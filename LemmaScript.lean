@@ -1,3 +1,4 @@
 import LemmaScript.BinarySearch
+import LemmaScript.BinarySearchProof
 import LemmaScript.ArraySum
 import LemmaScript.LinearSearch
