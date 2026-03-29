@@ -1,6 +1,6 @@
 # LemmaScript — Design Document
 
-**Version:** 0.1 (Draft)
+**Version:** 0.2 (Draft)
 **Authors:** Nerd
 **Date:** March 2026
 **Status:** Early exploration
@@ -9,9 +9,11 @@
 
 ## 1. What This Is
 
-LemmaScript is a verified imperative language that looks like a subset of TypeScript, verifies through Lean 4 via the Loom framework, and erases to plain TypeScript/JavaScript. Ghost state, loop invariants, pre/postconditions, decreases clauses, and proof blocks are all first-class constructs in the source language — and all disappear completely at compile time. What remains is the computational content: ordinary TypeScript that runs anywhere.
+LemmaScript is a verification toolchain for TypeScript. You write ordinary TypeScript with lightweight specification annotations (`//@ requires`, `//@ ensures`, `//@ invariant`). You write proofs and ghost definitions in Lean 4 (using LemmaScript's macro library). The toolchain parses your TypeScript, generates a Loom monadic embedding, and Lean checks everything.
 
-The core move: Verus is to Rust as LemmaScript is to TypeScript. The verified code *is* the production code, after erasure.
+There is no new language. There are two languages: TypeScript and Lean. The toolchain bridges them.
+
+The core insight: Verus is to Rust as LemmaScript is to TypeScript — but where Verus embeds specifications in Rust syntax, LemmaScript keeps TypeScript clean and puts the proof machinery where it belongs: in Lean.
 
 ---
 
@@ -26,87 +28,175 @@ JavaScript and TypeScript have no path to formal verification of functional prop
 - **Model-based verification** (extract to Dafny, verify the model): works, but introduces a semantic gap between the verified model and the production code. The gap is where bugs hide.
 - **Dafny's JS backend**: exists, but the runtime baggage (BigInteger emulation, immutable collections, class dispatch) creates a different semantic gap — between what the verifier assumed and what the compiled JS actually does.
 
-### Why not a "lite Dafny backend"?
+### Why not a new language that erases to TypeScript?
 
-Building a compiler backend that faithfully preserves the semantics the Dafny verifier assumed is extraordinarily difficult. The failure mode is silent unsoundness: you *think* you proved something, but the compiled JS disagrees. This is worse than having no verification at all.
+The previous version of this design proposed a "LemmaScript" surface language — a TypeScript subset extended with verification keywords that erases to plain TS. This has three problems:
 
-### Why not translate JS → Dafny?
+1. **Parsing TypeScript is hard.** Even a "subset" of TS syntax is vast and evolving. Building and maintaining a custom parser is a major engineering burden that has nothing to do with verification.
+2. **Erasure introduces a trust question.** Does the erased TS faithfully preserve the semantics of the source? You have to argue this. With our current approach, the TS *is* the source — there is no erasure.
+3. **Three languages.** Developers would need to understand TypeScript, LemmaScript (the superset), and enough Lean to debug proof failures. Two languages (TS + Lean) is strictly better than three.
 
-Better failure modes (conservatism is safe — reject what you can't translate), but you still face the problem of faithfully modeling JavaScript's semantics in a language that wasn't designed for it. And when Dafny's SMT automation gets stuck, you're stuck — Dafny has no interactive proof escape hatch.
+### The Verus existence proof, adapted
 
-### The Verus existence proof
-
-Verus demonstrates that a verification language can erase to a production systems language (Rust) with no semantic gap. The key insight: the verification annotations are *ghost* — they exist only for the prover and are erased during compilation. The computational content is real Rust, verified in place.
-
-LemmaScript applies the same insight to the TypeScript ecosystem, built on top of Lean 4 infrastructure rather than Rust's.
+Verus demonstrates that verification annotations can coexist with production code and be erased at compile time. LemmaScript takes a different cut: instead of embedding specifications *in* the production language and erasing them, we keep specifications *beside* the production code in a language (Lean) that was purpose-built for proofs. The production code is never modified.
 
 ---
 
 ## 3. Architecture
 
 ```
-LemmaScript source (.ls / .ls.ts)
-  │
-  ├──→ [Frontend] Parse → LemmaScript AST
-  │
-  ├──→ [Lean Embedding] AST → Loom monadic program
-  │     │
-  │     ├──→ Loom WP generation → verification conditions
-  │     │     │
-  │     │     ├──→ Z3 / cvc5 (automated discharge)
-  │     │     │
-  │     │     └──→ Lean interactive mode (when SMT fails)
-  │     │           │
-  │     │           └──→ LLM-assisted proof search (lean-lsp-mcp)
-  │     │
-  │     └──→ Proof artifact (.lean) — machine-checked, archivable
-  │
-  └──→ [Erasure] AST → TypeScript (.ts) → JavaScript (.js)
-        │
-        └──→ Strip ghost state, invariants, proof blocks
-              Emit computational skeleton
-              (deletion, not translation)
+  TypeScript source (.ts)
+  with //@ annotations
+       │
+       ├──→ [ts-morph] Parse AST + extract //@ annotations
+       │         │
+       │         └──→ [Code Generator] Emit Loom monadic embedding (.lean)
+       │                    │
+       │                    ├── imports *.spec.lean (ghost defs, lemmas, proofs)
+       │                    │
+       │                    └──→ Lean 4 / Loom checks everything
+       │                          │
+       │                          ├──→ Z3 / cvc5 (automated VC discharge)
+       │                          │
+       │                          └──→ Lean interactive mode (when SMT fails)
+       │                                │
+       │                                └──→ LLM-assisted proof search (lean-lsp-mcp)
+       │
+       └──→ TypeScript IS the production output. No erasure needed.
 ```
 
-### Key property: erasure is deletion
+### Key property: no erasure, no gap
 
-The erasure pass does not *transform* code. It *deletes* verification-only constructs and emits the remaining computational content as TypeScript. This is what makes it trustworthy — you cannot introduce bugs by removing things. The operational semantics of the erased program are a subset of the operational semantics of the source program.
+The TypeScript source *is* the production code. The `//@ ` annotations are comments — invisible to the TS compiler, bundlers, and runtime. The `.spec.lean` files never touch the production build. There is no compilation step that could introduce a semantic mismatch between "what was verified" and "what runs in production."
+
+The only trust question is: does the generated Loom embedding faithfully model the TypeScript code's semantics? This is a one-directional question (TS → Lean) that can be validated by inspection of the code generator.
 
 ---
 
-## 4. The Language
+## 4. Developer-Facing Surface
 
-LemmaScript is a subset of TypeScript extended with verification constructs. The computational fragment is valid TypeScript. The verification fragment is ghost.
+### 4.1 TypeScript with `//@ ` annotations
 
-### 4.1 Computational Fragment (erases to TS)
+Developers write TypeScript. They add specifications as structured comments:
 
-The computational fragment covers the subset of TypeScript with clean, verifiable semantics:
+```typescript
+// withdraw.ts
+
+export function withdraw(account: Account, amount: number): Account {
+  //@ requires amount > 0
+  //@ requires account.balance >= amount
+  //@ ensures result.balance === account.balance - amount
+  //@ ensures result.balance >= 0
+  return { ...account, balance: account.balance - amount }
+}
+```
+
+```typescript
+// binarySearch.ts
+
+export function binarySearch(arr: number[], target: number): number {
+  //@ requires sorted(arr)
+  //@ requires arr.length > 0
+  //@ ensures result >= -1 && result < arr.length
+  //@ ensures result >= 0 ==> arr[result] === target
+  //@ ensures result === -1 ==> forall(i, 0 <= i && i < arr.length ==> arr[i] !== target)
+
+  let lo = 0
+  let hi = arr.length - 1
+
+  while (lo <= hi) {
+    //@ invariant 0 <= lo && lo <= arr.length
+    //@ invariant -1 <= hi && hi < arr.length
+    //@ invariant forall(i, 0 <= i && i < lo ==> arr[i] !== target)
+    //@ invariant forall(i, hi < i && i < arr.length ==> arr[i] !== target)
+    //@ decreases hi - lo + 1
+
+    const mid = Math.floor((lo + hi) / 2)
+
+    if (arr[mid] === target) {
+      return mid
+    } else if (arr[mid] < target) {
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+
+  return -1
+}
+```
+
+The `//@ ` annotations are the only LemmaScript-specific syntax. They use a small expression language for specifications:
+
+- `requires <expr>` — precondition
+- `ensures <expr>` — postcondition (`result` refers to return value)
+- `invariant <expr>` — loop invariant
+- `decreases <expr>` — termination metric
+- `assert <expr>` — inline assertion (for proof guidance)
+
+The expression language supports basic arithmetic, comparisons, logical connectives, array access, `forall`/`exists` quantifiers, and calls to ghost functions defined in `.spec.lean` files.
+
+### 4.2 Lean specification files
+
+Ghost definitions, lemmas, and proofs live in `.spec.lean` files:
+
+```lean
+-- binarySearch.spec.lean
+import LemmaScript
+
+ghost_fun sorted (arr : Array Int) : Prop :=
+  ∀ i j, 0 ≤ i → i < j → j < arr.size → arr[i]! ≤ arr[j]!
+
+ghost_fun arraySum (arr : Array Int) (lo hi : Int) : Int :=
+  if lo ≥ hi then 0 else arr[lo]! + arraySum arr (lo + 1) hi
+
+lemma sumNonneg (arr : Array Int) (n : Int)
+    (h : ∀ i, 0 ≤ i → i < n → arr[i]! ≥ 0)
+    : arraySum arr 0 n ≥ 0 := by
+  loom_solve
+```
+
+These are plain Lean 4 files using LemmaScript's macro library (`ghost_fun`, etc.). The full power of Lean is available: tactics, mathlib, induction, everything. The Lean LSP provides proof state, autocomplete, and error reporting.
+
+### 4.3 What developers see
+
+```
+withdraw.ts              ← TypeScript + //@ annotations (you write this)
+withdraw.spec.lean       ← ghost defs, lemmas, proofs (you write this, LLM helps)
+.lsc/withdraw.lean       ← generated Loom embedding (don't edit, don't commit)
+```
+
+Two files to think about. Two languages. No compilation step that transforms your TypeScript.
+
+---
+
+## 5. The Computational Fragment
+
+### What TypeScript constructs are supported for verification
+
+The code generator (ts-morph → Loom) must understand the TypeScript it reads. The supported fragment:
 
 ```typescript
 // Variables and bindings
 let x: number = 0
 const y: string = "hello"
-let mut z: number = 0          // explicit mutability marker
 
 // Primitive types
 number                          // IEEE 754 doubles (with integer reasoning mode)
-int                             // mathematical integers (ghost-backed, erases to number)
 boolean
 string
 
 // Compound types
-Array<T>                        // fixed or dynamic arrays
+Array<T>                        // arrays
 { field: T, ... }               // object literals (no prototypes)
 [T, U, ...]                     // tuples
 T | U                           // unions (discriminated)
-T & U                           // intersections
 
 // Control flow
 if / else
-while (with mandatory invariant)
+while (with //@ invariant)
 for (of iterable)
 return
-match (exhaustive pattern matching)
 
 // Functions
 function f(x: T): U { ... }    // named functions
@@ -116,123 +206,65 @@ function f(x: T): U { ... }    // named functions
 import / export
 ```
 
-**Explicitly excluded from the computational fragment:**
+**Not supported (code outside these constructs cannot be verified):**
 
 - `this` and method dispatch
 - Prototypes, classes with inheritance
 - Closures over mutable state
-- `any`, `unknown` (except at boundaries)
+- `any`, `unknown`
 - Generators, async/await (future work)
 - Implicit coercions
 - `eval`, `with`, dynamic property access via string
-- The event loop
 
-These exclusions are not limitations of the implementation — they are design decisions that define the verifiable subset. Code that needs these features lives outside LemmaScript and interacts through the contract boundary.
-
-### 4.2 Verification Fragment (erased at compile time)
-
-```typescript
-// Pre/postconditions
-function withdraw(account: Account, amount: number): Account
-  requires amount > 0
-  requires account.balance >= amount
-  ensures result.balance === account.balance - amount
-  ensures result.balance >= 0
-{
-  return { ...account, balance: account.balance - amount }
-}
-
-// Loop invariants
-let mut i: number = 0
-let mut sum: number = 0
-while (i < arr.length)
-  invariant 0 <= i && i <= arr.length
-  invariant sum === arraySum(arr, 0, i)       // ghost function
-  decreases arr.length - i
-{
-  sum = sum + arr[i]
-  i = i + 1
-}
-
-// Ghost variables (exist only during verification)
-ghost let originalBalance = account.balance
-
-// Ghost functions (specifications, not implementations)
-ghost function isSorted(arr: Array<number>): boolean {
-  forall(i, j, 0 <= i && i < j && j < arr.length ==> arr[i] <= arr[j])
-}
-
-// Lemma functions (proof steps, fully erased)
-lemma function sortPreservesLength<T>(arr: Array<T>, sorted: Array<T>)
-  requires isSorted(sorted) && isPermutation(arr, sorted)
-  ensures sorted.length === arr.length
-{
-  // proof body — may be filled by LLM, checked by Lean
-}
-
-// Proof blocks (inline proof steps, fully erased)
-proof {
-  assert someIntermediateFact
-  // unfold definition, apply lemma, etc.
-}
-
-// Quantifiers (in specifications only)
-forall(x: T, P(x))
-exists(x: T, P(x))
-```
-
-### 4.3 Syntax Design Principles
-
-1. **Familiar to TypeScript developers.** The computational fragment *is* TypeScript. No new syntax for things that already have syntax.
-
-2. **Verification constructs are visually distinct.** `requires`, `ensures`, `invariant`, `decreases`, `ghost`, `lemma`, `proof` — these are keywords that don't exist in TypeScript. A developer can see at a glance what's computational and what's specification.
-
-3. **Erasure is syntactically obvious.** Everything that erases is introduced by a verification keyword. If it doesn't have a verification keyword, it survives erasure. No surprises.
-
-4. **No verification in expressions.** Verification constructs appear at the statement/declaration level, never inside expressions. This keeps the computational fragment a clean subset of TS and makes erasure trivial.
+Unsupported code isn't *forbidden* — it just can't be verified. It lives outside the LemmaScript boundary and interacts through contracts.
 
 ---
 
-## 5. Semantic Foundation
+## 6. Semantic Foundation
 
-### 5.1 Embedding into Loom
+### 6.1 Embedding into Loom
 
-LemmaScript programs are translated into Loom's monadic shallow embedding. Loom represents imperative programs as monadic computations in Lean 4 and provides:
+The code generator reads TypeScript (via ts-morph) and emits a Loom monadic program in Lean. Loom provides:
 
-- **Monad transformer algebra** for composing effects (state, exceptions, nondeterminism)
+- **Monad transformer algebras** for composing effects (state, exceptions, nondeterminism)
 - **Weakest precondition generation** via the algebra structure
-- **SMT integration** (Z3, cvc5) for automated discharge of VCs
+- **SMT integration** (Z3, cvc5) for automated VC discharge
 - **Lean escape hatch** for interactive proofs when SMT fails
 
-The translation targets Loom's imperative language, which already supports `let mut`, while loops, structured control flow, and arrays — aligning closely with LemmaScript's computational fragment.
+The generated `.lean` file contains:
+1. The Loom monadic program (the computational semantics of the TS function)
+2. Imports of the `.spec.lean` file (ghost definitions, lemmas)
+3. The wiring: pre/postconditions from `//@ ` annotations linked to Loom's `triple` infrastructure
+4. A `prove_correct` obligation that Lean checks
 
-### 5.2 Semantic Correspondence
+### 6.2 Semantic Correspondence
 
-The critical property: for every LemmaScript program P, the Loom embedding `⟦P⟧_loom` and the TypeScript erasure `⟦P⟧_ts` must agree on all observable behaviors.
+The critical question: does the generated Loom embedding faithfully model the TypeScript code?
 
-This is achievable by construction because:
+This is easier to argue than in the previous design (where we had to argue that erasure preserved semantics) because:
 
-- The computational fragment has no features whose TypeScript semantics diverge from the Loom embedding's semantics (this is why we exclude prototypes, `this`, closures over mutable state, etc.)
-- The verification fragment is erased from both — it exists only in the Loom embedding for proof purposes and is deleted in the TS output.
-- Erasure is monotone deletion: `⟦P⟧_ts ⊆ ⟦P⟧_loom` in terms of the computational content.
+- The TS code is the ground truth. The Loom embedding is a *model* of it, not a *translation* of it.
+- The model covers only the supported computational fragment (§5), which was chosen specifically because its semantics are well-defined and align with Loom's.
+- The code generator is the single point of trust. It can be inspected, tested, and (eventually) verified.
 
-### 5.3 The Number Problem
+### 6.3 The Number Problem
 
-JavaScript has one numeric type: IEEE 754 doubles. Dafny, Lean, and most verification systems reason about mathematical integers.
+JavaScript has one numeric type: IEEE 754 doubles. Lean and Loom reason about mathematical integers.
 
-LemmaScript takes a layered approach:
+**Approach:**
 
-- **`int`**: Mathematical integers. Ghost type. Used in specifications and proofs. Erases to `number` in TS output. The programmer asserts (and must verify) that values stay within safe integer range, or the system inserts overflow checks.
-- **`number`**: IEEE 754 doubles. Used in computational code. Verification reasons about the double semantics when needed (rare — most programs don't need floating-point proofs).
-- **Bounded integers**: `int32`, `uint8`, etc. — phantom-typed wrappers that carry range invariants. Erase to `number` with verified bounds.
+- The Loom embedding models `number` as mathematical integers (`Int`) by default.
+- Automatic side-conditions ensure values stay within `Number.MAX_SAFE_INTEGER` (2^53 - 1).
+- The `.spec.lean` file can override the reasoning mode per function or per variable if needed.
+- For the rare case of floating-point verification, the embedding can model `number` as `Float` with IEEE 754 semantics (future work).
 
-For most programs, the developer writes `number`, the verifier reasons about `int` (mathematical integers), and an automatic side-condition ensures the values stay within `Number.MAX_SAFE_INTEGER`. This is the same trade-off Verus makes with Rust's fixed-width integers.
+For most programs (array algorithms, business logic, state machines), integer reasoning is what you want. The safe-integer side-conditions close the gap. This is the same trade-off Verus makes with Rust's fixed-width integers.
 
 ---
 
-## 6. The Boundary: @lemmafit/contracts
+## 7. The Boundary: @lemmafit/contracts
 
-LemmaScript does not require rewriting an entire codebase. It coexists with regular TypeScript through the `@lemmafit/contracts` boundary layer.
+LemmaScript does not require verifying an entire codebase. It coexists with regular TypeScript through the `@lemmafit/contracts` boundary layer.
 
 ```
 ┌─────────────────────────────────────┐
@@ -244,9 +276,9 @@ LemmaScript does not require rewriting an entire codebase. It coexists with regu
 │    │   (runtime enforcement)   │    │
 │    │                           │    │
 │    │   ┌───────────────────┐   │    │
-│    │   │   LemmaScript     │   │    │
-│    │   │   (verified,      │   │    │
-│    │   │    erases to TS)  │   │    │
+│    │   │  Verified TS      │   │    │
+│    │   │  (//@ annotations │   │    │
+│    │   │   + .spec.lean)   │   │    │
 │    │   └───────────────────┘   │    │
 │    │                           │    │
 │    └───────────────────────────┘    │
@@ -254,114 +286,86 @@ LemmaScript does not require rewriting an entire codebase. It coexists with regu
 └─────────────────────────────────────┘
 ```
 
-- **Inside the LemmaScript boundary**: properties are proved. Zero runtime cost.
-- **At the boundary**: contracts enforce that unverified TS interacts correctly with verified LemmaScript modules. Runtime checked in development, optionally stripped in production (with the understanding that the contract violations indicate bugs in the *unverified* code, not the verified code).
-- **Outside the boundary**: regular TypeScript. No verification claims. Business as usual.
+- **Inside the verified boundary**: properties are proved. Zero runtime cost.
+- **At the boundary**: contracts enforce that unverified TS interacts correctly with verified modules. Runtime checked in development, optionally stripped in production.
+- **Outside the boundary**: regular TypeScript. No verification claims.
 
-Developers adopt LemmaScript incrementally: start with contracts on existing code, then rewrite critical modules in LemmaScript when the properties matter enough to prove.
+Developers adopt LemmaScript incrementally: start with contracts on existing code, then add `//@ ` annotations and `.spec.lean` files to critical modules when the properties matter enough to prove.
 
 ---
 
-## 7. Toolchain
+## 8. Toolchain
 
-### 7.1 Compiler
+### 8.1 CLI
 
 ```
 lsc (LemmaScript Compiler)
   │
-  ├── lsc check   — verify (emit Lean, run Loom, report results)
-  ├── lsc build   — verify + erase to TypeScript
-  ├── lsc erase   — erase only (skip verification, for fast iteration)
-  └── lsc prove   — interactive proof mode (open in Lean/VS Code)
+  ├── lsc check <file.ts>    — parse TS, generate Loom embedding, verify via Lean
+  ├── lsc check --watch       — re-check on file changes
+  ├── lsc init                — scaffold .spec.lean file for a TS module
+  └── lsc status              — show verification status across project
 ```
 
-The compiler is written in TypeScript (dogfooding the ecosystem). The Lean embedding and proof checking require a Lean 4 installation, but `lsc erase` works standalone — letting developers iterate on computational code without waiting for the verifier.
+The compiler is a Node.js tool (dogfooding the ecosystem) that orchestrates:
+1. **ts-morph** to parse TypeScript and extract `//@ ` annotations
+2. **Code generation** to emit `.lsc/*.lean` files (Loom embedding + VC wiring)
+3. **Lean/Lake** to check the generated files plus user-written `.spec.lean` files
 
-### 7.2 Editor Integration
+`lsc check` is the only command most developers run. There is no `build` or `erase` — the TypeScript is already the output.
 
-- **VS Code extension**: syntax highlighting, inline verification status, ghost code dimming, error reporting from Lean
-- **LSP**: standard Language Server Protocol for editor-agnostic support
-- **Inline proof state**: when SMT fails, show the Lean proof context inline (à la Velvet's InfoView integration)
+### 8.2 Editor Integration
 
-### 7.3 LLM Integration
+- **VS Code extension**: inline verification status (green/red gutters), `//@ ` annotation autocomplete, ghost function name resolution
+- **Lean LSP** (standard): proof state, error reporting, autocomplete in `.spec.lean` files — works out of the box, no custom tooling needed
+- **Inline proof state**: when SMT fails, the developer opens the `.spec.lean` file and uses Lean's standard InfoView
+
+### 8.3 LLM Integration
 
 When verification conditions can't be discharged by SMT:
 
-1. The unsolved goals are extracted as Lean proof obligations
+1. Unsolved goals are extracted as Lean proof obligations
 2. An LLM (via lean-lsp-mcp) attempts to synthesize proof terms
 3. Lean checks the synthesized proofs
-4. If successful, proofs are cached alongside the source
+4. If successful, proofs are written into the `.spec.lean` file
 
 The LLM is not trusted. Lean is. The LLM proposes; the kernel disposes.
 
-### 7.4 Claude Code / MCP Integration
+### 8.4 Claude Code / MCP Integration
 
 A LemmaScript MCP server provides tools for AI coding agents:
 
-- `verify_function` — check a LemmaScript function against its spec
-- `suggest_spec` — propose pre/postconditions for a function body
-- `fill_proof` — attempt to fill in a lemma or proof block
+- `verify_function` — run `lsc check` on a specific function
+- `suggest_spec` — propose `//@ ` annotations for a function body
+- `fill_proof` — attempt to fill a lemma in a `.spec.lean` file
 - `explain_failure` — explain why a verification condition failed
-- `erase_module` — produce the TypeScript output for a module
 
 ---
 
-## 8. Example: Verified Binary Search
+## 9. Example: Verified Binary Search
+
+### TypeScript source
 
 ```typescript
-// binarySearch.ls.ts
+// binarySearch.ts
 
-ghost function sorted(arr: Array<number>): boolean {
-  forall(i, j, 0 <= i && i < j && j < arr.length ==> arr[i] <= arr[j])
-}
+export function binarySearch(arr: number[], target: number): number {
+  //@ requires sorted(arr)
+  //@ requires arr.length > 0
+  //@ ensures result >= -1 && result < arr.length
+  //@ ensures result >= 0 ==> arr[result] === target
+  //@ ensures result === -1 ==> forall(i, 0 <= i && i < arr.length ==> arr[i] !== target)
 
-function binarySearch(arr: Array<number>, target: number): number
-  requires sorted(arr)
-  requires arr.length > 0
-  ensures result >= -1 && result < arr.length
-  ensures result >= 0 ==> arr[result] === target
-  ensures result === -1 ==> forall(i, 0 <= i && i < arr.length ==> arr[i] !== target)
-{
-  let mut lo: number = 0
-  let mut hi: number = arr.length - 1
-
-  while (lo <= hi)
-    invariant 0 <= lo && lo <= arr.length
-    invariant -1 <= hi && hi < arr.length
-    invariant forall(i, 0 <= i && i < lo ==> arr[i] !== target)
-    invariant forall(i, hi < i && i < arr.length ==> arr[i] !== target)
-    decreases hi - lo + 1
-  {
-    const mid = Math.floor((lo + hi) / 2)
-
-    proof {
-      assert 0 <= mid && mid < arr.length
-      // follows from invariants and loop condition
-    }
-
-    if (arr[mid] === target) {
-      return mid
-    } else if (arr[mid] < target) {
-      lo = mid + 1
-    } else {
-      hi = mid - 1
-    }
-  }
-
-  return -1
-}
-```
-
-**After erasure** (`lsc erase binarySearch.ls.ts`):
-
-```typescript
-// binarySearch.ts — generated by lsc, do not edit
-
-function binarySearch(arr: Array<number>, target: number): number {
-  let lo: number = 0
-  let hi: number = arr.length - 1
+  let lo = 0
+  let hi = arr.length - 1
 
   while (lo <= hi) {
+    //@ invariant 0 <= lo && lo <= arr.length
+    //@ invariant -1 <= hi && hi < arr.length
+    //@ invariant forall(i, 0 <= i && i < lo ==> arr[i] !== target)
+    //@ invariant forall(i, hi < i && i < arr.length ==> arr[i] !== target)
+    //@ decreases hi - lo + 1
+
     const mid = Math.floor((lo + hi) / 2)
 
     if (arr[mid] === target) {
@@ -377,11 +381,52 @@ function binarySearch(arr: Array<number>, target: number): number {
 }
 ```
 
-Completely ordinary TypeScript. No runtime overhead. The proof existed at build time and is gone.
+### Specification file
+
+```lean
+-- binarySearch.spec.lean
+import LemmaScript
+
+ghost_fun sorted (arr : Array Int) : Prop :=
+  ∀ i j, 0 ≤ i → i < j → j < arr.size → arr[i]! ≤ arr[j]!
+```
+
+No lemmas needed for this example — the invariants are strong enough that `loom_solve` (backed by Z3/cvc5) discharges all VCs automatically.
+
+### Generated embedding (build artifact)
+
+```lean
+-- .lsc/binarySearch.lean (generated by lsc, do not edit)
+import Loom
+import «binarySearch.spec»
+
+def binarySearch (arr : Array Int) (target : Int) : LoomM Int := do
+  let mut lo := 0
+  let mut hi := arr.size - 1
+  repeat
+    invariant (0 ≤ lo ∧ lo ≤ arr.size)
+    invariant (-1 ≤ hi ∧ hi < arr.size)
+    invariant (∀ i, 0 ≤ i → i < lo → arr[i]! ≠ target)
+    invariant (∀ i, hi < i → i < arr.size → arr[i]! ≠ target)
+    decreasing (hi - lo + 1)
+    ...
+  ...
+
+prove_correct binarySearch by
+  loom_solve
+```
+
+### What the developer experiences
+
+1. Write `binarySearch.ts` with `//@ ` annotations
+2. Run `lsc init binarySearch.ts` → scaffolds `binarySearch.spec.lean` with `sorted` stub
+3. Fill in the ghost function definition
+4. Run `lsc check binarySearch.ts` → green checkmark
+5. Ship `binarySearch.ts` to production. It's just TypeScript.
 
 ---
 
-## 9. Scope of the Computational Fragment
+## 10. Scope
 
 ### What you can verify (day 1)
 
@@ -393,7 +438,7 @@ Completely ordinary TypeScript. No runtime overhead. The proof existed at build 
 
 ### What you can verify (later)
 
-- Async/await (via Loom's monad transformer support — the effect is explicit)
+- Async/await (via Loom's monad transformer support)
 - Map/Set operations (with suitable axiomatization)
 - Higher-order functions (map, filter, reduce — with contracts on the callback)
 - Module-level invariants (enforced across function boundaries)
@@ -410,165 +455,195 @@ These live outside the LemmaScript boundary. Contracts handle the interface.
 
 ---
 
-## 10. Building on Loom
+## 11. Building on Loom
 
-### What Loom provides for free
+### What Loom provides
 
 - Monadic shallow embedding of imperative programs into Lean 4
 - Weakest precondition generation via monad transformer algebras
 - SMT solver integration (Z3, cvc5) for automated VC discharge
-- Support for partial and total correctness, separately or combined
+- Support for partial and total correctness
 - Nondeterminism (useful for modeling external inputs)
 - Lean's full proof automation (grind, aesop, omega, etc.)
 - Property-based testing integration (Plausible)
 - Machine-checked soundness of the VC generator
 
-### What LemmaScript adds on top
+### What LemmaScript adds
 
-- A TypeScript-flavored surface syntax (parse → Loom embedding)
-- Erasure to TypeScript (AST → TS code generation)
-- The semantic correspondence argument (LemmaScript ↔ TS)
-- Editor tooling and DX
-- LLM-assisted proof filling
+- A TypeScript reader (ts-morph) that extracts control flow and `//@ ` annotations
+- Code generation: TS → Loom monadic embedding
+- Lean macro library for ghost definitions (`ghost_fun`, etc.)
+- The semantic correspondence argument (generated Loom embedding ↔ TS semantics)
+- `lsc` CLI for the check/watch/init workflow
+- Editor tooling (VS Code extension for `//@ ` annotations)
+- LLM-assisted proof filling via lean-lsp-mcp
 - @lemmafit/contracts integration at the boundary
 - MCP server for AI agent interaction
 
 ### Relationship to Velvet
 
-Velvet is one verifier built on Loom. LemmaScript is another. They share the Loom substrate but target different surface languages and different developer communities. Velvet targets Lean developers who want imperative verification. LemmaScript targets TypeScript developers who want verified code that erases to their production language.
+Velvet is a Dafny-style verifier built on Loom. LemmaScript is a TypeScript verifier built on Loom. They share the Loom substrate but target different surface languages and developer communities. Velvet validates Loom's macro-based approach to surface syntax. LemmaScript adapts the pattern: lightweight macros in Lean for `.spec.lean` files, `//@ ` comments in TS for inline annotations.
 
 ---
 
-## 11. Research Contributions
+## 12. The Code Generator
 
-LemmaScript, if realized, would constitute several research contributions:
+The code generator is the critical component and the single point of trust. It reads TypeScript and emits Lean.
 
-1. **Verified erasure for a dynamic language.** Verus demonstrated erasure for Rust (a statically typed, ownership-aware language where the semantics are well-understood). LemmaScript does it for a subset of TypeScript, which requires carefully delineating the verifiable fragment and arguing semantic correspondence despite JavaScript's notoriously complex semantics.
+### Input
 
-2. **Loom as a retargetable verification backend.** Building a second verifier on Loom (after Velvet) validates the framework's claim to generality and exercises its monad transformer algebra in a new setting.
+- TypeScript AST (via ts-morph)
+- `//@ ` annotations extracted from comments and associated with AST nodes
+- Type information from the TypeScript type checker
 
-3. **LLM-assisted proof completion in an embedded verifier.** Using LLMs to fill proof obligations in a Loom-based verifier, with Lean as the trust anchor, is a concrete instance of the LLM-verifier interface that is directly relevant to the LICS keynote thesis.
+### Output
 
-4. **Gradual verification via contracts.** The @lemmafit/contracts boundary layer enables gradual adoption — moving from runtime checking to static verification without rewriting. The formal relationship between the two modes is itself a contribution.
+- A Lean file containing:
+  - Import of Loom and the user's `.spec.lean`
+  - A Loom monadic program mirroring the TS function's control flow
+  - Pre/postconditions wired from `//@ requires` / `//@ ensures`
+  - Loop invariants and decreases clauses wired from `//@ invariant` / `//@ decreases`
+  - A `prove_correct` obligation
+
+### Translation rules (sketch)
+
+| TypeScript | Loom embedding |
+|-----------|----------------|
+| `let x = e` | `let x ← eval e` |
+| `let x = e; x = e2; ...` | `let mut x ← eval e; x := eval e2; ...` |
+| `if (c) { ... } else { ... }` | `if c then ... else ...` |
+| `while (c) { ... }` | `repeat ... invariant ... decreasing ...` |
+| `arr[i]` | `arr[i]!` (with bounds VC) |
+| `arr[i] = v` | `arr := arr.set i v` |
+| `return e` | `return e` (with postcondition VC) |
+| `f(x, y)` | `f x y` (with precondition VC) |
+| `//@ requires P` | `require P` in Loom spec |
+| `//@ ensures P` | `ensure P` in Loom spec |
+| `//@ invariant P` | `invariant P` on loop |
+| `//@ decreases e` | `decreasing e` on loop |
+
+### What makes this trustworthy
+
+The code generator is a relatively simple syntactic translation. It does not optimize, reorder, or transform. Each TS construct maps to one Loom construct. The generated Lean files are human-readable and inspectable. Over time, the code generator itself could be verified (in Lean, using LemmaScript on its own codebase).
 
 ---
 
-## 12. Open Questions
+## 13. Open Questions
 
-### 12.1 Surface syntax: new file extension or TypeScript superset?
+### 13.1 The `//@ ` expression language
 
-**Option A:** `.ls` files with TypeScript-like syntax plus verification keywords. Requires a custom parser. Clean separation but no existing editor support for free.
+The `//@ ` annotations contain expressions (e.g., `forall(i, 0 <= i && i < arr.length ==> arr[i] !== target)`). These must be parsed and translated to Lean. Options:
 
-**Option B:** `.ls.ts` files that are valid TypeScript (modulo the verification keywords, which could be encoded as decorators or specially-named functions). Leverages existing TS tooling. Uglier encoding of verification constructs.
+- **TypeScript-flavored expressions.** Familiar to TS developers. Requires a small expression parser in the code generator.
+- **Lean expressions in comments.** No parsing needed — pass through directly. But unfamiliar to TS developers.
+- **A minimal shared syntax.** Basic arithmetic, comparisons, `forall`/`exists`, `==>`, and calls to ghost functions. Small enough to be unambiguous, familiar enough to be readable.
 
-**Option C:** TypeScript with a compiler plugin that recognizes verification constructs in comments or JSDoc-style annotations. No new syntax at all. Maximum compatibility. Least expressive.
+Leaning toward the minimal shared syntax. It's a small parser (not a full language), and it avoids exposing TS developers to Lean notation.
 
-Leaning toward Option A with a dedicated VS Code extension. The verification constructs are too important to hide in comments.
+### 13.2 Connecting `//@ ` annotations to `.spec.lean`
 
-### 12.2 How much of TypeScript's type system do we mirror?
+When an `//@ ` annotation references a ghost function (e.g., `sorted(arr)`), the code generator must resolve it to the Lean definition in the `.spec.lean` file. How?
 
-LemmaScript's type system must be *at least* as expressive as the TypeScript types used in the computational fragment, so that erasure produces well-typed TypeScript. But TypeScript's type system is complex (structural subtyping, conditional types, mapped types, template literal types). How much do we need?
+- **By name.** The ghost function name in the `//@ ` annotation must match the Lean definition name. Simple, probably sufficient.
+- **Via a manifest.** A generated mapping file that connects TS names to Lean names. More flexible but more machinery.
 
-Probably: basic structural types, generics, unions, intersections, literal types. Not: conditional types, mapped types, template literal types, declaration merging. The boundary contracts handle the impedance mismatch.
+Starting with by-name resolution.
 
-### 12.3 Integer overflow
+### 13.3 Integer overflow side-conditions
 
-Most LemmaScript programs will reason about mathematical integers but erase to JavaScript `number`. The mismatch is real: `Number.MAX_SAFE_INTEGER` is 2^53 - 1. Options:
+When the Loom embedding models `number` as `Int`, every arithmetic operation generates a side-condition that the result fits in `[-2^53+1, 2^53-1]`. This could produce many trivial VCs. Options:
 
-- **Default: automatic safe-integer side conditions.** Every arithmetic operation generates a VC that the result stays within safe integer range. Annoying for large computations but sound.
-- **Opt-in: BigInt erasure.** For programs that need true arbitrary precision, erase `int` to `BigInt` instead of `number`. Sound but with performance implications.
-- **Explicit bounded types.** `int32`, `uint16`, etc. with modular arithmetic semantics matching typed arrays.
+- **Generate all, let SMT handle them.** Simple. SMT is fast on bounded arithmetic.
+- **Elide when provably safe.** If the code generator can see that values are bounded (e.g., array indices), skip the side-condition. Reduces noise but adds complexity to the code generator.
+- **User opt-out.** An `//@ assume safe_integers` annotation that suppresses overflow checks for a function.
 
-### 12.4 Arrays: mutable or immutable?
+### 13.4 Mutable state model
 
-Loom/Velvet uses immutable sequences in specifications. JavaScript arrays are mutable. Options:
+TypeScript `let` variables are mutable. The Loom embedding must model mutation. Options:
 
-- **Computational arrays are mutable** (matching JS semantics), with automatic snapshotting for pre-state references in postconditions.
-- **Ghost arrays are immutable** (matching Lean `List`/`Array` semantics). The translation between computational mutable arrays and ghost immutable sequences is handled by the embedding.
-- **Functional update syntax** for the common case where you're building a new array from an old one.
+- **StateT.** Each mutable variable becomes part of a state tuple. Matches Velvet's approach.
+- **Lean's `let mut`.** Lean 4 supports `let mut` in `do` blocks. Simpler if Loom supports it directly.
 
-### 12.5 Proof portability
+Loom already supports `let mut` in its imperative language, so this aligns naturally.
 
-Proofs are currently Lean 4 tactic scripts. These are fragile across Lean/Loom/mathlib versions. Options:
+### 13.5 Proof portability
+
+Proofs in `.spec.lean` files are Lean 4 tactic scripts. These are fragile across Lean/Loom/mathlib versions. Options:
 
 - Accept fragility (proofs are re-checked on each build anyway)
-- Generate proof terms instead of tactic scripts (more stable but harder for LLMs to produce)
+- Generate proof terms instead of tactic scripts (more stable but harder for LLMs)
 - Version-lock Lean/Loom/mathlib in the project (practical but constraining)
-
-### 12.6 Community and ecosystem
-
-LemmaScript sits at the intersection of three communities that rarely overlap: TypeScript developers, formal verification researchers, and LLM/AI tooling builders. The messaging and onboarding must work for all three without alienating any.
 
 ---
 
-## 13. Implementation Plan
+## 14. Implementation Plan
 
 ### Phase 0: Feasibility (Weeks 1–4)
 
-**Goal:** Prove the Loom embedding works for a representative example.
+**Goal:** Prove the TS → Loom embedding works for a representative example.
 
-- Take the binary search example from Section 8
-- Hand-write the Loom embedding in Lean 4
-- Verify it using Loom's infrastructure
-- Hand-write the TypeScript erasure
-- Document the semantic correspondence argument
-- Identify where Loom's current API needs extension
+- Take the binary search example from Section 9
+- Hand-write the Loom embedding in Lean 4 (what the code generator would produce)
+- Write the `.spec.lean` file with ghost definitions
+- Verify using Loom's infrastructure
+- Document where Loom's current API needs extension
+- Build a minimal ts-morph prototype that parses binary search and extracts `//@ ` annotations
 
-### Phase 1: Core Compiler (Months 2–4)
+### Phase 1: Code Generator (Months 2–4)
 
-**Goal:** `lsc check` and `lsc erase` work for a minimal fragment.
+**Goal:** `lsc check` works for a minimal fragment.
 
-- Parser for LemmaScript (subset: functions, if/else, while, let/const, arrays, numbers, booleans)
-- AST → Loom embedding (code generation into Lean)
-- AST → TypeScript erasure
-- Basic error reporting (parse errors, type errors, verification failures)
+- Implement the TS → Loom code generator (ts-morph → Lean emission)
+- `//@ ` annotation parser (minimal expression language)
+- Lean macro library (`ghost_fun`, etc.)
+- Basic error reporting (parse errors, annotation errors, verification failures surfaced from Lean)
 - 5–10 verified example programs (search, sort, accumulate, state machines)
 
 ### Phase 2: Tooling (Months 4–6)
 
 **Goal:** Usable developer experience.
 
-- VS Code extension (syntax highlighting, inline verification status, ghost dimming)
+- VS Code extension (`//@ ` annotation support, inline verification status)
+- `lsc init` scaffolding
+- `lsc check --watch` mode
 - LLM proof filling via lean-lsp-mcp
 - MCP server for Claude Code integration
-- @lemmafit/contracts interop (import LemmaScript modules from TS, contracts at boundary)
-- `lsc prove` interactive mode
+- @lemmafit/contracts interop
 
 ### Phase 3: Language Expansion (Months 6–12)
 
 **Goal:** Cover the useful subset identified by early adopters.
 
-- Generics
 - Higher-order functions with contracts
 - Object types and structural subtyping
-- Match expressions
-- Module system
+- For-of loops
+- Module-level invariants
 - More comprehensive standard library specifications (Array methods, Math, etc.)
 
 ---
 
-## 14. Relationship to Existing Work
+## 15. Relationship to Existing Work
 
 | System | Relationship |
 |--------|-------------|
-| **Verus** | Direct inspiration. Verus is to Rust as LemmaScript is to TypeScript. Key difference: Verus can rely on Rust's ownership model and borrow checker; LemmaScript must define its own discipline for mutable state. |
-| **Dafny** | LemmaScript replaces Dafny in LemmaFit's stack for the TypeScript use case. Dafny remains relevant for standalone verification and non-TS targets. |
-| **Velvet** | Sibling project built on the same Loom substrate. Velvet validates Loom's design. LemmaScript benefits from Loom improvements driven by Velvet's development. |
+| **Verus** | Direct inspiration. Verus embeds specs in Rust and erases them. LemmaScript keeps specs beside TypeScript in Lean. Different cut, same goal: verified production code with no runtime overhead. |
+| **Frama-C / ACSL** | Closest architectural precedent. ACSL puts specs in C comments; Frama-C verifies them. LemmaScript puts lightweight specs in TS comments and heavy proofs in Lean files. |
+| **JML** | External specification for Java. Similar separation of code and specs, but JML targets runtime checking more than formal proof. |
+| **Dafny** | LemmaScript replaces Dafny in LemmaFit's stack for the TypeScript use case. |
+| **Velvet** | Sibling project built on the same Loom substrate. Validates the approach. LemmaScript benefits from Loom improvements driven by Velvet. |
 | **Loom** | The foundational framework. LemmaScript is a Loom client, like Velvet. |
-| **RSC (Refined TypeScript)** | Prior art for TypeScript verification. RSC attempted refinement type inference across the full language. LemmaScript takes a different approach: explicit annotations on a restricted fragment, with full Lean proving power instead of only SMT. |
-| **@lemmafit/contracts** | The interop layer. Contracts bridge verified LemmaScript and unverified TypeScript. |
-| **ClaimCheck** | Spec auditing for LemmaScript's pre/postconditions. Round-trip formalization validates that specs match developer intent. |
-| **VerMCTS** | MCTS-guided proof search could complement LLM-based proof filling for difficult verification conditions. |
+| **RSC (Refined TypeScript)** | Prior art for TypeScript verification. RSC attempted refinement type inference across the full language. LemmaScript takes a different approach: explicit annotations on a restricted fragment, with full Lean proving power. |
+| **@lemmafit/contracts** | The interop layer. Contracts bridge verified and unverified TypeScript. |
 | **lean-lsp-mcp** | The bridge between LLMs and Lean's proof engine. LemmaScript's LLM proof filling is a direct client. |
 
 ---
 
-## 15. Why Now
+## 16. Why Now
 
 Three things have converged:
 
-1. **Loom exists.** Building a verification language from scratch requires years of foundational work — WP calculi, SMT integration, proof infrastructure. Loom gives us all of this as a library. We build the surface language and the erasure, not the verification engine.
+1. **Loom exists.** Building verification infrastructure from scratch requires years. Loom gives us WP calculi, SMT integration, proof automation, and machine-checked soundness as a library.
 
-2. **LLMs can fill proofs.** The interactive proof obligations that remain after SMT automation were, until recently, the exclusive domain of expert Lean users. LLMs (particularly via lean-lsp-mcp and similar integrations) can now handle many of these automatically, with Lean checking their work. This lowers the barrier from "must know Lean" to "must understand your specification."
+2. **LLMs can fill proofs.** The interactive proof obligations that remain after SMT automation were, until recently, the exclusive domain of expert Lean users. LLMs can now handle many of these, with Lean checking their work. This lowers the barrier from "must know Lean" to "must understand your specification."
 
-3. **TypeScript is the world's most popular language** and has zero verified programming story. The market is not "TypeScript developers who want verification" (tiny, today). The market is "AI agents generating TypeScript that should be trustworthy" (enormous, growing). LemmaScript gives agents a target language where correctness is provable, not just testable.
+3. **TypeScript is the world's most popular language** and has zero verified programming story. The market is not "TypeScript developers who want verification" (tiny, today). The market is "AI agents generating TypeScript that should be trustworthy" (enormous, growing). LemmaScript gives agents a target where correctness is provable, not just testable.
