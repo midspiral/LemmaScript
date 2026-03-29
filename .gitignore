@@ -5,5 +5,5 @@
 node_modules/
 dist/
 
-# Generated Loom embeddings
-.lsc/
+# Generated definitions
+*.def.lean

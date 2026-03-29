@@ -1,4 +1,3 @@
-import LemmaScript.BinarySearch
-import LemmaScript.BinarySearchProof
-import LemmaScript.ArraySum
-import LemmaScript.LinearSearch
+-- LemmaScript library — re-exports Velvet/Loom
+import Velvet.Syntax
+import Velvet.Std

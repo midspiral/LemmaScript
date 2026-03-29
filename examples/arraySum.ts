@@ -1,13 +1,11 @@
 /**
  * Array sum — simplest verification example.
- * No early return, no break. Pure accumulator pattern.
+ * No break, no early return. Pure accumulator.
  */
 
-//@ import { sumTo } from "./arraySum.spec.lean"
-
 export function arraySum(arr: number[]): number {
-  //@ ensures result === sumTo(arr, arr.length)
-  //@ nat i
+  //@ ensures \result === sumTo(arr, arr.length)
+  //@ type i nat
 
   let sum = 0;
   let i = 0;

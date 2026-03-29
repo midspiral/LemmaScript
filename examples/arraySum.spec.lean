@@ -1,7 +1,6 @@
 import Velvet.Syntax
 import Velvet.Std
 
-/-- Sum of the first n elements of arr. -/
 @[grind, loomAbstractionSimp]
 def sumTo (arr : Array Int) : Nat → Int
   | 0 => 0

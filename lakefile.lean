@@ -101,6 +101,11 @@ target downloadDependencies pkg : Array FilePath := do
   return Job.collectArray #[z3, cvc5]
 
 @[default_target]
-lean_lib LemmaScript where
-  globs := #[Glob.submodules `LemmaScript]
+lean_lib Examples where
+  srcDir := "examples"
+  roots := #[
+    `«binarySearch.spec», `«binarySearch.def», `«binarySearch.proof»,
+    `«arraySum.spec», `«arraySum.def», `«arraySum.proof»,
+    `«linearSearch.def», `«linearSearch.proof»
+  ]
   extraDepTargets := #[``downloadDependencies]
