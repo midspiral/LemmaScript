@@ -236,8 +236,8 @@ class Parser {
 export interface EmitContext {
   arrayVars: Set<string>;
   natVars: Set<string>;
-  /** What \result maps to — "res" in ensures, unused elsewhere */
-  resultVar: string;
+  /** What \result maps to. Only set in ensures context ("res"). Absent elsewhere. */
+  resultVar?: string;
 }
 
 export function isNat(expr: Expr, ctx: EmitContext): boolean {
@@ -280,7 +280,9 @@ function emit(expr: Expr, ctx: EmitContext, parentOp?: string): string {
     case "num": return `${expr.value}`;
     case "bool": return expr.value ? "True" : "False";
     case "var": return expr.name;
-    case "result": return ctx.resultVar;
+    case "result":
+      if (!ctx.resultVar) throw new Error("\\result is only valid in ensures");
+      return ctx.resultVar;
 
     case "unop":
       if (expr.op === "!") return `¬(${e(expr.expr)})`;

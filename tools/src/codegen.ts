@@ -24,11 +24,15 @@ function leanType(tsType: string, nat: boolean): string {
 
 // ── Context ──────────────────────────────────────────────────
 
-function makeCtx(fn: FunctionSpec, resultVar: string): EmitContext {
+function makeCtx(fn: FunctionSpec): EmitContext {
   const arrayVars = new Set<string>();
   for (const p of fn.params) if (p.type.includes("[]") || p.type.includes("Array")) arrayVars.add(p.name);
   const natVars = new Set(fn.typeAnnotations.filter(t => t.type === "nat").map(t => t.name));
-  return { arrayVars, natVars, resultVar };
+  return { arrayVars, natVars };
+}
+
+function ensuresCtx(fn: FunctionSpec): EmitContext {
+  return { ...makeCtx(fn), resultVar: "res" };
 }
 
 // ── Return-in-loop check (SPEC.md §5.3) ─────────────────────
@@ -123,16 +127,15 @@ function generateFunction(fn: FunctionSpec): string[] {
   }
 
   const lines: string[] = [];
-  const specCtx = makeCtx(fn, "res");
-  const bodyCtx = makeCtx(fn, "res"); // \result doesn't appear in body, but just in case
+  const ctx = makeCtx(fn);
   const natNames = new Set(fn.typeAnnotations.filter(t => t.type === "nat").map(t => t.name));
 
   const params = fn.params.map(p => `(${p.name} : ${leanType(p.type, false)})`).join(" ");
   lines.push(`method ${fn.name} ${params} return (res : ${leanType(fn.returnType, false)})`);
-  for (const r of fn.requires) for (const c of specToClauses(r, specCtx)) lines.push(`  require ${c}`);
-  for (const e of fn.ensures) for (const c of specToClauses(e, specCtx)) lines.push(`  ensures ${c}`);
+  for (const r of fn.requires) for (const c of specToClauses(r, ctx)) lines.push(`  require ${c}`);
+  for (const e of fn.ensures) for (const c of specToClauses(e, ensuresCtx(fn))) lines.push(`  ensures ${c}`);
   lines.push("  do");
-  for (const bl of emitBody(fn.body, bodyCtx, natNames)) lines.push(`    ${bl}`);
+  for (const bl of emitBody(fn.body, ctx, natNames)) lines.push(`    ${bl}`);
 
   return lines;
 }
