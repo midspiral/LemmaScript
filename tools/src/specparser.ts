@@ -1,24 +1,9 @@
 /**
- * LemmaScript spec expression parser
+ * Spec expression parser and Lean emitter.
  *
- * Parses the TS-flavored expression language used in //@ annotations
- * and computational expressions, and emits Lean 4 syntax.
- *
- * Grammar (precedence low→high):
- *   expr     := implies
- *   implies  := or ('==>' implies)?
- *   or       := and ('||' and)*
- *   and      := compare ('&&' compare)*
- *   compare  := add (cmpOp add)?
- *   add      := mul (('+' | '-') mul)*
- *   mul      := unary (('*' | '/' | '%') unary)*
- *   unary    := '!' unary | '-' unary | postfix
- *   postfix  := atom ('.' ident | '[' expr ']' | '(' args ')')*
- *   atom     := NUM | IDENT | 'true' | 'false' | 'result'
- *             | 'forall' '(' IDENT (':' TYPE)? ',' expr ')'
- *             | 'exists' '(' IDENT (':' TYPE)? ',' expr ')'
- *             | '(' expr ')'
- *   TYPE     := 'nat' | 'int'
+ * Parses the //@ expression language (SPEC.md §3.2) and emits Lean 4 syntax.
+ * The parser produces an AST; the emitter translates it using an EmitContext
+ * that tracks which variables are Nat-typed.
  */
 
 // ── AST ──────────────────────────────────────────────────────
@@ -29,6 +14,7 @@ export type Expr =
   | { kind: "num"; value: number }
   | { kind: "bool"; value: boolean }
   | { kind: "var"; name: string }
+  | { kind: "result" }
   | { kind: "binop"; op: string; left: Expr; right: Expr }
   | { kind: "unop"; op: string; expr: Expr }
   | { kind: "call"; fn: Expr; args: Expr[] }
@@ -43,21 +29,28 @@ type Token =
   | { type: "num"; value: number }
   | { type: "ident"; value: string }
   | { type: "op"; value: string }
-  | { type: "punc"; value: string };
+  | { type: "punc"; value: string }
+  | { type: "result" };
 
-const MULTI_CHAR_OPS = ["==>", "===", "!==", ">=", "<=", "&&", "||"];
+const MULTI_OPS = ["==>", "===", "!==", ">=", "<=", "&&", "||"];
 
 function tokenize(input: string): Token[] {
   const tokens: Token[] = [];
   let i = 0;
-
   while (i < input.length) {
     if (/\s/.test(input[i])) { i++; continue; }
 
+    // \result
+    if (input[i] === "\\" && input.slice(i + 1, i + 7) === "result") {
+      tokens.push({ type: "result" });
+      i += 7;
+      continue;
+    }
+
     if (/[0-9]/.test(input[i])) {
-      let num = "";
-      while (i < input.length && /[0-9]/.test(input[i])) num += input[i++];
-      tokens.push({ type: "num", value: parseInt(num) });
+      let n = "";
+      while (i < input.length && /[0-9]/.test(input[i])) n += input[i++];
+      tokens.push({ type: "num", value: parseInt(n) });
       continue;
     }
 
@@ -69,7 +62,7 @@ function tokenize(input: string): Token[] {
     }
 
     let matched = false;
-    for (const op of MULTI_CHAR_OPS) {
+    for (const op of MULTI_OPS) {
       if (input.slice(i, i + op.length) === op) {
         tokens.push({ type: "op", value: op });
         i += op.length;
@@ -82,35 +75,31 @@ function tokenize(input: string): Token[] {
     const ch = input[i];
     if ("+-*/%><!".includes(ch)) {
       tokens.push({ type: "op", value: ch });
-      i++;
-    } else if ("()[],.:" .includes(ch)) {
+    } else if ("()[],:.".includes(ch)) {
       tokens.push({ type: "punc", value: ch });
-      i++;
     } else {
-      throw new Error(`Unexpected character '${ch}' at position ${i} in: ${input}`);
+      throw new Error(`Unexpected '${ch}' at ${i} in: ${input}`);
     }
+    i++;
   }
-
   return tokens;
 }
 
 // ── Parser ───────────────────────────────────────────────────
 
 class Parser {
-  private pos = 0;
+  pos = 0;
   constructor(private tokens: Token[]) {}
 
-  private peek(): Token | undefined { return this.tokens[this.pos]; }
-  private advance(): Token { return this.tokens[this.pos++]; }
-
-  private expect(type: string, value?: string): Token {
+  peek() { return this.tokens[this.pos]; }
+  advance() { return this.tokens[this.pos++]; }
+  expect(type: string, value?: string) {
     const t = this.advance();
     if (!t || t.type !== type || (value !== undefined && (t as any).value !== value))
-      throw new Error(`Expected ${type}${value ? ` '${value}'` : ""}, got ${t ? `${t.type} '${(t as any).value}'` : "EOF"}`);
+      throw new Error(`Expected ${type}${value ? ` '${value}'` : ""}, got ${t ? JSON.stringify(t) : "EOF"}`);
     return t;
   }
-
-  private match(type: string, value?: string): boolean {
+  match(type: string, value?: string) {
     const t = this.peek();
     if (t && t.type === type && (value === undefined || (t as any).value === value)) {
       this.pos++;
@@ -120,71 +109,58 @@ class Parser {
   }
 
   parse(): Expr {
-    const result = this.parseImplies();
-    if (this.pos < this.tokens.length)
-      throw new Error(`Unexpected token at end: ${JSON.stringify(this.peek())}`);
-    return result;
+    const r = this.parseImplies();
+    if (this.pos < this.tokens.length) throw new Error(`Unexpected: ${JSON.stringify(this.peek())}`);
+    return r;
   }
 
-  private parseImplies(): Expr {
+  parseImplies(): Expr {
     const left = this.parseOr();
-    if (this.match("op", "==>")) {
-      const right = this.parseImplies();
-      return { kind: "binop", op: "==>", left, right };
-    }
+    if (this.match("op", "==>")) return { kind: "binop", op: "==>", left, right: this.parseImplies() };
     return left;
   }
 
-  private parseOr(): Expr {
+  parseOr(): Expr {
     let left = this.parseAnd();
-    while (this.match("op", "||")) {
-      const right = this.parseAnd();
-      left = { kind: "binop", op: "||", left, right };
-    }
+    while (this.match("op", "||")) left = { kind: "binop", op: "||", left, right: this.parseAnd() };
     return left;
   }
 
-  private parseAnd(): Expr {
-    let left = this.parseCompare();
-    while (this.match("op", "&&")) {
-      const right = this.parseCompare();
-      left = { kind: "binop", op: "&&", left, right };
-    }
+  parseAnd(): Expr {
+    let left = this.parseCmp();
+    while (this.match("op", "&&")) left = { kind: "binop", op: "&&", left, right: this.parseCmp() };
     return left;
   }
 
-  private parseCompare(): Expr {
+  parseCmp(): Expr {
     const left = this.parseAdd();
     const t = this.peek();
     if (t?.type === "op" && ["===", "!==", ">=", "<=", ">", "<"].includes(t.value)) {
       this.advance();
-      const right = this.parseAdd();
-      return { kind: "binop", op: t.value, left, right };
+      return { kind: "binop", op: t.value, left, right: this.parseAdd() };
     }
     return left;
   }
 
-  private parseAdd(): Expr {
+  parseAdd(): Expr {
     let left = this.parseMul();
     while (this.peek()?.type === "op" && ["+", "-"].includes(this.peek()!.value)) {
       const op = this.advance().value;
-      const right = this.parseMul();
-      left = { kind: "binop", op, left, right };
+      left = { kind: "binop", op, left, right: this.parseMul() };
     }
     return left;
   }
 
-  private parseMul(): Expr {
+  parseMul(): Expr {
     let left = this.parseUnary();
     while (this.peek()?.type === "op" && ["*", "/", "%"].includes(this.peek()!.value)) {
       const op = this.advance().value;
-      const right = this.parseUnary();
-      left = { kind: "binop", op, left, right };
+      left = { kind: "binop", op, left, right: this.parseUnary() };
     }
     return left;
   }
 
-  private parseUnary(): Expr {
+  parseUnary(): Expr {
     if (this.match("op", "!")) return { kind: "unop", op: "!", expr: this.parseUnary() };
     if (this.peek()?.type === "op" && this.peek()!.value === "-") {
       const prev = this.pos > 0 ? this.tokens[this.pos - 1] : undefined;
@@ -196,12 +172,11 @@ class Parser {
     return this.parsePostfix();
   }
 
-  private parsePostfix(): Expr {
+  parsePostfix(): Expr {
     let expr = this.parseAtom();
     while (true) {
       if (this.match("punc", ".")) {
-        const prop = this.expect("ident").value as string;
-        expr = { kind: "prop", obj: expr, prop };
+        expr = { kind: "prop", obj: expr, prop: (this.expect("ident").value as string) };
       } else if (this.match("punc", "[")) {
         const idx = this.parseImplies();
         this.expect("punc", "]");
@@ -219,46 +194,40 @@ class Parser {
     return expr;
   }
 
-  private parseAtom(): Expr {
+  parseAtom(): Expr {
     const t = this.peek();
     if (!t) throw new Error("Unexpected end of expression");
-
+    if (t.type === "result") { this.advance(); return { kind: "result" }; }
     if (t.type === "num") { this.advance(); return { kind: "num", value: t.value }; }
-
     if (t.type === "ident") {
       if (t.value === "true") { this.advance(); return { kind: "bool", value: true }; }
       if (t.value === "false") { this.advance(); return { kind: "bool", value: false }; }
-
-      // forall(k, body) or forall(k: nat, body)
       if (t.value === "forall" || t.value === "exists") {
-        const q = t.value;
+        const q = t.value as "forall" | "exists";
         this.advance();
         this.expect("punc", "(");
         const v = this.expect("ident").value as string;
-        let varType: LeanType = "int"; // default
+        let varType: LeanType = "int";
         if (this.match("punc", ":")) {
           const ty = this.expect("ident").value as string;
-          if (ty === "nat") varType = "nat";
-          else if (ty !== "int") throw new Error(`Unknown type '${ty}', expected 'nat' or 'int'`);
+          if (ty !== "nat" && ty !== "int") throw new Error(`Unknown type '${ty}'`);
+          varType = ty;
         }
         this.expect("punc", ",");
         const body = this.parseImplies();
         this.expect("punc", ")");
-        return { kind: q as "forall" | "exists", var: v, varType, body };
+        return { kind: q, var: v, varType, body };
       }
-
       this.advance();
       return { kind: "var", name: t.value };
     }
-
     if (t.type === "punc" && t.value === "(") {
       this.advance();
       const expr = this.parseImplies();
       this.expect("punc", ")");
       return expr;
     }
-
-    throw new Error(`Unexpected token: ${JSON.stringify(t)}`);
+    throw new Error(`Unexpected: ${JSON.stringify(t)}`);
   }
 }
 
@@ -267,147 +236,112 @@ class Parser {
 export interface EmitContext {
   arrayVars: Set<string>;
   natVars: Set<string>;
+  /** What \result maps to — "res" in ensures, unused elsewhere */
   resultVar: string;
 }
 
-const defaultContext: EmitContext = {
-  arrayVars: new Set(),
-  natVars: new Set(),
-  resultVar: "result",
-};
-
-/** Is this expression Nat-typed given the context? */
 export function isNat(expr: Expr, ctx: EmitContext): boolean {
   switch (expr.kind) {
     case "num": return expr.value >= 0;
     case "var": return ctx.natVars.has(expr.name);
-    case "prop": return expr.prop === "length" && isArrayExpr(expr.obj, ctx); // arr.size is Nat
-    case "binop":
-      if (["+", "-", "*", "/", "%"].includes(expr.op))
-        return isNat(expr.left, ctx) && isNat(expr.right, ctx);
-      return false;
-    case "unop": return false; // -x is Int
-    case "call": return false; // conservative
+    case "prop": return expr.prop === "length" && expr.obj.kind === "var" && ctx.arrayVars.has(expr.obj.name);
+    case "binop": return ["+", "-", "*", "/", "%"].includes(expr.op) && isNat(expr.left, ctx) && isNat(expr.right, ctx);
     default: return false;
   }
 }
 
-function isArrayExpr(expr: Expr, ctx: EmitContext): boolean {
-  return expr.kind === "var" && ctx.arrayVars.has(expr.name);
-}
-
-export function splitConjuncts(expr: Expr): Expr[] {
-  if (expr.kind === "binop" && expr.op === "&&") {
-    return [...splitConjuncts(expr.left), ...splitConjuncts(expr.right)];
-  }
+function splitConj(expr: Expr): Expr[] {
+  if (expr.kind === "binop" && expr.op === "&&") return [...splitConj(expr.left), ...splitConj(expr.right)];
   return [expr];
 }
 
-function flattenImplication(expr: Expr): { premises: Expr[]; conclusion: Expr } {
+function flattenImpl(expr: Expr): { premises: Expr[]; conclusion: Expr } {
   if (expr.kind === "binop" && expr.op === "==>") {
-    const lhsParts = splitConjuncts(expr.left);
-    const rest = flattenImplication(expr.right);
-    return { premises: [...lhsParts, ...rest.premises], conclusion: rest.conclusion };
+    const lhs = splitConj(expr.left);
+    const rest = flattenImpl(expr.right);
+    return { premises: [...lhs, ...rest.premises], conclusion: rest.conclusion };
   }
   return { premises: [], conclusion: expr };
 }
 
-function needsParens(expr: Expr, parentOp?: string): boolean {
-  if (expr.kind !== "binop") return false;
-  const prec: Record<string, number> = {
+function prec(op: string): number {
+  const p: Record<string, number> = {
     "==>": 1, "||": 2, "&&": 3,
     "===": 4, "!==": 4, ">=": 4, "<=": 4, ">": 4, "<": 4,
     "+": 5, "-": 5, "*": 6, "/": 6, "%": 6,
   };
-  if (!parentOp) return false;
-  return (prec[expr.op] ?? 10) < (prec[parentOp] ?? 10);
+  return p[op] ?? 10;
 }
 
-function emitLean(expr: Expr, ctx: EmitContext, parentOp?: string): string {
-  const emit = (e: Expr, pOp?: string) => emitLean(e, ctx, pOp);
+function emit(expr: Expr, ctx: EmitContext, parentOp?: string): string {
+  const e = (x: Expr, p?: string) => emit(x, ctx, p);
 
   switch (expr.kind) {
-    case "num":
-      return expr.value < 0 ? `(${expr.value})` : `${expr.value}`;
-
-    case "bool":
-      return expr.value ? "True" : "False";
-
-    case "var":
-      if (expr.name === "result") return ctx.resultVar;
-      return expr.name;
+    case "num": return `${expr.value}`;
+    case "bool": return expr.value ? "True" : "False";
+    case "var": return expr.name;
+    case "result": return ctx.resultVar;
 
     case "unop":
-      if (expr.op === "!") return `¬${emit(expr.expr)}`;
+      if (expr.op === "!") return `¬(${e(expr.expr)})`;
       if (expr.op === "-") {
         if (expr.expr.kind === "num") return `-${expr.expr.value}`;
-        return `(-${emit(expr.expr)})`;
+        return `(-${e(expr.expr)})`;
       }
-      return `(${expr.op} ${emit(expr.expr)})`;
+      return `(${expr.op} ${e(expr.expr)})`;
 
     case "binop": {
       if (expr.op === "==>") {
-        const { premises, conclusion } = flattenImplication(expr);
-        const parts = [...premises.map(p => emit(p)), emit(conclusion)];
-        const result = parts.join(" → ");
-        return parentOp ? `(${result})` : result;
+        const { premises, conclusion } = flattenImpl(expr);
+        const r = [...premises.map(p => e(p)), e(conclusion)].join(" → ");
+        return parentOp ? `(${r})` : r;
       }
-
-      const opMap: Record<string, string> = {
-        "===": "=", "!==": "≠", ">=": "≥", "<=": "≤",
-        "&&": "∧", "||": "∨",
-        "+": "+", "-": "-", "*": "*", "/": "/", "%": "%",
-        ">": ">", "<": "<",
+      const ops: Record<string, string> = {
+        "===": "=", "!==": "≠", ">=": "≥", "<=": "≤", ">": ">", "<": "<",
+        "&&": "∧", "||": "∨", "+": "+", "-": "-", "*": "*", "/": "/", "%": "%",
       };
-      const leanOp = opMap[expr.op] ?? expr.op;
-      const result = `${emit(expr.left, expr.op)} ${leanOp} ${emit(expr.right, expr.op)}`;
-      return needsParens(expr, parentOp) ? `(${result})` : result;
+      const r = `${e(expr.left, expr.op)} ${ops[expr.op] ?? expr.op} ${e(expr.right, expr.op)}`;
+      return (parentOp && prec(expr.op) < prec(parentOp)) ? `(${r})` : r;
     }
 
-    case "prop":
-      if (expr.prop === "length" && isArrayExpr(expr.obj, ctx)) {
-        return `${emit(expr.obj)}.size`;
-      }
-      return `${emit(expr.obj)}.${expr.prop}`;
+    case "prop": {
+      if (expr.prop === "length" && expr.obj.kind === "var" && ctx.arrayVars.has(expr.obj.name))
+        return `${e(expr.obj)}.size`;
+      // Wrap non-atomic objects for dot access
+      const obj = e(expr.obj);
+      const atomic = expr.obj.kind === "var" || expr.obj.kind === "num" || expr.obj.kind === "bool";
+      return atomic ? `${obj}.${expr.prop}` : `(${obj}).${expr.prop}`;
+    }
 
     case "index": {
-      if (isArrayExpr(expr.obj, ctx)) {
-        const idx = emit(expr.idx);
-        // Nat index: arr[i]!  Int index: arr[i.toNat]!
-        return isNat(expr.idx, ctx) ? `${emit(expr.obj)}[${idx}]!` : `${emit(expr.obj)}[${idx}.toNat]!`;
+      if (expr.obj.kind === "var" && ctx.arrayVars.has(expr.obj.name)) {
+        const idx = e(expr.idx);
+        return isNat(expr.idx, ctx) ? `${e(expr.obj)}[${idx}]!` : `${e(expr.obj)}[${idx}.toNat]!`;
       }
-      return `${emit(expr.obj)}[${emit(expr.idx)}]`;
+      return `${e(expr.obj)}[${e(expr.idx)}]`;
     }
 
     case "call": {
+      // Math.floor(x) → x
       if (expr.fn.kind === "prop" && expr.fn.prop === "floor" &&
-          expr.fn.obj.kind === "var" && expr.fn.obj.name === "Math" &&
-          expr.args.length === 1) {
-        return emit(expr.args[0]);
-      }
-      const fnName = expr.fn.kind === "var" ? expr.fn.name : emit(expr.fn);
-      const leanArgs = expr.args.map(a => {
-        const s = emit(a);
-        return a.kind === "binop" || a.kind === "unop" ? `(${s})` : s;
+          expr.fn.obj.kind === "var" && expr.fn.obj.name === "Math" && expr.args.length === 1)
+        return e(expr.args[0]);
+      const fn = expr.fn.kind === "var" ? expr.fn.name : e(expr.fn);
+      const args = expr.args.map(a => {
+        const s = e(a);
+        return (a.kind === "binop" || a.kind === "unop") ? `(${s})` : s;
       });
-      return `${fnName} ${leanArgs.join(" ")}`;
+      return `${fn} ${args.join(" ")}`;
     }
 
-    case "forall": {
-      const leanType = expr.varType === "nat" ? "Nat" : "Int";
-      // Add quantified variable to natVars for body emission
-      const bodyCtx = expr.varType === "nat"
-        ? { ...ctx, natVars: new Set([...ctx.natVars, expr.var]) }
-        : ctx;
-      return `∀ ${expr.var} : ${leanType}, ${emitLean(expr.body, bodyCtx)}`;
-    }
-
+    case "forall":
     case "exists": {
-      const leanType = expr.varType === "nat" ? "Nat" : "Int";
+      const sym = expr.kind === "forall" ? "∀" : "∃";
+      const ty = expr.varType === "nat" ? "Nat" : "Int";
       const bodyCtx = expr.varType === "nat"
         ? { ...ctx, natVars: new Set([...ctx.natVars, expr.var]) }
         : ctx;
-      return `∃ ${expr.var} : ${leanType}, ${emitLean(expr.body, bodyCtx)}`;
+      return `${sym} ${expr.var} : ${ty}, ${emit(expr.body, bodyCtx)}`;
     }
   }
 }
@@ -418,15 +352,11 @@ export function parseExpr(input: string): Expr {
   return new Parser(tokenize(input)).parse();
 }
 
-export function exprToLean(input: string, ctx?: Partial<EmitContext>): string {
-  return emitLean(parseExpr(input), { ...defaultContext, ...ctx });
+export function exprToLean(input: string, ctx: EmitContext): string {
+  return emit(parseExpr(input), ctx);
 }
 
-export function astToLean(expr: Expr, ctx?: Partial<EmitContext>): string {
-  return emitLean(expr, { ...defaultContext, ...ctx });
-}
-
-export function specToClauses(input: string, ctx?: Partial<EmitContext>): string[] {
-  const fullCtx = { ...defaultContext, ...ctx };
-  return splitConjuncts(parseExpr(input)).map(e => emitLean(e, fullCtx));
+/** Split top-level && and emit each conjunct as a separate Lean clause. */
+export function specToClauses(input: string, ctx: EmitContext): string[] {
+  return splitConj(parseExpr(input)).map(e => emit(e, ctx));
 }

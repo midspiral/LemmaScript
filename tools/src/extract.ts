@@ -1,322 +1,186 @@
 /**
- * LemmaScript //@ annotation extractor — Phase 0 prototype
+ * TS extractor — parses TypeScript with //@ annotations, produces IR.
  *
- * Parses a TypeScript file using ts-morph, extracts //@ annotations,
- * associates them with their AST nodes (functions, loops), and outputs
- * a structured IR that the code generator would consume.
- *
- * Usage: npx tsx src/extract.ts <file.ts>
+ * The IR is consumed by the code generator to produce .def.lean files.
  */
 
-import { Project, SyntaxKind, Node, FunctionDeclaration, WhileStatement, ForStatement, SourceFile } from "ts-morph";
+import { Project, SyntaxKind, Node, FunctionDeclaration, WhileStatement, SourceFile } from "ts-morph";
 
-// ------------------------------------------------------------------
-// IR types — what the code generator would receive
-// ------------------------------------------------------------------
+// ── IR types ─────────────────────────────────────────────────
 
-interface Annotation {
-  kind: "requires" | "ensures" | "invariant" | "decreases" | "assert" | "import" | "nat";
-  expr: string;
-  line: number;
+export interface ParamSpec { name: string; type: string }
+export interface LetSpec { kind: "let"; name: string; mutable: boolean; init: string; line: number }
+export interface AssignSpec { kind: "assign"; target: string; value: string; line: number }
+export interface ReturnSpec { kind: "return"; value: string; line: number }
+export interface BreakSpec { kind: "break"; line: number }
+export interface ExprStmtSpec { kind: "expr"; text: string; line: number }
+export interface IfSpec { kind: "if"; condition: string; then: StmtSpec[]; else: StmtSpec[]; line: number }
+export interface WhileSpec {
+  kind: "while"; condition: string;
+  invariants: string[]; decreases: string | null; doneWith: string | null;
+  body: StmtSpec[]; line: number;
 }
+export type StmtSpec = LetSpec | AssignSpec | ReturnSpec | BreakSpec | ExprStmtSpec | IfSpec | WhileSpec;
 
-interface ParamSpec {
-  name: string;
-  type: string;
-}
-
-interface WhileSpec {
-  kind: "while";
-  condition: string;
-  invariants: string[];
-  decreases: string | null;
-  body: StatementSpec[];
-  line: number;
-}
-
-interface IfSpec {
-  kind: "if";
-  condition: string;
-  then: StatementSpec[];
-  else: StatementSpec[];
-  line: number;
-}
-
-interface LetSpec {
-  kind: "let";
-  name: string;
-  mutable: boolean;
-  type: string | null;
-  init: string;
-  line: number;
-}
-
-interface ReturnSpec {
-  kind: "return";
-  value: string;
-  line: number;
-}
-
-interface AssignSpec {
-  kind: "assign";
-  target: string;
-  value: string;
-  line: number;
-}
-
-interface ExprStmtSpec {
-  kind: "expr";
-  text: string;
-  line: number;
-}
-
-type StatementSpec = WhileSpec | IfSpec | LetSpec | ReturnSpec | AssignSpec | ExprStmtSpec;
-
-interface FunctionSpec {
+export interface FunctionSpec {
   name: string;
   params: ParamSpec[];
   returnType: string;
   requires: string[];
   ensures: string[];
-  natVars: string[];
-  body: StatementSpec[];
+  typeAnnotations: { name: string; type: string }[];
+  body: StmtSpec[];
   line: number;
 }
 
-interface ModuleSpec {
+export interface ModuleSpec {
   file: string;
-  imports: string[];
   functions: FunctionSpec[];
 }
 
-// ------------------------------------------------------------------
-// Annotation parsing
-// ------------------------------------------------------------------
+// ── Annotation parsing ───────────────────────────────────────
 
-const ANNOTATION_PREFIX = "//@ ";
+const PREFIX = "//@ ";
+const KEYWORDS = ["requires", "ensures", "invariant", "decreases", "done_with", "type"] as const;
+type AnnotKind = (typeof KEYWORDS)[number];
+
+interface Annotation { kind: AnnotKind; expr: string }
 
 function parseAnnotations(node: Node): Annotation[] {
-  const annotations: Annotation[] = [];
-  const ranges = node.getLeadingCommentRanges();
-
-  for (const range of ranges) {
+  const result: Annotation[] = [];
+  for (const range of node.getLeadingCommentRanges()) {
     const text = range.getText().trim();
-    if (!text.startsWith(ANNOTATION_PREFIX)) continue;
-
-    const content = text.slice(ANNOTATION_PREFIX.length);
-    const spaceIdx = content.indexOf(" ");
-    if (spaceIdx === -1) continue;
-
-    const keyword = content.slice(0, spaceIdx);
-    const expr = content.slice(spaceIdx + 1).trim();
-    const line = range.getPos();
-
-    const validKinds = ["requires", "ensures", "invariant", "decreases", "assert", "import", "nat"];
-    if (validKinds.includes(keyword)) {
-      annotations.push({ kind: keyword as Annotation["kind"], expr, line });
-    }
+    if (!text.startsWith(PREFIX)) continue;
+    const content = text.slice(PREFIX.length);
+    const sp = content.indexOf(" ");
+    if (sp === -1) continue;
+    const kw = content.slice(0, sp);
+    if (!(KEYWORDS as readonly string[]).includes(kw)) continue;
+    result.push({ kind: kw as AnnotKind, expr: content.slice(sp + 1).trim() });
   }
-
-  return annotations;
+  return result;
 }
 
-// ------------------------------------------------------------------
-// Statement extraction
-// ------------------------------------------------------------------
+/** Collect annotations from a node and its first child statement. */
+function collectAnnotations(node: Node, body?: Node[]): Annotation[] {
+  const own = parseAnnotations(node);
+  if (body && body.length > 0) return [...own, ...parseAnnotations(body[0])];
+  return own;
+}
 
-function extractStatements(stmts: Node[]): StatementSpec[] {
-  const result: StatementSpec[] = [];
+// ── Statement extraction ─────────────────────────────────────
 
-  for (const stmt of stmts) {
-    const line = stmt.getStartLineNumber();
+function extractStmts(stmts: Node[]): StmtSpec[] {
+  const result: StmtSpec[] = [];
+  for (const s of stmts) {
+    const line = s.getStartLineNumber();
 
-    // Variable declaration
-    if (Node.isVariableStatement(stmt)) {
-      for (const decl of stmt.getDeclarations()) {
-        const mutable = stmt.getDeclarationKind() === "let";
+    if (Node.isVariableStatement(s)) {
+      for (const d of s.getDeclarations()) {
         result.push({
-          kind: "let",
-          name: decl.getName(),
-          mutable,
-          type: decl.getTypeNode()?.getText() ?? null,
-          init: decl.getInitializer()?.getText() ?? "",
-          line,
+          kind: "let", name: d.getName(), mutable: s.getDeclarationKind() === "let",
+          init: d.getInitializer()?.getText() ?? "", line,
         });
       }
       continue;
     }
 
-    // While loop
-    if (Node.isWhileStatement(stmt)) {
-      const whileStmt = stmt as WhileStatement;
-      const annotations = parseAnnotations(stmt);
-      // Also check for annotations on the first statement inside the loop body
-      const bodyStmts = whileStmt.getStatement();
-      let bodyAnnotations: Annotation[] = [];
-      if (Node.isBlock(bodyStmts)) {
-        const firstChild = bodyStmts.getStatements()[0];
-        if (firstChild) {
-          bodyAnnotations = parseAnnotations(firstChild);
-        }
-      }
-      const allAnnotations = [...annotations, ...bodyAnnotations];
-
-      const invariants = allAnnotations
-        .filter((a) => a.kind === "invariant")
-        .map((a) => a.expr);
-      const decreases = allAnnotations.find((a) => a.kind === "decreases")?.expr ?? null;
-
-      const body = Node.isBlock(bodyStmts)
-        ? extractStatements(bodyStmts.getStatements())
-        : [];
-
+    if (Node.isWhileStatement(s)) {
+      const bodyNode = s.getStatement();
+      const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [];
+      const annots = collectAnnotations(s, bodyStmts);
       result.push({
         kind: "while",
-        condition: whileStmt.getExpression().getText(),
-        invariants,
-        decreases,
-        body,
+        condition: s.getExpression().getText(),
+        invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
+        decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
+        doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
+        body: extractStmts(bodyStmts),
         line,
       });
       continue;
     }
 
-    // If statement
-    if (Node.isIfStatement(stmt)) {
-      const thenStmt = stmt.getThenStatement();
-      const elseStmt = stmt.getElseStatement();
+    if (Node.isIfStatement(s)) {
+      const thenNode = s.getThenStatement();
+      const elseNode = s.getElseStatement();
       result.push({
         kind: "if",
-        condition: stmt.getExpression().getText(),
-        then: Node.isBlock(thenStmt)
-          ? extractStatements(thenStmt.getStatements())
-          : extractStatements([thenStmt]),
-        else: elseStmt
-          ? Node.isBlock(elseStmt)
-            ? extractStatements(elseStmt.getStatements())
-            : extractStatements([elseStmt])
+        condition: s.getExpression().getText(),
+        then: Node.isBlock(thenNode) ? extractStmts(thenNode.getStatements()) : extractStmts([thenNode]),
+        else: elseNode
+          ? Node.isBlock(elseNode) ? extractStmts(elseNode.getStatements()) : extractStmts([elseNode])
           : [],
         line,
       });
       continue;
     }
 
-    // Return
-    if (Node.isReturnStatement(stmt)) {
-      result.push({
-        kind: "return",
-        value: stmt.getExpression()?.getText() ?? "",
-        line,
-      });
+    if (Node.isReturnStatement(s)) {
+      result.push({ kind: "return", value: s.getExpression()?.getText() ?? "", line });
       continue;
     }
 
-    // Expression statement (assignments, function calls)
-    if (Node.isExpressionStatement(stmt)) {
-      const expr = stmt.getExpression();
+    if (Node.isBreakStatement(s)) {
+      result.push({ kind: "break", line });
+      continue;
+    }
+
+    if (Node.isExpressionStatement(s)) {
+      const expr = s.getExpression();
       if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getText() === "=") {
-        result.push({
-          kind: "assign",
-          target: expr.getLeft().getText(),
-          value: expr.getRight().getText(),
-          line,
-        });
+        result.push({ kind: "assign", target: expr.getLeft().getText(), value: expr.getRight().getText(), line });
       } else {
-        result.push({
-          kind: "expr",
-          text: expr.getText(),
-          line,
-        });
+        result.push({ kind: "expr", text: expr.getText(), line });
       }
       continue;
     }
 
-    // Fallback
-    result.push({
-      kind: "expr",
-      text: stmt.getText(),
-      line,
-    });
+    result.push({ kind: "expr", text: s.getText(), line });
   }
-
   return result;
 }
 
-// ------------------------------------------------------------------
-// Function extraction
-// ------------------------------------------------------------------
+// ── Function extraction ──────────────────────────────────────
 
 function extractFunction(fn: FunctionDeclaration): FunctionSpec {
-  const annotations = parseAnnotations(fn);
-  // Also check annotations on the first statement of the body
   const bodyStmts = fn.getBody()?.getStatements() ?? [];
-  const firstStmtAnnotations = bodyStmts.length > 0 ? parseAnnotations(bodyStmts[0]) : [];
-  const allAnnotations = [...annotations, ...firstStmtAnnotations];
+  const annots = collectAnnotations(fn, bodyStmts);
 
-  const requires = allAnnotations.filter((a) => a.kind === "requires").map((a) => a.expr);
-  const ensures = allAnnotations.filter((a) => a.kind === "ensures").map((a) => a.expr);
-  const natVars = allAnnotations.filter((a) => a.kind === "nat").map((a) => a.expr);
-
-  const params = fn.getParameters().map((p) => ({
-    name: p.getName(),
-    type: p.getTypeNode()?.getText() ?? "unknown",
-  }));
+  const typeAnnotations: { name: string; type: string }[] = [];
+  for (const a of annots) {
+    if (a.kind === "type") {
+      const parts = a.expr.split(/\s+/);
+      if (parts.length === 2) typeAnnotations.push({ name: parts[0], type: parts[1] });
+    }
+  }
 
   return {
     name: fn.getName() ?? "<anonymous>",
-    params,
+    params: fn.getParameters().map(p => ({ name: p.getName(), type: p.getTypeNode()?.getText() ?? "unknown" })),
     returnType: fn.getReturnTypeNode()?.getText() ?? "unknown",
-    requires,
-    ensures,
-    natVars,
-    body: extractStatements(bodyStmts),
+    requires: annots.filter(a => a.kind === "requires").map(a => a.expr),
+    ensures: annots.filter(a => a.kind === "ensures").map(a => a.expr),
+    typeAnnotations,
+    body: extractStmts(bodyStmts),
     line: fn.getStartLineNumber(),
   };
 }
 
-// ------------------------------------------------------------------
-// Module extraction
-// ------------------------------------------------------------------
+// ── Module extraction ────────────────────────────────────────
 
 export function extractModule(sourceFile: SourceFile): ModuleSpec {
-  // Collect top-level //@ import annotations
-  const imports: string[] = [];
-  const firstStmt = sourceFile.getStatements()[0];
-  if (firstStmt) {
-    const annotations = parseAnnotations(firstStmt);
-    for (const a of annotations) {
-      if (a.kind === "import") imports.push(a.expr);
-    }
-  }
-
-  const functions = sourceFile
-    .getFunctions()
-    .map(extractFunction);
-
   return {
     file: sourceFile.getFilePath(),
-    imports,
-    functions,
+    functions: sourceFile.getFunctions().map(extractFunction),
   };
 }
 
-// ------------------------------------------------------------------
-// Main (when run directly)
-// ------------------------------------------------------------------
+// ── Main ─────────────────────────────────────────────────────
 
-if (process.argv[1]?.endsWith("extract.ts") || process.argv[1]?.endsWith("extract.js")) {
-  const filePath = process.argv[2];
-  if (!filePath) {
-    console.error("Usage: npx tsx src/extract.ts <file.ts>");
-    process.exit(1);
-  }
-
-  const project = new Project({
-    compilerOptions: { strict: true },
-  });
-
-  const sourceFile = project.addSourceFileAtPath(filePath);
-  const spec = extractModule(sourceFile);
-
-  console.log(JSON.stringify(spec, null, 2));
+if (process.argv[1]?.match(/extract\.(ts|js)$/)) {
+  const file = process.argv[2];
+  if (!file) { console.error("Usage: extract <file.ts>"); process.exit(1); }
+  const proj = new Project({ compilerOptions: { strict: true } });
+  console.log(JSON.stringify(extractModule(proj.addSourceFileAtPath(file)), null, 2));
 }

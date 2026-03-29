@@ -2,21 +2,22 @@
  * lsc — LemmaScript compiler CLI
  *
  * Usage:
- *   npx tsx src/lsc.ts check <file.ts>     — extract, generate, print Lean
- *   npx tsx src/lsc.ts extract <file.ts>   — extract only (print IR JSON)
+ *   lsc gen <file.ts>       — generate .def.lean
+ *   lsc check <file.ts>    — gen + lake build
+ *   lsc extract <file.ts>  — print IR JSON
  */
 
 import { Project } from "ts-morph";
-import { existsSync } from "fs";
+import { existsSync, writeFileSync } from "fs";
+import { execSync } from "child_process";
 import path from "path";
 import { extractModule } from "./extract.js";
-import { generateLean } from "./codegen.js";
+import { generateDef } from "./codegen.js";
 
 function main() {
   const [cmd, filePath] = process.argv.slice(2);
-
   if (!cmd || !filePath) {
-    console.error("Usage: lsc <check|extract> <file.ts>");
+    console.error("Usage: lsc <gen|check|extract> <file.ts>");
     process.exit(1);
   }
 
@@ -35,12 +36,47 @@ function main() {
     return;
   }
 
-  if (cmd === "check" || cmd === "gen") {
-    const baseName = path.basename(filePath, ".ts");
-    const specPath = path.join(path.dirname(absPath), `${baseName}.spec.lean`);
-    const specImport = existsSync(specPath) ? `«${baseName}.spec»` : undefined;
-    const lean = generateLean(mod, specImport);
-    console.log(lean);
+  // Determine spec import
+  const dir = path.dirname(absPath);
+  const base = path.basename(filePath, ".ts");
+  const specPath = path.join(dir, `${base}.spec.lean`);
+  const specImport = existsSync(specPath) ? `«${base}.spec»` : undefined;
+
+  const lean = generateDef(mod, specImport);
+
+  if (cmd === "gen") {
+    const defPath = path.join(dir, `${base}.def.lean`);
+    writeFileSync(defPath, lean);
+    console.log(`Generated: ${defPath}`);
+    return;
+  }
+
+  if (cmd === "check") {
+    const defPath = path.join(dir, `${base}.def.lean`);
+    writeFileSync(defPath, lean);
+    console.log(`Generated: ${defPath}`);
+
+    // Find lakefile
+    let lakeDir = dir;
+    while (lakeDir !== path.dirname(lakeDir)) {
+      if (existsSync(path.join(lakeDir, "lakefile.lean"))) break;
+      lakeDir = path.dirname(lakeDir);
+    }
+
+    // Build the proof file
+    const proofPath = path.join(dir, `${base}.proof.lean`);
+    if (!existsSync(proofPath)) {
+      console.error(`No proof file: ${proofPath}`);
+      console.error(`Create it with: prove_correct ${mod.functions[0]?.name ?? "fn"} by loom_solve`);
+      process.exit(1);
+    }
+
+    console.log("Running lake build...");
+    try {
+      execSync(`lake build`, { cwd: lakeDir, stdio: "inherit" });
+    } catch {
+      process.exit(1);
+    }
     return;
   }
 
