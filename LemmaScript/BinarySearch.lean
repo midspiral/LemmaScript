@@ -11,10 +11,10 @@ set_option loom.semantics.choice "demonic"
 
 method binarySearch (arr : Array Int) (target : Int) return (res : Int)
   require sorted arr
-  require 0 < arr.size
-  ensures -1 ≤ res
+  require arr.size > 0
+  ensures res ≥ -1
   ensures res < arr.size
-  ensures 0 ≤ res → arr[res.toNat]! = target
+  ensures res ≥ 0 → arr[res.toNat]! = target
   ensures res = -1 → ∀ k : Int, 0 ≤ k → k < arr.size → arr[k.toNat]! ≠ target
   do
     let mut lo : Int := 0
@@ -27,8 +27,8 @@ method binarySearch (arr : Array Int) (target : Int) return (res : Int)
       invariant hi < arr.size
       invariant ∀ k : Int, 0 ≤ k → k < lo → arr[k.toNat]! ≠ target
       invariant ∀ k : Int, hi < k → k < arr.size → arr[k.toNat]! ≠ target
-      invariant result = -1 ∨ 0 ≤ result ∧ result < arr.size ∧ arr[result.toNat]! = target
-      done_with result ≠ -1 ∨ lo > hi
+      invariant result = -1 ∨ result ≥ 0 ∧ result < arr.size ∧ arr[result.toNat]! = target
+      done_with result ≠ -1 ∨ ¬(lo ≤ hi)
       decreasing (hi - lo + 1).toNat
     do
       let mid := (lo + hi) / 2

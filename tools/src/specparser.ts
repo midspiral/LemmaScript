@@ -342,22 +342,11 @@ function emitLean(expr: Expr, ctx: EmitContext, parentOp?: string): string {
         return parentOp ? `(${result})` : result;
       }
 
-      // Normalize >= to ≤ and > to < (flip operands).
-      // loom_solve handles ≤ and < but not ≥ and >.
-      if (expr.op === ">=") {
-        const result = `${emit(expr.right, "<=")} ≤ ${emit(expr.left, "<=")}`;
-        return needsParens(expr, parentOp) ? `(${result})` : result;
-      }
-      if (expr.op === ">") {
-        const result = `${emit(expr.right, "<")} < ${emit(expr.left, "<")}`;
-        return needsParens(expr, parentOp) ? `(${result})` : result;
-      }
-
       const opMap: Record<string, string> = {
-        "===": "=", "!==": "≠", "<=": "≤",
+        "===": "=", "!==": "≠", ">=": "≥", "<=": "≤",
         "&&": "∧", "||": "∨",
         "+": "+", "-": "-", "*": "*", "/": "/", "%": "%",
-        "<": "<",
+        ">": ">", "<": "<",
       };
       const leanOp = opMap[expr.op] ?? expr.op;
       const result = `${emit(expr.left, expr.op)} ${leanOp} ${emit(expr.right, expr.op)}`;

@@ -165,14 +165,7 @@ function flattenImplConclusion(expr: Expr): Expr {
 
 /** Negate a simple comparison for done_with clauses. */
 function negateCondition(cond: string, ctx: ReturnType<typeof makeBodyCtx>): string {
-  // Simple pattern: "a <= b" → "a > b", "a < b" → "a >= b", etc.
-  const leanCond = exprToLean(cond, ctx);
-  if (leanCond.includes(" ≤ ")) return leanCond.replace(" ≤ ", " > ");
-  if (leanCond.includes(" < ")) return leanCond.replace(" < ", " ≥ ");
-  if (leanCond.includes(" ≥ ")) return leanCond.replace(" ≥ ", " < ");
-  if (leanCond.includes(" > ")) return leanCond.replace(" > ", " ≤ ");
-  if (leanCond.includes(" = ")) return leanCond.replace(" = ", " ≠ ");
-  return `¬(${leanCond})`;
+  return `¬(${exprToLean(cond, ctx)})`;
 }
 
 // ── Body emission ────────────────────────────────────────────
