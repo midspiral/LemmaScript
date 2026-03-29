@@ -1,0 +1,16 @@
+{
+  "name": "@lemmascript/tools",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "extract": "tsx src/extract.ts"
+  },
+  "dependencies": {
+    "ts-morph": "^25.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}

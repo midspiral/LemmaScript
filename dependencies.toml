@@ -1,0 +1,3 @@
+# Solver versions — changes trigger re-download
+z3 = "4.15.4"
+cvc5 = "1.3.1"

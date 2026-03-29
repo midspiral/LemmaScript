@@ -1,0 +1,9 @@
+# Lean
+.lake/
+
+# Node
+node_modules/
+dist/
+
+# Generated Loom embeddings
+.lsc/
