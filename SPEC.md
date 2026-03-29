@@ -378,6 +378,8 @@ The library depends on:
 
 Pre-built oleans are distributed so user projects skip compilation.
 
+**Future: replacing Velvet with LemmaScript-native macros.** The Velvet fork is pragmatic for Phase 1. Long term, building our own Lean macros on Loom directly would give us: exact control over the generated proof state (no `WithName` surprises), TS-specific constructs (e.g., `break` with return value, for-of loops) without waiting on Velvet, error messages that reference TS source instead of Velvet internals, and independent evolution from Velvet's Dafny-oriented design. The fork gives us time to learn exactly which Velvet behaviors to keep.
+
 ---
 
 ## 11. Findings from Phase 0
