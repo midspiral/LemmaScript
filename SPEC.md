@@ -57,7 +57,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | Keyword | Placement | Meaning |
 |---------|-----------|---------|
 | `requires` | Before first statement of function body | Precondition |
-| `ensures` | Before first statement of function body | Postcondition (`result` refers to return value) |
+| `ensures` | Before first statement of function body | Postcondition (`\result` refers to return value) |
 | `invariant` | Before first statement of loop body | Loop invariant |
 | `decreases` | Before first statement of loop body | Termination metric |
 | `type` | Before first statement of function body | Type override for a variable (see §3.3) |
@@ -77,14 +77,14 @@ add      := mul (('+' | '-') mul)*
 mul      := unary (('*' | '/' | '%') unary)*
 unary    := '!' unary | '-' unary | postfix
 postfix  := atom ('.' ident | '[' expr ']' | '(' args ')')*
-atom     := NUMBER | IDENT | 'true' | 'false' | 'result'
+atom     := NUMBER | IDENT | 'true' | 'false' | '\result'
           | 'forall' '(' IDENT (':' TYPE)? ',' expr ')'
           | 'exists' '(' IDENT (':' TYPE)? ',' expr ')'
           | '(' expr ')'
 TYPE     := 'nat' | 'int'
 ```
 
-**`result`** in ensures refers to the function's return value. In loop invariants when the function has an early return inside the loop, `result` refers to the tentative return value (see §5.3).
+**`\result`** refers to the function's return value (following Frama-C/ACSL convention). It is only valid in `ensures` annotations. The `\` prefix distinguishes it from any TS variable named `result`.
 
 **`forall(k, P)`** quantifies `k` as `Int` by default. **`forall(k: nat, P)`** quantifies as `Nat`.
 
@@ -137,7 +137,7 @@ No normalization of `≥` to `≤` or similar. Lean and `loom_solve` handle all 
 | `arr[e]` where `e` is Int-typed | `arr[e.toNat]!` | Int-to-Nat conversion for indexing. |
 | `f(a, b)` | `f a b` | Ghost function call (Lean application syntax). |
 | `Math.floor(e)` | `e` | Int division in Lean is already floor. |
-| `result` | `res` in ensures; `result` in invariants with return-in-loop | See §5.3. |
+| `\result` | `res` | Only valid in `ensures`. |
 | `forall(k, P)` | `∀ k : Int, P'` | Default Int quantification. |
 | `forall(k: nat, P)` | `∀ k : Nat, P'` | Nat quantification. |
 
@@ -239,11 +239,9 @@ function f(...): number {
 3. Add `done_with result ≠ default' ∨ ¬(condition')` to the while.
 4. Replace the final `return default` with `return result`.
 
-**Placement:** The `result` variable is declared after the user's leading `let` declarations but before the `while` loop. This ensures the Velvet state tuple has `result` in the right position.
+**Placement:** The `result` variable is declared after the user's leading `let` declarations but before the `while` loop.
 
-**`result` in annotations:** The user may reference `result` in `//@ invariant` annotations inside the loop to state properties about the tentative return value. This is necessary when `loom_solve` cannot infer the needed invariant. If `loom_solve` fails, the LLM proof filler (lean-lsp-mcp) can propose the missing invariant.
-
-**Open question:** Whether `result` should be user-visible in annotations or whether this should be fully automated (by the LLM, not the codegen). Current status: user writes it. This may change.
+**Missing invariants:** The transformation may require a loop invariant about `result` that `loom_solve` cannot infer (e.g., that `result` is either the sentinel or a valid index). The codegen does not generate this invariant — it is not the codegen's job to invent invariants. When `loom_solve` fails, the LLM proof filler (lean-lsp-mcp) proposes the missing invariant in the generated Lean or in a supplementary proof file.
 
 ---
 
