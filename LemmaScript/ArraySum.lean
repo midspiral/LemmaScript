@@ -13,14 +13,14 @@ method arraySum (arr : Array Int) return (res : Int)
   ensures res = sumTo arr arr.size
   do
     let mut sum : Int := 0
-    let mut i : Int := 0
+    let mut i : Nat := 0
     while i < arr.size
       invariant 0 ≤ i
       invariant i ≤ arr.size
-      invariant sum = sumTo arr i.toNat
-      decreasing arr.size - i.toNat
+      invariant sum = sumTo arr i
+      decreasing arr.size - i
     do
-      sum := sum + arr[i.toNat]!
+      sum := sum + arr[i]!
       i := i + 1
     return sum
 

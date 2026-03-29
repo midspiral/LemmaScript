@@ -15,12 +15,15 @@
  *   unary    := '!' unary | '-' unary | postfix
  *   postfix  := atom ('.' ident | '[' expr ']' | '(' args ')')*
  *   atom     := NUM | IDENT | 'true' | 'false' | 'result'
- *             | 'forall' '(' IDENT ',' expr ')'
- *             | 'exists' '(' IDENT ',' expr ')'
+ *             | 'forall' '(' IDENT (':' TYPE)? ',' expr ')'
+ *             | 'exists' '(' IDENT (':' TYPE)? ',' expr ')'
  *             | '(' expr ')'
+ *   TYPE     := 'nat' | 'int'
  */
 
 // ── AST ──────────────────────────────────────────────────────
+
+export type LeanType = "nat" | "int";
 
 export type Expr =
   | { kind: "num"; value: number }
@@ -31,8 +34,8 @@ export type Expr =
   | { kind: "call"; fn: Expr; args: Expr[] }
   | { kind: "index"; obj: Expr; idx: Expr }
   | { kind: "prop"; obj: Expr; prop: string }
-  | { kind: "forall"; var: string; body: Expr }
-  | { kind: "exists"; var: string; body: Expr };
+  | { kind: "forall"; var: string; varType: LeanType; body: Expr }
+  | { kind: "exists"; var: string; varType: LeanType; body: Expr };
 
 // ── Tokenizer ────────────────────────────────────────────────
 
@@ -49,10 +52,8 @@ function tokenize(input: string): Token[] {
   let i = 0;
 
   while (i < input.length) {
-    // Skip whitespace
     if (/\s/.test(input[i])) { i++; continue; }
 
-    // Number
     if (/[0-9]/.test(input[i])) {
       let num = "";
       while (i < input.length && /[0-9]/.test(input[i])) num += input[i++];
@@ -60,7 +61,6 @@ function tokenize(input: string): Token[] {
       continue;
     }
 
-    // Identifier / keyword
     if (/[a-zA-Z_]/.test(input[i])) {
       let id = "";
       while (i < input.length && /[a-zA-Z_0-9]/.test(input[i])) id += input[i++];
@@ -68,7 +68,6 @@ function tokenize(input: string): Token[] {
       continue;
     }
 
-    // Multi-char operators
     let matched = false;
     for (const op of MULTI_CHAR_OPS) {
       if (input.slice(i, i + op.length) === op) {
@@ -80,12 +79,11 @@ function tokenize(input: string): Token[] {
     }
     if (matched) continue;
 
-    // Single-char operators and punctuation
     const ch = input[i];
     if ("+-*/%><!".includes(ch)) {
       tokens.push({ type: "op", value: ch });
       i++;
-    } else if ("()[],.".includes(ch)) {
+    } else if ("()[],.:" .includes(ch)) {
       tokens.push({ type: "punc", value: ch });
       i++;
     } else {
@@ -131,7 +129,7 @@ class Parser {
   private parseImplies(): Expr {
     const left = this.parseOr();
     if (this.match("op", "==>")) {
-      const right = this.parseImplies(); // right-associative
+      const right = this.parseImplies();
       return { kind: "binop", op: "==>", left, right };
     }
     return left;
@@ -189,7 +187,6 @@ class Parser {
   private parseUnary(): Expr {
     if (this.match("op", "!")) return { kind: "unop", op: "!", expr: this.parseUnary() };
     if (this.peek()?.type === "op" && this.peek()!.value === "-") {
-      // Only treat as unary minus if not after a number/ident/close-paren
       const prev = this.pos > 0 ? this.tokens[this.pos - 1] : undefined;
       if (!prev || prev.type === "op" || (prev.type === "punc" && prev.value !== ")")) {
         this.advance();
@@ -210,7 +207,6 @@ class Parser {
         this.expect("punc", "]");
         expr = { kind: "index", obj: expr, idx };
       } else if (this.match("punc", "(")) {
-        // Function call — only if expr looks callable
         const args: Expr[] = [];
         if (!this.match("punc", ")")) {
           args.push(this.parseImplies());
@@ -233,15 +229,22 @@ class Parser {
       if (t.value === "true") { this.advance(); return { kind: "bool", value: true }; }
       if (t.value === "false") { this.advance(); return { kind: "bool", value: false }; }
 
+      // forall(k, body) or forall(k: nat, body)
       if (t.value === "forall" || t.value === "exists") {
         const q = t.value;
         this.advance();
         this.expect("punc", "(");
         const v = this.expect("ident").value as string;
+        let varType: LeanType = "int"; // default
+        if (this.match("punc", ":")) {
+          const ty = this.expect("ident").value as string;
+          if (ty === "nat") varType = "nat";
+          else if (ty !== "int") throw new Error(`Unknown type '${ty}', expected 'nat' or 'int'`);
+        }
         this.expect("punc", ",");
         const body = this.parseImplies();
         this.expect("punc", ")");
-        return { kind: q as "forall" | "exists", var: v, body };
+        return { kind: q as "forall" | "exists", var: v, varType, body };
       }
 
       this.advance();
@@ -261,24 +264,38 @@ class Parser {
 
 // ── Lean emitter ─────────────────────────────────────────────
 
-interface EmitContext {
-  /** Variables known to be arrays (for .length and [i] translation) */
+export interface EmitContext {
   arrayVars: Set<string>;
-  /** Replace 'result' with this name (e.g., 'res' for Velvet ensures) */
+  natVars: Set<string>;
   resultVar: string;
-  /** Are we inside a spec context? (affects quantifier output) */
-  isSpec: boolean;
 }
 
 const defaultContext: EmitContext = {
   arrayVars: new Set(),
+  natVars: new Set(),
   resultVar: "result",
-  isSpec: false,
 };
 
-/**
- * Flatten a conjunction into its conjuncts (for splitting && into separate clauses).
- */
+/** Is this expression Nat-typed given the context? */
+export function isNat(expr: Expr, ctx: EmitContext): boolean {
+  switch (expr.kind) {
+    case "num": return expr.value >= 0;
+    case "var": return ctx.natVars.has(expr.name);
+    case "prop": return expr.prop === "length" && isArrayExpr(expr.obj, ctx); // arr.size is Nat
+    case "binop":
+      if (["+", "-", "*", "/", "%"].includes(expr.op))
+        return isNat(expr.left, ctx) && isNat(expr.right, ctx);
+      return false;
+    case "unop": return false; // -x is Int
+    case "call": return false; // conservative
+    default: return false;
+  }
+}
+
+function isArrayExpr(expr: Expr, ctx: EmitContext): boolean {
+  return expr.kind === "var" && ctx.arrayVars.has(expr.name);
+}
+
 export function splitConjuncts(expr: Expr): Expr[] {
   if (expr.kind === "binop" && expr.op === "&&") {
     return [...splitConjuncts(expr.left), ...splitConjuncts(expr.right)];
@@ -286,10 +303,6 @@ export function splitConjuncts(expr: Expr): Expr[] {
   return [expr];
 }
 
-/**
- * Flatten the LHS of an implication: (A && B) ==> C → [A, B, C] as chained →
- * Returns premises and conclusion separately for curried Lean output.
- */
 function flattenImplication(expr: Expr): { premises: Expr[]; conclusion: Expr } {
   if (expr.kind === "binop" && expr.op === "==>") {
     const lhsParts = splitConjuncts(expr.left);
@@ -327,14 +340,12 @@ function emitLean(expr: Expr, ctx: EmitContext, parentOp?: string): string {
     case "unop":
       if (expr.op === "!") return `¬${emit(expr.expr)}`;
       if (expr.op === "-") {
-        // Negative literal: emit as -N without parens
         if (expr.expr.kind === "num") return `-${expr.expr.value}`;
         return `(-${emit(expr.expr)})`;
       }
       return `(${expr.op} ${emit(expr.expr)})`;
 
     case "binop": {
-      // Implication with curried LHS
       if (expr.op === "==>") {
         const { premises, conclusion } = flattenImplication(expr);
         const parts = [...premises.map(p => emit(p)), emit(conclusion)];
@@ -354,31 +365,27 @@ function emitLean(expr: Expr, ctx: EmitContext, parentOp?: string): string {
     }
 
     case "prop":
-      // arr.length → arr.size (Lean coerces Nat→Int automatically)
       if (expr.prop === "length" && isArrayExpr(expr.obj, ctx)) {
         return `${emit(expr.obj)}.size`;
       }
       return `${emit(expr.obj)}.${expr.prop}`;
 
     case "index": {
-      // arr[i] → arr[i.toNat]!
       if (isArrayExpr(expr.obj, ctx)) {
-        return `${emit(expr.obj)}[${emit(expr.idx)}.toNat]!`;
+        const idx = emit(expr.idx);
+        // Nat index: arr[i]!  Int index: arr[i.toNat]!
+        return isNat(expr.idx, ctx) ? `${emit(expr.obj)}[${idx}]!` : `${emit(expr.obj)}[${idx}.toNat]!`;
       }
       return `${emit(expr.obj)}[${emit(expr.idx)}]`;
     }
 
     case "call": {
-      // Math.floor(x) → strip (Int division is floor in Lean)
       if (expr.fn.kind === "prop" && expr.fn.prop === "floor" &&
           expr.fn.obj.kind === "var" && expr.fn.obj.name === "Math" &&
           expr.args.length === 1) {
         return emit(expr.args[0]);
       }
-      // Ghost function call: f(a, b) → f a b
       const fnName = expr.fn.kind === "var" ? expr.fn.name : emit(expr.fn);
-      const args = expr.args.map(a => emit(a));
-      // Wrap complex args in parens
       const leanArgs = expr.args.map(a => {
         const s = emit(a);
         return a.kind === "binop" || a.kind === "unop" ? `(${s})` : s;
@@ -386,16 +393,23 @@ function emitLean(expr: Expr, ctx: EmitContext, parentOp?: string): string {
       return `${fnName} ${leanArgs.join(" ")}`;
     }
 
-    case "forall":
-      return `∀ ${expr.var} : Int, ${emitLean(expr.body, ctx)}`;
+    case "forall": {
+      const leanType = expr.varType === "nat" ? "Nat" : "Int";
+      // Add quantified variable to natVars for body emission
+      const bodyCtx = expr.varType === "nat"
+        ? { ...ctx, natVars: new Set([...ctx.natVars, expr.var]) }
+        : ctx;
+      return `∀ ${expr.var} : ${leanType}, ${emitLean(expr.body, bodyCtx)}`;
+    }
 
-    case "exists":
-      return `∃ ${expr.var} : Int, ${emitLean(expr.body, ctx)}`;
+    case "exists": {
+      const leanType = expr.varType === "nat" ? "Nat" : "Int";
+      const bodyCtx = expr.varType === "nat"
+        ? { ...ctx, natVars: new Set([...ctx.natVars, expr.var]) }
+        : ctx;
+      return `∃ ${expr.var} : ${leanType}, ${emitLean(expr.body, bodyCtx)}`;
+    }
   }
-}
-
-function isArrayExpr(expr: Expr, ctx: EmitContext): boolean {
-  return expr.kind === "var" && ctx.arrayVars.has(expr.name);
 }
 
 // ── Public API ───────────────────────────────────────────────
@@ -405,20 +419,14 @@ export function parseExpr(input: string): Expr {
 }
 
 export function exprToLean(input: string, ctx?: Partial<EmitContext>): string {
-  const fullCtx = { ...defaultContext, ...ctx };
-  return emitLean(parseExpr(input), fullCtx);
+  return emitLean(parseExpr(input), { ...defaultContext, ...ctx });
 }
 
 export function astToLean(expr: Expr, ctx?: Partial<EmitContext>): string {
-  const fullCtx = { ...defaultContext, ...ctx };
-  return emitLean(expr, fullCtx);
+  return emitLean(expr, { ...defaultContext, ...ctx });
 }
 
-/**
- * Parse a spec expression and split top-level && into separate Lean clauses.
- */
 export function specToClauses(input: string, ctx?: Partial<EmitContext>): string[] {
   const fullCtx = { ...defaultContext, ...ctx };
-  const ast = parseExpr(input);
-  return splitConjuncts(ast).map(e => emitLean(e, fullCtx));
+  return splitConjuncts(parseExpr(input)).map(e => emitLean(e, fullCtx));
 }

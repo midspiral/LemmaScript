@@ -7,6 +7,7 @@
 
 export function arraySum(arr: number[]): number {
   //@ ensures result === sumTo(arr, arr.length)
+  //@ nat i
 
   let sum = 0;
   let i = 0;

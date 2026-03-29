@@ -12,19 +12,19 @@ method linearSearch (arr : Array Int) (target : Int) return (res : Int)
   ensures res ≥ -1
   ensures res < arr.size
   ensures res ≥ 0 → arr[res.toNat]! = target
-  ensures res = -1 → ∀ k : Int, 0 ≤ k → k < arr.size → arr[k.toNat]! ≠ target
+  ensures res = -1 → ∀ k : Nat, k < arr.size → arr[k]! ≠ target
   do
-    let mut i : Int := 0
+    let mut i : Nat := 0
     let mut result : Int := -1
     while i < arr.size
       invariant 0 ≤ i
       invariant i ≤ arr.size
-      invariant ∀ k : Int, 0 ≤ k → k < i → arr[k.toNat]! ≠ target
+      invariant ∀ k : Nat, k < i → arr[k]! ≠ target
       invariant result = -1 ∨ result ≥ 0 ∧ result < arr.size ∧ arr[result.toNat]! = target
       done_with result ≠ -1 ∨ ¬(i < arr.size)
-      decreasing arr.size - i.toNat
+      decreasing arr.size - i
     do
-      if arr[i.toNat]! = target then
+      if arr[i]! = target then
         result := i
         break
       i := i + 1

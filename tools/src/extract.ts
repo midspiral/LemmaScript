@@ -15,7 +15,7 @@ import { Project, SyntaxKind, Node, FunctionDeclaration, WhileStatement, ForStat
 // ------------------------------------------------------------------
 
 interface Annotation {
-  kind: "requires" | "ensures" | "invariant" | "decreases" | "assert" | "import";
+  kind: "requires" | "ensures" | "invariant" | "decreases" | "assert" | "import" | "nat";
   expr: string;
   line: number;
 }
@@ -78,6 +78,7 @@ interface FunctionSpec {
   returnType: string;
   requires: string[];
   ensures: string[];
+  natVars: string[];
   body: StatementSpec[];
   line: number;
 }
@@ -110,7 +111,7 @@ function parseAnnotations(node: Node): Annotation[] {
     const expr = content.slice(spaceIdx + 1).trim();
     const line = range.getPos();
 
-    const validKinds = ["requires", "ensures", "invariant", "decreases", "assert", "import"];
+    const validKinds = ["requires", "ensures", "invariant", "decreases", "assert", "import", "nat"];
     if (validKinds.includes(keyword)) {
       annotations.push({ kind: keyword as Annotation["kind"], expr, line });
     }
@@ -254,6 +255,7 @@ function extractFunction(fn: FunctionDeclaration): FunctionSpec {
 
   const requires = allAnnotations.filter((a) => a.kind === "requires").map((a) => a.expr);
   const ensures = allAnnotations.filter((a) => a.kind === "ensures").map((a) => a.expr);
+  const natVars = allAnnotations.filter((a) => a.kind === "nat").map((a) => a.expr);
 
   const params = fn.getParameters().map((p) => ({
     name: p.getName(),
@@ -266,6 +268,7 @@ function extractFunction(fn: FunctionDeclaration): FunctionSpec {
     returnType: fn.getReturnTypeNode()?.getText() ?? "unknown",
     requires,
     ensures,
+    natVars,
     body: extractStatements(bodyStmts),
     line: fn.getStartLineNumber(),
   };
