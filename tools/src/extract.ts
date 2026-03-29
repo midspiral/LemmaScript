@@ -275,7 +275,7 @@ function extractFunction(fn: FunctionDeclaration): FunctionSpec {
 // Module extraction
 // ------------------------------------------------------------------
 
-function extractModule(sourceFile: SourceFile): ModuleSpec {
+export function extractModule(sourceFile: SourceFile): ModuleSpec {
   // Collect top-level //@ import annotations
   const imports: string[] = [];
   const firstStmt = sourceFile.getStatements()[0];
@@ -298,20 +298,22 @@ function extractModule(sourceFile: SourceFile): ModuleSpec {
 }
 
 // ------------------------------------------------------------------
-// Main
+// Main (when run directly)
 // ------------------------------------------------------------------
 
-const filePath = process.argv[2];
-if (!filePath) {
-  console.error("Usage: npx tsx src/extract.ts <file.ts>");
-  process.exit(1);
+if (process.argv[1]?.endsWith("extract.ts") || process.argv[1]?.endsWith("extract.js")) {
+  const filePath = process.argv[2];
+  if (!filePath) {
+    console.error("Usage: npx tsx src/extract.ts <file.ts>");
+    process.exit(1);
+  }
+
+  const project = new Project({
+    compilerOptions: { strict: true },
+  });
+
+  const sourceFile = project.addSourceFileAtPath(filePath);
+  const spec = extractModule(sourceFile);
+
+  console.log(JSON.stringify(spec, null, 2));
 }
-
-const project = new Project({
-  compilerOptions: { strict: true },
-});
-
-const sourceFile = project.addSourceFileAtPath(filePath);
-const spec = extractModule(sourceFile);
-
-console.log(JSON.stringify(spec, null, 2));

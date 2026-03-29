@@ -23,6 +23,7 @@ export function binarySearch(arr: number[], target: number): number {
     //@ invariant -1 <= hi && hi < arr.length
     //@ invariant forall(k, 0 <= k && k < lo ==> arr[k] !== target)
     //@ invariant forall(k, hi < k && k < arr.length ==> arr[k] !== target)
+    //@ invariant result === -1 || (result >= 0 && result < arr.length && arr[result] === target)
     //@ decreases hi - lo + 1
 
     const mid = Math.floor((lo + hi) / 2);

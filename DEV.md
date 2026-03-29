@@ -4,106 +4,108 @@ Status as of 2026-03-29. Read this before working on the codebase.
 
 ## What exists
 
-### Lean side (verified, builds clean)
+### End-to-end pipeline (working)
 
-- **`LemmaScript/BinarySearch.lean`** — Binary search verified via Velvet's `method` macro on Loom. Ghost `sorted` predicate, 7 loop invariants, `break` for early return, total correctness with termination. `loom_solve` discharges all VCs automatically in ~5s.
-- **`lakefile.lean`** — Depends on Velvet (local path `../velvet`), which depends on Loom (git). Includes Z3/cvc5 download targets copied from Velvet's lakefile.
+The full loop is closed for binary search:
+
+```
+examples/binarySearch.ts          (TypeScript + //@ annotations)
+    ↓  tools/src/extract.ts       (ts-morph → JSON IR)
+    ↓  tools/src/codegen.ts       (IR → Lean source)
+LemmaScript/BinarySearch.lean     (generated Velvet method + prove_correct)
+    +  LemmaScript/BinarySearchSpec.lean  (hand-written ghost defs)
+    ↓  lake build                 (Loom/Velvet/Z3)
+    ✔  Verified (4.5s, fully automated by loom_solve)
+```
+
+Run it:
+```sh
+cd tools && npx tsx src/lsc.ts check ../examples/binarySearch.ts
+```
+
+### Files
+
+**Lean side:**
+- `LemmaScript/BinarySearch.lean` — Generated from binarySearch.ts. Velvet `method` + `prove_correct by loom_solve`. All VCs discharged automatically.
+- `LemmaScript/BinarySearchSpec.lean` — Ghost `sorted` predicate. Tagged `@[grind, loomAbstractionSimp]`. This is what the user writes.
+- `lakefile.lean` — Depends on Velvet (local `../velvet`) → Loom (git). Z3/cvc5 download targets.
 - Lean toolchain: **v4.24.0** (must match Loom and Velvet).
 
-### Node.js side (working prototype)
+**Node.js toolchain (`tools/`):**
+- `src/extract.ts` — ts-morph extractor. Parses TS, extracts `//@ ` annotations, outputs structured IR.
+- `src/specparser.ts` — Recursive descent parser for the `//@ ` expression language. Tokenizer → AST → Lean emitter. Handles `forall`, `==>`, `===`, `arr.length`, `arr[i]`, `Math.floor`, quantifiers, etc.
+- `src/codegen.ts` — IR → Lean/Velvet source. Return-in-loop transformation, type mapping, invariant/decreases/done_with emission.
+- `src/lsc.ts` — CLI entry point. `lsc check <file.ts>` runs the full pipeline.
 
-- **`tools/src/extract.ts`** — ts-morph-based extractor. Parses a `.ts` file, extracts `//@ ` annotations, associates them with AST nodes, outputs structured JSON IR. Run with `cd tools && npx tsx src/extract.ts ../examples/binarySearch.ts`.
-- **`examples/binarySearch.ts`** — The motivating example. TypeScript with `//@ requires`, `//@ ensures`, `//@ invariant`, `//@ decreases` annotations.
+**Examples:**
+- `examples/binarySearch.ts` — The motivating example. TypeScript with `//@ ` annotations.
 
-### Design
+**Design:**
+- `DESIGN.md` — v0.2. Architecture: TS + `//@ ` comments + `.spec.lean` files, no custom language.
 
-- **`DESIGN.md`** — v0.2. The architecture: TS + `//@ ` comments + `.spec.lean` files. No custom language.
+## Hard-won constraints (read before changing anything)
 
-## What we learned (Phase 0 findings)
+### 1. Use Int everywhere, never Nat in specs
 
-### 1. Use Int everywhere in the Loom embedding
+Velvet wraps values in `WithName` (transparent abbrev). If invariants quantify over `k : Int` but postconditions quantify over `k : Nat`, `loom_solve` fails and manual proof is painful (fighting WithName wrappers + struct tuple equalities).
 
-Velvet wraps values in `WithName` (a transparent abbrev), but this interacts badly with Lean's `simp`/`dsimp` when types don't match syntactically. If loop invariants quantify over `k : Int` but postconditions quantify over `k : Nat`, `loom_solve` fails and manual proof requires fighting `WithName` wrappers + struct tuple equalities.
+**Rule:** All quantifiers in generated Lean use `Int`. Array access uses `arr[k.toNat]!`.
 
-**Rule: the code generator must emit Int-typed quantifiers throughout.** Nat-indexed array access uses `arr[k.toNat]!`. This is a hard constraint.
+### 2. Use `arr.size` not `↑arr.size`
 
-### 2. Return-inside-loop requires transformation
+Let Lean coerce Nat→Int automatically. Explicit `↑` coercion disrupts `loom_solve`'s ability to discharge array bounds VCs. The specparser emits `arr.size` (not `↑arr.size`) for `arr.length`.
 
-TypeScript `return mid` from inside a `while` loop doesn't map directly to Velvet/Loom. The code generator must transform it to:
-- Introduce a `result` mutable variable (init to sentinel, e.g., -1)
-- Replace `return x` with `result := x; break`
-- Add `done_with` clause capturing exit conditions
-- Use `result` in the final `return`
+### 3. Normalize `>=` to `≤` (flip operands)
 
-The binary search example demonstrates this pattern.
+`loom_solve` handles `≤` and `<` but not `≥` and `>`. The specparser flips: `result >= -1` → `-1 ≤ result`. This is non-obvious and easy to regress on.
 
-### 3. loom_solve handles binary search fully automatically
+### 4. Return-inside-loop needs explicit result invariant from user
 
-No manual lemmas, no helper functions, no SMT hints. The `sorted` ghost function tagged `@[grind, loomAbstractionSimp]` plus well-written invariants is enough. Z3/cvc5 + Lean's `grind` handle the arithmetic and array reasoning.
+TypeScript `return mid` inside a `while` is transformed to:
+- `let mut result := <sentinel>` (from the final `return` after the loop)
+- `result := mid; break` (replaces the in-loop `return`)
+- `done_with result ≠ <sentinel> ∨ ¬(<condition>)`
 
-### 4. Velvet's method syntax works well as a target
+The code generator handles this transformation. BUT: the user must write an invariant about the result variable, because `loom_solve` needs it and the right invariant can't be auto-derived from postconditions.
 
-The code generator could emit Velvet `method` declarations directly rather than raw Loom monadic code. This gives us `require`/`ensures`/`invariant`/`done_with`/`decreasing`/`break` for free, plus `prove_correct` and `loom_solve`. No need to build LemmaScript-specific Lean macros in Phase 1.
-
-### 5. ts-morph extraction is clean
-
-The extractor correctly handles:
-- `//@ ` annotations on functions (requires, ensures) and loops (invariant, decreases)
-- Full control flow IR: let, while, if/else chains, return, assignment
-- Mutable vs const detection
-- Module-level `//@ import` annotations
-
-Annotations are placed as comments before the first statement of the function body (for requires/ensures) or before the first statement inside the loop body (for invariant/decreases). The extractor checks both leading comments on the node and on the first child.
-
-## Architecture for the code generator (not yet built)
-
+For binary search, the user writes:
 ```
-binarySearch.ts          →  ts-morph extract  →  IR (JSON)
-                                                    ↓
-binarySearch.spec.lean   →                    →  .lsc/binarySearch.lean
-                                                 (Velvet method + prove_correct)
-                                                    ↓
-                                                 lake build → verified / errors
+//@ invariant result === -1 || (result >= 0 && result < arr.length && arr[result] === target)
 ```
 
-The code generator (Phase 1) needs to:
+The weaker bound `-1 ≤ result` (derived from ensures) is NOT sufficient — `loom_solve` needs `0 ≤ result` to reason about array index bounds. Only the user knows that `result` comes from a non-negative index.
 
-1. **Parse the IR** from the extractor
-2. **Emit a Velvet `method`** declaration:
-   - Map TS params → Lean params (number → Int, number[] → Array Int, etc.)
-   - Map `//@ requires` → `require`
-   - Map `//@ ensures` → `ensures`
-   - Map let/const → `let` / `let mut`
-   - Map while + `//@ invariant` → `while ... invariant ... decreasing ... do`
-   - Transform return-inside-loop to break + result variable
-   - Map if/else → `if ... then ... else ...`
-   - Map array access `arr[i]` → `arr[i.toNat]!`
-   - Map `Math.floor((a + b) / 2)` → `(a + b) / 2` (Int division in Lean)
-3. **Emit `prove_correct`** with `loom_solve`
-4. **Import the `.spec.lean`** file for ghost definitions
-5. **Translate the `//@ ` expression language** to Lean terms:
-   - `forall(k, P)` → `∀ k : Int, P`
-   - `==>` → `→`
-   - `===` → `=`
-   - `!==` → `≠`
-   - `&&` → `∧`
-   - `||` → `∨`
-   - `arr.length` → `↑arr.size`
-   - Ghost function calls by name
+### 5. `(A && B) ==> C` curries to `A → B → C`
 
-## What's next (Phase 1)
+The specparser flattens the LHS of implications: `forall(k, 0 <= k && k < lo ==> arr[k] !== target)` becomes `∀ k : Int, 0 ≤ k → k < lo → arr[k.toNat]! ≠ target`. This is more idiomatic Lean and matches what `loom_solve` expects. Top-level `&&` in ensures/requires/invariants is split into separate clauses.
 
-1. **Build the code generator** (`tools/src/codegen.ts`): IR → Lean source emission
-2. **Build the `//@ ` expression parser** (`tools/src/specparser.ts`): TS-flavored spec expressions → Lean syntax
-3. **Wire it into `lsc check`** (`tools/src/cli.ts`): parse TS → generate .lean → invoke `lake build` → report results
-4. **More examples**: array sum, insertion sort, linear search — validate the code generator on different patterns
-5. **Error reporting**: surface Lean verification errors back to TS source locations
+### 6. Spec file must be importable by Lake
+
+Ghost definitions live in `.spec.lean` files. Currently placed at `LemmaScript/BinarySearchSpec.lean` so Lake can import them. The codegen doesn't yet handle spec file discovery — the import is added manually. This needs fixing.
+
+## What's next
+
+### Immediate (close gaps in the pipeline)
+1. **Spec file discovery** — codegen should find `<name>.spec.lean` next to the TS file and generate the correct import
+2. **More examples** — array sum, linear search, insertion sort. Each exercises different patterns (no loop return, nested loops, array mutation)
+3. **Error reporting** — surface Lean verification errors back to TS source locations (line mapping from generated Lean back to TS)
+
+### Phase 2 (tooling)
+4. **VS Code extension** — `//@ ` annotation autocomplete, inline verification status
+5. **`lsc check --watch`** — re-verify on file changes
+6. **`lsc init`** — scaffold `.spec.lean` for a TS file
+7. **LLM proof filling** — when `loom_solve` fails, extract goals and use lean-lsp-mcp
+
+### Phase 3 (language expansion)
+8. **For-of loops** — `for (const x of arr)` → Lean `for` with ForIn
+9. **Object types** — `{ field: T }` → Lean structures
+10. **Higher-order functions** — `arr.map(f)` with contracts on callbacks
+11. **Multiple functions per file** — inter-function specs and calls
 
 ## Dependencies
 
 - **Lean 4**: v4.24.0 (via elan)
 - **Loom**: git master (fetched by Lake via Velvet dependency)
-- **Velvet**: local at `../velvet` (must be present and its toolchain must match)
+- **Velvet**: local at `../velvet` (must be present, toolchain must match)
 - **Node.js**: for ts-morph tools
-- **ts-morph**: ^25.0.0
-- **tsx**: ^4.0.0 (dev runner)
+- **ts-morph**: ^25.0.0, **tsx**: ^4.0.0 (in `tools/`)
