@@ -629,6 +629,8 @@ Empirical constraints discovered during prototyping. They inform the design but 
 
 ## 12. What This Spec Does Not Cover (Future Work)
 
+- **Compound pattern matching** — conditions like `state === "idle" && event.kind === "syn"` where both variables are data-carrying unions would need nested match or match on a tuple. Currently, compound conditions work only when both types have `DecidableEq` (enum-like).
+- **Cross-file type imports** — types defined in a separate TS file and imported
 - For-of loops, object types, higher-order functions, async/await
 - Multiple functions per file with inter-function calls
 - Array mutation (`arr[i] = v`)
