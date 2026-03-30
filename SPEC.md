@@ -115,7 +115,7 @@ TYPE     := 'nat' | 'int'
 
 ### 3.3 Type Annotations
 
-The codegen reads TS types from ts-morph and maps them to Lean (see §8). For `number` variables, the default mapping is `Int`. The `type` annotation overrides this to `Nat`:
+`lsc` reads TS types from ts-morph and maps them to Lean (see §8). For `number` variables, the default mapping is `Int`. The `type` annotation overrides this to `Nat`:
 
 ```
 //@ type <varname> nat
@@ -133,7 +133,7 @@ When a variable is `Nat`-typed:
 
 ## 4. Spec Expression → Lean Translation
 
-The translation is purely syntactic. The codegen does not infer types beyond what `//@ type` annotations provide.
+The translation is purely syntactic. `lsc` does not infer types beyond what `//@ type` annotations provide.
 
 ### 4.1 Operator Mapping
 
@@ -222,7 +222,7 @@ ensures res < arr.size
 
 All expressions `e` in the table above are translated using the spec expression rules (§4).
 
-**Discriminant if-chains (data-carrying unions only):** When the codegen encounters an if-else chain where each condition tests `x.discriminantField === "variant"` on a discriminated union with data fields, it emits a Lean `match` instead of `if`. This is necessary because Lean's `if` cannot bind constructor fields — only `match` can. For enum-like types (string-literal unions, no data), `if` stays `if` with `DecidableEq`. See §5.4 and §8.3.
+**Discriminant if-chains (data-carrying unions only):** When `lsc` encounters an if-else chain where each condition tests `x.discriminantField === "variant"` on a discriminated union with data fields, it emits a Lean `match` instead of `if`. This is necessary because Lean's `if` cannot bind constructor fields — only `match` can. For enum-like types (string-literal unions, no data), `if` stays `if` with `DecidableEq`. See §5.4 and §8.3.
 
 ### 5.2 While Loops
 
@@ -246,13 +246,13 @@ do
   body'
 ```
 
-**Decreasing clause:** Emitted directly as a Lean expression. Lean's termination checker accepts any type with a well-founded relation — `Nat`, lexicographic tuples `(a, b)`, etc. The codegen does not add `.toNat` automatically; the user writes the decreasing expression in the form Lean expects.
+**Decreasing clause:** Emitted directly as a Lean expression. Lean's termination checker accepts any type with a well-founded relation — `Nat`, lexicographic tuples `(a, b)`, etc. `lsc` does not add `.toNat` automatically; the user writes the decreasing expression in the form Lean expects.
 
 **`done_with` clause:** If the loop body contains `break`, the user should add a `//@ done_with` annotation specifying what is true when the loop exits. (If omitted, Velvet defaults to the negation of the loop condition, which is only correct when there is no `break`.)
 
 ### 5.3 Return Inside Loops
 
-`return` inside a `while` loop is **not supported**. Velvet does not support `return` inside loops, and the codegen does not transform it. If the codegen encounters `return` inside a loop, it emits an error.
+`return` inside a `while` loop is **not supported**. Velvet does not support `return` inside loops, and `lsc` does not transform it. If `lsc` encounters `return` inside a loop, it emits an error.
 
 The user must restructure their TypeScript to use `break` with an explicit result variable:
 
@@ -273,11 +273,11 @@ while (...) {
 return result;
 ```
 
-The TypeScript is still valid and runs identically. The verified version uses `break` instead of `return`, which maps directly to Velvet's `break` construct. The user writes invariants about their own `result` variable — no codegen magic.
+The TypeScript is still valid and runs identically. The verified version uses `break` instead of `return`, which maps directly to Velvet's `break` construct. The user writes invariants about their own `result` variable — no magic.
 
 ### 5.4 Discriminant Dispatch → Match
 
-Both `switch` on a discriminant and if-chains on a discriminant translate to Lean `match`. The codegen detects the pattern: conditions of the form `x.field === "variant"` (or `x === "variant"` for enum-like types) on the same variable.
+Both `switch` on a discriminant and if-chains on a discriminant translate to Lean `match`. `lsc` detects the pattern: conditions of the form `x.field === "variant"` (or `x === "variant"` for enum-like types) on the same variable.
 
 **If-chain:**
 ```typescript
@@ -304,11 +304,11 @@ match pkt with
 | _ => return state
 ```
 
-**Detection:** ts-morph provides the variable's type (discriminated union), the discriminant field name, and the variant field types. The codegen uses this — no guessing.
+**Detection:** ts-morph provides the variable's type (discriminated union), the discriminant field name, and the variant field types. `lsc` uses this — no guessing.
 
 **Field binding:** Property accesses on the matched variable (`pkt.seq`, `pkt.len`) become bound variables from the match pattern. Unused fields get `_`.
 
-**Enum-like types** (string literal unions, no data fields) stay as `if` with `DecidableEq`. The codegen does NOT convert them to `match`. `state === "idle"` → `state = .idle` (simple equality). Only discriminated unions with data fields trigger the if-chain → match transformation.
+**Enum-like types** (string literal unions, no data fields) stay as `if` with `DecidableEq`. `lsc` does NOT convert them to `match`. `state === "idle"` → `state = .idle` (simple equality). Only discriminated unions with data fields trigger the if-chain → match transformation.
 
 ---
 
@@ -341,7 +341,7 @@ The generated file contains **only the method definition**, no `prove_correct`. 
 
 ### 6.1 Pure Function Mirrors
 
-For functions that are **pure** (no `while`, no mutable `let`), the codegen also generates a plain Lean `def` in `foo.types.lean`:
+For functions that are **pure** (no `while`, no mutable `let`), `lsc` also generates a plain Lean `def` in `foo.types.lean`:
 
 ```lean
 def foo_pure (params...) : RetType :=
@@ -423,7 +423,7 @@ The pattern: `unfold` the method to expose the body, then `loom_solve` to discha
 | `T[]` / `Array<T>` | `Array T'` | `T'` is the Lean mapping of `T`. |
 | Anything else | Pass through | `State` → `State`. Generated in `.types.lean`. |
 
-The codegen reads parameter and variable types from ts-morph. Primitive types are mapped per the table. User-defined types (like `State`, `Event`) are passed through by name — the corresponding Lean type is generated in `.types.lean`.
+`lsc` reads parameter and variable types from ts-morph. Primitive types are mapped per the table. User-defined types (like `State`, `Event`) are passed through by name — the corresponding Lean type is generated in `.types.lean`.
 
 `//@ type v nat` overrides the primitive mapping for `number` variables:
 - `//@ type i nat` — `number` → `Nat` instead of `Int`
@@ -464,7 +464,7 @@ inductive Packet where
 deriving Repr, Inhabited
 ```
 
-**If-chains on the discriminant → Lean `match`.**  When the codegen encounters an if-else chain where each condition tests `x.field === "variant"` on the same variable, it emits a `match`. ts-morph provides the discriminant field name, variant types, and field names — no guessing.
+**If-chains on the discriminant → Lean `match`.**  When `lsc` encounters an if-else chain where each condition tests `x.field === "variant"` on the same variable, it emits a `match`. ts-morph provides the discriminant field name, variant types, and field names — no guessing.
 
 ```typescript
 if (pkt.tag === "syn") return pkt.seq;
@@ -607,7 +607,7 @@ return { res := true, done := true, rec := true }
 
 ### 8.6 Type Mapping Implementation
 
-Type mapping logic lives in a single `types.ts` module imported by both codegen and specparser.
+Type mapping logic lives in `types.ts`, used by the resolve and transform phases.
 
 The module provides:
 - `tsTypeToLean(tsType: string): string` — primitive type mapping, pass-through for user-defined types
@@ -717,14 +717,16 @@ Empirical constraints discovered during prototyping. They inform the design but 
 
 ---
 
-## 13. Implementation Order
+## 13. Pipeline
 
-1. **Spec expression parser** — tokenizer, recursive descent, AST. Unit tested.
-2. **Lean emitter** — AST → Lean string, using EmitContext for types. Unit tested.
-3. **TS extractor** — ts-morph → IR. Tested on examples.
-4. **Code generator** — IR → `.def.lean`. Tested by diffing against known-good output.
-5. **`lsc` CLI** — wires extractor → codegen → Lake. Integration tested.
-6. **Lean library** — re-exports Velvet fork + Loom. Verified by building examples.
-7. **Project scaffolding** (`lsc init`).
+The toolchain is a four-phase pipeline (see `TOOLS.md` for internal details):
 
-Each step has clear inputs and outputs. Test at each boundary.
+```
+extract (ts-morph → Raw IR) → resolve (→ Typed IR) → transform (→ Lean IR) → emit (→ text)
+```
+
+- **Extract**: ts-morph → structured AST. Body expressions are nodes, not strings. Annotations remain as strings.
+- **Resolve**: attaches types, classifies calls, identifies discriminants, rejects unsupported patterns. Uses linked environments for lexical scoping.
+- **Transform**: Typed IR → Lean IR. Pattern-matches on types. Desugars `for-of` to `while`. Detects discriminant if-chains → `match`.
+- **Emit**: Lean IR → text. Trivial printer.
+
