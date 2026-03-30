@@ -7,9 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  check:
+  tools:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -31,3 +30,18 @@ jobs:
 
       - name: Check generated files are up to date
         run: git diff --exit-code
+
+  lean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone Velvet fork
+        run: git clone https://github.com/namin/velvet.git -b lemma ../velvet
+
+      - uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: false
+
+      - name: Build
+        run: lake build
