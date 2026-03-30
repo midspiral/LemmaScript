@@ -68,14 +68,13 @@ function transformExpr(e: TExpr): LeanExpr {
           right: { kind: "constructor", name: e.right.value },
         };
       }
-      // Generic string literal comparison: x === "foo" → x = .foo
+      // String literal comparison — constructor if user type, string literal if string
       if ((e.op === "===" || e.op === "!==") && e.right.kind === "str") {
-        return {
-          kind: "binop",
-          op: e.op === "===" ? "=" : "≠",
-          left: transformExpr(e.left),
-          right: { kind: "constructor", name: e.right.value },
-        };
+        const left = transformExpr(e.left);
+        const right: LeanExpr = isUser(e.left.ty)
+          ? { kind: "constructor", name: e.right.value }
+          : { kind: "str", value: e.right.value };
+        return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right };
       }
       return {
         kind: "binop",

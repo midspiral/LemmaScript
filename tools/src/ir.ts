@@ -11,6 +11,7 @@ export type LeanExpr =
   | { kind: "var"; name: string }
   | { kind: "num"; value: number }
   | { kind: "bool"; value: boolean }
+  | { kind: "str"; value: string }
   | { kind: "constructor"; name: string }                     // .idle, .allow
   | { kind: "binop"; op: string; left: LeanExpr; right: LeanExpr }
   | { kind: "unop"; op: string; expr: LeanExpr }

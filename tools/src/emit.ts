@@ -22,6 +22,7 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
     case "var": return e.name;
     case "num": return `${e.value}`;
     case "bool": return e.value ? "true" : "false";
+    case "str": return `"${e.value}"`;
     case "constructor": return `.${e.name}`;
 
     case "unop":
