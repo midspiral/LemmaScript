@@ -18,9 +18,6 @@ function transition(state: State, event: Event): State {
 
 function runSession(events: Event[]): State {
   //@ type i nat
-  //@ requires events.length > 0
-  //@ requires lastEvent(events) === "timeout"
-  //@ ensures \result === "idle"
 
   let state: State = "idle";
   let i = 0;

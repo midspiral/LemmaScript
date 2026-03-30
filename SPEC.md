@@ -371,6 +371,31 @@ prove_correct binarySearch by
 
 **Invariants** are part of the method definition (in the `//@ ` annotations), not the proof. If an invariant is missing, the user adds `//@ invariant` to the TS file and regenerates `.def.lean`.
 
+### 7.1 Standalone Lemmas
+
+Properties about functions can be proved as standalone Hoare triples in `.proof.lean`, separately from the function's `requires`/`ensures`. This is useful when:
+- The function has no natural precondition but interesting properties hold under specific conditions
+- Multiple properties should be proved about the same function
+- The property involves multiple functions
+
+```lean
+-- The function has no ensures — just loop invariants
+prove_correct runSession by
+  loom_solve
+
+-- Property proved separately as a Hoare triple
+open TotalCorrectness DemonicChoice in
+theorem runSession_timeout_resets (events : Array Event)
+    (h1 : events.size > 0) (h2 : lastEvent events = .timeout) :
+    triple (events.size > 0 ∧ lastEvent events = .timeout)
+           (runSession events)
+           (fun res => res = State.idle) := by
+  unfold runSession
+  loom_solve
+```
+
+The pattern: `unfold` the method to expose the body, then `loom_solve` to discharge the VCs. The loop invariants from the method definition are available after unfolding.
+
 ---
 
 ## 8. Type Mapping

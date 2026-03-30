@@ -8,3 +8,13 @@ prove_correct transition by
 
 prove_correct runSession by
   loom_solve
+
+-- Standalone property: if the last event is timeout, runSession returns idle.
+open TotalCorrectness DemonicChoice in
+theorem runSession_timeout_resets (events : Array Event)
+    (h1 : events.size > 0) (h2 : lastEvent events = .timeout) :
+    triple (events.size > 0 ∧ lastEvent events = .timeout)
+           (runSession events)
+           (fun res => res = State.idle) := by
+  unfold runSession
+  loom_solve
