@@ -339,6 +339,19 @@ method foo (params...) return (res : RetType)
 
 The generated file contains **only the method definition**, no `prove_correct`. The proof lives in `foo.proof.lean`.
 
+### 6.1 Pure Function Mirrors
+
+For functions that are **pure** (no `while`, no mutable `let`), the codegen also generates a plain Lean `def` in `foo.types.lean`:
+
+```lean
+def foo_pure (params...) : RetType :=
+  -- same logic as the Velvet method, as a plain function
+```
+
+This enables proofs by standard Lean induction over sequences of calls. The Velvet method is still generated for per-step verification via `prove_correct` + `loom_solve`. Both coexist.
+
+Pure function detection: a function is pure if its body contains no `while` statements and no mutable `let` declarations.
+
 **Import chain:** `foo.def.lean` imports `foo.spec.lean`, which imports `foo.types.lean` (if it exists). If there is no `.spec.lean`, `foo.def.lean` imports `foo.types.lean` directly (or Velvet/Loom if there are no types either).
 
 ---

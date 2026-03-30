@@ -45,6 +45,19 @@ function isPrimitive(tsType: string): boolean {
 
 // ── Return-in-loop check ─────────────────────────────────────
 
+/** A function is pure if it has no while loops and no mutable let declarations. */
+function isPure(stmts: StmtSpec[]): boolean {
+  for (const s of stmts) {
+    switch (s.kind) {
+      case "while": return false;
+      case "let": if (s.mutable) return false; break;
+      case "if": if (!isPure(s.then) || !isPure(s.else)) return false; break;
+      case "switch": if (!s.cases.every(c => isPure(c.body)) || !isPure(s.defaultBody)) return false; break;
+    }
+  }
+  return true;
+}
+
 function containsReturn(stmts: StmtSpec[]): boolean {
   for (const s of stmts) {
     if (s.kind === "return") return true;
@@ -393,7 +406,118 @@ function generateFunction(fn: FunctionSpec, typeDecls: TypeDeclInfo[]): string[]
   return lines;
 }
 
+// ── Pure function generation ─────────────────────────────────
+
+/** Generate a plain Lean `def` for a pure function (no while, no mutation). */
+function generatePureDef(fn: FunctionSpec, typeDecls: TypeDeclInfo[]): string[] | null {
+  if (!isPure(fn.body)) return null;
+
+  const ctx = makeCtx(fn, typeDecls);
+  const natNames = new Set(fn.typeAnnotations.filter(t => t.type === "nat").map(t => t.name));
+
+  const params = fn.params.map(p => {
+    const ty = resolveVarType(p.name, p.type, fn.typeAnnotations);
+    return `(${p.name} : ${ty})`;
+  }).join(" ");
+  const retType = resolveVarType("\\result", fn.returnType, fn.typeAnnotations);
+
+  const body = emitPureBody(fn.body, ctx, natNames, typeDecls, 1);
+  if (!body) return null;
+
+  const lines: string[] = [];
+  lines.push(`def ${fn.name}_pure ${params} : ${retType} :=`);
+  lines.push(body);
+  return lines;
+}
+
+/** Emit a pure function body as a Lean expression (not do-notation). */
+function emitPureBody(stmts: StmtSpec[], ctx: EmitContext, natNames: Set<string>, typeDecls: TypeDeclInfo[], depth: number): string | null {
+  const pad = "  ".repeat(depth);
+
+  // Detect discriminant if-chain at the start
+  if (stmts.length > 0 && stmts[0].kind === "if") {
+    const chain = detectDiscriminantChain(stmts, ctx);
+    if (chain) return emitPureMatch(chain.chain, ctx, natNames, typeDecls, depth);
+  }
+
+  // Process statement by statement
+  const parts: string[] = [];
+  for (let i = 0; i < stmts.length; i++) {
+    const s = stmts[i];
+    const rest = stmts.slice(i + 1);
+
+    switch (s.kind) {
+      case "return":
+        return pad + exprToLean(s.value, ctx);
+
+      case "let": {
+        const init = exprToLean(s.init, ctx);
+        const restBody = emitPureBody(rest, ctx, natNames, typeDecls, depth);
+        if (!restBody) return null;
+        return `${pad}let ${s.name} := ${init}\n${restBody}`;
+      }
+
+      case "if": {
+        const cond = exprToLean(s.condition, ctx);
+        const thenBody = emitPureBody(s.then, ctx, natNames, typeDecls, depth + 1);
+        if (!thenBody) return null;
+        // If there's no else but there are more statements after, those are the else
+        const elseBranch = s.else.length > 0 ? s.else : rest;
+        const elseBody = emitPureBody(elseBranch, ctx, natNames, typeDecls, depth + 1);
+        if (!elseBody) return null;
+        return `${pad}if ${cond} then\n${thenBody}\n${pad}else\n${elseBody}`;
+      }
+
+      default:
+        return null; // unsupported in pure context
+    }
+  }
+  return null;
+}
+
+function emitPureMatch(chain: DiscriminantChain, ctx: EmitContext, natNames: Set<string>, typeDecls: TypeDeclInfo[], depth: number): string | null {
+  const pad = "  ".repeat(depth);
+  const decl = typeDecls.find(d => d.name === chain.typeName);
+  const lines: string[] = [];
+
+  lines.push(`${pad}match ${chain.varName} with`);
+  for (const c of chain.cases) {
+    const variant = decl?.variants?.find(v => v.name === c.variant);
+    const fields = variant?.fields ?? [];
+    const pattern = fields.length > 0
+      ? `.${c.variant} ${fields.map(f => f.name).join(" ")}`
+      : `.${c.variant}`;
+    const body = emitPureBody(c.body, ctx, natNames, typeDecls, depth + 1);
+    if (!body) return null;
+    // Replace x.field with bound variable
+    let bodyFixed = body;
+    for (const f of fields) {
+      bodyFixed = bodyFixed.replaceAll(`${chain.varName}.${f.name}`, f.name);
+    }
+    lines.push(`${pad}| ${pattern} =>\n${bodyFixed}`);
+  }
+  if (chain.fallthrough.length > 0) {
+    const body = emitPureBody(chain.fallthrough, ctx, natNames, typeDecls, depth + 1);
+    if (!body) return null;
+    lines.push(`${pad}| _ =>\n${body}`);
+  }
+  return lines.join("\n");
+}
+
 // ── Module generation ────────────────────────────────────────
+
+/** Generate pure Lean defs for pure functions. Returns lines to append to .types.lean. */
+export function generatePureDefs(mod: ModuleSpec): string[] {
+  const lines: string[] = [];
+  for (const fn of mod.functions) {
+    const pureDef = generatePureDef(fn, mod.typeDecls);
+    if (pureDef) {
+      lines.push("");
+      lines.push(...pureDef);
+    }
+  }
+  return lines;
+}
 
 export function generateDef(mod: ModuleSpec, specImport?: string, typesImport?: string): string {
   const lines: string[] = [];
