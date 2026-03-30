@@ -303,7 +303,7 @@ function emit(expr: Expr, ctx: EmitContext, parentOp?: string): string {
 
   switch (expr.kind) {
     case "num": return `${expr.value}`;
-    case "bool": return expr.value ? "True" : "False";
+    case "bool": return expr.value ? "true" : "false";
     case "var": return expr.name;
     case "result":
       if (!ctx.resultVar) throw new Error("\\result is only valid in ensures");

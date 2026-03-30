@@ -108,6 +108,8 @@ lean_lib Examples where
     `«arraySum.spec», `«arraySum.def», `«arraySum.proof»,
     `«linearSearch.def», `«linearSearch.proof»,
     `«transition.types», `«transition.spec», `«transition.def», `«transition.proof»,
-    `«packet.types», `«packet.def», `«packet.proof»
+    `«packet.types», `«packet.def», `«packet.proof»,
+    `«maxElement.def», `«maxElement.proof»,
+    `«isSorted.def», `«isSorted.proof»
   ]
   extraDepTargets := #[``downloadDependencies]
