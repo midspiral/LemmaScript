@@ -86,13 +86,7 @@ function transformSpecExpr(e: Expr, ctx: TransformCtx): LeanExpr {
           conclusion: transformSpecExpr(conclusion, ctx),
         };
       }
-      // String literal comparison: x === "foo" → x = .foo (for user-defined types)
-      if ((e.op === "===" || e.op === "!==") && e.right.kind === "str") {
-        const left = transformSpecExpr(e.left, ctx);
-        const right: LeanExpr = { kind: "constructor", name: e.right.value };
-        return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right };
-      }
-      // Discriminant check: x.tag === "foo" → x = .foo (for data-free) or handled by match
+      // Discriminant check: x.tag === "foo" → x = .foo (check BEFORE generic string comparison)
       if ((e.op === "===" || e.op === "!==") && e.left.kind === "prop" && e.right.kind === "str") {
         const varName = e.left.obj.kind === "var" ? e.left.obj.name : undefined;
         const typeName = varName ? ctx.userTypes.get(varName) : undefined;
@@ -102,6 +96,12 @@ function transformSpecExpr(e: Expr, ctx: TransformCtx): LeanExpr {
           const right: LeanExpr = { kind: "constructor", name: e.right.value };
           return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right };
         }
+      }
+      // Generic string literal comparison: x === "foo" → x = .foo
+      if ((e.op === "===" || e.op === "!==") && e.right.kind === "str") {
+        const left = transformSpecExpr(e.left, ctx);
+        const right: LeanExpr = { kind: "constructor", name: e.right.value };
+        return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right };
       }
       return {
         kind: "binop",
@@ -203,13 +203,20 @@ function replaceFieldAccess(e: LeanExpr, varName: string, fields: { name: string
     const f = fields.find(f => f.name === e.field);
     if (f) return { kind: "var", name: f.name };
   }
-  // Recurse
+  const r = (x: LeanExpr) => replaceFieldAccess(x, varName, fields);
   switch (e.kind) {
-    case "binop": return { ...e, left: replaceFieldAccess(e.left, varName, fields), right: replaceFieldAccess(e.right, varName, fields) };
-    case "unop": return { ...e, expr: replaceFieldAccess(e.expr, varName, fields) };
-    case "implies": return { ...e, premises: e.premises.map(p => replaceFieldAccess(p, varName, fields)), conclusion: replaceFieldAccess(e.conclusion, varName, fields) };
-    case "forall": return { ...e, body: replaceFieldAccess(e.body, varName, fields) };
-    case "exists": return { ...e, body: replaceFieldAccess(e.body, varName, fields) };
+    case "binop": return { ...e, left: r(e.left), right: r(e.right) };
+    case "unop": return { ...e, expr: r(e.expr) };
+    case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };
+    case "forall": return { ...e, body: r(e.body) };
+    case "exists": return { ...e, body: r(e.body) };
+    case "app": return { ...e, args: e.args.map(r) };
+    case "record": return { ...e, fields: e.fields.map(f => ({ ...f, value: r(f.value) })) };
+    case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
+    case "let": return { ...e, value: r(e.value), body: r(e.body) };
+    case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
+    case "field": return { ...e, obj: r(e.obj) };
+    case "match": return { ...e, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
     default: return e;
   }
 }
@@ -444,6 +451,15 @@ function transformPureMatch(chain: Chain, ctx: TransformCtx): LeanExpr | null {
 
 // ── Return-in-loop check ─────────────────────────────────────
 
+function hasReturnInLoop(stmts: StmtSpec[]): boolean {
+  for (const s of stmts) {
+    if (s.kind === "while" && containsReturn(s.body)) return true;
+    if (s.kind === "if" && (hasReturnInLoop(s.then) || hasReturnInLoop(s.else))) return true;
+    if (s.kind === "switch" && (s.cases.some(c => hasReturnInLoop(c.body)) || hasReturnInLoop(s.defaultBody))) return true;
+  }
+  return false;
+}
+
 function containsReturn(stmts: StmtSpec[]): boolean {
   for (const s of stmts) {
     if (s.kind === "return") return true;
@@ -481,7 +497,7 @@ function transformTypeDecl(d: TypeDeclInfo): LeanDecl {
 }
 
 function transformFunction(fn: FunctionSpec, typeDecls: TypeDeclInfo[]): LeanMethod {
-  if (fn.body.some(s => s.kind === "while") && containsReturn(fn.body.filter(s => s.kind === "while").flatMap(s => (s as any).body)))
+  if (hasReturnInLoop(fn.body))
     throw new Error(`${fn.name}: return inside a loop is not supported.`);
 
   const ctx = makeCtx(fn, typeDecls);
