@@ -45,6 +45,7 @@ export type TStmt =
   | { kind: "assign"; target: string; value: TExpr }
   | { kind: "return"; value: TExpr }
   | { kind: "break" }
+  | { kind: "continue" }
   | { kind: "expr"; expr: TExpr }
   | { kind: "if"; cond: TExpr; then: TStmt[]; else: TStmt[] }
   | { kind: "while"; cond: TExpr;

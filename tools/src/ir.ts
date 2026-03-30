@@ -39,6 +39,7 @@ export type LeanStmt =
   | { kind: "bind"; target: string; value: LeanExpr }         // x ← f a b
   | { kind: "return"; value: LeanExpr }
   | { kind: "break" }
+  | { kind: "continue" }
   | { kind: "if"; cond: LeanExpr; then: LeanStmt[]; else: LeanStmt[] }
   | { kind: "match"; scrutinee: string; arms: LeanStmtMatchArm[] }
   | { kind: "while"; cond: LeanExpr; invariants: LeanExpr[]; decreasing: LeanExpr | null;

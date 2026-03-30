@@ -302,6 +302,11 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       continue;
     }
 
+    if (Node.isContinueStatement(s)) {
+      result.push({ kind: "continue", line });
+      continue;
+    }
+
     if (Node.isExpressionStatement(s)) {
       const expr = s.getExpression();
       if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getText() === "=") {

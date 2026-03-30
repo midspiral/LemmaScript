@@ -55,6 +55,11 @@ export interface RawBreak {
   line: number;
 }
 
+export interface RawContinue {
+  kind: "continue";
+  line: number;
+}
+
 export interface RawExprStmt {
   kind: "expr";
   expr: RawExpr;
@@ -96,7 +101,7 @@ export interface RawForOf {
   line: number;
 }
 
-export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf;
+export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawContinue | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf;
 
 // ── Top-level ────────────────────────────────────────────────
 

@@ -243,6 +243,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): LeanStmt {
 
     case "return": return { kind: "return", value: transformExpr(s.value) };
     case "break": return { kind: "break" };
+    case "continue": return { kind: "continue" };
     case "expr": return { kind: "assign", target: "_", value: transformExpr(s.expr) };
 
     case "if":
@@ -374,7 +375,7 @@ function replaceFieldAccessInStmt(s: LeanStmt, varName: string, fields: { name: 
     case "assign": return { ...s, value: r(s.value) };
     case "bind": return { ...s, value: r(s.value) };
     case "return": return { ...s, value: r(s.value) };
-    case "break": return s;
+    case "break": case "continue": return s;
     case "if": return { ...s, cond: r(s.cond), then: replaceFieldAccessInStmts(s.then, varName, fields), else: replaceFieldAccessInStmts(s.else, varName, fields) };
     case "match": return { ...s, arms: s.arms.map(a => ({ ...a, body: replaceFieldAccessInStmts(a.body, varName, fields) })) };
     case "while": return { ...s, cond: r(s.cond), body: replaceFieldAccessInStmts(s.body, varName, fields) };

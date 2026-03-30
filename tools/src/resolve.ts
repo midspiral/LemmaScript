@@ -206,6 +206,9 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     case "break":
       return [{ kind: "break" }, ctx.env];
 
+    case "continue":
+      return [{ kind: "continue" }, ctx.env];
+
     case "expr":
       return [{ kind: "expr", expr: resolveExpr(s.expr, ctx) }, ctx.env];
 

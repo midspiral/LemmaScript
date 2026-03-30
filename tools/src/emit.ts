@@ -97,6 +97,7 @@ function emitStmt(s: LeanStmt, indent: number): string {
     case "bind": return `${pad}${s.target} ← ${emitExpr(s.value)}`;
     case "return": return `${pad}return ${emitExpr(s.value)}`;
     case "break": return `${pad}break`;
+    case "continue": return `${pad}continue`;
 
     case "if": {
       let out = `${pad}if ${emitExpr(s.cond)} then\n${emitStmts(s.then, indent + 1)}`;
