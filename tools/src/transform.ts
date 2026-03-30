@@ -88,21 +88,23 @@ function transformSpecExpr(e: Expr, ctx: TransformCtx): LeanExpr {
       }
       // Discriminant check: x.tag === "foo" → x = .foo (check BEFORE generic string comparison)
       if ((e.op === "===" || e.op === "!==") && e.left.kind === "prop" && e.right.kind === "str") {
-        const varName = e.left.obj.kind === "var" ? e.left.obj.name : undefined;
+        const rhs = e.right;
+        const lhs = e.left;
+        const varName = lhs.obj.kind === "var" ? lhs.obj.name : undefined;
         const typeName = varName ? ctx.userTypes.get(varName) : undefined;
         const decl = typeName ? ctx.typeDecls.find(d => d.name === typeName) : undefined;
-        if (decl && decl.discriminant === e.left.prop) {
-          const variant = decl.variants?.find(v => v.name === e.right.value);
+        if (decl && decl.discriminant === lhs.prop) {
+          const variant = decl.variants?.find(v => v.name === rhs.value);
           if (variant && variant.fields.length > 0) {
             // Data-carrying variant: can't use simple equality (`.b` needs arguments).
             // Error for now — user should use switch or restructure.
             throw new Error(
-              `Cannot compare against data-carrying variant "${e.right.value}" of "${typeName}" with ===. ` +
+              `Cannot compare against data-carrying variant "${rhs.value}" of "${typeName}" with ===. ` +
               `Use switch to destructure, or compare only against nullary variants.`
             );
           }
-          const left = transformSpecExpr(e.left.obj, ctx);
-          const right: LeanExpr = { kind: "constructor", name: e.right.value };
+          const left = transformSpecExpr(lhs.obj, ctx);
+          const right: LeanExpr = { kind: "constructor", name: rhs.value };
           return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right };
         }
       }
