@@ -2,7 +2,7 @@
  * lsc — LemmaScript compiler CLI
  *
  * Usage:
- *   lsc gen <file.ts>       — generate .def.lean
+ *   lsc gen <file.ts>       — generate .types.lean + .def.lean
  *   lsc check <file.ts>    — gen + lake build
  *   lsc extract <file.ts>  — print IR JSON
  */
@@ -13,6 +13,7 @@ import { execSync } from "child_process";
 import path from "path";
 import { extractModule } from "./extract.js";
 import { generateDef } from "./codegen.js";
+import { generateTypesLean } from "./types.js";
 
 function main() {
   const [cmd, filePath] = process.argv.slice(2);
@@ -36,13 +37,23 @@ function main() {
     return;
   }
 
-  // Determine spec import
   const dir = path.dirname(absPath);
   const base = path.basename(filePath, ".ts");
+
+  // Generate .types.lean if there are type declarations
+  const typesLean = generateTypesLean(mod.typeDecls);
+  const typesImport = typesLean ? `«${base}.types»` : undefined;
+  if (typesLean) {
+    const typesPath = path.join(dir, `${base}.types.lean`);
+    writeFileSync(typesPath, typesLean);
+    console.log(`Generated: ${typesPath}`);
+  }
+
+  // Determine imports: .spec.lean → .types.lean → Velvet
   const specPath = path.join(dir, `${base}.spec.lean`);
   const specImport = existsSync(specPath) ? `«${base}.spec»` : undefined;
 
-  const lean = generateDef(mod, specImport);
+  const lean = generateDef(mod, specImport, typesImport);
 
   if (cmd === "gen") {
     const defPath = path.join(dir, `${base}.def.lean`);
@@ -56,18 +67,15 @@ function main() {
     writeFileSync(defPath, lean);
     console.log(`Generated: ${defPath}`);
 
-    // Find lakefile
     let lakeDir = dir;
     while (lakeDir !== path.dirname(lakeDir)) {
       if (existsSync(path.join(lakeDir, "lakefile.lean"))) break;
       lakeDir = path.dirname(lakeDir);
     }
 
-    // Build the proof file
     const proofPath = path.join(dir, `${base}.proof.lean`);
     if (!existsSync(proofPath)) {
       console.error(`No proof file: ${proofPath}`);
-      console.error(`Create it with: prove_correct ${mod.functions[0]?.name ?? "fn"} by loom_solve`);
       process.exit(1);
     }
 

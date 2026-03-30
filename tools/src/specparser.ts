@@ -2,9 +2,9 @@
  * Spec expression parser and Lean emitter.
  *
  * Parses the //@ expression language (SPEC.md §3.2) and emits Lean 4 syntax.
- * The parser produces an AST; the emitter translates it using an EmitContext
- * that tracks which variables are Nat-typed.
  */
+
+import type { TypeDeclInfo } from "./types.js";
 
 // ── AST ──────────────────────────────────────────────────────
 
@@ -13,6 +13,7 @@ export type LeanType = "nat" | "int";
 export type Expr =
   | { kind: "num"; value: number }
   | { kind: "bool"; value: boolean }
+  | { kind: "str"; value: string }
   | { kind: "var"; name: string }
   | { kind: "result" }
   | { kind: "binop"; op: string; left: Expr; right: Expr }
@@ -27,6 +28,7 @@ export type Expr =
 
 type Token =
   | { type: "num"; value: number }
+  | { type: "str"; value: string }
   | { type: "ident"; value: string }
   | { type: "op"; value: string }
   | { type: "punc"; value: string }
@@ -40,10 +42,19 @@ function tokenize(input: string): Token[] {
   while (i < input.length) {
     if (/\s/.test(input[i])) { i++; continue; }
 
-    // \result
     if (input[i] === "\\" && input.slice(i + 1, i + 7) === "result") {
       tokens.push({ type: "result" });
       i += 7;
+      continue;
+    }
+
+    // String literals
+    if (input[i] === '"') {
+      i++;
+      let s = "";
+      while (i < input.length && input[i] !== '"') s += input[i++];
+      if (i < input.length) i++; // skip closing "
+      tokens.push({ type: "str", value: s });
       continue;
     }
 
@@ -199,6 +210,7 @@ class Parser {
     if (!t) throw new Error("Unexpected end of expression");
     if (t.type === "result") { this.advance(); return { kind: "result" }; }
     if (t.type === "num") { this.advance(); return { kind: "num", value: t.value }; }
+    if (t.type === "str") { this.advance(); return { kind: "str", value: t.value }; }
     if (t.type === "ident") {
       if (t.value === "true") { this.advance(); return { kind: "bool", value: true }; }
       if (t.value === "false") { this.advance(); return { kind: "bool", value: false }; }
@@ -236,8 +248,11 @@ class Parser {
 export interface EmitContext {
   arrayVars: Set<string>;
   natVars: Set<string>;
-  /** What \result maps to. Only set in ensures context ("res"). Absent elsewhere. */
   resultVar?: string;
+  /** Maps variable name → type name for user-defined types */
+  userTypes: Map<string, string>;
+  /** Type declarations for looking up constructors and fields */
+  typeDecls: TypeDeclInfo[];
 }
 
 export function isNat(expr: Expr, ctx: EmitContext): boolean {
@@ -248,6 +263,16 @@ export function isNat(expr: Expr, ctx: EmitContext): boolean {
     case "binop": return ["+", "-", "*", "/", "%"].includes(expr.op) && isNat(expr.left, ctx) && isNat(expr.right, ctx);
     default: return false;
   }
+}
+
+function findTypeDecl(ctx: EmitContext, typeName: string): TypeDeclInfo | undefined {
+  return ctx.typeDecls.find(d => d.name === typeName);
+}
+
+function varTypeName(expr: Expr, ctx: EmitContext): string | undefined {
+  if (expr.kind === "var") return ctx.userTypes.get(expr.name);
+  if (expr.kind === "result" && ctx.resultVar) return ctx.userTypes.get("\\result");
+  return undefined;
 }
 
 function splitConj(expr: Expr): Expr[] {
@@ -284,6 +309,12 @@ function emit(expr: Expr, ctx: EmitContext, parentOp?: string): string {
       if (!ctx.resultVar) throw new Error("\\result is only valid in ensures");
       return ctx.resultVar;
 
+    case "str": {
+      // String literal → Lean constructor (.value) if in a typed context
+      // The caller is responsible for context; here we just emit .value
+      return `.${expr.value}`;
+    }
+
     case "unop":
       if (expr.op === "!") return `¬(${e(expr.expr)})`;
       if (expr.op === "-") {
@@ -298,6 +329,36 @@ function emit(expr: Expr, ctx: EmitContext, parentOp?: string): string {
         const r = [...premises.map(p => e(p)), e(conclusion)].join(" → ");
         return parentOp ? `(${r})` : r;
       }
+
+      // Comparison with string literal → constructor equality
+      if ((expr.op === "===" || expr.op === "!==") && expr.right.kind === "str") {
+        const lhs = e(expr.left);
+        const rhs = `.${expr.right.value}`;
+        const op = expr.op === "===" ? "=" : "≠";
+        const r = `${lhs} ${op} ${rhs}`;
+        return parentOp ? `(${r})` : r;
+      }
+
+      // Property access on discriminant (x.tag === "foo") → constructor equality
+      if ((expr.op === "===" || expr.op === "!==") &&
+          expr.left.kind === "prop" && expr.right.kind === "str") {
+        const varExpr = expr.left.obj;
+        const typeName = varTypeName(varExpr, ctx);
+        const decl = typeName ? findTypeDecl(ctx, typeName) : undefined;
+        if (decl && decl.discriminant === expr.left.prop) {
+          const lhs = e(varExpr);
+          const op = expr.op === "===" ? "=" : "≠";
+          // For data-free variant, just .name. For data variant, need to handle differently.
+          const variant = decl.variants?.find(v => v.name === expr.right.value);
+          if (variant && variant.fields.length === 0) {
+            const r = `${lhs} ${op} .${expr.right.value}`;
+            return parentOp ? `(${r})` : r;
+          }
+          // Data-carrying variant: can't use simple equality. This will be handled by match.
+          // For now, emit a comment indicating the pattern.
+        }
+      }
+
       const ops: Record<string, string> = {
         "===": "=", "!==": "≠", ">=": "≥", "<=": "≤", ">": ">", "<": "<",
         "&&": "∧", "||": "∨", "+": "+", "-": "-", "*": "*", "/": "/", "%": "%",
@@ -309,7 +370,6 @@ function emit(expr: Expr, ctx: EmitContext, parentOp?: string): string {
     case "prop": {
       if (expr.prop === "length" && expr.obj.kind === "var" && ctx.arrayVars.has(expr.obj.name))
         return `${e(expr.obj)}.size`;
-      // Wrap non-atomic objects for dot access
       const obj = e(expr.obj);
       const atomic = expr.obj.kind === "var" || expr.obj.kind === "num" || expr.obj.kind === "bool";
       return atomic ? `${obj}.${expr.prop}` : `(${obj}).${expr.prop}`;
@@ -324,7 +384,6 @@ function emit(expr: Expr, ctx: EmitContext, parentOp?: string): string {
     }
 
     case "call": {
-      // Math.floor(x) → x
       if (expr.fn.kind === "prop" && expr.fn.prop === "floor" &&
           expr.fn.obj.kind === "var" && expr.fn.obj.name === "Math" && expr.args.length === 1)
         return e(expr.args[0]);
@@ -358,7 +417,6 @@ export function exprToLean(input: string, ctx: EmitContext): string {
   return emit(parseExpr(input), ctx);
 }
 
-/** Split top-level && and emit each conjunct as a separate Lean clause. */
 export function specToClauses(input: string, ctx: EmitContext): string[] {
   return splitConj(parseExpr(input)).map(e => emit(e, ctx));
 }
