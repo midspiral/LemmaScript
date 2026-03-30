@@ -1,8 +1,8 @@
 /**
  * Resolve — Raw IR → Typed IR.
  *
- * Resolves types, classifies calls, identifies discriminants,
- * parses //@ annotations, rejects unsupported patterns.
+ * Uses linked environments (Scheme-style) for lexical scoping.
+ * No mutation — each let extends the chain, lookup walks it.
  */
 
 import type { RawExpr, RawStmt, RawFunction, RawModule } from "./rawir.js";
@@ -10,76 +10,70 @@ import type { Ty, TExpr, TStmt, TFunction, TModule, TParam, CallKind } from "./t
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 
-// ── Resolution context ───────────────────────────────────────
+// ── Environment ──────────────────────────────────────────────
+
+interface Env {
+  name: string;
+  ty: Ty;
+  parent: Env | null;
+}
+
+function lookup(env: Env | null, name: string): Ty | undefined {
+  if (!env) return undefined;
+  return env.name === name ? env.ty : lookup(env.parent, name);
+}
+
+function extend(env: Env | null, name: string, ty: Ty): Env {
+  return { name, ty, parent: env };
+}
+
+// ── Context ──────────────────────────────────────────────────
 
 interface Ctx {
-  /** Variable name → resolved type */
-  vars: Map<string, Ty>;
-  /** Type declarations from the module */
+  env: Env | null;
   typeDecls: TypeDeclInfo[];
-  /** //@ type overrides */
   overrides: Map<string, string>;
-  /** Whether \result is allowed (only in ensures) */
   allowResult: boolean;
-  /** Return type (for \result) */
   returnTy: Ty;
 }
 
-// ── TS type string → Ty ─────────────────────────────────────
+function withEnv(ctx: Ctx, env: Env | null): Ctx {
+  return { ...ctx, env };
+}
+
+// ── TS type → Ty ─────────────────────────────────────────────
 
 function resolveTsType(tsType: string, overrides: Map<string, string>, varName?: string): Ty {
-  // Check override first
   if (varName) {
     const o = overrides.get(varName);
     if (o === "nat") return { kind: "nat" };
     if (o) return { kind: "user", name: o };
   }
-
   const t = tsType.trim();
   if (t === "number") return { kind: "int" };
   if (t === "boolean") return { kind: "bool" };
   if (t === "string") return { kind: "string" };
   if (t === "void" || t === "undefined") return { kind: "void" };
-
-  // Array types
   if (t === "number[]") return { kind: "array", elem: { kind: "int" } };
   if (t === "boolean[]") return { kind: "array", elem: { kind: "bool" } };
   if (t === "string[]") return { kind: "array", elem: { kind: "string" } };
-  const arrMatch = t.match(/^(?:Array<(.+)>|(.+)\[\])$/);
-  if (arrMatch) return { kind: "array", elem: resolveTsType(arrMatch[1] || arrMatch[2], overrides) };
-
-  // User-defined
+  const m = t.match(/^(?:Array<(.+)>|(.+)\[\])$/);
+  if (m) return { kind: "array", elem: resolveTsType(m[1] || m[2], overrides) };
   return { kind: "user", name: t };
 }
 
-function isNatTy(ty: Ty): boolean { return ty.kind === "nat"; }
-function isArrayTy(ty: Ty): boolean { return ty.kind === "array"; }
-function isUserTy(ty: Ty): boolean { return ty.kind === "user"; }
-
-// ── Find type declaration info ───────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────
 
 function findDecl(ctx: Ctx, name: string): TypeDeclInfo | undefined {
   return ctx.typeDecls.find(d => d.name === name);
 }
 
 function getDiscriminant(ctx: Ctx, typeName: string): string | undefined {
-  const decl = findDecl(ctx, typeName);
-  return decl?.discriminant;
+  return findDecl(ctx, typeName)?.discriminant;
 }
 
-function isNullaryVariant(ctx: Ctx, typeName: string, variantName: string): boolean {
-  const decl = findDecl(ctx, typeName);
-  const variant = decl?.variants?.find(v => v.name === variantName);
-  return variant ? variant.fields.length === 0 : true;
-}
-
-// ── Classify calls ───────────────────────────────────────────
-
-function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
-  // Math.floor, Math.abs etc. are builtins → pure
+function classifyCall(fn: RawExpr): CallKind {
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Math") return "pure";
-  // If the callee is a known function name, check if it appears in the module
-  // For now, assume all user function calls are method calls (monadic in Velvet)
   if (fn.kind === "var") return "method";
   return "unknown";
 }
@@ -88,10 +82,8 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
 
 function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
   switch (e.kind) {
-    case "var": {
-      const ty = ctx.vars.get(e.name) ?? { kind: "unknown" as const };
-      return { kind: "var", name: e.name, ty };
-    }
+    case "var":
+      return { kind: "var", name: e.name, ty: lookup(ctx.env, e.name) ?? { kind: "unknown" } };
 
     case "num":
       return { kind: "num", value: e.value, ty: e.value >= 0 ? { kind: "nat" } : { kind: "int" } };
@@ -105,7 +97,6 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     case "binop": {
       const left = resolveExpr(e.left, ctx);
       const right = resolveExpr(e.right, ctx);
-      // Result type depends on operator
       let ty: Ty = { kind: "unknown" };
       if (["===", "!==", ">=", "<=", ">", "<", "&&", "||"].includes(e.op)) ty = { kind: "bool" };
       else if (["+", "-", "*", "/", "%"].includes(e.op)) ty = left.ty;
@@ -114,23 +105,16 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "unop": {
       const expr = resolveExpr(e.expr, ctx);
-      const ty: Ty = e.op === "!" ? { kind: "bool" } : expr.ty;
-      return { kind: "unop", op: e.op, expr, ty };
+      return { kind: "unop", op: e.op, expr, ty: e.op === "!" ? { kind: "bool" } : expr.ty };
     }
 
-    case "call": {
-      const fn = resolveExpr(e.fn, ctx);
-      const args = e.args.map(a => resolveExpr(a, ctx));
-      const callKind = classifyCall(e.fn, ctx);
-      // Return type: unknown for now (could look up function signatures)
-      return { kind: "call", fn, args, ty: { kind: "unknown" }, callKind };
-    }
+    case "call":
+      return { kind: "call", fn: resolveExpr(e.fn, ctx), args: e.args.map(a => resolveExpr(a, ctx)), ty: { kind: "unknown" }, callKind: classifyCall(e.fn) };
 
     case "index": {
       const obj = resolveExpr(e.obj, ctx);
       const idx = resolveExpr(e.idx, ctx);
-      const elemTy: Ty = obj.ty.kind === "array" ? obj.ty.elem : { kind: "unknown" };
-      return { kind: "index", obj, idx, ty: elemTy };
+      return { kind: "index", obj, idx, ty: obj.ty.kind === "array" ? obj.ty.elem : { kind: "unknown" } };
     }
 
     case "field": {
@@ -138,14 +122,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let isDiscriminant = false;
       let ty: Ty = { kind: "unknown" };
 
-      // arr.length → Nat
-      if (e.field === "length" && isArrayTy(obj.ty)) {
+      if (e.field === "length" && obj.ty.kind === "array") {
         ty = { kind: "nat" };
-      }
-      // x.field on a user type → check if discriminant
-      else if (obj.ty.kind === "user") {
-        const disc = getDiscriminant(ctx, obj.ty.name);
-        if (disc === e.field) isDiscriminant = true;
+      } else if (obj.ty.kind === "user") {
+        if (getDiscriminant(ctx, obj.ty.name) === e.field) isDiscriminant = true;
         const decl = findDecl(ctx, obj.ty.name);
         if (decl?.kind === "record") {
           const f = decl.fields?.find(f => f.name === e.field);
@@ -156,43 +136,35 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       return { kind: "field", obj, field: e.field, ty, isDiscriminant };
     }
 
-    case "record": {
-      const fields = e.fields.map(f => ({ name: f.name, value: resolveExpr(f.value, ctx) }));
-      return { kind: "record", fields, ty: { kind: "unknown" } };
-    }
+    case "record":
+      return { kind: "record", fields: e.fields.map(f => ({ name: f.name, value: resolveExpr(f.value, ctx) })), ty: { kind: "unknown" } };
 
-    // Spec-only nodes (from specparser):
     case "result":
       if (!ctx.allowResult) throw new Error("\\result is only valid in ensures");
       return { kind: "result", ty: ctx.returnTy };
 
     case "forall": {
       const varTy: Ty = e.varType === "nat" ? { kind: "nat" } : { kind: "int" };
-      const innerCtx = { ...ctx, vars: new Map(ctx.vars).set(e.var, varTy) };
-      return { kind: "forall", var: e.var, varTy, body: resolveExpr(e.body, innerCtx), ty: { kind: "bool" } };
+      return { kind: "forall", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
     }
 
     case "exists": {
       const varTy: Ty = e.varType === "nat" ? { kind: "nat" } : { kind: "int" };
-      const innerCtx = { ...ctx, vars: new Map(ctx.vars).set(e.var, varTy) };
-      return { kind: "exists", var: e.var, varTy, body: resolveExpr(e.body, innerCtx), ty: { kind: "bool" } };
+      return { kind: "exists", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
     }
   }
 }
 
-// ── Resolve spec annotations (strings → TExpr) ──────────────
+// ── Resolve specs ────────────────────────────────────────────
 
 function resolveSpec(spec: string, ctx: Ctx): TExpr {
-  const raw = parseExpr(spec);
-  return resolveExpr(raw, ctx);
+  return resolveExpr(parseExpr(spec), ctx);
 }
 
 function resolveSpecs(specs: string[], ctx: Ctx): TExpr[] {
-  // Split top-level && into separate clauses
   const result: TExpr[] = [];
   for (const spec of specs) {
-    const raw = parseExpr(spec);
-    for (const clause of splitConj(raw)) {
+    for (const clause of splitConj(parseExpr(spec))) {
       result.push(resolveExpr(clause, ctx));
     }
   }
@@ -206,87 +178,77 @@ function splitConj(e: RawExpr): RawExpr[] {
 
 // ── Resolve statements ───────────────────────────────────────
 
-function resolveStmts(stmts: RawStmt[], ctx: Ctx): TStmt[] {
+function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
   const result: TStmt[] = [];
+  let env = ctx.env;
   for (const s of stmts) {
-    result.push(resolveStmt(s, ctx));
+    const [typed, nextEnv] = resolveStmt(s, withEnv(ctx, env));
+    result.push(typed);
+    env = nextEnv;
   }
   return result;
 }
 
-function resolveStmt(s: RawStmt, ctx: Ctx): TStmt {
+function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
   switch (s.kind) {
     case "let": {
       const ty = resolveTsType(s.tsType, ctx.overrides, s.name);
-      ctx.vars.set(s.name, ty);
-      return { kind: "let", name: s.name, ty, mutable: s.mutable, init: resolveExpr(s.init, ctx) };
+      const init = resolveExpr(s.init, ctx); // resolve init BEFORE adding binding
+      return [{ kind: "let", name: s.name, ty, mutable: s.mutable, init }, extend(ctx.env, s.name, ty)];
     }
 
     case "assign":
-      return { kind: "assign", target: s.target, value: resolveExpr(s.value, ctx) };
+      return [{ kind: "assign", target: s.target, value: resolveExpr(s.value, ctx) }, ctx.env];
 
     case "return":
-      return { kind: "return", value: resolveExpr(s.value, ctx) };
+      return [{ kind: "return", value: resolveExpr(s.value, ctx) }, ctx.env];
 
     case "break":
-      return { kind: "break" };
+      return [{ kind: "break" }, ctx.env];
 
     case "expr":
-      return { kind: "expr", expr: resolveExpr(s.expr, ctx) };
+      return [{ kind: "expr", expr: resolveExpr(s.expr, ctx) }, ctx.env];
 
     case "if":
-      return {
-        kind: "if",
-        cond: resolveExpr(s.cond, ctx),
-        then: resolveStmts(s.then, ctx),
-        else: resolveStmts(s.else, ctx),
-      };
+      return [{ kind: "if", cond: resolveExpr(s.cond, ctx), then: resolveBlock(s.then, ctx), else: resolveBlock(s.else, ctx) }, ctx.env];
 
-    case "while": {
-      const bodyCtx = { ...ctx, vars: new Map(ctx.vars) };
-      return {
+    case "while":
+      return [{
         kind: "while",
-        cond: resolveExpr(s.cond, bodyCtx),
-        invariants: resolveSpecs(s.invariants, bodyCtx),
-        decreases: s.decreases ? resolveSpec(s.decreases, bodyCtx) : null,
-        doneWith: s.doneWith ? resolveSpec(s.doneWith, bodyCtx) : null,
-        body: resolveStmts(s.body, bodyCtx),
-      };
-    }
+        cond: resolveExpr(s.cond, ctx),
+        invariants: resolveSpecs(s.invariants, ctx),
+        decreases: s.decreases ? resolveSpec(s.decreases, ctx) : null,
+        doneWith: s.doneWith ? resolveSpec(s.doneWith, ctx) : null,
+        body: resolveBlock(s.body, ctx),
+      }, ctx.env];
 
     case "forof": {
       const iterable = resolveExpr(s.iterable, ctx);
       const elemTy: Ty = iterable.ty.kind === "array" ? iterable.ty.elem : { kind: "unknown" };
-      const bodyCtx = { ...ctx, vars: new Map(ctx.vars).set(s.varName, elemTy) };
-      return {
-        kind: "forof",
-        varName: s.varName,
-        varTy: elemTy,
-        iterable,
+      const bodyCtx = withEnv(ctx, extend(ctx.env, s.varName, elemTy));
+      return [{
+        kind: "forof", varName: s.varName, varTy: elemTy, iterable,
         invariants: resolveSpecs(s.invariants, bodyCtx),
         doneWith: s.doneWith ? resolveSpec(s.doneWith, bodyCtx) : null,
-        body: resolveStmts(s.body, bodyCtx),
-      };
+        body: resolveBlock(s.body, bodyCtx),
+      }, ctx.env];
     }
 
     case "switch":
-      return {
-        kind: "switch",
-        expr: resolveExpr(s.expr, ctx),
-        discriminant: s.discriminant,
-        cases: s.cases.map(c => ({ label: c.label, body: resolveStmts(c.body, ctx) })),
-        defaultBody: resolveStmts(s.defaultBody, ctx),
-      };
+      return [{
+        kind: "switch", expr: resolveExpr(s.expr, ctx), discriminant: s.discriminant,
+        cases: s.cases.map(c => ({ label: c.label, body: resolveBlock(c.body, ctx) })),
+        defaultBody: resolveBlock(s.defaultBody, ctx),
+      }, ctx.env];
   }
 }
 
-// ── Pure function detection ──────────────────────────────────
+// ── Pure / return-in-loop detection ──────────────────────────
 
 function isPure(stmts: RawStmt[]): boolean {
   for (const s of stmts) {
     switch (s.kind) {
-      case "while": return false;
-      case "forof": return false;
+      case "while": case "forof": return false;
       case "let": if (s.mutable) return false; break;
       case "if": if (!isPure(s.then) || !isPure(s.else)) return false; break;
       case "switch": if (!s.cases.every(c => isPure(c.body)) || !isPure(s.defaultBody)) return false; break;
@@ -295,12 +257,9 @@ function isPure(stmts: RawStmt[]): boolean {
   return true;
 }
 
-// ── Return-in-loop detection ─────────────────────────────────
-
 function hasReturnInLoop(stmts: RawStmt[]): boolean {
   for (const s of stmts) {
-    if (s.kind === "while" && containsReturn(s.body)) return true;
-    if (s.kind === "forof" && containsReturn(s.body)) return true;
+    if ((s.kind === "while" || s.kind === "forof") && containsReturn(s.body)) return true;
     if (s.kind === "if" && (hasReturnInLoop(s.then) || hasReturnInLoop(s.else))) return true;
     if (s.kind === "switch" && (s.cases.some(c => hasReturnInLoop(c.body)) || hasReturnInLoop(s.defaultBody))) return true;
   }
@@ -311,48 +270,37 @@ function containsReturn(stmts: RawStmt[]): boolean {
   for (const s of stmts) {
     if (s.kind === "return") return true;
     if (s.kind === "if" && (containsReturn(s.then) || containsReturn(s.else))) return true;
-    if (s.kind === "while" && containsReturn(s.body)) return true;
-    if (s.kind === "forof" && containsReturn(s.body)) return true;
+    if ((s.kind === "while" || s.kind === "forof") && containsReturn(s.body)) return true;
     if (s.kind === "switch" && (s.cases.some(c => containsReturn(c.body)) || containsReturn(s.defaultBody))) return true;
   }
   return false;
 }
 
-// ── Resolve function ─────────────────────────────────────────
+// ── Resolve function / module ────────────────────────────────
 
 function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[]): TFunction {
   if (hasReturnInLoop(fn.body)) {
-    throw new Error(`${fn.name}: return inside a loop is not supported. Restructure to use break + result variable.`);
+    throw new Error(`${fn.name}: return inside a loop is not supported.`);
   }
 
   const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
-
-  const params: TParam[] = fn.params.map(p => ({
-    name: p.name,
-    ty: resolveTsType(p.tsType, overrides, p.name),
-  }));
-
+  const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: resolveTsType(p.tsType, overrides, p.name) }));
   const returnTy = resolveTsType(fn.returnType, overrides, "\\result");
 
-  // Build variable context from params
-  const vars = new Map<string, Ty>();
-  for (const p of params) vars.set(p.name, p.ty);
+  let env: Env | null = null;
+  for (const p of params) env = extend(env, p.name, p.ty);
 
-  const baseCtx: Ctx = { vars, typeDecls, overrides, allowResult: false, returnTy };
+  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy };
   const ensuresCtx: Ctx = { ...baseCtx, allowResult: true };
 
   return {
-    name: fn.name,
-    params,
-    returnTy,
+    name: fn.name, params, returnTy,
     requires: resolveSpecs(fn.requires, baseCtx),
     ensures: resolveSpecs(fn.ensures, ensuresCtx),
     isPure: isPure(fn.body),
-    body: resolveStmts(fn.body, baseCtx),
+    body: resolveBlock(fn.body, baseCtx),
   };
 }
-
-// ── Resolve module ───────────────────────────────────────────
 
 export function resolveModule(raw: RawModule): TModule {
   return {

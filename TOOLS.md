@@ -58,6 +58,23 @@ The specparser (`specparser.ts`) parses `//@ ` annotation expressions into `RawE
 3. **Transform**: add a Lean IR lowering rule that pattern-matches on the typed node.
 4. **Emit**: usually nothing.
 
+## Scoping
+
+The resolve pass uses linked environments (Scheme-style). Each binding is a frame with one name, one type, and a pointer to the parent:
+
+```ts
+interface Env { name: string; ty: Ty; parent: Env | null }
+```
+
+`let` extends the chain. Lookup walks it. No mutation, no maps, no copying. `resolveStmt` returns `[TStmt, Env]` so bindings thread through a block. Block-creating constructs (`if`, `while`, `forof`, `switch`) call `resolveBlock`; inner bindings don't leak out. `let x = init` resolves init before adding x to the env.
+
+## Known Bugs
+
+- **Discriminant check ordering**: the generic string-comparison branch in `transformExpr` still runs before the discriminant-specific branch for spec annotations (`//@ requires m.tag === "a"` → `require m.tag = .a` instead of `require m = .a`). Fixed for body expressions but not for spec expressions that go through `resolveExpr`.
+- **3+ arm discriminant chains**: `detectDiscriminantChain` only flattens one level of `else if`. Three or more arms produce nested matches instead of a flat match.
+- **Dead emission code**: `specparser.ts` still contains the old Lean-emission path (the `emit` function and `EmitContext`). No longer called by the pipeline.
+- **Fallback escape hatch**: unsupported expressions in `extract.ts` silently become `{ kind: "var", name: node.getText() }`. Should error instead.
+
 ## Current State
 
 | File | Phase | Role |
