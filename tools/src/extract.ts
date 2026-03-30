@@ -93,8 +93,7 @@ function extractExpr(node: Expression): RawExpr {
     return { kind: "record", fields };
   }
 
-  // Fallback: wrap as a var with the source text (lossy but safe)
-  return { kind: "var", name: node.getText() };
+  throw new Error(`Unsupported expression: ${node.getText()}`);
 }
 
 // ── Annotation parsing ───────────────────────────────────────
@@ -313,8 +312,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       continue;
     }
 
-    // Fallback
-    result.push({ kind: "expr", expr: { kind: "var", name: s.getText() }, line });
+    throw new Error(`Unsupported statement at line ${line}: ${s.getText().slice(0, 80)}`);
   }
   return result;
 }

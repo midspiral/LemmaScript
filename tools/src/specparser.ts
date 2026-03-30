@@ -1,16 +1,10 @@
 /**
- * Spec expression parser and Lean emitter.
- *
- * Parses the //@ expression language (SPEC.md §3.2) and emits Lean 4 syntax.
+ * Spec expression parser.
+ * Parses //@ annotation expressions into RawExpr AST nodes.
  */
-
-import type { TypeDeclInfo } from "./types.js";
-
-// ── AST ──────────────────────────────────────────────────────
 
 import type { RawExpr } from "./rawir.js";
 
-// Re-export RawExpr as the parser's output type
 export type Expr = RawExpr;
 
 // ── Tokenizer ────────────────────────────────────────────────
@@ -22,10 +16,6 @@ type Token =
   | { type: "op"; value: string }
   | { type: "punc"; value: string }
   | { type: "result"; value: undefined };
-
-function tokenValue(t: Token): string | number | undefined {
-  return t.value;
-}
 
 const MULTI_OPS = ["==>", "===", "!==", ">=", "<=", "&&", "||"];
 
@@ -41,7 +31,6 @@ function tokenize(input: string): Token[] {
       continue;
     }
 
-    // String literals (double or single quotes)
     if (input[i] === '"' || input[i] === "'") {
       const quote = input[i];
       i++;
@@ -233,7 +222,6 @@ class Parser {
       this.expect("punc", ")");
       return expr;
     }
-    // Object literal: { field: value, ... }
     if (t.type === "punc" && t.value === "{") {
       this.advance();
       const fields: { name: string; value: Expr }[] = [];
@@ -254,186 +242,6 @@ class Parser {
   }
 }
 
-// ── Lean emitter ─────────────────────────────────────────────
-
-export interface EmitContext {
-  arrayVars: Set<string>;
-  natVars: Set<string>;
-  resultVar?: string;
-  /** Maps variable name → type name for user-defined types */
-  userTypes: Map<string, string>;
-  /** Type declarations for looking up constructors and fields */
-  typeDecls: TypeDeclInfo[];
-}
-
-export function isNat(expr: Expr, ctx: EmitContext): boolean {
-  switch (expr.kind) {
-    case "num": return expr.value >= 0;
-    case "var": return ctx.natVars.has(expr.name);
-    case "field": return expr.field === "length" && expr.obj.kind === "var" && ctx.arrayVars.has(expr.obj.name);
-    case "binop": return ["+", "-", "*", "/", "%"].includes(expr.op) && isNat(expr.left, ctx) && isNat(expr.right, ctx);
-    default: return false;
-  }
-}
-
-function findTypeDecl(ctx: EmitContext, typeName: string): TypeDeclInfo | undefined {
-  return ctx.typeDecls.find(d => d.name === typeName);
-}
-
-function varTypeName(expr: Expr, ctx: EmitContext): string | undefined {
-  if (expr.kind === "var") return ctx.userTypes.get(expr.name);
-  if (expr.kind === "result" && ctx.resultVar) return ctx.userTypes.get("\\result");
-  return undefined;
-}
-
-function splitConj(expr: Expr): Expr[] {
-  if (expr.kind === "binop" && expr.op === "&&") return [...splitConj(expr.left), ...splitConj(expr.right)];
-  return [expr];
-}
-
-function flattenImpl(expr: Expr): { premises: Expr[]; conclusion: Expr } {
-  if (expr.kind === "binop" && expr.op === "==>") {
-    const lhs = splitConj(expr.left);
-    const rest = flattenImpl(expr.right);
-    return { premises: [...lhs, ...rest.premises], conclusion: rest.conclusion };
-  }
-  return { premises: [], conclusion: expr };
-}
-
-function prec(op: string): number {
-  const p: Record<string, number> = {
-    "==>": 1, "||": 2, "&&": 3,
-    "===": 4, "!==": 4, ">=": 4, "<=": 4, ">": 4, "<": 4,
-    "+": 5, "-": 5, "*": 6, "/": 6, "%": 6,
-  };
-  return p[op] ?? 10;
-}
-
-function emit(expr: Expr, ctx: EmitContext, parentOp?: string): string {
-  const e = (x: Expr, p?: string) => emit(x, ctx, p);
-
-  switch (expr.kind) {
-    case "num": return `${expr.value}`;
-    case "bool": return expr.value ? "true" : "false";
-    case "var": return expr.name;
-    case "result":
-      if (!ctx.resultVar) throw new Error("\\result is only valid in ensures");
-      return ctx.resultVar;
-
-    case "str": {
-      // String literal → Lean constructor (.value) if in a typed context
-      // The caller is responsible for context; here we just emit .value
-      return `.${expr.value}`;
-    }
-
-    case "unop":
-      if (expr.op === "!") return `¬(${e(expr.expr)})`;
-      if (expr.op === "-") {
-        if (expr.expr.kind === "num") return `-${expr.expr.value}`;
-        return `(-${e(expr.expr)})`;
-      }
-      return `(${expr.op} ${e(expr.expr)})`;
-
-    case "binop": {
-      if (expr.op === "==>") {
-        const { premises, conclusion } = flattenImpl(expr);
-        const r = [...premises.map(p => e(p)), e(conclusion)].join(" → ");
-        return parentOp ? `(${r})` : r;
-      }
-
-      // Comparison with string literal → constructor equality
-      if ((expr.op === "===" || expr.op === "!==") && expr.right.kind === "str") {
-        const lhs = e(expr.left);
-        const rhs = `.${expr.right.value}`;
-        const op = expr.op === "===" ? "=" : "≠";
-        const r = `${lhs} ${op} ${rhs}`;
-        return parentOp ? `(${r})` : r;
-      }
-
-      // Property access on discriminant (x.tag === "foo") → constructor equality
-      if ((expr.op === "===" || expr.op === "!==") &&
-          expr.left.kind === "field" && expr.right.kind === "str") {
-        const varExpr = expr.left.obj;
-        const typeName = varTypeName(varExpr, ctx);
-        const decl = typeName ? findTypeDecl(ctx, typeName) : undefined;
-        if (decl && decl.discriminant === expr.left.field) {
-          const lhs = e(varExpr);
-          const op = expr.op === "===" ? "=" : "≠";
-          // For data-free variant, just .name. For data variant, need to handle differently.
-          const strVal = (expr.right as { kind: "str"; value: string }).value;
-          const variant = decl.variants?.find(v => v.name === strVal);
-          if (variant && variant.fields.length === 0) {
-            const r = `${lhs} ${op} .${strVal}`;
-            return parentOp ? `(${r})` : r;
-          }
-          // Data-carrying variant: can't use simple equality. This will be handled by match.
-          // For now, emit a comment indicating the pattern.
-        }
-      }
-
-      const ops: Record<string, string> = {
-        "===": "=", "!==": "≠", ">=": "≥", "<=": "≤", ">": ">", "<": "<",
-        "&&": "∧", "||": "∨", "+": "+", "-": "-", "*": "*", "/": "/", "%": "%",
-      };
-      const r = `${e(expr.left, expr.op)} ${ops[expr.op] ?? expr.op} ${e(expr.right, expr.op)}`;
-      return (parentOp && prec(expr.op) < prec(parentOp)) ? `(${r})` : r;
-    }
-
-    case "field": {
-      if (expr.field === "length" && expr.obj.kind === "var" && ctx.arrayVars.has(expr.obj.name))
-        return `${e(expr.obj)}.size`;
-      const obj = e(expr.obj);
-      const atomic = expr.obj.kind === "var" || expr.obj.kind === "num" || expr.obj.kind === "bool";
-      return atomic ? `${obj}.${expr.field}` : `(${obj}).${expr.field}`;
-    }
-
-    case "index": {
-      if (expr.obj.kind === "var" && ctx.arrayVars.has(expr.obj.name)) {
-        const idx = e(expr.idx);
-        return isNat(expr.idx, ctx) ? `${e(expr.obj)}[${idx}]!` : `${e(expr.obj)}[${idx}.toNat]!`;
-      }
-      return `${e(expr.obj)}[${e(expr.idx)}]`;
-    }
-
-    case "call": {
-      if (expr.fn.kind === "field" && expr.fn.field === "floor" &&
-          expr.fn.obj.kind === "var" && expr.fn.obj.name === "Math" && expr.args.length === 1)
-        return e(expr.args[0]);
-      const fn = expr.fn.kind === "var" ? expr.fn.name : e(expr.fn);
-      const args = expr.args.map(a => {
-        const s = e(a);
-        return (a.kind === "binop" || a.kind === "unop") ? `(${s})` : s;
-      });
-      return `${fn} ${args.join(" ")}`;
-    }
-
-    case "record": {
-      const fields = expr.fields.map(f => `${f.name} := ${e(f.value)}`).join(", ");
-      return `{ ${fields} }`;
-    }
-
-    case "forall":
-    case "exists": {
-      const sym = expr.kind === "forall" ? "∀" : "∃";
-      const ty = expr.varType === "nat" ? "Nat" : "Int";
-      const bodyCtx = expr.varType === "nat"
-        ? { ...ctx, natVars: new Set([...ctx.natVars, expr.var]) }
-        : ctx;
-      return `${sym} ${expr.var} : ${ty}, ${emit(expr.body, bodyCtx)}`;
-    }
-  }
-}
-
-// ── Public API ───────────────────────────────────────────────
-
 export function parseExpr(input: string): Expr {
   return new Parser(tokenize(input)).parse();
-}
-
-export function exprToLean(input: string, ctx: EmitContext): string {
-  return emit(parseExpr(input), ctx);
-}
-
-export function specToClauses(input: string, ctx: EmitContext): string[] {
-  return splitConj(parseExpr(input)).map(e => emit(e, ctx));
 }

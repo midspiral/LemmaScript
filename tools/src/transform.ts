@@ -59,21 +59,21 @@ function transformExpr(e: TExpr): LeanExpr {
         const { premises, conclusion } = flattenImpl(e);
         return { kind: "implies", premises: premises.map(transformExpr), conclusion: transformExpr(conclusion) };
       }
-      // String comparison on user type → constructor equality
-      if ((e.op === "===" || e.op === "!==") && e.right.kind === "str") {
-        return {
-          kind: "binop",
-          op: e.op === "===" ? "=" : "≠",
-          left: transformExpr(e.left),
-          right: { kind: "constructor", name: e.right.value },
-        };
-      }
-      // Discriminant check: x.discriminant === "foo" → x = .foo
+      // Discriminant check: x.discriminant === "foo" → x = .foo (before generic string literal comparison)
       if ((e.op === "===" || e.op === "!==") && e.left.kind === "field" && e.left.isDiscriminant && e.right.kind === "str") {
         return {
           kind: "binop",
           op: e.op === "===" ? "=" : "≠",
           left: transformExpr(e.left.obj),
+          right: { kind: "constructor", name: e.right.value },
+        };
+      }
+      // Generic string literal comparison: x === "foo" → x = .foo
+      if ((e.op === "===" || e.op === "!==") && e.right.kind === "str") {
+        return {
+          kind: "binop",
+          op: e.op === "===" ? "=" : "≠",
+          left: transformExpr(e.left),
           right: { kind: "constructor", name: e.right.value },
         };
       }
@@ -278,8 +278,19 @@ function detectDiscriminantChain(stmts: TStmt[]): { chain: Chain; consumed: numb
   if (!first) return null;
 
   const cases: { variant: string; body: TStmt[] }[] = [];
-  let consumed = 0;
 
+  // Follow else branches within one if-else-if tree
+  function collectElse(s: TStmt & { kind: "if" }): TStmt[] {
+    const p = parseDiscriminantCond(s.cond);
+    if (!p || p.varName !== first!.varName) return [s];
+    cases.push({ variant: p.variant, body: s.then });
+    if (s.else.length === 0) return [];
+    if (s.else.length === 1 && s.else[0].kind === "if") return collectElse(s.else[0]);
+    return s.else;
+  }
+
+  // Walk consecutive top-level ifs on the same discriminant
+  let consumed = 0;
   for (let i = 0; i < stmts.length; i++) {
     const s = stmts[i];
     if (s.kind !== "if") break;
@@ -288,19 +299,13 @@ function detectDiscriminantChain(stmts: TStmt[]): { chain: Chain; consumed: numb
     cases.push({ variant: p.variant, body: s.then });
     consumed = i + 1;
     if (s.else.length > 0) {
-      if (s.else.length === 1 && s.else[0].kind === "if") {
-        const ep = parseDiscriminantCond(s.else[0].cond);
-        if (ep && ep.varName === first.varName) {
-          cases.push({ variant: ep.variant, body: s.else[0].then });
-          if (s.else[0].else.length > 0)
-            return { chain: { ...first, cases, fallthrough: s.else[0].else }, consumed };
-        }
-      }
-      return { chain: { ...first, cases, fallthrough: s.else }, consumed };
+      const ft = (s.else.length === 1 && s.else[0].kind === "if") ? collectElse(s.else[0]) : s.else;
+      return cases.length > 0 ? { chain: { ...first, cases, fallthrough: ft }, consumed } : null;
     }
   }
-  const fallthrough = stmts.slice(consumed);
-  return cases.length > 0 ? { chain: { ...first, cases, fallthrough }, consumed: stmts.length } : null;
+
+  if (cases.length === 0) return null;
+  return { chain: { ...first, cases, fallthrough: stmts.slice(consumed) }, consumed: stmts.length };
 }
 
 function parseDiscriminantCond(cond: TExpr): { varName: string; typeName: string; variant: string } | null {
