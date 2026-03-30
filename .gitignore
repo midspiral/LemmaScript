@@ -5,6 +5,3 @@
 node_modules/
 dist/
 
-# Generated Lean files
-*.types.lean
-*.def.lean

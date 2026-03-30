@@ -25,9 +25,9 @@ LemmaScript is a library. Each user project depends on it.
 my-app/
   src/
     binarySearch.ts              ← TypeScript source
-    binarySearch.types.lean      ← Lean types from TS (generated, gitignored)
+    binarySearch.types.lean      ← Lean types from TS (generated)
     binarySearch.spec.lean       ← ghost definitions, lemmas (user-written)
-    binarySearch.def.lean        ← method definition (generated, gitignored)
+    binarySearch.def.lean        ← method definition (generated)
     binarySearch.proof.lean      ← prove_correct + tactics (user/LLM-written)
   lakefile.lean                  ← requires LemmaScript
   lean-toolchain
@@ -38,12 +38,12 @@ my-app/
 
 For each verified TS function `foo.ts`, there are up to four Lean files:
 
-| File | Who writes it | Version-controlled? | Purpose |
-|------|--------------|-------------------|---------|
-| `foo.types.lean` | `lsc gen` | No (gitignored) | Lean type definitions derived from TS types |
-| `foo.spec.lean` | User | Yes | Ghost definitions, helper lemmas |
-| `foo.def.lean` | `lsc gen` | No (gitignored) | Method definition (generated from TS) |
-| `foo.proof.lean` | User / LLM | Yes | `prove_correct` with proof tactics |
+| File | Who writes it | Purpose |
+|------|--------------|---------|
+| `foo.types.lean` | `lsc gen` | Lean type definitions derived from TS types |
+| `foo.spec.lean` | User | Ghost definitions, helper lemmas |
+| `foo.def.lean` | `lsc gen` | Method definition (generated from TS) |
+| `foo.proof.lean` | User / LLM | `prove_correct` with proof tactics |
 
 **Key property:** `foo.types.lean` and `foo.def.lean` are always regeneratable from `foo.ts`. The user only writes `.spec.lean` and `.proof.lean`.
 
