@@ -554,7 +554,45 @@ Generated `.def.lean` uses `match` for the body and ensures. `loom_solve` handle
 
 Both examples are validated — the generated Lean compiles and verifies.
 
-### 8.5 Type Mapping Implementation
+### 8.5 Record/Object Types
+
+TS interfaces and object types map to Lean structures.
+
+```typescript
+interface EffectState {
+  res: boolean;
+  done: boolean;
+  rec: boolean;
+}
+```
+
+Generated in `.types.lean`:
+
+```lean
+structure EffectState where
+  res : Bool
+  done : Bool
+  rec : Bool
+deriving Repr, Inhabited, DecidableEq
+```
+
+**Field access** passes through directly: `state.res` → `state.res` (Lean structures have field projection).
+
+**Object literals** translate to anonymous constructors:
+
+```typescript
+return { res: true, done: true, rec: true };
+```
+
+→
+
+```lean
+return { res := true, done := true, rec := true }
+```
+
+**Detection:** ts-morph identifies `interface` and `type` declarations that are pure object shapes (no union, no discriminant). These generate `structure` instead of `inductive`.
+
+### 8.6 Type Mapping Implementation
 
 Type mapping logic lives in a single `types.ts` module imported by both codegen and specparser.
 

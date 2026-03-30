@@ -20,12 +20,14 @@ export interface UnionTypeInfo {
 
 export interface TypeDeclInfo {
   name: string;
-  kind: "string-union" | "discriminated-union";
+  kind: "string-union" | "discriminated-union" | "record";
   /** For string unions: the literal values */
   values?: string[];
   /** For discriminated unions: the discriminant field and variants */
   discriminant?: string;
   variants?: VariantInfo[];
+  /** For records: the fields */
+  fields?: { name: string; tsType: string }[];
 }
 
 // ── Primitive mapping ────────────────────────────────────────
@@ -74,7 +76,7 @@ export function generateTypesLean(decls: TypeDeclInfo[]): string | null {
       lines.push(`inductive ${decl.name} where`);
       lines.push(`  | ${decl.values!.join(" | ")}`);
       lines.push(`deriving Repr, Inhabited, DecidableEq`);
-    } else {
+    } else if (decl.kind === "discriminated-union") {
       lines.push(`inductive ${decl.name} where`);
       for (const v of decl.variants!) {
         if (v.fields.length === 0) {
@@ -85,6 +87,12 @@ export function generateTypesLean(decls: TypeDeclInfo[]): string | null {
         }
       }
       lines.push(`deriving Repr, Inhabited`);
+    } else if (decl.kind === "record") {
+      lines.push(`structure ${decl.name} where`);
+      for (const f of decl.fields!) {
+        lines.push(`  ${f.name} : ${tsTypeToLean(f.tsType)}`);
+      }
+      lines.push(`deriving Repr, Inhabited, DecidableEq`);
     }
   }
 

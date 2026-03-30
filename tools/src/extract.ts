@@ -4,7 +4,7 @@
  * The IR is consumed by the code generator to produce .types.lean and .def.lean files.
  */
 
-import { Project, Node, FunctionDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind } from "ts-morph";
+import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind } from "ts-morph";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 
 // ── IR types ─────────────────────────────────────────────────
@@ -115,7 +115,27 @@ function extractTypeDecl(decl: TypeAliasDeclaration): TypeDeclInfo | null {
     }
   }
 
+  // Plain object type: type Foo = { x: number; y: boolean }
+  if (type.isObject()) {
+    return extractRecord(name, type, decl);
+  }
+
   return null;
+}
+
+function extractInterface(decl: InterfaceDeclaration): TypeDeclInfo | null {
+  return extractRecord(decl.getName(), decl.getType(), decl);
+}
+
+function extractRecord(name: string, type: Type, locationNode: Node): TypeDeclInfo | null {
+  const props = type.getProperties();
+  if (props.length === 0) return null;
+  const fields: { name: string; tsType: string }[] = [];
+  for (const prop of props) {
+    const propType = prop.getTypeAtLocation(locationNode);
+    fields.push({ name: prop.getName(), tsType: typeToString(propType) });
+  }
+  return { name, kind: "record", fields };
 }
 
 /** Find the discriminant field: a property present in all members with distinct string literal types. */
@@ -139,6 +159,9 @@ function typeToString(type: Type): string {
   if (type.isNumber()) return "number";
   if (type.isString()) return "string";
   if (type.isBoolean()) return "boolean";
+  // For named types, use the symbol name (avoids full import paths)
+  const symbol = type.getSymbol() ?? type.getAliasSymbol();
+  if (symbol) return symbol.getName();
   return type.getText();
 }
 
@@ -275,6 +298,10 @@ export function extractModule(sourceFile: SourceFile): ModuleSpec {
   const typeDecls: TypeDeclInfo[] = [];
   for (const ta of sourceFile.getTypeAliases()) {
     const info = extractTypeDecl(ta);
+    if (info) typeDecls.push(info);
+  }
+  for (const iface of sourceFile.getInterfaces()) {
+    const info = extractInterface(iface);
     if (info) typeDecls.push(info);
   }
 

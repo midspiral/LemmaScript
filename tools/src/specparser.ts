@@ -22,7 +22,8 @@ export type Expr =
   | { kind: "index"; obj: Expr; idx: Expr }
   | { kind: "prop"; obj: Expr; prop: string }
   | { kind: "forall"; var: string; varType: LeanType; body: Expr }
-  | { kind: "exists"; var: string; varType: LeanType; body: Expr };
+  | { kind: "exists"; var: string; varType: LeanType; body: Expr }
+  | { kind: "record"; fields: { name: string; value: Expr }[] };
 
 // ── Tokenizer ────────────────────────────────────────────────
 
@@ -86,7 +87,7 @@ function tokenize(input: string): Token[] {
     const ch = input[i];
     if ("+-*/%><!".includes(ch)) {
       tokens.push({ type: "op", value: ch });
-    } else if ("()[],:.".includes(ch)) {
+    } else if ("()[],:.{}".includes(ch)) {
       tokens.push({ type: "punc", value: ch });
     } else {
       throw new Error(`Unexpected '${ch}' at ${i} in: ${input}`);
@@ -238,6 +239,23 @@ class Parser {
       const expr = this.parseImplies();
       this.expect("punc", ")");
       return expr;
+    }
+    // Object literal: { field: value, ... }
+    if (t.type === "punc" && t.value === "{") {
+      this.advance();
+      const fields: { name: string; value: Expr }[] = [];
+      if (!this.match("punc", "}")) {
+        const name = this.expect("ident").value as string;
+        this.expect("punc", ":");
+        fields.push({ name, value: this.parseImplies() });
+        while (this.match("punc", ",")) {
+          const n = this.expect("ident").value as string;
+          this.expect("punc", ":");
+          fields.push({ name: n, value: this.parseImplies() });
+        }
+        this.expect("punc", "}");
+      }
+      return { kind: "record", fields };
     }
     throw new Error(`Unexpected: ${JSON.stringify(t)}`);
   }
@@ -393,6 +411,11 @@ function emit(expr: Expr, ctx: EmitContext, parentOp?: string): string {
         return (a.kind === "binop" || a.kind === "unop") ? `(${s})` : s;
       });
       return `${fn} ${args.join(" ")}`;
+    }
+
+    case "record": {
+      const fields = expr.fields.map(f => `${f.name} := ${e(f.value)}`).join(", ");
+      return `{ ${fields} }`;
     }
 
     case "forall":
