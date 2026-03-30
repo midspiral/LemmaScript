@@ -92,6 +92,15 @@ function transformSpecExpr(e: Expr, ctx: TransformCtx): LeanExpr {
         const typeName = varName ? ctx.userTypes.get(varName) : undefined;
         const decl = typeName ? ctx.typeDecls.find(d => d.name === typeName) : undefined;
         if (decl && decl.discriminant === e.left.prop) {
+          const variant = decl.variants?.find(v => v.name === e.right.value);
+          if (variant && variant.fields.length > 0) {
+            // Data-carrying variant: can't use simple equality (`.b` needs arguments).
+            // Error for now — user should use switch or restructure.
+            throw new Error(
+              `Cannot compare against data-carrying variant "${e.right.value}" of "${typeName}" with ===. ` +
+              `Use switch to destructure, or compare only against nullary variants.`
+            );
+          }
           const left = transformSpecExpr(e.left.obj, ctx);
           const right: LeanExpr = { kind: "constructor", name: e.right.value };
           return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right };
@@ -465,6 +474,7 @@ function containsReturn(stmts: StmtSpec[]): boolean {
     if (s.kind === "return") return true;
     if (s.kind === "if" && (containsReturn(s.then) || containsReturn(s.else))) return true;
     if (s.kind === "while" && containsReturn(s.body)) return true;
+    if (s.kind === "switch" && (s.cases.some(c => containsReturn(c.body)) || containsReturn(s.defaultBody))) return true;
   }
   return false;
 }
