@@ -110,6 +110,7 @@ lean_lib Examples where
     `«transition.types», `«transition.spec», `«transition.def», `«transition.proof»,
     `«packet.types», `«packet.def», `«packet.proof»,
     `«maxElement.def», `«maxElement.proof»,
-    `«isSorted.def», `«isSorted.proof»
+    `«isSorted.def», `«isSorted.proof»,
+    `«arrayContains.def», `«arrayContains.proof»
   ]
   extraDepTargets := #[``downloadDependencies]

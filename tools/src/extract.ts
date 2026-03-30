@@ -237,6 +237,24 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       continue;
     }
 
+    if (Node.isForOfStatement(s)) {
+      const init = s.getInitializer();
+      const varName = Node.isVariableDeclarationList(init) ? init.getDeclarations()[0]?.getName() ?? "_" : "_";
+      const bodyNode = s.getStatement();
+      const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [bodyNode];
+      const annots = collectAnnotations(s, bodyStmts);
+      result.push({
+        kind: "forof",
+        varName,
+        iterable: extractExpr(s.getExpression()),
+        invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
+        doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
+        body: extractStmts(bodyStmts),
+        line,
+      });
+      continue;
+    }
+
     if (Node.isIfStatement(s)) {
       const thenNode = s.getThenStatement();
       const elseNode = s.getElseStatement();

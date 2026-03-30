@@ -55,6 +55,8 @@ export type TStmt =
   | { kind: "switch"; expr: TExpr; discriminant: string;
       cases: { label: string; body: TStmt[] }[];
       defaultBody: TStmt[] }
+  | { kind: "forof"; varName: string; varTy: Ty; iterable: TExpr;
+      invariants: TExpr[]; doneWith: TExpr | null; body: TStmt[] }
 
 // ── Top-level ────────────────────────────────────────────────
 

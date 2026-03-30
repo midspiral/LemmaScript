@@ -72,8 +72,7 @@ export interface RawIf {
 export interface RawWhile {
   kind: "while";
   cond: RawExpr;
-  invariants: string[];     // //@ annotations, parsed later by specparser
-  decreases: string | null;
+  invariants: string[];  decreases: string | null;
   doneWith: string | null;
   body: RawStmt[];
   line: number;
@@ -88,7 +87,16 @@ export interface RawSwitch {
   line: number;
 }
 
-export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawExprStmt | RawIf | RawWhile | RawSwitch;
+export interface RawForOf {
+  kind: "forof";
+  varName: string;
+  iterable: RawExpr;
+  invariants: string[];  doneWith: string | null;
+  body: RawStmt[];
+  line: number;
+}
+
+export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf;
 
 // ── Top-level ────────────────────────────────────────────────
 

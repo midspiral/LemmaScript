@@ -254,6 +254,21 @@ function resolveStmt(s: RawStmt, ctx: Ctx): TStmt {
       };
     }
 
+    case "forof": {
+      const iterable = resolveExpr(s.iterable, ctx);
+      const elemTy: Ty = iterable.ty.kind === "array" ? iterable.ty.elem : { kind: "unknown" };
+      const bodyCtx = { ...ctx, vars: new Map(ctx.vars).set(s.varName, elemTy) };
+      return {
+        kind: "forof",
+        varName: s.varName,
+        varTy: elemTy,
+        iterable,
+        invariants: resolveSpecs(s.invariants, bodyCtx),
+        doneWith: s.doneWith ? resolveSpec(s.doneWith, bodyCtx) : null,
+        body: resolveStmts(s.body, bodyCtx),
+      };
+    }
+
     case "switch":
       return {
         kind: "switch",
@@ -271,6 +286,7 @@ function isPure(stmts: RawStmt[]): boolean {
   for (const s of stmts) {
     switch (s.kind) {
       case "while": return false;
+      case "forof": return false;
       case "let": if (s.mutable) return false; break;
       case "if": if (!isPure(s.then) || !isPure(s.else)) return false; break;
       case "switch": if (!s.cases.every(c => isPure(c.body)) || !isPure(s.defaultBody)) return false; break;
@@ -284,6 +300,7 @@ function isPure(stmts: RawStmt[]): boolean {
 function hasReturnInLoop(stmts: RawStmt[]): boolean {
   for (const s of stmts) {
     if (s.kind === "while" && containsReturn(s.body)) return true;
+    if (s.kind === "forof" && containsReturn(s.body)) return true;
     if (s.kind === "if" && (hasReturnInLoop(s.then) || hasReturnInLoop(s.else))) return true;
     if (s.kind === "switch" && (s.cases.some(c => hasReturnInLoop(c.body)) || hasReturnInLoop(s.defaultBody))) return true;
   }
@@ -295,6 +312,7 @@ function containsReturn(stmts: RawStmt[]): boolean {
     if (s.kind === "return") return true;
     if (s.kind === "if" && (containsReturn(s.then) || containsReturn(s.else))) return true;
     if (s.kind === "while" && containsReturn(s.body)) return true;
+    if (s.kind === "forof" && containsReturn(s.body)) return true;
     if (s.kind === "switch" && (s.cases.some(c => containsReturn(c.body)) || containsReturn(s.defaultBody))) return true;
   }
   return false;

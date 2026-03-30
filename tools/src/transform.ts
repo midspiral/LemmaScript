@@ -193,6 +193,28 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanStmt[] {
         continue;
       }
     }
+    // Desugar for-of → index variable + while loop
+    if (s.kind === "forof") {
+      const arrExpr = transformExpr(s.iterable);
+      const idxName = `_${s.varName}_idx`;
+      const idx: LeanExpr = { kind: "var", name: idxName };
+      const arrSize: LeanExpr = { kind: "field", obj: arrExpr, field: "size" };
+      result.push({ kind: "let", name: idxName, type: "Nat", mutable: true, value: { kind: "num", value: 0 } });
+      result.push({
+        kind: "while",
+        cond: { kind: "binop", op: "<", left: idx, right: arrSize },
+        invariants: s.invariants.map(transformExpr),
+        decreasing: { kind: "binop", op: "-", left: arrSize, right: idx },
+        doneWith: s.doneWith ? transformExpr(s.doneWith) : null,
+        body: [
+          { kind: "let", name: s.varName, type: tyToLean(s.varTy), mutable: false, value: { kind: "index", arr: arrExpr, idx, toNat: false } },
+          ...transformStmts(s.body, typeDecls),
+          { kind: "assign", target: idxName, value: { kind: "binop", op: "+", left: idx, right: { kind: "num", value: 1 } } },
+        ],
+      });
+      i++;
+      continue;
+    }
     result.push(transformStmt(s, typeDecls));
     i++;
   }
@@ -228,6 +250,9 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): LeanStmt {
         doneWith: s.doneWith ? transformExpr(s.doneWith) : null,
         body: transformStmts(s.body, typeDecls),
       };
+
+    case "forof":
+      throw new Error("forof should be desugared in transformStmts, not transformStmt");
 
     case "switch":
       return emitSwitchStmt(s, typeDecls);
