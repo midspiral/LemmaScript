@@ -13,11 +13,11 @@ deriving Repr, Inhabited
 
 def nextSeq_pure (state : Int) (pkt : Packet) : Int :=
   match pkt with
-  | .syn seq =>
-    seq
-  | .ack seq =>
+  | .syn _seq =>
+    _seq
+  | .ack _seq =>
     state
-  | .data seq len =>
-    state + len
+  | .data _seq _len =>
+    state + _len
   | _ =>
     state

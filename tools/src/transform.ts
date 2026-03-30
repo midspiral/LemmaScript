@@ -10,6 +10,11 @@ import type { LeanExpr, LeanStmt, LeanDecl, LeanFile, LeanDef, LeanMethod, LeanM
 import type { TypeDeclInfo } from "./types.js";
 import { tsTypeToLean } from "./types.js";
 
+/** Prefix match-bound field names to avoid capturing user variables. */
+function matchBinder(fieldName: string): string {
+  return `_${fieldName}`;
+}
+
 // ── Ty → Lean type string ────────────────────────────────────
 
 function tyToLean(ty: Ty): string {
@@ -145,7 +150,7 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): LeanExpr | null {
   if (!variant) return null;
 
   const fields = variant.fields;
-  const pattern = fields.length > 0 ? `.${variantName} ${fields.map(f => f.name).join(" ")}` : `.${variantName}`;
+  const pattern = fields.length > 0 ? `.${variantName} ${fields.map(f => matchBinder(f.name)).join(" ")}` : `.${variantName}`;
 
   let rhs = transformExpr(e.right);
   rhs = replaceFieldAccess(rhs, obj.name, fields);
@@ -156,7 +161,7 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): LeanExpr | null {
 function replaceFieldAccess(e: LeanExpr, varName: string, fields: { name: string; tsType: string }[]): LeanExpr {
   if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === varName) {
     const f = fields.find(f => f.name === e.field);
-    if (f) return { kind: "var", name: f.name };
+    if (f) return { kind: "var", name: matchBinder(f.name) };
   }
   const r = (x: LeanExpr) => replaceFieldAccess(x, varName, fields);
   switch (e.kind) {
@@ -320,7 +325,7 @@ function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): LeanStmt {
   const arms: LeanStmtMatchArm[] = chain.cases.map(c => {
     const variant = decl?.variants?.find(v => v.name === c.variant);
     const fields = variant?.fields ?? [];
-    const pattern = fields.length > 0 ? `.${c.variant} ${fields.map(f => f.name).join(" ")}` : `.${c.variant}`;
+    const pattern = fields.length > 0 ? `.${c.variant} ${fields.map(f => matchBinder(f.name)).join(" ")}` : `.${c.variant}`;
     let body = transformStmts(c.body, typeDecls);
     body = replaceFieldAccessInStmts(body, chain.varName, fields);
     return { pattern, body };
@@ -336,7 +341,7 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
   const arms: LeanStmtMatchArm[] = s.cases.map(c => {
     const variant = decl?.variants?.find(v => v.name === c.label);
     const fields = variant?.fields ?? [];
-    const pattern = fields.length > 0 ? `.${c.label} ${fields.map(f => f.name).join(" ")}` : `.${c.label}`;
+    const pattern = fields.length > 0 ? `.${c.label} ${fields.map(f => matchBinder(f.name)).join(" ")}` : `.${c.label}`;
     let body = transformStmts(c.body, typeDecls);
     body = replaceFieldAccessInStmts(body, varName, fields);
     return { pattern, body };
@@ -415,7 +420,7 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): LeanExpr |
   for (const c of chain.cases) {
     const variant = decl?.variants?.find(v => v.name === c.variant);
     const fields = variant?.fields ?? [];
-    const pattern = fields.length > 0 ? `.${c.variant} ${fields.map(f => f.name).join(" ")}` : `.${c.variant}`;
+    const pattern = fields.length > 0 ? `.${c.variant} ${fields.map(f => matchBinder(f.name)).join(" ")}` : `.${c.variant}`;
     let body = transformPureBody(c.body, typeDecls);
     if (!body) return null;
     if (fields.length > 0) body = replaceFieldAccess(body, chain.varName, fields);
