@@ -1,7 +1,7 @@
 /**
  * lsc — LemmaScript compiler CLI
  *
- * Architecture: extract (ts-morph) → transform (raw IR → Lean IR) → emit (text)
+ * Pipeline: extract → resolve → transform → emit
  */
 
 import { Project } from "ts-morph";
@@ -9,6 +9,7 @@ import { existsSync, writeFileSync } from "fs";
 import { execSync } from "child_process";
 import path from "path";
 import { extractModule } from "./extract.js";
+import { resolveModule } from "./resolve.js";
 import { transformModule } from "./transform.js";
 import { emitFile } from "./emit.js";
 
@@ -27,22 +28,25 @@ function main() {
 
   const project = new Project({ compilerOptions: { strict: true } });
   const sourceFile = project.addSourceFileAtPath(absPath);
-  const mod = extractModule(sourceFile);
+
+  // Extract: ts-morph → Raw IR
+  const raw = extractModule(sourceFile);
 
   if (cmd === "extract") {
-    console.log(JSON.stringify(mod, null, 2));
+    console.log(JSON.stringify(raw, null, 2));
     return;
   }
 
+  // Resolve: Raw IR → Typed IR
+  const typed = resolveModule(raw);
+
   const dir = path.dirname(absPath);
   const base = path.basename(filePath, ".ts");
-
-  // Check for spec file
   const specPath = path.join(dir, `${base}.spec.lean`);
   const specImport = existsSync(specPath) ? `«${base}.spec»` : undefined;
 
-  // Transform: raw IR → Lean IR
-  const { typesFile, defFile } = transformModule(mod, specImport);
+  // Transform: Typed IR → Lean IR
+  const { typesFile, defFile } = transformModule(typed, specImport);
 
   // Emit: Lean IR → text
   if (typesFile) {

@@ -8,22 +8,10 @@ import type { TypeDeclInfo } from "./types.js";
 
 // ── AST ──────────────────────────────────────────────────────
 
-export type LeanType = "nat" | "int";
+import type { RawExpr } from "./rawir.js";
 
-export type Expr =
-  | { kind: "num"; value: number }
-  | { kind: "bool"; value: boolean }
-  | { kind: "str"; value: string }
-  | { kind: "var"; name: string }
-  | { kind: "result" }
-  | { kind: "binop"; op: string; left: Expr; right: Expr }
-  | { kind: "unop"; op: string; expr: Expr }
-  | { kind: "call"; fn: Expr; args: Expr[] }
-  | { kind: "index"; obj: Expr; idx: Expr }
-  | { kind: "prop"; obj: Expr; prop: string }
-  | { kind: "forall"; var: string; varType: LeanType; body: Expr }
-  | { kind: "exists"; var: string; varType: LeanType; body: Expr }
-  | { kind: "record"; fields: { name: string; value: Expr }[] };
+// Re-export RawExpr as the parser's output type
+export type Expr = RawExpr;
 
 // ── Tokenizer ────────────────────────────────────────────────
 
@@ -193,7 +181,7 @@ class Parser {
     let expr = this.parseAtom();
     while (true) {
       if (this.match("punc", ".")) {
-        expr = { kind: "prop", obj: expr, prop: (this.expect("ident").value as string) };
+        expr = { kind: "field", obj: expr, field: (this.expect("ident").value as string) };
       } else if (this.match("punc", "[")) {
         const idx = this.parseImplies();
         this.expect("punc", "]");
@@ -225,7 +213,7 @@ class Parser {
         this.advance();
         this.expect("punc", "(");
         const v = this.expect("ident").value as string;
-        let varType: LeanType = "int";
+        let varType: "nat" | "int" = "int";
         if (this.match("punc", ":")) {
           const ty = this.expect("ident").value as string;
           if (ty !== "nat" && ty !== "int") throw new Error(`Unknown type '${ty}'`);
@@ -282,7 +270,7 @@ export function isNat(expr: Expr, ctx: EmitContext): boolean {
   switch (expr.kind) {
     case "num": return expr.value >= 0;
     case "var": return ctx.natVars.has(expr.name);
-    case "prop": return expr.prop === "length" && expr.obj.kind === "var" && ctx.arrayVars.has(expr.obj.name);
+    case "field": return expr.field === "length" && expr.obj.kind === "var" && ctx.arrayVars.has(expr.obj.name);
     case "binop": return ["+", "-", "*", "/", "%"].includes(expr.op) && isNat(expr.left, ctx) && isNat(expr.right, ctx);
     default: return false;
   }
@@ -364,11 +352,11 @@ function emit(expr: Expr, ctx: EmitContext, parentOp?: string): string {
 
       // Property access on discriminant (x.tag === "foo") → constructor equality
       if ((expr.op === "===" || expr.op === "!==") &&
-          expr.left.kind === "prop" && expr.right.kind === "str") {
+          expr.left.kind === "field" && expr.right.kind === "str") {
         const varExpr = expr.left.obj;
         const typeName = varTypeName(varExpr, ctx);
         const decl = typeName ? findTypeDecl(ctx, typeName) : undefined;
-        if (decl && decl.discriminant === expr.left.prop) {
+        if (decl && decl.discriminant === expr.left.field) {
           const lhs = e(varExpr);
           const op = expr.op === "===" ? "=" : "≠";
           // For data-free variant, just .name. For data variant, need to handle differently.
@@ -391,12 +379,12 @@ function emit(expr: Expr, ctx: EmitContext, parentOp?: string): string {
       return (parentOp && prec(expr.op) < prec(parentOp)) ? `(${r})` : r;
     }
 
-    case "prop": {
-      if (expr.prop === "length" && expr.obj.kind === "var" && ctx.arrayVars.has(expr.obj.name))
+    case "field": {
+      if (expr.field === "length" && expr.obj.kind === "var" && ctx.arrayVars.has(expr.obj.name))
         return `${e(expr.obj)}.size`;
       const obj = e(expr.obj);
       const atomic = expr.obj.kind === "var" || expr.obj.kind === "num" || expr.obj.kind === "bool";
-      return atomic ? `${obj}.${expr.prop}` : `(${obj}).${expr.prop}`;
+      return atomic ? `${obj}.${expr.field}` : `(${obj}).${expr.field}`;
     }
 
     case "index": {
@@ -408,7 +396,7 @@ function emit(expr: Expr, ctx: EmitContext, parentOp?: string): string {
     }
 
     case "call": {
-      if (expr.fn.kind === "prop" && expr.fn.prop === "floor" &&
+      if (expr.fn.kind === "field" && expr.fn.field === "floor" &&
           expr.fn.obj.kind === "var" && expr.fn.obj.name === "Math" && expr.args.length === 1)
         return e(expr.args[0]);
       const fn = expr.fn.kind === "var" ? expr.fn.name : e(expr.fn);

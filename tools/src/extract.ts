@@ -1,49 +1,100 @@
 /**
- * TS extractor — parses TypeScript with //@ annotations, produces IR.
+ * Extract — ts-morph → Raw IR.
  *
- * The IR is consumed by the code generator to produce .types.lean and .def.lean files.
+ * Produces structured AST nodes, not strings.
+ * The only strings are //@ annotation expressions (parsed later by specparser).
  */
 
-import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind } from "ts-morph";
+import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression } from "ts-morph";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
+import type { RawExpr, RawStmt, RawFunction, RawModule } from "./rawir.js";
 
-// ── IR types ─────────────────────────────────────────────────
+// ── Expression extraction ────────────────────────────────────
 
-export interface ParamSpec { name: string; type: string }
-export interface LetSpec { kind: "let"; name: string; mutable: boolean; type: string; init: string; line: number }
-export interface AssignSpec { kind: "assign"; target: string; value: string; line: number }
-export interface ReturnSpec { kind: "return"; value: string; line: number }
-export interface BreakSpec { kind: "break"; line: number }
-export interface ExprStmtSpec { kind: "expr"; text: string; line: number }
-export interface IfSpec { kind: "if"; condition: string; then: StmtSpec[]; else: StmtSpec[]; line: number }
-export interface WhileSpec {
-  kind: "while"; condition: string;
-  invariants: string[]; decreases: string | null; doneWith: string | null;
-  body: StmtSpec[]; line: number;
-}
-export interface SwitchSpec {
-  kind: "switch"; expr: string; discriminant: string;
-  cases: { label: string; body: StmtSpec[] }[];
-  defaultBody: StmtSpec[];
-  line: number;
-}
-export type StmtSpec = LetSpec | AssignSpec | ReturnSpec | BreakSpec | ExprStmtSpec | IfSpec | WhileSpec | SwitchSpec;
+function extractExpr(node: Expression): RawExpr {
+  // Numeric literal
+  if (Node.isNumericLiteral(node)) {
+    return { kind: "num", value: Number(node.getLiteralValue()) };
+  }
 
-export interface FunctionSpec {
-  name: string;
-  params: ParamSpec[];
-  returnType: string;
-  requires: string[];
-  ensures: string[];
-  typeAnnotations: { name: string; type: string }[];
-  body: StmtSpec[];
-  line: number;
-}
+  // String literal
+  if (Node.isStringLiteral(node)) {
+    return { kind: "str", value: node.getLiteralValue() };
+  }
 
-export interface ModuleSpec {
-  file: string;
-  typeDecls: TypeDeclInfo[];
-  functions: FunctionSpec[];
+  // Boolean literals: true, false
+  if (Node.isTrueLiteral(node)) return { kind: "bool", value: true };
+  if (Node.isFalseLiteral(node)) return { kind: "bool", value: false };
+
+  // Identifier
+  if (Node.isIdentifier(node)) {
+    return { kind: "var", name: node.getText() };
+  }
+
+  // Property access: x.foo
+  if (Node.isPropertyAccessExpression(node)) {
+    return { kind: "field", obj: extractExpr(node.getExpression()), field: node.getName() };
+  }
+
+  // Element access: arr[i]
+  if (Node.isElementAccessExpression(node)) {
+    const arg = node.getArgumentExpression();
+    if (!arg) throw new Error(`Missing index in element access: ${node.getText()}`);
+    return { kind: "index", obj: extractExpr(node.getExpression()), idx: extractExpr(arg) };
+  }
+
+  // Call expression: f(a, b)
+  if (Node.isCallExpression(node)) {
+    return {
+      kind: "call",
+      fn: extractExpr(node.getExpression()),
+      args: node.getArguments().map(a => extractExpr(a as Expression)),
+    };
+  }
+
+  // Binary expression: a + b, a === b, etc.
+  if (Node.isBinaryExpression(node)) {
+    const op = node.getOperatorToken().getText();
+    // Assignment: a = b → handled at statement level, but can appear in expressions
+    if (op === "=") {
+      // This is an assignment expression; extract as binop for now
+      return { kind: "binop", op: "=", left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
+    }
+    return { kind: "binop", op, left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
+  }
+
+  // Prefix unary: !x, -x
+  if (Node.isPrefixUnaryExpression(node)) {
+    const opToken = node.getOperatorToken();
+    let op: string;
+    switch (opToken) {
+      case SyntaxKind.ExclamationToken: op = "!"; break;
+      case SyntaxKind.MinusToken: op = "-"; break;
+      case SyntaxKind.PlusToken: op = "+"; break;
+      default: op = String(opToken);
+    }
+    return { kind: "unop", op, expr: extractExpr(node.getOperand()) };
+  }
+
+  // Parenthesized: (x)
+  if (Node.isParenthesizedExpression(node)) {
+    return extractExpr(node.getExpression());
+  }
+
+  // Object literal: { res: true, done: false }
+  if (Node.isObjectLiteralExpression(node)) {
+    const fields: { name: string; value: RawExpr }[] = [];
+    for (const prop of node.getProperties()) {
+      if (Node.isPropertyAssignment(prop)) {
+        const init = prop.getInitializer();
+        if (init) fields.push({ name: prop.getName(), value: extractExpr(init) });
+      }
+    }
+    return { kind: "record", fields };
+  }
+
+  // Fallback: wrap as a var with the source text (lossy but safe)
+  return { kind: "var", name: node.getText() };
 }
 
 // ── Annotation parsing ───────────────────────────────────────
@@ -51,7 +102,6 @@ export interface ModuleSpec {
 const PREFIX = "//@ ";
 const KEYWORDS = ["requires", "ensures", "invariant", "decreases", "done_with", "type"] as const;
 type AnnotKind = (typeof KEYWORDS)[number];
-
 interface Annotation { kind: AnnotKind; expr: string }
 
 function parseAnnotations(node: Node): Annotation[] {
@@ -81,20 +131,11 @@ function extractTypeDecl(decl: TypeAliasDeclaration): TypeDeclInfo | null {
   const name = decl.getName();
   const type = decl.getType();
 
-  // String literal union: type State = "idle" | "connecting" | ...
   if (type.isUnion()) {
     const members = type.getUnionTypes();
-
-    // All string literals → string union
     if (members.every(m => m.isStringLiteral())) {
-      return {
-        name,
-        kind: "string-union",
-        values: members.map(m => m.getLiteralValue() as string),
-      };
+      return { name, kind: "string-union", values: members.map(m => m.getLiteralValue() as string) };
     }
-
-    // Object types with a common discriminant → discriminated union
     if (members.every(m => m.isObject())) {
       const discriminant = findDiscriminant(members);
       if (discriminant) {
@@ -105,8 +146,7 @@ function extractTypeDecl(decl: TypeAliasDeclaration): TypeDeclInfo | null {
           const fields: { name: string; tsType: string }[] = [];
           for (const prop of m.getProperties()) {
             if (prop.getName() === discriminant) continue;
-            const propType = prop.getTypeAtLocation(decl);
-            fields.push({ name: prop.getName(), tsType: typeToString(propType) });
+            fields.push({ name: prop.getName(), tsType: typeToString(prop.getTypeAtLocation(decl)) });
           }
           return { name: tag, fields };
         });
@@ -115,11 +155,7 @@ function extractTypeDecl(decl: TypeAliasDeclaration): TypeDeclInfo | null {
     }
   }
 
-  // Plain object type: type Foo = { x: number; y: boolean }
-  if (type.isObject()) {
-    return extractRecord(name, type, decl);
-  }
-
+  if (type.isObject()) return extractRecord(name, type, decl);
   return null;
 }
 
@@ -132,13 +168,11 @@ function extractRecord(name: string, type: Type, locationNode: Node): TypeDeclIn
   if (props.length === 0) return null;
   const fields: { name: string; tsType: string }[] = [];
   for (const prop of props) {
-    const propType = prop.getTypeAtLocation(locationNode);
-    fields.push({ name: prop.getName(), tsType: typeToString(propType) });
+    fields.push({ name: prop.getName(), tsType: typeToString(prop.getTypeAtLocation(locationNode)) });
   }
   return { name, kind: "record", fields };
 }
 
-/** Find the discriminant field: a property present in all members with distinct string literal types. */
 function findDiscriminant(members: Type[]): string | null {
   if (members.length === 0) return null;
   const firstProps = members[0].getProperties();
@@ -159,25 +193,29 @@ function typeToString(type: Type): string {
   if (type.isNumber()) return "number";
   if (type.isString()) return "string";
   if (type.isBoolean()) return "boolean";
-  // For named types, use the symbol name (avoids full import paths)
   const symbol = type.getSymbol() ?? type.getAliasSymbol();
   if (symbol) return symbol.getName();
   return type.getText();
 }
 
-// ── Statement extraction ────────────────────��────────────────
+// ── Statement extraction ─────────────────────────────────────
 
-function extractStmts(stmts: Node[]): StmtSpec[] {
-  const result: StmtSpec[] = [];
+function extractStmts(stmts: Node[]): RawStmt[] {
+  const result: RawStmt[] = [];
   for (const s of stmts) {
     const line = s.getStartLineNumber();
 
     if (Node.isVariableStatement(s)) {
       for (const d of s.getDeclarations()) {
         const declType = d.getType();
+        const init = d.getInitializer();
         result.push({
-          kind: "let", name: d.getName(), mutable: s.getDeclarationKind() === "let",
-          type: typeToString(declType), init: d.getInitializer()?.getText() ?? "", line,
+          kind: "let",
+          name: d.getName(),
+          mutable: s.getDeclarationKind() === "let",
+          tsType: typeToString(declType),
+          init: init ? extractExpr(init) : { kind: "var", name: "default" },
+          line,
         });
       }
       continue;
@@ -189,7 +227,7 @@ function extractStmts(stmts: Node[]): StmtSpec[] {
       const annots = collectAnnotations(s, bodyStmts);
       result.push({
         kind: "while",
-        condition: s.getExpression().getText(),
+        cond: extractExpr(s.getExpression()),
         invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
         decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
         doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
@@ -204,7 +242,7 @@ function extractStmts(stmts: Node[]): StmtSpec[] {
       const elseNode = s.getElseStatement();
       result.push({
         kind: "if",
-        condition: s.getExpression().getText(),
+        cond: extractExpr(s.getExpression()),
         then: Node.isBlock(thenNode) ? extractStmts(thenNode.getStatements()) : extractStmts([thenNode]),
         else: elseNode
           ? Node.isBlock(elseNode) ? extractStmts(elseNode.getStatements()) : extractStmts([elseNode])
@@ -215,34 +253,30 @@ function extractStmts(stmts: Node[]): StmtSpec[] {
     }
 
     if (Node.isSwitchStatement(s)) {
-      const exprText = s.getExpression().getText();
-      // Check for discriminant pattern: switch (x.tag) or switch (x)
-      const dotIdx = exprText.lastIndexOf(".");
-      const varName = dotIdx >= 0 ? exprText.slice(0, dotIdx) : exprText;
-      const field = dotIdx >= 0 ? exprText.slice(dotIdx + 1) : "";
+      const exprNode = s.getExpression();
+      const exprAst = extractExpr(exprNode);
+      const discriminant = exprAst.kind === "field" ? exprAst.field : "";
+      const switchExpr = exprAst.kind === "field" ? exprAst.obj : exprAst;
 
-      const cases: { label: string; body: StmtSpec[] }[] = [];
-      let defaultBody: StmtSpec[] = [];
-
+      const cases: { label: string; body: RawStmt[] }[] = [];
+      let defaultBody: RawStmt[] = [];
       for (const clause of s.getClauses()) {
         if (Node.isCaseClause(clause)) {
           const label = clause.getExpression().getText().replace(/^["']|["']$/g, "");
-          // Filter out break statements from the body
-          const bodyStmts = clause.getStatements().filter(s => !Node.isBreakStatement(s));
+          const bodyStmts = clause.getStatements().filter(st => !Node.isBreakStatement(st));
           cases.push({ label, body: extractStmts(bodyStmts) });
         } else {
-          // default clause
-          const bodyStmts = clause.getStatements().filter(s => !Node.isBreakStatement(s));
+          const bodyStmts = clause.getStatements().filter(st => !Node.isBreakStatement(st));
           defaultBody = extractStmts(bodyStmts);
         }
       }
-
-      result.push({ kind: "switch", expr: varName, discriminant: field, cases, defaultBody, line });
+      result.push({ kind: "switch", expr: switchExpr, discriminant, cases, defaultBody, line });
       continue;
     }
 
     if (Node.isReturnStatement(s)) {
-      result.push({ kind: "return", value: s.getExpression()?.getText() ?? "", line });
+      const expr = s.getExpression();
+      result.push({ kind: "return", value: expr ? extractExpr(expr) : { kind: "var", name: "()" }, line });
       continue;
     }
 
@@ -254,21 +288,22 @@ function extractStmts(stmts: Node[]): StmtSpec[] {
     if (Node.isExpressionStatement(s)) {
       const expr = s.getExpression();
       if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getText() === "=") {
-        result.push({ kind: "assign", target: expr.getLeft().getText(), value: expr.getRight().getText(), line });
+        result.push({ kind: "assign", target: expr.getLeft().getText(), value: extractExpr(expr.getRight()), line });
       } else {
-        result.push({ kind: "expr", text: expr.getText(), line });
+        result.push({ kind: "expr", expr: extractExpr(expr), line });
       }
       continue;
     }
 
-    result.push({ kind: "expr", text: s.getText(), line });
+    // Fallback
+    result.push({ kind: "expr", expr: { kind: "var", name: s.getText() }, line });
   }
   return result;
 }
 
-// ── Function extraction ──────────────────���───────────────────
+// ── Function extraction ──────────────────────────────────────
 
-function extractFunction(fn: FunctionDeclaration): FunctionSpec {
+function extractFunction(fn: FunctionDeclaration): RawFunction {
   const body = fn.getBody();
   if (!body || !Node.isBlock(body)) throw new Error(`${fn.getName()}: function body is not a block`);
   const bodyStmts = body.getStatements();
@@ -284,7 +319,7 @@ function extractFunction(fn: FunctionDeclaration): FunctionSpec {
 
   return {
     name: fn.getName() ?? "<anonymous>",
-    params: fn.getParameters().map(p => ({ name: p.getName(), type: p.getTypeNode()?.getText() ?? "unknown" })),
+    params: fn.getParameters().map(p => ({ name: p.getName(), tsType: p.getTypeNode()?.getText() ?? "unknown" })),
     returnType: fn.getReturnTypeNode()?.getText() ?? "unknown",
     requires: annots.filter(a => a.kind === "requires").map(a => a.expr),
     ensures: annots.filter(a => a.kind === "ensures").map(a => a.expr),
@@ -294,9 +329,9 @@ function extractFunction(fn: FunctionDeclaration): FunctionSpec {
   };
 }
 
-// ── Module extraction ────────���───────────────────────────────
+// ── Module extraction ────────────────────────────────────────
 
-export function extractModule(sourceFile: SourceFile): ModuleSpec {
+export function extractModule(sourceFile: SourceFile): RawModule {
   const typeDecls: TypeDeclInfo[] = [];
   for (const ta of sourceFile.getTypeAliases()) {
     const info = extractTypeDecl(ta);

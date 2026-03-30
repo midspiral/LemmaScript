@@ -1,102 +1,74 @@
 # LemmaScript Tools — Internal Architecture
 
-The `lsc` toolchain translates annotated TypeScript to Lean. This document describes the internal architecture for contributors.
+The `lsc` toolchain translates annotated TypeScript to Lean.
 
-## Three Phases
+## Pipeline
 
 ```
 TS source (.ts)
-  → extract    (ts-morph → raw IR)
-  → transform  (raw IR → Lean IR)
-  → emit       (Lean IR → .types.lean + .def.lean text)
+  → extract    (ts-morph → Raw IR)
+  → resolve    (Raw IR → Typed IR)
+  → transform  (Typed IR → Lean IR)
+  → emit       (Lean IR → text)
 ```
 
-**Extract** parses TypeScript using ts-morph. Produces a raw IR that mirrors the TS AST: functions, statements, expressions, type declarations, `//@ ` annotations. No Lean-specific decisions.
+## Three IRs
 
-**Transform** converts the raw IR to a Lean IR. This is where all the intelligence lives:
-- Type resolution (`number` → `Int`, user types → pass-through, `//@ type` overrides)
-- Spec expression translation (`===` → `=`, `\result` → `res`, `forall` → `∀`, `.toNat` insertion)
-- Discriminant if-chain detection → `match` nodes
-- Conjunction splitting in ensures/requires/invariants
-- Implication flattening (`(A && B) ==> C` → curried)
-- Ensures-to-match for discriminated unions
-- Pure function detection and mirror generation
-- Method call detection (`x = f(a, b)` → monadic bind)
+### Raw IR (`rawir.ts`)
 
-**Emit** serializes the Lean IR to text. Trivial pretty-printer — indentation, keywords, no logic.
+Structured AST from ts-morph. Expressions are nodes, not strings. Has declared type references (`tsType: "Packet"`) but no resolved types. Close to TS syntax.
 
-## Lean IR
+- `RawExpr`: var, num, str, bool, binop, unop, call, field, index, record
+- `RawStmt`: let, assign, return, break, if, while, switch
+- `//@ ` annotations remain as strings (parsed by specparser in the resolve pass)
 
-The transform phase produces a Lean IR with these node types:
+### Typed IR (`typedir.ts`)
 
-### Top-level declarations
+Raw IR annotated with resolved types and classifications. Produced by a resolve pass that runs once. Still TS-shaped, not Lean-shaped.
 
-```typescript
-type LeanDecl =
-  | LeanInductive   // inductive Foo where | a | b ...
-  | LeanStructure   // structure Foo where field : Type ...
-  | LeanDef         // def foo_pure (params) : RetType := body
-  | LeanMethod      // method foo (params) return (res : T) require ... ensures ... do ...
-```
+Each expression carries:
+- `ty: Ty` — resolved LemmaScript type (nat, int, bool, array, user, etc.)
+- Calls carry `callKind` (pure, method)
+- Discriminant fields identified
 
-### Expressions (used in pure defs, ensures, requires, invariants)
+Each statement carries type information for variables. Unsupported patterns (data-carrying variant equality, return in loop) are rejected here with source locations.
 
-```typescript
-type LeanExpr =
-  | { kind: "var"; name: string }
-  | { kind: "num"; value: number }
-  | { kind: "bool"; value: boolean }
-  | { kind: "constructor"; name: string }           // .idle, .allow
-  | { kind: "app"; fn: string; args: LeanExpr[] }   // f a b
-  | { kind: "binop"; op: string; left: LeanExpr; right: LeanExpr }
-  | { kind: "unop"; op: string; expr: LeanExpr }
-  | { kind: "if"; cond: LeanExpr; then: LeanExpr; else: LeanExpr }
-  | { kind: "match"; scrutinee: string; arms: MatchArm[] }
-  | { kind: "record"; fields: { name: string; value: LeanExpr }[] }
-  | { kind: "field"; obj: LeanExpr; field: string }  // x.res
-  | { kind: "index"; arr: LeanExpr; idx: LeanExpr }  // arr[i]!
-  | { kind: "forall"; var: string; type: string; body: LeanExpr }
-  | { kind: "exists"; var: string; type: string; body: LeanExpr }
-  | { kind: "let"; name: string; value: LeanExpr; body: LeanExpr }
-  | { kind: "implies"; premises: LeanExpr[]; conclusion: LeanExpr }
+### Lean IR (`ir.ts`)
 
-type MatchArm = { pattern: string; bindings: string[]; body: LeanExpr }
-```
+Lean-shaped. Produced by the transform from typed IR. Consumed by the emitter. Has Lean syntax concepts: `∀`, `∃`, `→`, match arms, `let mut`, `←`.
 
-### Statements (used in Velvet method bodies)
+## Phases
 
-```typescript
-type LeanStmt =
-  | { kind: "let"; name: string; type: string; mutable: boolean; value: LeanExpr }
-  | { kind: "assign"; target: string; value: LeanExpr }
-  | { kind: "bind"; target: string; call: LeanExpr }  // x ← f a b
-  | { kind: "return"; value: LeanExpr }
-  | { kind: "break" }
-  | { kind: "if"; cond: LeanExpr; then: LeanStmt[]; else: LeanStmt[] }
-  | { kind: "match"; scrutinee: string; arms: { pattern: string; bindings: string[]; body: LeanStmt[] }[] }
-  | { kind: "while"; cond: LeanExpr; invariants: LeanExpr[]; decreasing: LeanExpr | null;
-      doneWith: LeanExpr | null; body: LeanStmt[] }
-```
+**Extract** (`extract.ts`): ts-morph → Raw IR. Walks the TS AST, produces structured expression nodes. Only string outputs are `//@ ` annotation text.
+
+**Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser.
+
+**Transform** (`transform.ts`): Typed IR → Lean IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. No type lookups, no string parsing.
+
+**Emit** (`emit.ts`): Lean IR → text. Trivial pretty-printer.
+
+## Spec Expression Parser
+
+The specparser (`specparser.ts`) parses `//@ ` annotation expressions into `RawExpr` nodes. Called by the resolve pass, not by extract or transform.
 
 ## Adding a New Feature
 
-1. **Extract**: add the TS construct to the raw IR (new node type or field).
-2. **Transform**: add a rule that converts the raw IR node to the appropriate Lean IR node. This is where type-directed decisions happen.
-3. **Emit**: usually nothing — if the Lean IR nodes are already supported, the printer handles them.
-
-The emit phase should rarely need changes. If it does, it's adding a new Lean IR node type and its trivial serialization.
+1. **Extract**: add the TS construct to Raw IR.
+2. **Resolve**: add type resolution and classification for the new construct.
+3. **Transform**: add a Lean IR lowering rule that pattern-matches on the typed node.
+4. **Emit**: usually nothing.
 
 ## Current State
 
-The three-phase architecture is implemented:
-
 | File | Phase | Role |
 |------|-------|------|
-| `extract.ts` | Extract | ts-morph → raw IR |
-| `specparser.ts` | (parser) | Parses `//@ ` expression language → AST |
-| `types.ts` | (shared) | Type mapping helpers (`tsTypeToLean`, `TypeDeclInfo`) |
-| `ir.ts` | IR | Lean IR type definitions |
-| `transform.ts` | Transform | Raw IR → Lean IR (all intelligence) |
-| `emit.ts` | Emit | Lean IR → text (trivial printer) |
-| `lsc.ts` | CLI | Wires extract → transform → emit |
-
+| `rawir.ts` | Types | Raw IR type definitions |
+| `extract.ts` | Extract | ts-morph → Raw IR |
+| `specparser.ts` | (parser) | Parses `//@ ` annotations → RawExpr |
+| `resolve.ts` | Resolve | Raw IR → Typed IR |
+| `typedir.ts` | Types | Typed IR type definitions |
+| `ir.ts` | Types | Lean IR type definitions |
+| `transform.ts` | Transform | Typed IR → Lean IR |
+| `emit.ts` | Emit | Lean IR → text |
+| `types.ts` | (shared) | Type mapping helpers |
+| `lsc.ts` | CLI | Wires the pipeline |
