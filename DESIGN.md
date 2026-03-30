@@ -1,7 +1,6 @@
 # LemmaScript — Design Rationale
 
 **Version:** 0.3
-**Authors:** Nerd
 **Date:** March 2026
 
 > For implementation details, see [SPEC.md](SPEC.md).
