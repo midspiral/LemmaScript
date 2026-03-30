@@ -169,7 +169,10 @@ function replaceFieldAccess(e: LeanExpr, varName: string, fields: { name: string
     case "app": return { ...e, args: e.args.map(r) };
     case "record": return { ...e, fields: e.fields.map(f => ({ ...f, value: r(f.value) })) };
     case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
-    case "let": return { ...e, value: r(e.value), body: r(e.body) };
+    case "let":
+      // If this let shadows the matched variable, stop replacing in the body
+      if (e.name === varName) return { ...e, value: r(e.value) };
+      return { ...e, value: r(e.value), body: r(e.body) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
     case "field": return { ...e, obj: r(e.obj) };
     case "match": return { ...e, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
@@ -340,7 +343,19 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
 
 function replaceFieldAccessInStmts(stmts: LeanStmt[], varName: string, fields: { name: string; tsType: string }[]): LeanStmt[] {
   if (fields.length === 0) return stmts;
-  return stmts.map(s => replaceFieldAccessInStmt(s, varName, fields));
+  const result: LeanStmt[] = [];
+  for (const s of stmts) {
+    // If a let shadows the matched variable, stop replacing from here on
+    if (s.kind === "let" && s.name === varName) {
+      const r = (e: LeanExpr) => replaceFieldAccess(e, varName, fields);
+      result.push({ ...s, value: r(s.value) });
+      // Remaining statements see the shadowed name — no more replacement
+      result.push(...stmts.slice(result.length));
+      break;
+    }
+    result.push(replaceFieldAccessInStmt(s, varName, fields));
+  }
+  return result;
 }
 
 function replaceFieldAccessInStmt(s: LeanStmt, varName: string, fields: { name: string; tsType: string }[]): LeanStmt {
