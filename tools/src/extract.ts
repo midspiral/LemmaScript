@@ -269,7 +269,9 @@ function extractStmts(stmts: Node[]): StmtSpec[] {
 // ── Function extraction ──────────────────���───────────────────
 
 function extractFunction(fn: FunctionDeclaration): FunctionSpec {
-  const bodyStmts = fn.getBody()?.getStatements() ?? [];
+  const body = fn.getBody();
+  if (!body || !Node.isBlock(body)) throw new Error(`${fn.getName()}: function body is not a block`);
+  const bodyStmts = body.getStatements();
   const annots = collectAnnotations(fn, bodyStmts);
 
   const typeAnnotations: { name: string; type: string }[] = [];

@@ -2,7 +2,7 @@
  * Type mapping — TS types → Lean types.
  *
  * Single source of truth for type-related decisions.
- * Both the codegen and specparser import this.
+ * The transform phase imports this.
  */
 
 // ── Type info extracted from TS ──────────────────────────────

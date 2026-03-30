@@ -33,7 +33,11 @@ type Token =
   | { type: "ident"; value: string }
   | { type: "op"; value: string }
   | { type: "punc"; value: string }
-  | { type: "result" };
+  | { type: "result"; value: undefined };
+
+function tokenValue(t: Token): string | number | undefined {
+  return t.value;
+}
 
 const MULTI_OPS = ["==>", "===", "!==", ">=", "<=", "&&", "||"];
 
@@ -44,17 +48,18 @@ function tokenize(input: string): Token[] {
     if (/\s/.test(input[i])) { i++; continue; }
 
     if (input[i] === "\\" && input.slice(i + 1, i + 7) === "result") {
-      tokens.push({ type: "result" });
+      tokens.push({ type: "result", value: undefined });
       i += 7;
       continue;
     }
 
-    // String literals
-    if (input[i] === '"') {
+    // String literals (double or single quotes)
+    if (input[i] === '"' || input[i] === "'") {
+      const quote = input[i];
       i++;
       let s = "";
-      while (i < input.length && input[i] !== '"') s += input[i++];
-      if (i < input.length) i++; // skip closing "
+      while (i < input.length && input[i] !== quote) s += input[i++];
+      if (i < input.length) i++;
       tokens.push({ type: "str", value: s });
       continue;
     }
@@ -107,13 +112,13 @@ class Parser {
   advance() { return this.tokens[this.pos++]; }
   expect(type: string, value?: string) {
     const t = this.advance();
-    if (!t || t.type !== type || (value !== undefined && (t as any).value !== value))
+    if (!t || t.type !== type || (value !== undefined && t.value !== value))
       throw new Error(`Expected ${type}${value ? ` '${value}'` : ""}, got ${t ? JSON.stringify(t) : "EOF"}`);
     return t;
   }
   match(type: string, value?: string) {
     const t = this.peek();
-    if (t && t.type === type && (value === undefined || (t as any).value === value)) {
+    if (t && t.type === type && (value === undefined || t.value === value)) {
       this.pos++;
       return true;
     }
@@ -156,8 +161,8 @@ class Parser {
 
   parseAdd(): Expr {
     let left = this.parseMul();
-    while (this.peek()?.type === "op" && ["+", "-"].includes(this.peek()!.value)) {
-      const op = this.advance().value;
+    while (this.peek()?.type === "op" && ["+", "-"].includes(this.peek()!.value as string)) {
+      const op = this.advance().value as string;
       left = { kind: "binop", op, left, right: this.parseMul() };
     }
     return left;
@@ -165,8 +170,8 @@ class Parser {
 
   parseMul(): Expr {
     let left = this.parseUnary();
-    while (this.peek()?.type === "op" && ["*", "/", "%"].includes(this.peek()!.value)) {
-      const op = this.advance().value;
+    while (this.peek()?.type === "op" && ["*", "/", "%"].includes(this.peek()!.value as string)) {
+      const op = this.advance().value as string;
       left = { kind: "binop", op, left, right: this.parseUnary() };
     }
     return left;
@@ -367,9 +372,10 @@ function emit(expr: Expr, ctx: EmitContext, parentOp?: string): string {
           const lhs = e(varExpr);
           const op = expr.op === "===" ? "=" : "≠";
           // For data-free variant, just .name. For data variant, need to handle differently.
-          const variant = decl.variants?.find(v => v.name === expr.right.value);
+          const strVal = (expr.right as { kind: "str"; value: string }).value;
+          const variant = decl.variants?.find(v => v.name === strVal);
           if (variant && variant.fields.length === 0) {
-            const r = `${lhs} ${op} .${expr.right.value}`;
+            const r = `${lhs} ${op} .${strVal}`;
             return parentOp ? `(${r})` : r;
           }
           // Data-carrying variant: can't use simple equality. This will be handled by match.
