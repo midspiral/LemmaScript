@@ -206,6 +206,12 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanStmt[] {
       const idxName = `_${s.varName}_idx`;
       const idx: LeanExpr = { kind: "var", name: idxName };
       const arrSize: LeanExpr = { kind: "field", obj: arrExpr, field: "size" };
+      const bodyStmts = transformStmts(s.body, typeDecls);
+      const letElem: LeanStmt = { kind: "let", name: s.varName, type: tyToLean(s.varTy), mutable: false, value: { kind: "index", arr: arrExpr, idx, toNat: false } };
+      const incr: LeanStmt = { kind: "assign", target: idxName, value: { kind: "binop", op: "+", left: idx, right: { kind: "num", value: 1 } } };
+      const last = bodyStmts[bodyStmts.length - 1];
+      const endsWithExit = last?.kind === "break" || last?.kind === "return";
+      const whileBody = endsWithExit ? [letElem, ...bodyStmts] : [letElem, ...bodyStmts, incr];
       result.push({ kind: "let", name: idxName, type: "Nat", mutable: true, value: { kind: "num", value: 0 } });
       result.push({
         kind: "while",
@@ -213,11 +219,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanStmt[] {
         invariants: s.invariants.map(transformExpr),
         decreasing: { kind: "binop", op: "-", left: arrSize, right: idx },
         doneWith: s.doneWith ? transformExpr(s.doneWith) : null,
-        body: [
-          { kind: "let", name: s.varName, type: tyToLean(s.varTy), mutable: false, value: { kind: "index", arr: arrExpr, idx, toNat: false } },
-          ...transformStmts(s.body, typeDecls),
-          { kind: "assign", target: idxName, value: { kind: "binop", op: "+", left: idx, right: { kind: "num", value: 1 } } },
-        ],
+        body: whileBody,
       });
       i++;
       continue;

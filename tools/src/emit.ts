@@ -5,6 +5,22 @@
 
 import type { LeanExpr, LeanStmt, LeanDecl, LeanFile, LeanMatchArm, LeanStmtMatchArm } from "./ir.js";
 
+// ── Lean keyword escaping ────────────────────────────────────
+
+const LEAN_KEYWORDS = new Set([
+  "def", "theorem", "lemma", "example", "structure", "class", "instance",
+  "inductive", "where", "match", "with", "if", "then", "else", "do",
+  "let", "mut", "return", "for", "in", "while", "break", "continue",
+  "import", "open", "section", "namespace", "end", "set_option",
+  "variable", "axiom", "constant", "private", "protected", "noncomputable",
+  "partial", "unsafe", "macro", "syntax", "by", "fun", "have", "show",
+  "at", "from", "deriving", "extends", "true", "false",
+]);
+
+function escapeName(name: string): string {
+  return LEAN_KEYWORDS.has(name) ? `«${name}»` : name;
+}
+
 // ── Operator precedence (for parenthesization) ──────────────
 
 const PREC: Record<string, number> = {
@@ -51,7 +67,7 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
     case "field": {
       const obj = emitExpr(e.obj);
       const wrap = e.obj.kind !== "var" && e.obj.kind !== "num" && e.obj.kind !== "bool";
-      return wrap ? `(${obj}).${e.field}` : `${obj}.${e.field}`;
+      return wrap ? `(${obj}).${escapeName(e.field)}` : `${obj}.${escapeName(e.field)}`;
     }
 
     case "index":
@@ -60,7 +76,7 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
         : `${emitExpr(e.arr)}[${emitExpr(e.idx)}]!`;
 
     case "record": {
-      const fields = e.fields.map(f => `${f.name} := ${emitExpr(f.value)}`);
+      const fields = e.fields.map(f => `${escapeName(f.name)} := ${emitExpr(f.value)}`);
       return `{ ${fields.join(", ")} }`;
     }
 
@@ -144,7 +160,7 @@ function emitDecl(d: LeanDecl): string {
         if (c.fields.length === 0) {
           lines.push(`  | ${c.name} : ${d.name}`);
         } else {
-          const params = c.fields.map(f => `(${f.name} : ${f.type})`).join(" ");
+          const params = c.fields.map(f => `(${escapeName(f.name)} : ${f.type})`).join(" ");
           lines.push(`  | ${c.name} ${params} : ${d.name}`);
         }
       }
@@ -154,7 +170,7 @@ function emitDecl(d: LeanDecl): string {
 
     case "structure": {
       const lines = [`structure ${d.name} where`];
-      for (const f of d.fields) lines.push(`  ${f.name} : ${f.type}`);
+      for (const f of d.fields) lines.push(`  ${escapeName(f.name)} : ${f.type}`);
       if (d.deriving.length > 0) lines.push(`deriving ${d.deriving.join(", ")}`);
       return lines.join("\n");
     }
