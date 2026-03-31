@@ -197,6 +197,13 @@ function emitDecl(d: LeanDecl): string {
       lines.push(emitStmts(d.body, 2));
       return lines.join("\n");
     }
+
+    case "namespace": {
+      const lines = [`namespace ${d.name}`];
+      for (const inner of d.decls) lines.push("", emitDecl(inner));
+      lines.push("", `end ${d.name}`);
+      return lines.join("\n");
+    }
   }
 }
 

@@ -18,7 +18,9 @@ inductive Event where
   | timeout : Event
 deriving Repr, Inhabited, DecidableEq
 
-def transition_pure (state : State) (event : Event) : State :=
+namespace Pure
+
+def transition (state : State) (event : Event) : State :=
   if state = .idle ∧ event = .connect then
     .connecting
   else
@@ -35,3 +37,5 @@ def transition_pure (state : State) (event : Event) : State :=
             .idle
           else
             state
+
+end Pure

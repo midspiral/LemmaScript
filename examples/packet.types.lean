@@ -11,7 +11,9 @@ inductive Packet where
   | fin : Packet
 deriving Repr, Inhabited
 
-def nextSeq_pure (state : Int) (pkt : Packet) : Int :=
+namespace Pure
+
+def nextSeq (state : Int) (pkt : Packet) : Int :=
   match pkt with
   | .syn _seq =>
     _seq
@@ -21,3 +23,5 @@ def nextSeq_pure (state : Int) (pkt : Packet) : Int :=
     state + _len
   | _ =>
     state
+
+end Pure

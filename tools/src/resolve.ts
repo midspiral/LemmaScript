@@ -35,6 +35,8 @@ interface Ctx {
   overrides: Map<string, string>;
   allowResult: boolean;
   returnTy: Ty;
+  pureFns: Set<string>;  // names of pure functions in this module
+  inSpec: boolean;
 }
 
 function withEnv(ctx: Ctx, env: Env | null): Ctx {
@@ -78,8 +80,14 @@ function getDiscriminant(ctx: Ctx, typeName: string): string | undefined {
   return findDecl(ctx, typeName)?.discriminant;
 }
 
-function classifyCall(fn: RawExpr): CallKind {
+function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Math") return "pure";
+  if (fn.kind === "var" && ctx.inSpec) {
+    if (ctx.pureFns.has(fn.name)) return "spec-pure";
+    // Not a known pure function — could be external (Lean-defined spec helper).
+    // Pass through as "pure" and let Lean catch any errors.
+    return "pure";
+  }
   if (fn.kind === "var") return "method";
   return "unknown";
 }
@@ -119,7 +127,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "call":
-      return { kind: "call", fn: resolveExpr(e.fn, ctx), args: e.args.map(a => resolveExpr(a, ctx)), ty: { kind: "unknown" }, callKind: classifyCall(e.fn) };
+      return { kind: "call", fn: resolveExpr(e.fn, ctx), args: e.args.map(a => resolveExpr(a, ctx)), ty: { kind: "unknown" }, callKind: classifyCall(e.fn, ctx) };
 
     case "index": {
       const obj = resolveExpr(e.obj, ctx);
@@ -227,15 +235,17 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     case "if":
       return [{ kind: "if", cond: resolveExpr(s.cond, ctx), then: resolveBlock(s.then, ctx), else: resolveBlock(s.else, ctx) }, ctx.env];
 
-    case "while":
+    case "while": {
+      const whileSpecCtx = { ...ctx, inSpec: true };
       return [{
         kind: "while",
         cond: resolveExpr(s.cond, ctx),
-        invariants: resolveSpecs(s.invariants, ctx),
-        decreases: s.decreases ? resolveSpec(s.decreases, ctx) : null,
-        doneWith: s.doneWith ? resolveSpec(s.doneWith, ctx) : null,
+        invariants: resolveSpecs(s.invariants, whileSpecCtx),
+        decreases: s.decreases ? resolveSpec(s.decreases, whileSpecCtx) : null,
+        doneWith: s.doneWith ? resolveSpec(s.doneWith, whileSpecCtx) : null,
         body: resolveBlock(s.body, ctx),
       }, ctx.env];
+    }
 
     case "forof": {
       const iterable = resolveExpr(s.iterable, ctx);
@@ -246,8 +256,8 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       const bodyCtx = withEnv(ctx, withElem);
       return [{
         kind: "forof", varName: s.varName, varTy: elemTy, iterable,
-        invariants: resolveSpecs(s.invariants, bodyCtx),
-        doneWith: s.doneWith ? resolveSpec(s.doneWith, bodyCtx) : null,
+        invariants: resolveSpecs(s.invariants, { ...bodyCtx, inSpec: true }),
+        doneWith: s.doneWith ? resolveSpec(s.doneWith, { ...bodyCtx, inSpec: true }) : null,
         body: resolveBlock(s.body, bodyCtx),
       }, ctx.env];
     }
@@ -296,7 +306,7 @@ function containsReturn(stmts: RawStmt[]): boolean {
 
 // ── Resolve function / module ────────────────────────────────
 
-function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[]): TFunction {
+function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Set<string>): TFunction {
   if (hasReturnInLoop(fn.body)) {
     throw new Error(`${fn.name}: return inside a loop is not supported.`);
   }
@@ -308,12 +318,13 @@ function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[]): TFunction 
   let env: Env | null = null;
   for (const p of params) env = extend(env, p.name, p.ty);
 
-  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy };
-  const ensuresCtx: Ctx = { ...baseCtx, allowResult: true };
+  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, inSpec: false };
+  const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
+  const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
 
   return {
     name: fn.name, params, returnTy,
-    requires: resolveSpecs(fn.requires, baseCtx),
+    requires: resolveSpecs(fn.requires, requiresCtx),
     ensures: resolveSpecs(fn.ensures, ensuresCtx),
     isPure: isPure(fn.body),
     body: resolveBlock(fn.body, baseCtx),
@@ -321,9 +332,10 @@ function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[]): TFunction 
 }
 
 export function resolveModule(raw: RawModule): TModule {
+  const pureFns = new Set(raw.functions.filter(fn => isPure(fn.body)).map(fn => fn.name));
   return {
     file: raw.file,
     typeDecls: raw.typeDecls,
-    functions: raw.functions.map(fn => resolveFunction(fn, raw.typeDecls)),
+    functions: raw.functions.map(fn => resolveFunction(fn, raw.typeDecls, pureFns)),
   };
 }

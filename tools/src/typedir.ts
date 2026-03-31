@@ -17,7 +17,7 @@ export type Ty =
   | { kind: "user"; name: string }
   | { kind: "unknown" }
 
-export type CallKind = "pure" | "method" | "unknown"
+export type CallKind = "pure" | "method" | "spec-pure" | "unknown"
 
 // ── Expressions ──────────────────────────────────────────────
 

@@ -85,7 +85,13 @@ export interface LeanMethod {
   body: LeanStmt[];
 }
 
-export type LeanDecl = LeanInductive | LeanStructure | LeanDef | LeanMethod;
+export interface LeanNamespace {
+  kind: "namespace";
+  name: string;
+  decls: LeanDecl[];
+}
+
+export type LeanDecl = LeanInductive | LeanStructure | LeanDef | LeanMethod | LeanNamespace;
 
 export interface LeanFile {
   comment: string;

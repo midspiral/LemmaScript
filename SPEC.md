@@ -345,16 +345,22 @@ The generated file contains **only the method definition**, no `prove_correct`. 
 
 ### 6.1 Pure Function Mirrors
 
-For functions that are **pure** (no `while`, no mutable `let`), `lsc` also generates a plain Lean `def` in `foo.types.lean`:
+For functions that are **pure** (no `while`, no mutable `let`), `lsc` also generates a plain Lean `def` in `foo.types.lean`, inside a `namespace Pure`:
 
 ```lean
-def foo_pure (params...) : RetType :=
+namespace Pure
+
+def foo (params...) : RetType :=
   -- same logic as the Velvet method, as a plain function
+
+end Pure
 ```
 
-This enables proofs by standard Lean induction over sequences of calls. The Velvet method is still generated for per-step verification via `prove_correct` + `loom_solve`. Both coexist.
+This enables proofs by standard Lean induction over sequences of calls. The Velvet method is still generated for per-step verification via `prove_correct` + `loom_solve`. Both coexist without name clashes.
 
 Pure function detection: a function is pure if its body contains no `while` statements and no mutable `let` declarations.
+
+**Spec references:** In `//@ ensures`, `//@ requires`, and `//@ invariant` annotations, calls to pure functions are resolved as `Pure.fnName`. The resolve phase classifies these as `spec-pure` call kind, and the transform emits the qualified name. Calls to external Lean-defined spec helpers (e.g., `sumTo` in a hand-written `.spec.lean`) pass through unqualified.
 
 **Import chain:** `foo.def.lean` imports `foo.spec.lean`, which imports `foo.types.lean` (if it exists). If there is no `.spec.lean`, `foo.def.lean` imports `foo.types.lean` directly (or Velvet/Loom if there are no types either).
 
