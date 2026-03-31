@@ -62,6 +62,12 @@ function resolveTsType(tsType: string, overrides: Map<string, string>, varName?:
   return { kind: "user", name: t };
 }
 
+/** If expr is a string literal and targetTy is a user type, coerce the literal's type. */
+function coerceStr(expr: TExpr, targetTy: Ty): TExpr {
+  if (expr.kind === "str" && targetTy.kind === "user") return { ...expr, ty: targetTy };
+  return expr;
+}
+
 // ── Helpers ──────────────────────────────────────────────────
 
 function findDecl(ctx: Ctx, name: string): TypeDeclInfo | undefined {
@@ -95,8 +101,12 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       return { kind: "bool", value: e.value, ty: { kind: "bool" } };
 
     case "binop": {
-      const left = resolveExpr(e.left, ctx);
-      const right = resolveExpr(e.right, ctx);
+      let left = resolveExpr(e.left, ctx);
+      let right = resolveExpr(e.right, ctx);
+      if (e.op === "===" || e.op === "!==") {
+        left = coerceStr(left, right.ty);
+        right = coerceStr(right, left.ty);
+      }
       let ty: Ty = { kind: "unknown" };
       if (["===", "!==", ">=", "<=", ">", "<", "&&", "||"].includes(e.op)) ty = { kind: "bool" };
       else if (["+", "-", "*", "/", "%"].includes(e.op)) ty = left.ty;
@@ -193,15 +203,17 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
   switch (s.kind) {
     case "let": {
       const ty = resolveTsType(s.tsType, ctx.overrides, s.name);
-      const init = resolveExpr(s.init, ctx); // resolve init BEFORE adding binding
+      const init = coerceStr(resolveExpr(s.init, ctx), ty);
       return [{ kind: "let", name: s.name, ty, mutable: s.mutable, init }, extend(ctx.env, s.name, ty)];
     }
 
-    case "assign":
-      return [{ kind: "assign", target: s.target, value: resolveExpr(s.value, ctx) }, ctx.env];
+    case "assign": {
+      const targetTy = lookup(ctx.env, s.target) ?? { kind: "unknown" as const };
+      return [{ kind: "assign", target: s.target, value: coerceStr(resolveExpr(s.value, ctx), targetTy) }, ctx.env];
+    }
 
     case "return":
-      return [{ kind: "return", value: resolveExpr(s.value, ctx) }, ctx.env];
+      return [{ kind: "return", value: coerceStr(resolveExpr(s.value, ctx), ctx.returnTy) }, ctx.env];
 
     case "break":
       return [{ kind: "break" }, ctx.env];

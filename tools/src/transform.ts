@@ -50,8 +50,8 @@ function transformExpr(e: TExpr): LeanExpr {
     case "result": return { kind: "var", name: "res" };
 
     case "str":
-      // String literal → constructor (for user-defined enum types)
-      return { kind: "constructor", name: e.value };
+      if (e.ty.kind === "user") return { kind: "constructor", name: e.value };
+      return { kind: "str", value: e.value };
 
     case "unop":
       if (e.op === "-" && e.expr.kind === "num")
