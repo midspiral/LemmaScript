@@ -111,6 +111,7 @@ function emitStmt(s: LeanStmt, indent: number): string {
         : `${pad}let ${s.name} := ${emitExpr(s.value)}`;
     case "assign": return `${pad}${s.target} := ${emitExpr(s.value)}`;
     case "bind": return `${pad}${s.target} ← ${emitExpr(s.value)}`;
+    case "let-bind": return `${pad}let ${s.name} ← ${emitExpr(s.value)}`;
     case "return": return `${pad}return ${emitExpr(s.value)}`;
     case "break": return `${pad}break`;
     case "continue": return `${pad}continue`;

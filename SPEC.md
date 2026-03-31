@@ -162,6 +162,7 @@ No normalization of operators. Lean and `loom_solve` handle all comparison direc
 | `arr[e]` where `e` is Int-typed | `arr[e.toNat]!` | Int-to-Nat conversion for indexing. |
 | `f(a, b)` | `f a b` | Ghost function call or Velvet method call. |
 | `x = f(a, b)` (in body) | `x ← f a b` | Velvet method call uses monadic bind. |
+| `return f(a) + g(b)` (embedded calls) | `let _t0 ← f a`<br>`let _t1 ← g b`<br>`return _t0 + _t1` | Monadic lifting (selective ANF). See §4.4. |
 | `Math.floor(e)` | `e` | Int division in Lean is already floor. |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | Returns `Int` (-1 if not found). |
 | `s.slice(start, end)` | `JSString.slice s start end` | Nat-indexed substring. |
@@ -203,6 +204,29 @@ generates:
 ensures res ≥ -1
 ensures res < arr.size
 ```
+
+### 4.6 Monadic Lifting (Selective ANF)
+
+When a Velvet method call appears embedded inside a larger expression (not at the top level of an assignment), the transform lifts it into a `let ← ` bind before the statement. This follows Lean's do-notation `←` desugaring rules (see Ullrich & de Moura, "'do' Unchained", 2022).
+
+```typescript
+return sumTo(arr, n - 1) + arr[n - 1];
+```
+
+generates:
+
+```lean
+let _t0 ← sumTo arr (n - 1)
+return _t0 + arr[n - 1]!
+```
+
+**Rules:**
+- Lift from arithmetic, comparisons, function arguments — left-to-right, depth-first
+- `if` expressions: lift from the condition only, not from branches (branches are separate monadic blocks)
+- Top-level method calls in assignments remain as direct binds (`x ← f a b`)
+- Fresh names use the pattern `_t0`, `_t1`, etc.
+
+Note: as in Lean's `←`, lifting from `&&`/`||` loses short-circuit semantics (both sides execute). This matches Lean's behavior.
 
 ---
 
@@ -737,6 +761,6 @@ extract (ts-morph → Raw IR) → resolve (→ Typed IR) → transform (→ Lean
 
 - **Extract**: ts-morph → structured AST. Body expressions are nodes, not strings. Annotations remain as strings.
 - **Resolve**: attaches types, classifies calls, identifies discriminants, rejects unsupported patterns. Uses linked environments for lexical scoping.
-- **Transform**: Typed IR → Lean IR. Pattern-matches on types. Desugars `for-of` to `while`. Detects discriminant if-chains → `match`.
+- **Transform**: Typed IR → Lean IR. Pattern-matches on types. Desugars `for-of` to `while`. Detects discriminant if-chains → `match`. Lifts embedded method calls to `let ←` binds (selective ANF, §4.6).
 - **Emit**: Lean IR → text. Trivial printer.
 

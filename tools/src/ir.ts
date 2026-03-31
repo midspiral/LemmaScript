@@ -36,7 +36,8 @@ export interface LeanMatchArm {
 export type LeanStmt =
   | { kind: "let"; name: string; type: string; mutable: boolean; value: LeanExpr }
   | { kind: "assign"; target: string; value: LeanExpr }
-  | { kind: "bind"; target: string; value: LeanExpr }         // x ← f a b
+  | { kind: "bind"; target: string; value: LeanExpr }         // x ← f a b (mutation)
+  | { kind: "let-bind"; name: string; value: LeanExpr }       // let x ← f a b (new binding)
   | { kind: "return"; value: LeanExpr }
   | { kind: "break" }
   | { kind: "continue" }

@@ -247,48 +247,130 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanStmt[] {
       i++;
       continue;
     }
-    result.push(transformStmt(s, typeDecls));
+    result.push(...transformStmt(s, typeDecls));
     i++;
   }
   return result;
 }
 
-function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): LeanStmt {
-  switch (s.kind) {
-    case "let":
-      return { kind: "let", name: s.name, type: tyToLean(s.ty), mutable: s.mutable, value: transformExpr(s.init) };
+// ── Monadic lifting ─────────────────────────────────────────
+// Extract embedded method calls from expressions into let ← binds.
+// Follows Lean's do-notation rules: lift from anywhere except if/match branches.
 
-    case "assign": {
-      const value = transformExpr(s.value);
-      // Method call → monadic bind
-      if (s.value.kind === "call" && s.value.callKind === "method")
-        return { kind: "bind", target: s.target, value };
-      return { kind: "assign", target: s.target, value };
+let _liftCounter = 0;
+
+function liftMethodCalls(e: TExpr): { binds: LeanStmt[]; expr: LeanExpr } {
+  const binds: LeanStmt[] = [];
+
+  function lift(e: TExpr): LeanExpr {
+    // Method call embedded in an expression → extract to bind
+    if (e.kind === "call" && e.callKind === "method") {
+      const name = `_t${_liftCounter++}`;
+      const value = transformExpr(e);
+      binds.push({ kind: "let-bind", name, value });
+      return { kind: "var", name };
     }
 
-    case "return": return { kind: "return", value: transformExpr(s.value) };
-    case "break": return { kind: "break" };
-    case "continue": return { kind: "continue" };
-    case "expr": return { kind: "assign", target: "_", value: transformExpr(s.expr) };
+    // Recurse into subexpressions, but NOT into if/match branches
+    switch (e.kind) {
+      case "binop": {
+        const left = lift(e.left);
+        const right = lift(e.right);
+        return transformBinop(e, left, right);
+      }
+      case "unop": {
+        const expr = lift(e.expr);
+        if (e.op === "-" && e.expr.kind === "num") return { kind: "num", value: -e.expr.value };
+        return { kind: "unop", op: e.op === "!" ? "¬" : e.op, expr };
+      }
+      case "call": {
+        // Pure call with lifted args
+        const liftedArgs = e.args.map(lift);
+        if (e.fn.kind === "field" && e.fn.field === "floor" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1)
+          return liftedArgs[0];
+        if (e.fn.kind === "field") {
+          const lean = lookupMethod(e.fn.obj.ty, e.fn.field);
+          if (lean) return { kind: "app", fn: lean, args: [lift(e.fn.obj), ...liftedArgs] };
+          throw new Error(`Unsupported method call: .${e.fn.field}() on ${e.fn.obj.ty.kind}`);
+        }
+        if (e.fn.kind !== "var") throw new Error(`Unsupported call expression: ${e.fn.kind}`);
+        const prefix = e.callKind === "spec-pure" ? "Pure." : "";
+        return { kind: "app", fn: prefix + e.fn.name, args: liftedArgs };
+      }
+      default:
+        // For everything else (var, num, str, index, field, etc.), use standard transform
+        return transformExpr(e);
+    }
+  }
 
-    case "if":
-      return { kind: "if", cond: transformExpr(s.cond), then: transformStmts(s.then, typeDecls), else: transformStmts(s.else, typeDecls) };
+  return { binds, expr: lift(e) };
+}
+
+/** Helper for binop transformation within lift context */
+function transformBinop(e: TExpr & { kind: "binop" }, left: LeanExpr, right: LeanExpr): LeanExpr {
+  if (e.op === "==>") {
+    const { premises, conclusion } = flattenImpl(e);
+    return { kind: "implies", premises: premises.map(transformExpr), conclusion: transformExpr(conclusion) };
+  }
+  if ((e.op === "===" || e.op === "!==") && e.left.kind === "field" && e.left.isDiscriminant && e.right.kind === "str") {
+    return { kind: "binop", op: e.op === "===" ? "=" : "≠", left: transformExpr(e.left.obj), right: { kind: "constructor", name: e.right.value } };
+  }
+  if ((e.op === "===" || e.op === "!==") && e.right.kind === "str") {
+    const r: LeanExpr = isUser(e.left.ty) ? { kind: "constructor", name: e.right.value } : { kind: "str", value: e.right.value };
+    return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right: r };
+  }
+  return { kind: "binop", op: OP_MAP[e.op] ?? e.op, left, right };
+}
+
+// ── Transform statements ─────────────────────────────────────
+
+function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): LeanStmt[] {
+  switch (s.kind) {
+    case "let": {
+      const { binds, expr } = liftMethodCalls(s.init);
+      return [...binds, { kind: "let", name: s.name, type: tyToLean(s.ty), mutable: s.mutable, value: expr }];
+    }
+
+    case "assign": {
+      // Top-level method call → direct monadic bind, no lifting needed
+      if (s.value.kind === "call" && s.value.callKind === "method")
+        return [{ kind: "bind", target: s.target, value: transformExpr(s.value) }];
+      const { binds, expr } = liftMethodCalls(s.value);
+      return [...binds, { kind: "assign", target: s.target, value: expr }];
+    }
+
+    case "return": {
+      const { binds, expr } = liftMethodCalls(s.value);
+      return [...binds, { kind: "return", value: expr }];
+    }
+    case "break": return [{ kind: "break" }];
+    case "continue": return [{ kind: "continue" }];
+    case "expr": {
+      const { binds, expr } = liftMethodCalls(s.expr);
+      return [...binds, { kind: "assign", target: "_", value: expr }];
+    }
+
+    case "if": {
+      // Lift from condition only (Lean rule: don't lift from branches)
+      const { binds, expr: cond } = liftMethodCalls(s.cond);
+      return [...binds, { kind: "if", cond, then: transformStmts(s.then, typeDecls), else: transformStmts(s.else, typeDecls) }];
+    }
 
     case "while":
-      return {
+      return [{
         kind: "while",
         cond: transformExpr(s.cond),
         invariants: s.invariants.map(transformExpr),
         decreasing: s.decreases ? transformExpr(s.decreases) : null,
         doneWith: s.doneWith ? transformExpr(s.doneWith) : null,
         body: transformStmts(s.body, typeDecls),
-      };
+      }];
 
     case "forof":
       throw new Error("forof should be transformed to forin (range loop) in transformStmts");
 
     case "switch":
-      return emitSwitchStmt(s, typeDecls);
+      return [emitSwitchStmt(s, typeDecls)];
   }
 }
 
