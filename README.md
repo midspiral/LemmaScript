@@ -8,13 +8,14 @@ See [DESIGN.md](DESIGN.md) for why this exists and [SPEC.md](SPEC.md) for the im
 
 **Prerequisites:** [elan](https://github.com/leanprover/elan) (Lean toolchain manager), Node.js ≥ 18.
 
-**Clone with the Velvet fork:**
+**Clone the Loom and Velvet forks:**
 
 ```sh
+git clone https://github.com/namin/loom.git -b lemma ../loom
 git clone https://github.com/namin/velvet.git -b lemma ../velvet
 ```
 
-LemmaScript depends on Velvet (which depends on Loom). The fork has one change: `prove_correct` works across files.
+LemmaScript depends on Velvet, which depends on Loom. The Loom fork adds bounded range `forIn` step conditions (needed for native `for` loop support). The Velvet fork adds `for` loop handling and cross-file `prove_correct`.
 
 **Install Node.js dependencies:**
 
