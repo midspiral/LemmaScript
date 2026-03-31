@@ -263,32 +263,9 @@ function isPure(stmts: RawStmt[]): boolean {
   return true;
 }
 
-function hasReturnInLoop(stmts: RawStmt[]): boolean {
-  for (const s of stmts) {
-    if ((s.kind === "while" || s.kind === "forof") && containsReturn(s.body)) return true;
-    if (s.kind === "if" && (hasReturnInLoop(s.then) || hasReturnInLoop(s.else))) return true;
-    if (s.kind === "switch" && (s.cases.some(c => hasReturnInLoop(c.body)) || hasReturnInLoop(s.defaultBody))) return true;
-  }
-  return false;
-}
-
-function containsReturn(stmts: RawStmt[]): boolean {
-  for (const s of stmts) {
-    if (s.kind === "return") return true;
-    if (s.kind === "if" && (containsReturn(s.then) || containsReturn(s.else))) return true;
-    if ((s.kind === "while" || s.kind === "forof") && containsReturn(s.body)) return true;
-    if (s.kind === "switch" && (s.cases.some(c => containsReturn(c.body)) || containsReturn(s.defaultBody))) return true;
-  }
-  return false;
-}
-
 // ── Resolve function / module ────────────────────────────────
 
 function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[]): TFunction {
-  if (hasReturnInLoop(fn.body)) {
-    throw new Error(`${fn.name}: return inside a loop is not supported.`);
-  }
-
   const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
   const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: resolveTsType(p.tsType, overrides, p.name) }));
   const returnTy = resolveTsType(fn.returnType, overrides, "\\result");
