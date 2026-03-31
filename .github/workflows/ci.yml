@@ -36,6 +36,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Clone Loom fork
+        run: git clone https://github.com/namin/loom.git -b lemma ../loom
+
       - name: Clone Velvet fork
         run: git clone https://github.com/namin/velvet.git -b lemma ../velvet
 
