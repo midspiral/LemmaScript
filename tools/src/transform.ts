@@ -34,6 +34,20 @@ function isNat(ty: Ty): boolean { return ty.kind === "nat"; }
 function isArray(ty: Ty): boolean { return ty.kind === "array"; }
 function isUser(ty: Ty): boolean { return ty.kind === "user"; }
 
+// ── Built-in method table ───────────────────────────────────
+
+const METHOD_TABLE: Record<string, Record<string, string>> = {
+  string: {
+    indexOf: "JSString.indexOf",
+    slice:   "JSString.slice",
+  },
+};
+
+function lookupMethod(recvTy: Ty, method: string): string | undefined {
+  const tyKey = recvTy.kind === "array" ? "array" : recvTy.kind;
+  return METHOD_TABLE[tyKey]?.[method];
+}
+
 // ── Transform expressions ────────────────────────────────────
 
 const OP_MAP: Record<string, string> = {
@@ -92,6 +106,8 @@ function transformExpr(e: TExpr): LeanExpr {
     case "field":
       if (e.field === "length" && isArray(e.obj.ty))
         return { kind: "field", obj: transformExpr(e.obj), field: "size" };
+      if (e.field === "length" && e.obj.ty.kind === "string")
+        return { kind: "field", obj: transformExpr(e.obj), field: "length" };
       return { kind: "field", obj: transformExpr(e.obj), field: e.field };
 
     case "index":
@@ -103,8 +119,16 @@ function transformExpr(e: TExpr): LeanExpr {
       // Math.floor(x) → x
       if (e.fn.kind === "field" && e.fn.field === "floor" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1)
         return transformExpr(e.args[0]);
-      const fn = e.fn.kind === "var" ? e.fn.name : "?";
-      return { kind: "app", fn, args: e.args.map(transformExpr) };
+      // Built-in method call: receiver.method(args) → leanFn receiver args
+      if (e.fn.kind === "field") {
+        const lean = lookupMethod(e.fn.obj.ty, e.fn.field);
+        if (lean)
+          return { kind: "app", fn: lean, args: [transformExpr(e.fn.obj), ...e.args.map(transformExpr)] };
+        throw new Error(`Unsupported method call: .${e.fn.field}() on ${e.fn.obj.ty.kind}`);
+      }
+      if (e.fn.kind !== "var")
+        throw new Error(`Unsupported call expression: ${e.fn.kind}`);
+      return { kind: "app", fn: e.fn.name, args: e.args.map(transformExpr) };
     }
 
     case "record":

@@ -132,7 +132,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let isDiscriminant = false;
       let ty: Ty = { kind: "unknown" };
 
-      if (e.field === "length" && obj.ty.kind === "array") {
+      if (e.field === "length" && (obj.ty.kind === "array" || obj.ty.kind === "string")) {
         ty = { kind: "nat" };
       } else if (obj.ty.kind === "user") {
         if (getDiscriminant(ctx, obj.ty.name) === e.field) isDiscriminant = true;
