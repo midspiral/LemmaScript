@@ -200,7 +200,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanStmt[] {
         continue;
       }
     }
-    // Desugar for-of → index variable + while loop
+    // Transform for-of → for-in over range
     if (s.kind === "forof") {
       const arrExpr = transformExpr(s.iterable);
       const idxName = `_${s.varName}_idx`;
@@ -208,18 +208,12 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanStmt[] {
       const arrSize: LeanExpr = { kind: "field", obj: arrExpr, field: "size" };
       const bodyStmts = transformStmts(s.body, typeDecls);
       const letElem: LeanStmt = { kind: "let", name: s.varName, type: tyToLean(s.varTy), mutable: false, value: { kind: "index", arr: arrExpr, idx, toNat: false } };
-      const incr: LeanStmt = { kind: "assign", target: idxName, value: { kind: "binop", op: "+", left: idx, right: { kind: "num", value: 1 } } };
-      const last = bodyStmts[bodyStmts.length - 1];
-      const endsWithExit = last?.kind === "break" || last?.kind === "return";
-      const whileBody = endsWithExit ? [letElem, ...bodyStmts] : [letElem, ...bodyStmts, incr];
-      result.push({ kind: "let", name: idxName, type: "Nat", mutable: true, value: { kind: "num", value: 0 } });
       result.push({
-        kind: "while",
-        cond: { kind: "binop", op: "<", left: idx, right: arrSize },
+        kind: "forin",
+        idx: idxName,
+        bound: arrSize,
         invariants: s.invariants.map(transformExpr),
-        decreasing: { kind: "binop", op: "-", left: arrSize, right: idx },
-        doneWith: s.doneWith ? transformExpr(s.doneWith) : null,
-        body: whileBody,
+        body: [letElem, ...bodyStmts],
       });
       i++;
       continue;
@@ -262,7 +256,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): LeanStmt {
       };
 
     case "forof":
-      throw new Error("forof should be desugared in transformStmts, not transformStmt");
+      throw new Error("forof should be transformed to forin (range loop) in transformStmts");
 
     case "switch":
       return emitSwitchStmt(s, typeDecls);
@@ -381,6 +375,7 @@ function replaceFieldAccessInStmt(s: LeanStmt, varName: string, fields: { name: 
     case "if": return { ...s, cond: r(s.cond), then: replaceFieldAccessInStmts(s.then, varName, fields), else: replaceFieldAccessInStmts(s.else, varName, fields) };
     case "match": return { ...s, arms: s.arms.map(a => ({ ...a, body: replaceFieldAccessInStmts(a.body, varName, fields) })) };
     case "while": return { ...s, cond: r(s.cond), body: replaceFieldAccessInStmts(s.body, varName, fields) };
+    case "forin": return { ...s, invariants: s.invariants.map(r), body: replaceFieldAccessInStmts(s.body, varName, fields) };
   }
 }
 

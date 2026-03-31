@@ -147,6 +147,14 @@ function emitStmt(s: LeanStmt, indent: number): string {
       lines.push(emitStmts(s.body, indent + 1));
       return lines.join("\n");
     }
+
+    case "forin": {
+      const lines = [`${pad}for ${s.idx} in [:${emitExpr(s.bound)}]`];
+      for (const inv of s.invariants) lines.push(`${pad}  invariant ${emitExpr(inv)}`);
+      lines.push(`${pad}do`);
+      lines.push(emitStmts(s.body, indent + 1));
+      return lines.join("\n");
+    }
   }
 }
 

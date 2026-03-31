@@ -228,7 +228,10 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     case "forof": {
       const iterable = resolveExpr(s.iterable, ctx);
       const elemTy: Ty = iterable.ty.kind === "array" ? iterable.ty.elem : { kind: "unknown" };
-      const bodyCtx = withEnv(ctx, extend(ctx.env, s.varName, elemTy));
+      const idxName = `_${s.varName}_idx`;
+      const withIdx = extend(ctx.env, idxName, { kind: "nat" });
+      const withElem = extend(withIdx, s.varName, elemTy);
+      const bodyCtx = withEnv(ctx, withElem);
       return [{
         kind: "forof", varName: s.varName, varTy: elemTy, iterable,
         invariants: resolveSpecs(s.invariants, bodyCtx),

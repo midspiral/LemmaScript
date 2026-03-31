@@ -44,6 +44,7 @@ export type LeanStmt =
   | { kind: "match"; scrutinee: string; arms: LeanStmtMatchArm[] }
   | { kind: "while"; cond: LeanExpr; invariants: LeanExpr[]; decreasing: LeanExpr | null;
       doneWith: LeanExpr | null; body: LeanStmt[] }
+  | { kind: "forin"; idx: string; bound: LeanExpr; invariants: LeanExpr[]; body: LeanStmt[] }
 
 export interface LeanStmtMatchArm {
   pattern: string;

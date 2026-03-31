@@ -13,16 +13,12 @@ method arrayContains (arr : Array Int) (target : Int) return (res : Bool)
   ensures res = false → ∀ k : Nat, k < arr.size → arr[k]! ≠ target
   do
     let mut found : Bool := false
-    let mut _x_idx : Nat := 0
-    while _x_idx < arr.size
+    for _x_idx in [:arr.size]
       invariant found = false → ∀ k : Nat, k < _x_idx → arr[k]! ≠ target
       invariant found = true → ∃ k : Nat, k < arr.size ∧ arr[k]! = target
-      done_with found = true ∨ ¬(_x_idx < arr.size)
-      decreasing arr.size - _x_idx
     do
       let x := arr[_x_idx]!
       if x = target then
         found := true
         break
-      _x_idx := _x_idx + 1
     return found
