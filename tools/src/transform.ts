@@ -544,7 +544,8 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): LeanExpr |
     if (fields.length > 0) body = replaceFieldAccess(body, chain.varName, fields);
     arms.push({ pattern, body });
   }
-  if (chain.fallthrough.length > 0) {
+  const allCovered = decl?.variants && chain.cases.length >= decl.variants.length;
+  if (chain.fallthrough.length > 0 && !allCovered) {
     const body = transformPureBody(chain.fallthrough, typeDecls);
     if (!body) return null;
     arms.push({ pattern: "_", body });
