@@ -69,7 +69,25 @@ const OP_MAP: Record<string, string> = {
   "==": "=", "!=": "≠",
 };
 
-function transformExpr(e: TExpr): LeanExpr {
+function transformExpr(e: TExpr): LeanExpr { return lowerExpr(e, null); }
+
+/**
+ * Lower a typed expression to Lean IR.
+ *
+ * When `binds` is non-null, embedded method calls are extracted into
+ * `let ← ` binds (monadic lifting / selective ANF).  Lifting propagates
+ * through binop, unop, and call arguments — the expression kinds where
+ * a method call can appear inline in TS.  It does NOT propagate into
+ * field, index, record, forall, or exists sub-expressions.
+ */
+function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
+  // Monadic lifting: extract embedded method calls to let-binds
+  if (binds && e.kind === "call" && e.callKind === "method") {
+    const name = `_t${_liftCounter++}`;
+    binds.push({ kind: "let-bind", name, value: lowerExpr(e, null) });
+    return { kind: "var", name };
+  }
+
   switch (e.kind) {
     case "var": return { kind: "var", name: e.name };
     case "num": return { kind: "num", value: e.value };
@@ -83,10 +101,11 @@ function transformExpr(e: TExpr): LeanExpr {
     case "unop":
       if (e.op === "-" && e.expr.kind === "num")
         return { kind: "num", value: -e.expr.value };
-      return { kind: "unop", op: e.op === "!" ? "¬" : e.op, expr: transformExpr(e.expr) };
+      return { kind: "unop", op: e.op === "!" ? "¬" : e.op, expr: lowerExpr(e.expr, binds) };
 
     case "binop": {
       // Implication: flatten (A && B) ==> C → implies [A, B] C
+      // Spec-only — no lifting through premises/conclusion.
       if (e.op === "==>") {
         const { premises, conclusion } = flattenImpl(e);
         return { kind: "implies", premises: premises.map(transformExpr), conclusion: transformExpr(conclusion) };
@@ -102,7 +121,7 @@ function transformExpr(e: TExpr): LeanExpr {
       }
       // String literal comparison — constructor if user type, string literal if string
       if ((e.op === "===" || e.op === "!==") && e.right.kind === "str") {
-        const left = transformExpr(e.left);
+        const left = lowerExpr(e.left, binds);
         const right: LeanExpr = isUser(e.left.ty)
           ? { kind: "constructor", name: e.right.value }
           : { kind: "str", value: e.right.value };
@@ -111,8 +130,8 @@ function transformExpr(e: TExpr): LeanExpr {
       return {
         kind: "binop",
         op: OP_MAP[e.op] ?? e.op,
-        left: transformExpr(e.left),
-        right: transformExpr(e.right),
+        left: lowerExpr(e.left, binds),
+        right: lowerExpr(e.right, binds),
       };
     }
 
@@ -131,18 +150,18 @@ function transformExpr(e: TExpr): LeanExpr {
     case "call": {
       // Math.floor(x) → x
       if (e.fn.kind === "field" && e.fn.field === "floor" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1)
-        return transformExpr(e.args[0]);
+        return lowerExpr(e.args[0], binds);
       // Built-in method call: receiver.method(args) → leanFn receiver args
       if (e.fn.kind === "field") {
         const lean = lookupMethod(e.fn.obj.ty, e.fn.field);
         if (lean)
-          return { kind: "app", fn: lean, args: [transformExpr(e.fn.obj), ...e.args.map(transformExpr)] };
+          return { kind: "app", fn: lean, args: [lowerExpr(e.fn.obj, binds), ...e.args.map(a => lowerExpr(a, binds))] };
         throw new Error(`Unsupported method call: .${e.fn.field}() on ${e.fn.obj.ty.kind}`);
       }
       if (e.fn.kind !== "var")
         throw new Error(`Unsupported call expression: ${e.fn.kind}`);
       const prefix = e.callKind === "spec-pure" ? "Pure." : "";
-      return { kind: "app", fn: prefix + e.fn.name, args: e.args.map(transformExpr) };
+      return { kind: "app", fn: prefix + e.fn.name, args: e.args.map(a => lowerExpr(a, binds)) };
     }
 
     case "record":
@@ -262,73 +281,11 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanStmt[] {
   return result;
 }
 
-// ── Monadic lifting ─────────────────────────────────────────
-// Extract embedded method calls from expressions into let ← binds.
-// Follows Lean's do-notation rules: lift from anywhere except if/match branches.
-
 let _liftCounter = 0;
 
 function liftMethodCalls(e: TExpr): { binds: LeanStmt[]; expr: LeanExpr } {
   const binds: LeanStmt[] = [];
-
-  function lift(e: TExpr): LeanExpr {
-    // Method call embedded in an expression → extract to bind
-    if (e.kind === "call" && e.callKind === "method") {
-      const name = `_t${_liftCounter++}`;
-      const value = transformExpr(e);
-      binds.push({ kind: "let-bind", name, value });
-      return { kind: "var", name };
-    }
-
-    // Recurse into subexpressions, but NOT into if/match branches
-    switch (e.kind) {
-      case "binop": {
-        const left = lift(e.left);
-        const right = lift(e.right);
-        return transformBinop(e, left, right);
-      }
-      case "unop": {
-        const expr = lift(e.expr);
-        if (e.op === "-" && e.expr.kind === "num") return { kind: "num", value: -e.expr.value };
-        return { kind: "unop", op: e.op === "!" ? "¬" : e.op, expr };
-      }
-      case "call": {
-        // Pure call with lifted args
-        const liftedArgs = e.args.map(lift);
-        if (e.fn.kind === "field" && e.fn.field === "floor" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1)
-          return liftedArgs[0];
-        if (e.fn.kind === "field") {
-          const lean = lookupMethod(e.fn.obj.ty, e.fn.field);
-          if (lean) return { kind: "app", fn: lean, args: [lift(e.fn.obj), ...liftedArgs] };
-          throw new Error(`Unsupported method call: .${e.fn.field}() on ${e.fn.obj.ty.kind}`);
-        }
-        if (e.fn.kind !== "var") throw new Error(`Unsupported call expression: ${e.fn.kind}`);
-        const prefix = e.callKind === "spec-pure" ? "Pure." : "";
-        return { kind: "app", fn: prefix + e.fn.name, args: liftedArgs };
-      }
-      default:
-        // For everything else (var, num, str, index, field, etc.), use standard transform
-        return transformExpr(e);
-    }
-  }
-
-  return { binds, expr: lift(e) };
-}
-
-/** Helper for binop transformation within lift context */
-function transformBinop(e: TExpr & { kind: "binop" }, left: LeanExpr, right: LeanExpr): LeanExpr {
-  if (e.op === "==>") {
-    const { premises, conclusion } = flattenImpl(e);
-    return { kind: "implies", premises: premises.map(transformExpr), conclusion: transformExpr(conclusion) };
-  }
-  if ((e.op === "===" || e.op === "!==") && e.left.kind === "field" && e.left.isDiscriminant && e.right.kind === "str") {
-    return { kind: "binop", op: e.op === "===" ? "=" : "≠", left: transformExpr(e.left.obj), right: { kind: "constructor", name: e.right.value } };
-  }
-  if ((e.op === "===" || e.op === "!==") && e.right.kind === "str") {
-    const r: LeanExpr = isUser(e.left.ty) ? { kind: "constructor", name: e.right.value } : { kind: "str", value: e.right.value };
-    return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right: r };
-  }
-  return { kind: "binop", op: OP_MAP[e.op] ?? e.op, left, right };
+  return { binds, expr: lowerExpr(e, binds) };
 }
 
 // ── Transform statements ─────────────────────────────────────
