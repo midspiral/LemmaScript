@@ -490,6 +490,7 @@ function replaceFieldAccessInStmt(s: LeanStmt, varName: string, fields: { name: 
     case "let": return { ...s, value: r(s.value) };
     case "assign": return { ...s, value: r(s.value) };
     case "bind": return { ...s, value: r(s.value) };
+    case "let-bind": return { ...s, value: r(s.value) };
     case "return": return { ...s, value: r(s.value) };
     case "break": case "continue": return s;
     case "if": return { ...s, cond: r(s.cond), then: replaceFieldAccessInStmts(s.then, varName, fields), else: replaceFieldAccessInStmts(s.else, varName, fields) };
