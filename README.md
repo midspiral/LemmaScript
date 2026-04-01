@@ -2,11 +2,16 @@
 
 A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations; write proofs in Lean 4. The toolchain generates Lean from your TypeScript and Lean checks it.
 
-See [DESIGN.md](DESIGN.md) for why this exists and [SPEC.md](SPEC.md) for the implementation specification.
+See [SPEC.md](SPEC.md) for the full specification and [DESIGN.md](DESIGN.md) for why this exists.
+
+## Case Studies
+
+- **[casbin-lemmascript](../casbin-lemmascript/)** — brownfield verification of the [node-casbin](https://github.com/casbin/node-casbin) access control library. 5 functions verified (effector, keyMatch, keyGet, arrayEquals), 217 existing tests pass with verified code wired in.
+- **[clear-split-lemmascript](../clear-split-lemmascript/)** — greenfield verified expense splitting web app. React frontend calling verified TS logic directly. Conservation theorem (sum of all balances = 0), invariant preservation, delta laws — all proven, no sorry.
 
 ## Setup
 
-**Prerequisites:** [elan](https://github.com/leanprover/elan) (Lean toolchain manager), Node.js ≥ 18.
+**Prerequisites:** [elan](https://github.com/leanprover/elan) (Lean toolchain manager), Node.js >= 18.
 
 **Clone the Loom and Velvet forks:**
 
@@ -15,7 +20,7 @@ git clone https://github.com/namin/loom.git -b lemma ../loom
 git clone https://github.com/namin/velvet.git -b lemma ../velvet
 ```
 
-LemmaScript depends on Velvet, which depends on Loom. The Loom fork adds bounded range `forIn` step conditions (needed for native `for` loop support). The Velvet fork adds `for` loop handling and cross-file `prove_correct`.
+LemmaScript depends on Velvet, which depends on Loom.
 
 **Install Node.js dependencies:**
 
@@ -40,7 +45,19 @@ This produces `binarySearch.types.lean` (if the TS has type declarations) and `b
 lake build
 ```
 
-Builds all examples. First run downloads mathlib cache and Z3/cvc5 (~5 min). Subsequent builds are fast (~5s per file).
+Builds all examples. First run downloads mathlib cache and Z3/cvc5 (~5 min). Subsequent builds are fast.
+
+## What's Supported
+
+### Annotations
+
+```typescript
+//@ requires arr.length > 0
+//@ ensures \result >= -1 && \result < arr.length
+//@ invariant 0 <= i && i <= arr.length
+//@ decreases arr.length - i
+//@ type i nat
+```
 
 ## File Structure
 
@@ -49,12 +66,10 @@ For each verified function `foo.ts`:
 | File | Generated? | Purpose |
 |------|-----------|---------|
 | `foo.ts` | — | TypeScript source with `//@ ` annotations |
-| `foo.types.lean` | Yes (gitignored) | Lean types from TS type declarations |
+| `foo.types.lean` | Yes | Lean types, `namespace Pure` defs |
 | `foo.spec.lean` | No | Ghost definitions, helper lemmas |
-| `foo.def.lean` | Yes (gitignored) | Velvet method definition |
+| `foo.def.lean` | Yes | Velvet method definitions |
 | `foo.proof.lean` | No | `prove_correct` with proof tactics |
-
-The user writes `.spec.lean` and `.proof.lean`. The codegen produces `.types.lean` and `.def.lean`.
 
 ## Examples
 
@@ -65,3 +80,6 @@ The user writes `.spec.lean` and `.proof.lean`. The codegen produces `.types.lea
 | `arraySum` | Accumulator, recursive ghost function |
 | `transition` | State machine, enum ADT, inter-method call |
 | `packet` | Discriminated union with data, if-chain → match |
+| `isSorted` | Loop with break, existential in invariant |
+| `maxElement` | If-without-else in loop |
+| `arrayContains` | For-of loop, boolean flag |
