@@ -239,6 +239,8 @@ Note: as in Lean's `←`, lifting from `&&`/`||` loses short-circuit semantics (
 | `let x = e` | `let mut x : T := e'` | Mutable. `T` from type map (§3.3). |
 | `const x = e` | `let x := e'` | Immutable. No type annotation. |
 | `x = e` | `x := e'` | Assignment. |
+| `x += e`, `x -= e`, etc. | `x := x + e'` | Compound assignment (desugared). |
+| `i++`, `++i`, `i--`, `--i` | `i := i + 1` / `i := i - 1` | Increment/decrement (desugared). |
 | `return e` | `return e'` | Not supported inside loops — see §5.3. |
 | `if (c) { ... }` | `if c' then ...` | |
 | `if (c) { ... } else { ... }` | `if c' then ... else ...` | |
