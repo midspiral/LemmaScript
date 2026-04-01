@@ -7,6 +7,7 @@
 
 import type { RawExpr, RawStmt, RawFunction, RawModule } from "./rawir.js";
 import type { Ty, TExpr, TStmt, TFunction, TModule, TParam, CallKind } from "./typedir.js";
+import { parseTsType } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 
@@ -48,20 +49,9 @@ function withEnv(ctx: Ctx, env: Env | null): Ctx {
 function resolveTsType(tsType: string, overrides: Map<string, string>, varName?: string): Ty {
   if (varName) {
     const o = overrides.get(varName);
-    if (o === "nat") return { kind: "nat" };
-    if (o) return { kind: "user", name: o };
+    if (o) return parseTsType(o);
   }
-  const t = tsType.trim();
-  if (t === "number") return { kind: "int" };
-  if (t === "boolean") return { kind: "bool" };
-  if (t === "string") return { kind: "string" };
-  if (t === "void" || t === "undefined") return { kind: "void" };
-  if (t === "number[]") return { kind: "array", elem: { kind: "int" } };
-  if (t === "boolean[]") return { kind: "array", elem: { kind: "bool" } };
-  if (t === "string[]") return { kind: "array", elem: { kind: "string" } };
-  const m = t.match(/^(?:Array<(.+)>|(.+)\[\])$/);
-  if (m) return { kind: "array", elem: resolveTsType(m[1] || m[2], overrides) };
-  return { kind: "user", name: t };
+  return parseTsType(tsType);
 }
 
 /** If expr is a string literal and targetTy is a user type, coerce the literal's type. */

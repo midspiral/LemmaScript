@@ -30,31 +30,19 @@ export interface TypeDeclInfo {
   fields?: { name: string; tsType: string }[];
 }
 
-// ── Primitive mapping ────────────────────────────────────────
+// ── TS type string → Ty (single source of truth) ───────────
 
-export function tsTypeToLean(tsType: string): string {
+import type { Ty } from "./typedir.js";
+
+export function parseTsType(tsType: string): Ty {
   const t = tsType.trim();
-  if (t === "number") return "Int";
-  if (t === "nat") return "Nat";
-  if (t === "boolean") return "Bool";
-  if (t === "string") return "String";
-  if (t === "void" || t === "undefined") return "Unit";
-  // Array types
-  if (t === "number[]") return "Array Int";
-  if (t === "boolean[]") return "Array Bool";
-  if (t === "string[]") return "Array String";
-  const arrMatch = t.match(/^(?:Array<(.+)>|(.+)\[\])$/);
-  if (arrMatch) return `Array ${tsTypeToLean(arrMatch[1] || arrMatch[2])}`;
-  // User-defined: pass through (same name in Lean)
-  return t;
+  if (t === "number") return { kind: "int" };
+  if (t === "nat") return { kind: "nat" };
+  if (t === "boolean") return { kind: "bool" };
+  if (t === "string") return { kind: "string" };
+  if (t === "void" || t === "undefined") return { kind: "void" };
+  const m = t.match(/^(?:Array<(.+)>|(.+)\[\])$/);
+  if (m) return { kind: "array", elem: parseTsType(m[1] || m[2]) };
+  return { kind: "user", name: t };
 }
 
-// ── Derived queries ──────────────────────────────────────────
-
-export function isNatType(leanType: string): boolean {
-  return leanType === "Nat";
-}
-
-export function isArrayType(leanType: string): boolean {
-  return leanType.startsWith("Array ");
-}

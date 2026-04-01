@@ -8,7 +8,7 @@
 import type { TExpr, TStmt, TFunction, TModule, Ty } from "./typedir.js";
 import type { LeanExpr, LeanStmt, LeanDecl, LeanFile, LeanDef, LeanMethod, LeanMatchArm, LeanStmtMatchArm } from "./ir.js";
 import type { TypeDeclInfo } from "./types.js";
-import { tsTypeToLean } from "./types.js";
+import { parseTsType } from "./types.js";
 
 /** Prefix match-bound field names to avoid capturing user variables. */
 function matchBinder(fieldName: string): string {
@@ -570,14 +570,14 @@ function transformTypeDecl(d: TypeDeclInfo): LeanDecl {
       kind: "inductive", name: d.name,
       constructors: d.variants!.map(v => ({
         name: v.name,
-        fields: v.fields.map(f => ({ name: f.name, type: tsTypeToLean(f.tsType) })),
+        fields: v.fields.map(f => ({ name: f.name, type: tyToLean(parseTsType(f.tsType)) })),
       })),
       deriving: ["Repr", "Inhabited"],
     };
   } else {
     return {
       kind: "structure", name: d.name,
-      fields: d.fields!.map(f => ({ name: f.name, type: tsTypeToLean(f.tsType) })),
+      fields: d.fields!.map(f => ({ name: f.name, type: tyToLean(parseTsType(f.tsType)) })),
       deriving: ["Repr", "Inhabited", "DecidableEq"],
     };
   }
