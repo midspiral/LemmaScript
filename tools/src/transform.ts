@@ -544,6 +544,9 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): LeanExpr |
     if (fields.length > 0) body = replaceFieldAccess(body, chain.varName, fields);
     arms.push({ pattern, body });
   }
+  // Idiomatic TS often has an unreachable fallthrough after exhaustive if-chains on
+  // discriminated unions. Skip the catch-all arm when all variants are matched,
+  // since Lean errors on redundant match arms.
   const allCovered = decl?.variants && chain.cases.length >= decl.variants.length;
   if (chain.fallthrough.length > 0 && !allCovered) {
     const body = transformPureBody(chain.fallthrough, typeDecls);
