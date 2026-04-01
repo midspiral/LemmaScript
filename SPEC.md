@@ -380,11 +380,13 @@ def foo (params...) : RetType :=
 end Pure
 ```
 
-This enables proofs by standard Lean induction over sequences of calls. The Velvet method is still generated for per-step verification via `prove_correct` + `loom_solve`. Both coexist without name clashes.
+This enables proofs by standard Lean induction over sequences of calls. The Velvet method is also generated, but as a thin wrapper: `return Pure.foo params`. This avoids termination issues (the pure `def` handles termination natively) while keeping the method callable from other Velvet methods via `←`.
 
 Pure function detection: a function is pure if its body contains no `while` statements and no mutable `let` declarations.
 
 **Spec references:** In `//@ ensures`, `//@ requires`, and `//@ invariant` annotations, calls to pure functions are resolved as `Pure.fnName`. The resolve phase classifies these as `spec-pure` call kind, and the transform emits the qualified name. Calls to external Lean-defined spec helpers (e.g., `sumTo` in a hand-written `.spec.lean`) pass through unqualified.
+
+**Proof note:** Since the method body is `return Pure.foo ...`, proofs need `unfold Pure.foo` before `loom_solve` to expose the logic.
 
 **Import chain:** `foo.def.lean` imports `foo.spec.lean`, which imports `foo.types.lean` (if it exists). If there is no `.spec.lean`, `foo.def.lean` imports `foo.types.lean` directly (or Velvet/Loom if there are no types either).
 

@@ -12,12 +12,4 @@ method nextSeq (state : Int) (pkt : Packet) return (res : Int)
   ensures match pkt with | .data _seq _len => res = state + _len | _ => true
   ensures match pkt with | .fin => res = state | _ => true
   do
-    match pkt with
-    | .syn _seq =>
-      return _seq
-    | .ack _seq =>
-      return state
-    | .data _seq _len =>
-      return state + _len
-    | _ =>
-      return state
+    return Pure.nextSeq state pkt

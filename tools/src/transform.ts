@@ -610,6 +610,8 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
   }
 
   // Def file: Velvet methods
+  // Pure functions get a wrapper that calls Pure.fnName
+  const pureDefNames = new Set(pureDefs.map(d => d.name));
   const methods: LeanMethod[] = mod.functions.map(fn => {
     const ensures: LeanExpr[] = [];
     for (const e of fn.ensures) {
@@ -618,6 +620,10 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
       else ensures.push(transformExpr(e));
     }
 
+    const body = pureDefNames.has(fn.name)
+      ? [{ kind: "return" as const, value: { kind: "app" as const, fn: `Pure.${fn.name}`, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) } }]
+      : transformStmts(fn.body, mod.typeDecls);
+
     return {
       kind: "method" as const,
       name: fn.name,
@@ -625,7 +631,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
       returnType: tyToLean(fn.returnTy),
       requires: fn.requires.map(transformExpr),
       ensures,
-      body: transformStmts(fn.body, mod.typeDecls),
+      body,
     };
   });
 

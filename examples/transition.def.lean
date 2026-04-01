@@ -10,17 +10,7 @@ set_option loom.semantics.choice "demonic"
 method transition (state : State) (event : Event) return (res : State)
   ensures event = .timeout → res = .idle
   do
-    if state = .idle ∧ event = .connect then
-      return .connecting
-    if state = .connecting ∧ event = .ack then
-      return .connected
-    if state = .connected ∧ event = .close then
-      return .closing
-    if state = .closing ∧ event = .ack then
-      return .idle
-    if event = .timeout then
-      return .idle
-    return state
+    return Pure.transition state event
 
 method runSession (events : Array Event) return (res : State)
   do
