@@ -3,6 +3,9 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "bin": {
+    "lsc": "src/lsc.ts"
+  },
   "scripts": {
     "extract": "tsx src/extract.ts",
     "typecheck": "tsc --noEmit"
