@@ -192,6 +192,10 @@ function typeToString(type: Type): string {
   if (type.isNumber()) return "number";
   if (type.isString()) return "string";
   if (type.isBoolean()) return "boolean";
+  if (type.isArray()) {
+    const elem = type.getArrayElementTypeOrThrow();
+    return `${typeToString(elem)}[]`;
+  }
   const symbol = type.getSymbol() ?? type.getAliasSymbol();
   if (symbol) return symbol.getName();
   return type.getText();

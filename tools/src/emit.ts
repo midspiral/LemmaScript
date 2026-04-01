@@ -14,7 +14,7 @@ const LEAN_KEYWORDS = new Set([
   "import", "open", "section", "namespace", "end", "set_option",
   "variable", "axiom", "constant", "private", "protected", "noncomputable",
   "partial", "unsafe", "macro", "syntax", "by", "fun", "have", "show",
-  "at", "from", "deriving", "extends", "true", "false",
+  "at", "from", "to", "deriving", "extends", "true", "false",
 ]);
 
 function escapeName(name: string): string {
@@ -35,7 +35,7 @@ function prec(op: string): number { return PREC[op] ?? 10; }
 
 function emitExpr(e: LeanExpr, parentPrec?: number): string {
   switch (e.kind) {
-    case "var": return e.name;
+    case "var": return escapeName(e.name);
     case "num": return `${e.value}`;
     case "bool": return e.value ? "true" : "false";
     case "str": return `"${e.value}"`;
@@ -107,10 +107,10 @@ function emitStmt(s: LeanStmt, indent: number): string {
   switch (s.kind) {
     case "let":
       return s.mutable
-        ? `${pad}let mut ${s.name} : ${s.type} := ${emitExpr(s.value)}`
-        : `${pad}let ${s.name} := ${emitExpr(s.value)}`;
-    case "assign": return `${pad}${s.target} := ${emitExpr(s.value)}`;
-    case "bind": return `${pad}${s.target} ← ${emitExpr(s.value)}`;
+        ? `${pad}let mut ${escapeName(s.name)} : ${s.type} := ${emitExpr(s.value)}`
+        : `${pad}let ${escapeName(s.name)} := ${emitExpr(s.value)}`;
+    case "assign": return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)}`;
+    case "bind": return `${pad}${escapeName(s.target)} ← ${emitExpr(s.value)}`;
     case "let-bind": return `${pad}let ${s.name} ← ${emitExpr(s.value)}`;
     case "return": return `${pad}return ${emitExpr(s.value)}`;
     case "break": return `${pad}break`;
@@ -185,12 +185,12 @@ function emitDecl(d: LeanDecl): string {
     }
 
     case "def": {
-      const params = d.params.map(p => `(${p.name} : ${p.type})`).join(" ");
+      const params = d.params.map(p => `(${escapeName(p.name)} : ${p.type})`).join(" ");
       return `def ${d.name} ${params} : ${d.returnType} :=\n${emitPureExpr(d.body, 1)}`;
     }
 
     case "method": {
-      const params = d.params.map(p => `(${p.name} : ${p.type})`).join(" ");
+      const params = d.params.map(p => `(${escapeName(p.name)} : ${p.type})`).join(" ");
       const lines = [`method ${d.name} ${params} return (res : ${d.returnType})`];
       for (const r of d.requires) lines.push(`  require ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
