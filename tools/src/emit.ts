@@ -70,10 +70,12 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
       return wrap ? `(${obj}).${escapeName(e.field)}` : `${obj}.${escapeName(e.field)}`;
     }
 
-    case "index":
-      return e.toNat
-        ? `${emitExpr(e.arr)}[${emitExpr(e.idx)}.toNat]!`
-        : `${emitExpr(e.arr)}[${emitExpr(e.idx)}]!`;
+    case "index": {
+      const idx = emitExpr(e.idx);
+      const needsParens = e.toNat && e.idx.kind !== "var" && e.idx.kind !== "num";
+      const idxStr = e.toNat ? (needsParens ? `(${idx}).toNat` : `${idx}.toNat`) : idx;
+      return `${emitExpr(e.arr)}[${idxStr}]!`;
+    }
 
     case "record": {
       const fields = e.fields.map(f => `${escapeName(f.name)} := ${emitExpr(f.value)}`);
