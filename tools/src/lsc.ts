@@ -1,3 +1,4 @@
+#!/usr/bin/env -S npx tsx
 /**
  * lsc — LemmaScript compiler CLI
  *
