@@ -367,13 +367,15 @@ function extractFunction(fn: FunctionDeclaration): RawFunction {
 
 export function extractModule(sourceFile: SourceFile): RawModule {
   const typeDecls: TypeDeclInfo[] = [];
-  for (const ta of sourceFile.getTypeAliases()) {
-    const info = extractTypeDecl(ta);
-    if (info) typeDecls.push(info);
-  }
-  for (const iface of sourceFile.getInterfaces()) {
-    const info = extractInterface(iface);
-    if (info) typeDecls.push(info);
+  // Extract type declarations in source order to respect dependencies
+  for (const stmt of sourceFile.getStatements()) {
+    if (Node.isTypeAliasDeclaration(stmt)) {
+      const info = extractTypeDecl(stmt);
+      if (info) typeDecls.push(info);
+    } else if (Node.isInterfaceDeclaration(stmt)) {
+      const info = extractInterface(stmt);
+      if (info) typeDecls.push(info);
+    }
   }
 
   return {
