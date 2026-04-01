@@ -221,6 +221,10 @@ function typeToString(type: Type): string {
   return type.getText();
 }
 
+const COMPOUND_OPS: Record<string, string> = {
+  "+=": "+", "-=": "-", "*=": "*", "/=": "/", "%=": "%",
+};
+
 // ── Statement extraction ─────────────────────────────────────
 
 function extractStmts(stmts: Node[]): RawStmt[] {
@@ -333,8 +337,24 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     if (Node.isExpressionStatement(s)) {
       const expr = s.getExpression();
+      // x = e
       if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getText() === "=") {
         result.push({ kind: "assign", target: expr.getLeft().getText(), value: extractExpr(expr.getRight()), line });
+      // x += e, x -= e, etc.
+      } else if (Node.isBinaryExpression(expr) && COMPOUND_OPS[expr.getOperatorToken().getText()]) {
+        const op = COMPOUND_OPS[expr.getOperatorToken().getText()];
+        const target = expr.getLeft().getText();
+        result.push({ kind: "assign", target, value: { kind: "binop", op, left: { kind: "var", name: target }, right: extractExpr(expr.getRight()) }, line });
+      // i++, i--
+      } else if (Node.isPostfixUnaryExpression(expr)) {
+        const target = expr.getOperand().getText();
+        const op = expr.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+" : "-";
+        result.push({ kind: "assign", target, value: { kind: "binop", op, left: { kind: "var", name: target }, right: { kind: "num", value: 1 } }, line });
+      // ++i, --i
+      } else if (Node.isPrefixUnaryExpression(expr) && (expr.getOperatorToken() === SyntaxKind.PlusPlusToken || expr.getOperatorToken() === SyntaxKind.MinusMinusToken)) {
+        const target = expr.getOperand().getText();
+        const op = expr.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+" : "-";
+        result.push({ kind: "assign", target, value: { kind: "binop", op, left: { kind: "var", name: target }, right: { kind: "num", value: 1 } }, line });
       } else {
         result.push({ kind: "expr", expr: extractExpr(expr), line });
       }

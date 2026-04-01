@@ -59,7 +59,7 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
 
     case "app": {
       const args = e.args.map(a =>
-        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies") ? `(${emitExpr(a)})` : emitExpr(a)
+        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app") ? `(${emitExpr(a)})` : emitExpr(a)
       );
       return `${e.fn} ${args.join(" ")}`;
     }
