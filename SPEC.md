@@ -464,7 +464,18 @@ The pattern: `unfold` the method to expose the body, then `loom_solve` to discha
 `//@ type v nat` overrides the primitive mapping for `number` variables:
 - `//@ type i nat` — `number` → `Nat` instead of `Int`
 
-This is the only supported override. User-defined types (string literal unions, discriminated unions) are generated in `.types.lean` with the same name as the TS type. The TS name IS the Lean name — no renaming.
+Interface fields can also be overridden with a trailing annotation on the same line:
+
+```typescript
+export interface Model {
+  memberCount: number; //@ type nat
+  expenses: Expense[];
+}
+```
+
+This generates `memberCount : Nat` instead of `memberCount : Int` in the Lean structure. No variable name is needed — the annotation applies to the field on the same line.
+
+User-defined types (string literal unions, discriminated unions) are generated in `.types.lean` with the same name as the TS type. The TS name IS the Lean name — no renaming.
 
 ### 8.2 String Literals as Constructors
 

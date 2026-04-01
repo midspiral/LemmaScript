@@ -168,15 +168,26 @@ function extractTypeDecl(decl: TypeAliasDeclaration): TypeDeclInfo | null {
 }
 
 function extractInterface(decl: InterfaceDeclaration): TypeDeclInfo | null {
-  return extractRecord(decl.getName(), decl.getType(), decl);
+  // Collect field type overrides from trailing //@ type annotations
+  const overrides = new Map<string, string>();
+  for (const member of decl.getMembers()) {
+    if (Node.isPropertySignature(member)) {
+      const text = member.getTrailingCommentRanges().map(r => r.getText()).join(" ");
+      const match = text.match(/\/\/@ type (\w+)/);
+      if (match) overrides.set(member.getName(), match[1]);
+    }
+  }
+  return extractRecord(decl.getName(), decl.getType(), decl, overrides);
 }
 
-function extractRecord(name: string, type: Type, locationNode: Node): TypeDeclInfo | null {
+function extractRecord(name: string, type: Type, locationNode: Node, overrides?: Map<string, string>): TypeDeclInfo | null {
   const props = type.getProperties();
   if (props.length === 0) return null;
   const fields: { name: string; tsType: string }[] = [];
   for (const prop of props) {
-    fields.push({ name: prop.getName(), tsType: typeToString(prop.getTypeAtLocation(locationNode)) });
+    const override = overrides?.get(prop.getName());
+    const tsType = override ?? typeToString(prop.getTypeAtLocation(locationNode));
+    fields.push({ name: prop.getName(), tsType });
   }
   return { name, kind: "record", fields };
 }

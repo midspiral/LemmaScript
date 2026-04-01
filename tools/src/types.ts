@@ -35,6 +35,7 @@ export interface TypeDeclInfo {
 export function tsTypeToLean(tsType: string): string {
   const t = tsType.trim();
   if (t === "number") return "Int";
+  if (t === "nat") return "Nat";
   if (t === "boolean") return "Bool";
   if (t === "string") return "String";
   if (t === "void" || t === "undefined") return "Unit";
