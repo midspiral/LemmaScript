@@ -41,14 +41,23 @@ const METHOD_TABLE: Record<string, Record<string, string>> = {
     indexOf: "JSString.indexOf",
     slice:   "JSString.slice",
   },
+  array: {
+    push: "Array.push",
+  },
 };
+
+/** Lean modules that don't need explicit imports. */
+const BUILTIN_MODULES = new Set(["Array", "String", "List", "Nat", "Int"]);
 
 const usedImports = new Set<string>();
 
 function lookupMethod(recvTy: Ty, method: string): string | undefined {
   const tyKey = recvTy.kind === "array" ? "array" : recvTy.kind;
   const lean = METHOD_TABLE[tyKey]?.[method];
-  if (lean) usedImports.add(lean.split(".")[0]);
+  if (lean) {
+    const mod = lean.split(".")[0];
+    if (!BUILTIN_MODULES.has(mod)) usedImports.add(mod);
+  }
   return lean;
 }
 
