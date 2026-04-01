@@ -654,12 +654,11 @@ return { res := true, done := true, rec := true }
 
 ### 8.6 Type Mapping Implementation
 
-Type mapping logic lives in `types.ts`, used by the resolve and transform phases.
+Type mapping logic lives in `types.ts`, the single source of truth for both the resolve and transform phases.
 
 The module provides:
-- `tsTypeToLean(tsType: string): string` — primitive type mapping, pass-through for user-defined types
-- `isNatType(leanType: string): boolean` — `leanType === "Nat"`
-- `isArrayType(leanType: string): boolean` — `leanType.startsWith("Array ")`
+- `parseTsType(tsType: string): Ty` — TS type string → structured `Ty` (used by resolve for type inference and by transform for type declarations)
+- `tyToLean(ty: Ty): string` — `Ty` → Lean type string (the inverse of `parseTsType`)
 
 ---
 
