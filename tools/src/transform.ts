@@ -8,26 +8,11 @@
 import type { TExpr, TStmt, TFunction, TModule, Ty } from "./typedir.js";
 import type { LeanExpr, LeanStmt, LeanDecl, LeanFile, LeanDef, LeanMethod, LeanMatchArm, LeanStmtMatchArm } from "./ir.js";
 import type { TypeDeclInfo } from "./types.js";
-import { parseTsType } from "./types.js";
+import { parseTsType, tyToLean } from "./types.js";
 
 /** Prefix match-bound field names to avoid capturing user variables. */
 function matchBinder(fieldName: string): string {
   return `_${fieldName}`;
-}
-
-// ── Ty → Lean type string ────────────────────────────────────
-
-function tyToLean(ty: Ty): string {
-  switch (ty.kind) {
-    case "nat": return "Nat";
-    case "int": return "Int";
-    case "bool": return "Bool";
-    case "string": return "String";
-    case "void": return "Unit";
-    case "array": return `Array ${tyToLean(ty.elem)}`;
-    case "user": return ty.name;
-    case "unknown": return "Int"; // fallback
-  }
 }
 
 function isNat(ty: Ty): boolean { return ty.kind === "nat"; }

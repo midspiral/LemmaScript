@@ -34,6 +34,19 @@ export interface TypeDeclInfo {
 
 import type { Ty } from "./typedir.js";
 
+export function tyToLean(ty: Ty): string {
+  switch (ty.kind) {
+    case "nat": return "Nat";
+    case "int": return "Int";
+    case "bool": return "Bool";
+    case "string": return "String";
+    case "void": return "Unit";
+    case "array": return `Array ${tyToLean(ty.elem)}`;
+    case "user": return ty.name;
+    case "unknown": return "Int"; // fallback
+  }
+}
+
 export function parseTsType(tsType: string): Ty {
   const t = tsType.trim();
   if (t === "number") return { kind: "int" };
