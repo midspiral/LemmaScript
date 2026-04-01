@@ -43,7 +43,7 @@ export function tyToLean(ty: Ty): string {
     case "void": return "Unit";
     case "array": return `Array ${tyToLean(ty.elem)}`;
     case "user": return ty.name;
-    case "unknown": return "Int"; // fallback
+    case "unknown": throw new Error("Unknown type");
   }
 }
 
