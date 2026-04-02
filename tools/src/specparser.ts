@@ -236,7 +236,7 @@ class Parser {
         }
         this.expect("punc", "}");
       }
-      return { kind: "record", fields };
+      return { kind: "record", spread: null, fields };
     }
     throw new Error(`Unexpected: ${JSON.stringify(t)}`);
   }

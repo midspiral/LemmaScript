@@ -20,7 +20,7 @@ export type RawExpr =
   | { kind: "call"; fn: RawExpr; args: RawExpr[] }
   | { kind: "index"; obj: RawExpr; idx: RawExpr }
   | { kind: "field"; obj: RawExpr; field: string }
-  | { kind: "record"; fields: { name: string; value: RawExpr }[] }
+  | { kind: "record"; spread: RawExpr | null; fields: { name: string; value: RawExpr }[] }
   | { kind: "arrayLiteral"; elems: RawExpr[] }
   | { kind: "lambda"; params: { name: string; tsType?: string }[]; body: RawExpr | RawStmt[] }
   // Spec-only (from //@ annotations, produced by specparser):

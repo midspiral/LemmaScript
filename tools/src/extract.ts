@@ -108,16 +108,19 @@ function extractExpr(node: Expression): RawExpr {
     return { kind: "arrayLiteral", elems: elems.map(e => extractExpr(e as Expression)) };
   }
 
-  // Object literal: { res: true, done: false }
+  // Object literal: { res: true, done: false } or { ...obj, res: true }
   if (Node.isObjectLiteralExpression(node)) {
+    let spread: RawExpr | null = null;
     const fields: { name: string; value: RawExpr }[] = [];
     for (const prop of node.getProperties()) {
-      if (Node.isPropertyAssignment(prop)) {
+      if (Node.isSpreadAssignment(prop)) {
+        spread = extractExpr(prop.getExpression());
+      } else if (Node.isPropertyAssignment(prop)) {
         const init = prop.getInitializer();
         if (init) fields.push({ name: prop.getName(), value: extractExpr(init) });
       }
     }
-    return { kind: "record", fields };
+    return { kind: "record", spread, fields };
   }
 
   throw new Error(`Unsupported expression: ${node.getText()}`);

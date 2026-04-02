@@ -173,7 +173,7 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
     }
 
     case "record":
-      return { kind: "record", fields: e.fields.map(f => ({ name: f.name, value: transformExpr(f.value) })) };
+      return { kind: "record", spread: e.spread ? transformExpr(e.spread) : null, fields: e.fields.map(f => ({ name: f.name, value: transformExpr(f.value) })) };
 
     case "arrayLiteral":
       return { kind: "arrayLiteral", elems: e.elems.map(el => lowerExpr(el, binds)) };
@@ -242,7 +242,7 @@ function replaceFieldAccess(e: LeanExpr, varName: string, fields: { name: string
     case "forall": return { ...e, body: r(e.body) };
     case "exists": return { ...e, body: r(e.body) };
     case "app": return { ...e, args: e.args.map(r) };
-    case "record": return { ...e, fields: e.fields.map(f => ({ ...f, value: r(f.value) })) };
+    case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(f => ({ ...f, value: r(f.value) })) };
     case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
     case "let":
       // If this let shadows the matched variable, stop replacing in the body

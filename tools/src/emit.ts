@@ -102,6 +102,7 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
 
     case "record": {
       const fields = e.fields.map(f => `${escapeName(f.name)} := ${emitExpr(f.value)}`);
+      if (e.spread) return `{ ${emitExpr(e.spread)} with ${fields.join(", ")} }`;
       return `{ ${fields.join(", ")} }`;
     }
 

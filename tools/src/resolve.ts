@@ -144,8 +144,11 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       return { kind: "field", obj, field: e.field, ty, isDiscriminant };
     }
 
-    case "record":
-      return { kind: "record", fields: e.fields.map(f => ({ name: f.name, value: resolveExpr(f.value, ctx) })), ty: { kind: "unknown" } };
+    case "record": {
+      const spread = e.spread ? resolveExpr(e.spread, ctx) : null;
+      const ty = spread ? spread.ty : { kind: "unknown" as const };
+      return { kind: "record", spread, fields: e.fields.map(f => ({ name: f.name, value: resolveExpr(f.value, ctx) })), ty };
+    }
 
     case "result":
       if (!ctx.allowResult) throw new Error("\\result is only valid in ensures");
