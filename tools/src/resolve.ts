@@ -160,6 +160,9 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       const varTy: Ty = e.varType === "nat" ? { kind: "nat" } : { kind: "int" };
       return { kind: "exists", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
     }
+
+    case "emptyArray":
+      return { kind: "emptyArray", ty: { kind: "array", elem: { kind: "unknown" } } };
   }
 }
 

@@ -40,6 +40,7 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
     case "bool": return e.value ? "true" : "false";
     case "str": return `"${e.value}"`;
     case "constructor": return `.${e.name}`;
+    case "emptyArray": return `#[]`;
 
     case "unop":
       if (e.op === "¬") return `¬(${emitExpr(e.expr)})`;

@@ -21,6 +21,7 @@ export type RawExpr =
   | { kind: "index"; obj: RawExpr; idx: RawExpr }
   | { kind: "field"; obj: RawExpr; field: string }
   | { kind: "record"; fields: { name: string; value: RawExpr }[] }
+  | { kind: "emptyArray" }
   // Spec-only (from //@ annotations, produced by specparser):
   | { kind: "result" }                                    // \result
   | { kind: "forall"; var: string; varType: "nat" | "int"; body: RawExpr }

@@ -152,6 +152,9 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
     case "record":
       return { kind: "record", fields: e.fields.map(f => ({ name: f.name, value: transformExpr(f.value) })) };
 
+    case "emptyArray":
+      return { kind: "emptyArray" };
+
     case "forall":
       return { kind: "forall", var: e.var, type: tyToLean(e.varTy), body: transformExpr(e.body) };
 

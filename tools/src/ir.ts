@@ -19,6 +19,7 @@ export type LeanExpr =
   | { kind: "field"; obj: LeanExpr; field: string }           // x.res, arr.size
   | { kind: "index"; arr: LeanExpr; idx: LeanExpr; toNat: boolean } // arr[i]! or arr[i.toNat]!
   | { kind: "record"; fields: { name: string; value: LeanExpr }[] }
+  | { kind: "emptyArray" }
   | { kind: "if"; cond: LeanExpr; then: LeanExpr; else: LeanExpr }
   | { kind: "match"; scrutinee: string; arms: LeanMatchArm[] }
   | { kind: "forall"; var: string; type: string; body: LeanExpr }

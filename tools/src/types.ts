@@ -41,7 +41,10 @@ export function tyToLean(ty: Ty): string {
     case "bool": return "Bool";
     case "string": return "String";
     case "void": return "Unit";
-    case "array": return `Array ${tyToLean(ty.elem)}`;
+    case "array": {
+      const elem = tyToLean(ty.elem);
+      return elem.includes(" ") ? `Array (${elem})` : `Array ${elem}`;
+    }
     case "user": return ty.name;
     case "unknown": throw new Error("Unknown type");
   }

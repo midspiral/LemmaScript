@@ -81,9 +81,12 @@ function extractExpr(node: Expression): RawExpr {
     return extractExpr(node.getExpression());
   }
 
-  // Array literal with spread: [...arr, elem] → push(arr, elem)
+  // Array literal: [] → empty, [...arr, elem] → push(arr, elem)
   if (Node.isArrayLiteralExpression(node)) {
     const elems = node.getElements();
+    if (elems.length === 0) {
+      return { kind: "emptyArray" };
+    }
     if (elems.length === 2 && Node.isSpreadElement(elems[0])) {
       return { kind: "call", fn: { kind: "field", obj: extractExpr(elems[0].getExpression()), field: "push" }, args: [extractExpr(elems[1])] };
     }
