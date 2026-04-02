@@ -113,6 +113,17 @@ function anyNegative(arr: number[]): boolean {
   return arr.some((x) => x < 0);
 }
 
+// pure function call in HOF lambda — no monadic lifting (§4.7)
+function negate(x: number): number {
+  //@ ensures \result === 0 - x
+  return 0 - x;
+}
+
+function negateAll(arr: number[]): number[] {
+  //@ ensures \result.length === arr.length
+  return arr.map((x) => negate(x));
+}
+
 // includes → contains
 function hasValue(arr: number[], v: number): boolean {
   return arr.includes(v);

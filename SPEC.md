@@ -263,6 +263,8 @@ Lambda parameter types are inferred by Lean (omitted from emission). Explicit TS
 
 The monadic HOF call is itself monadic — it gets `←` at the call site via the existing monadic lifting mechanism. Purity classification accounts for this: functions that transitively call non-pure functions (including through lambda callbacks) are classified as non-pure via call-graph analysis (see §13).
 
+**Pure calls in lambdas:** Inside lambda bodies, calls to pure same-file functions are classified as `spec-pure` (emitted as `Pure.fnName`, no `←`). This keeps the lambda pure so it can be passed to non-monadic HOFs like `arr.map`. In regular method bodies, the same calls go through the Velvet method interface (`← fnName`) to use the method's spec in proofs.
+
 **Proof note:** Velvet's WPGen does not currently have rules for `mapM`/`filterM`/etc. Proofs involving monadic HOFs require manual tactics.
 
 ### 4.8 Method Dispatch

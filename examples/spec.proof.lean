@@ -44,6 +44,13 @@ prove_correct allBelow by
 prove_correct anyNegative by
   unfold Pure.anyNegative; loom_solve
 
+-- Pure function call in HOF lambda
+prove_correct negate by
+  unfold Pure.negate; loom_solve
+
+prove_correct negateAll by
+  unfold Pure.negateAll; loom_solve
+
 prove_correct hasValue by
   unfold Pure.hasValue; loom_solve
 

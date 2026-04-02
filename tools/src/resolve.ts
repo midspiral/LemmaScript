@@ -38,6 +38,7 @@ interface Ctx {
   returnTy: Ty;
   pureFns: Set<string>;  // names of pure functions in this module
   inSpec: boolean;
+  inLambda: boolean;
 }
 
 function withEnv(ctx: Ctx, env: Env | null): Ctx {
@@ -72,8 +73,8 @@ function getDiscriminant(ctx: Ctx, typeName: string): string | undefined {
 
 function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Math") return "pure";
+  if (fn.kind === "var" && (ctx.inSpec || ctx.inLambda) && ctx.pureFns.has(fn.name)) return "spec-pure";
   if (fn.kind === "var" && ctx.inSpec) {
-    if (ctx.pureFns.has(fn.name)) return "spec-pure";
     // Not a known pure function — could be external (Lean-defined spec helper).
     // Pass through as "pure" and let Lean catch any errors.
     return "pure";
@@ -179,7 +180,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // Extend env with lambda params
       let lambdaEnv = ctx.env;
       for (const p of params) lambdaEnv = extend(lambdaEnv, p.name, p.ty);
-      const lambdaCtx = withEnv(ctx, lambdaEnv);
+      const lambdaCtx = { ...withEnv(ctx, lambdaEnv), inLambda: true };
       // Body: expression (wrap in return stmt) or statement block
       const body = Array.isArray(e.body)
         ? resolveBlock(e.body, lambdaCtx)
@@ -429,7 +430,7 @@ function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Se
   let env: Env | null = null;
   for (const p of params) env = extend(env, p.name, p.ty);
 
-  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, inSpec: false };
+  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, inSpec: false, inLambda: false };
   const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
   const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
 

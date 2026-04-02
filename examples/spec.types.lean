@@ -69,6 +69,12 @@ def allBelow (arr : Array Int) (cap : Int) : Bool :=
 def anyNegative (arr : Array Int) : Bool :=
   arr.any (fun x => x < 0)
 
+def negate (x : Int) : Int :=
+  0 - x
+
+def negateAll (arr : Array Int) : Array Int :=
+  arr.map (fun x => Pure.negate x)
+
 def hasValue (arr : Array Int) (v : Int) : Bool :=
   arr.contains v
 

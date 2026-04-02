@@ -80,6 +80,16 @@ method anyNegative (arr : Array Int) return (res : Bool)
   do
     return Pure.anyNegative arr
 
+method negate (x : Int) return (res : Int)
+  ensures res = 0 - x
+  do
+    return Pure.negate x
+
+method negateAll (arr : Array Int) return (res : Array Int)
+  ensures res.size = arr.size
+  do
+    return Pure.negateAll arr
+
 method hasValue (arr : Array Int) (v : Int) return (res : Bool)
   do
     return Pure.hasValue arr v
