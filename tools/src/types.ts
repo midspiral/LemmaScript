@@ -46,7 +46,7 @@ export function tyToLean(ty: Ty): string {
       return elem.includes(" ") ? `Array (${elem})` : `Array ${elem}`;
     }
     case "user": return ty.name;
-    case "unknown": throw new Error("Unknown type");
+    case "unknown": return "_";
   }
 }
 

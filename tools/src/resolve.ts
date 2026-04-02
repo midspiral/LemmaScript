@@ -163,6 +163,23 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "emptyArray":
       return { kind: "emptyArray", ty: { kind: "array", elem: { kind: "unknown" } } };
+
+    case "lambda": {
+      // Resolve lambda params — types from explicit annotation or unknown
+      const params = e.params.map(p => ({
+        name: p.name,
+        ty: p.tsType ? parseTsType(p.tsType) : { kind: "unknown" as const },
+      }));
+      // Extend env with lambda params
+      let lambdaEnv = ctx.env;
+      for (const p of params) lambdaEnv = extend(lambdaEnv, p.name, p.ty);
+      const lambdaCtx = withEnv(ctx, lambdaEnv);
+      // Body: expression (wrap in return stmt) or statement block
+      const body = Array.isArray(e.body)
+        ? resolveBlock(e.body, lambdaCtx)
+        : [{ kind: "return" as const, value: resolveExpr(e.body, lambdaCtx) }];
+      return { kind: "lambda", params, body, ty: { kind: "unknown" } };
+    }
   }
 }
 

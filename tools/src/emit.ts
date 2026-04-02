@@ -42,6 +42,26 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
     case "constructor": return `.${e.name}`;
     case "emptyArray": return `#[]`;
 
+    case "dotCall": {
+      const obj = emitExpr(e.obj);
+      const wrap = e.obj.kind === "binop" || e.obj.kind === "app" || e.obj.kind === "dotCall";
+      const receiver = wrap ? `(${obj})` : obj;
+      const args = e.args.map(a =>
+        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app") ? `(${emitExpr(a)})` : emitExpr(a)
+      );
+      return args.length > 0 ? `${receiver}.${e.method} ${args.join(" ")}` : `${receiver}.${e.method}`;
+    }
+
+    case "lambda": {
+      const params = e.params.map(p => p.name).join(" ");
+      // Single return statement → expression lambda
+      if (e.body.length === 1 && e.body[0].kind === "return") {
+        return `(fun ${params} => ${emitExpr(e.body[0].value)})`;
+      }
+      // Multi-statement → do block
+      return `(fun ${params} => do\n${emitStmts(e.body, 2)})`;
+    }
+
     case "unop":
       if (e.op === "¬") return `¬(${emitExpr(e.expr)})`;
       if (e.op === "-" && e.expr.kind === "num") return `-${e.expr.value}`;

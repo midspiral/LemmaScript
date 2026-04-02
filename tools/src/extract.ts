@@ -81,6 +81,22 @@ function extractExpr(node: Expression): RawExpr {
     return extractExpr(node.getExpression());
   }
 
+  // Arrow function: (x) => expr or (x) => { stmts }
+  if (Node.isArrowFunction(node)) {
+    const params = node.getParameters().map(p => {
+      const typeNode = p.getTypeNode();
+      return { name: p.getName(), tsType: typeNode ? typeNode.getText() : undefined };
+    });
+    const body = node.getBody();
+    if (Node.isExpression(body)) {
+      return { kind: "lambda", params, body: extractExpr(body) };
+    }
+    if (Node.isBlock(body)) {
+      return { kind: "lambda", params, body: extractStmts(body.getStatements()) };
+    }
+    throw new Error(`Unsupported arrow function body: ${node.getText().slice(0, 80)}`);
+  }
+
   // Array literal: [] → empty, [...arr, elem] → push(arr, elem)
   if (Node.isArrayLiteralExpression(node)) {
     const elems = node.getElements();

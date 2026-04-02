@@ -31,6 +31,22 @@ const METHOD_TABLE: Record<string, Record<string, string>> = {
   },
 };
 
+/** Dot-notation methods: emitted as obj.leanName args. Lean resolves argument order. */
+const DOT_METHODS: Record<string, Record<string, string>> = {
+  array: {
+    map: "map",
+    filter: "filter",
+    every: "all",
+    some: "any",
+    includes: "contains",
+    find: "find?",
+  },
+};
+
+function lookupDotMethod(recvTy: Ty, method: string): string | undefined {
+  return DOT_METHODS[recvTy.kind]?.[method];
+}
+
 /** Lean modules that don't need explicit imports. */
 const BUILTIN_MODULES = new Set(["Array", "String", "List", "Nat", "Int"]);
 
@@ -136,11 +152,18 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
       // Math.floor(x) → x
       if (e.fn.kind === "field" && e.fn.field === "floor" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1)
         return lowerExpr(e.args[0], binds);
-      // Built-in method call: receiver.method(args) → leanFn receiver args
+      // Built-in method call: receiver.method(args)
       if (e.fn.kind === "field") {
+        // Remapped methods: leanFn receiver args
         const lean = lookupMethod(e.fn.obj.ty, e.fn.field);
         if (lean)
           return { kind: "app", fn: lean, args: [lowerExpr(e.fn.obj, binds), ...e.args.map(a => lowerExpr(a, binds))] };
+        // Dot-notation methods: receiver.leanName args
+        const dotMethod = lookupDotMethod(e.fn.obj.ty, e.fn.field);
+        if (dotMethod) {
+          const recv = lowerExpr(e.fn.obj, binds);
+          return { kind: "dotCall", obj: recv, method: dotMethod, args: e.args.map(a => lowerExpr(a, binds)) };
+        }
         throw new Error(`Unsupported method call: .${e.fn.field}() on ${e.fn.obj.ty.kind}`);
       }
       if (e.fn.kind !== "var")
@@ -154,6 +177,9 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
 
     case "emptyArray":
       return { kind: "emptyArray" };
+
+    case "lambda":
+      return { kind: "lambda", params: e.params.map(p => ({ name: p.name, type: tyToLean(p.ty) })), body: transformStmts(e.body, []) };
 
     case "forall":
       return { kind: "forall", var: e.var, type: tyToLean(e.varTy), body: transformExpr(e.body) };
