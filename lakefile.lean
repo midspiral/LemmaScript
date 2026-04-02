@@ -100,9 +100,8 @@ target downloadDependencies pkg : Array FilePath := do
   let cvc5 ← downloadDependency pkg (solverDir / "cvc5") (downloadSolver Solver.cvc5)
   return Job.collectArray #[z3, cvc5]
 
-lean_lib JSString where
-  srcDir := "examples"
-  roots := #[`JSString]
+lean_lib LemmaScript where
+  extraDepTargets := #[``downloadDependencies]
 
 @[default_target]
 lean_lib Examples where
