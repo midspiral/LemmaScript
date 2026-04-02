@@ -68,7 +68,7 @@ Verus demonstrates that verification annotations can coexist with production cod
 **No erasure, no gap.** The TypeScript source *is* the production code. The `//@ ` annotations are comments — invisible to tsc, bundlers, and the runtime. The `.spec.lean` and `.proof.lean` files never touch the production build.
 
 **Three-file separation.** For each verified function:
-- `.def.lean` — generated from TS, always regeneratable, gitignored
+- `.def.lean` — generated from TS, always regeneratable
 - `.spec.lean` — ghost definitions and lemmas, user-written, version-controlled
 - `.proof.lean` — proof tactics, user/LLM-written, version-controlled
 
