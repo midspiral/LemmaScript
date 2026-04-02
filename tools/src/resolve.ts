@@ -161,8 +161,11 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       return { kind: "exists", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
     }
 
-    case "emptyArray":
-      return { kind: "emptyArray", ty: { kind: "array", elem: { kind: "unknown" } } };
+    case "arrayLiteral": {
+      const elems = e.elems.map(el => resolveExpr(el, ctx));
+      const elemTy: Ty = elems.length > 0 ? elems[0].ty : { kind: "unknown" };
+      return { kind: "arrayLiteral", elems, ty: { kind: "array", elem: elemTy } };
+    }
 
     case "lambda": {
       // Resolve lambda params — types from explicit annotation or unknown

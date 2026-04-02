@@ -21,7 +21,7 @@ export type RawExpr =
   | { kind: "index"; obj: RawExpr; idx: RawExpr }
   | { kind: "field"; obj: RawExpr; field: string }
   | { kind: "record"; fields: { name: string; value: RawExpr }[] }
-  | { kind: "emptyArray" }
+  | { kind: "arrayLiteral"; elems: RawExpr[] }
   | { kind: "lambda"; params: { name: string; tsType?: string }[]; body: RawExpr | RawStmt[] }
   // Spec-only (from //@ annotations, produced by specparser):
   | { kind: "result" }                                    // \result

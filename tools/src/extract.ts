@@ -97,16 +97,15 @@ function extractExpr(node: Expression): RawExpr {
     throw new Error(`Unsupported arrow function body: ${node.getText().slice(0, 80)}`);
   }
 
-  // Array literal: [] → empty, [...arr, elem] → push(arr, elem)
+  // Array literal: [a, b, c] → arrayLiteral, [...arr, elem] → push(arr, elem)
   if (Node.isArrayLiteralExpression(node)) {
     const elems = node.getElements();
-    if (elems.length === 0) {
-      return { kind: "emptyArray" };
-    }
+    // [...arr, elem] → push(arr, elem)
     if (elems.length === 2 && Node.isSpreadElement(elems[0])) {
       return { kind: "call", fn: { kind: "field", obj: extractExpr(elems[0].getExpression()), field: "push" }, args: [extractExpr(elems[1])] };
     }
-    throw new Error(`Unsupported array literal: ${node.getText()}`);
+    // [a, b, c] or [] → arrayLiteral
+    return { kind: "arrayLiteral", elems: elems.map(e => extractExpr(e as Expression)) };
   }
 
   // Object literal: { res: true, done: false }

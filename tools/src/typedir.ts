@@ -33,7 +33,7 @@ export type TExpr =
   | { kind: "field"; obj: TExpr; field: string; ty: Ty;
       isDiscriminant?: boolean }            // true if this is a discriminant field access
   | { kind: "record"; fields: { name: string; value: TExpr }[]; ty: Ty }
-  | { kind: "emptyArray"; ty: Ty }  // ty is the array type (e.g., { kind: "array", elem: ... })
+  | { kind: "arrayLiteral"; elems: TExpr[]; ty: Ty }
   | { kind: "lambda"; params: { name: string; ty: Ty }[]; body: TStmt[]; ty: Ty }
   // Spec-only (from //@ annotations):
   | { kind: "result"; ty: Ty }

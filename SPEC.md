@@ -261,6 +261,7 @@ Two strategies for translating `receiver.method(args)`:
 |-----------|-------------|----------|
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | Remapped |
 | `s.slice(start, end)` | `JSString.slice s start end` | Remapped |
+| `[a, b, c]` | `#[a, b, c]` | Array literal |
 | `[...arr, e]` | `Array.push arr e` | Remapped |
 | `arr.map(f)` | `arr.map f` | Dot-notation |
 | `arr.filter(f)` | `arr.filter f` | Dot-notation |

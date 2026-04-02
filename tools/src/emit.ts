@@ -40,7 +40,9 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
     case "bool": return e.value ? "true" : "false";
     case "str": return `"${e.value}"`;
     case "constructor": return `.${e.name}`;
-    case "emptyArray": return `#[]`;
+    case "arrayLiteral":
+      if (e.elems.length === 0) return `#[]`;
+      return `#[${e.elems.map(el => emitExpr(el)).join(", ")}]`;
 
     case "dotCall": {
       const obj = emitExpr(e.obj);
