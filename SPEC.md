@@ -167,6 +167,10 @@ No normalization of operators. Lean and `loom_solve` handle all comparison direc
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | Returns `Int` (-1 if not found). |
 | `s.slice(start, end)` | `JSString.slice s start end` | Nat-indexed substring. |
 | `s.length` | `s.length` | String length, `Nat`. |
+| `arr.map((x) => e)` | `arr.map (fun x => e)` | Dot-notation dispatch. See §4.7. |
+| `arr.filter((x) => e)` | `arr.filter (fun x => e)` | Dot-notation dispatch. |
+| `arr.every((x) => e)` | `arr.all (fun x => e)` | TS `every` → Lean `all`. |
+| `arr.some((x) => e)` | `arr.any (fun x => e)` | TS `some` → Lean `any`. |
 | `\result` | `res` | Only valid in `ensures`. |
 | `"foo"` (string literal, enum context) | `.foo` | Constructor. Lean infers type from context. |
 | `"foo"` (plain string context) | `"foo"` | String literal. Context-directed: user type → constructor, otherwise string. |
@@ -227,6 +231,44 @@ return _t0 + arr[n - 1]!
 - Fresh names use the pattern `_t0`, `_t1`, etc.
 
 Note: as in Lean's `←`, lifting from `&&`/`||` loses short-circuit semantics (both sides execute). This matches Lean's behavior.
+
+### 4.7 Higher-Order Functions and Lambdas
+
+Arrow functions extract as lambdas and emit as Lean's `fun` syntax:
+
+```typescript
+arr.map((x) => x * 2)    // → arr.map (fun x => x * 2)
+arr.filter((x) => x > 0) // → arr.filter (fun x => x > 0)
+arr.every((x) => x > 0)  // → arr.all (fun x => x > 0)
+arr.some((x) => x < 0)   // → arr.any (fun x => x < 0)
+```
+
+Lambda bodies can be expressions (`(x) => x + 1`) or statement blocks (`(x) => { ... }`). Expression bodies emit as `(fun x => expr)`. Block bodies emit as `(fun x => do stmts)`.
+
+Lambda parameter types are inferred by Lean (emitted as `_`). Explicit TS type annotations are preserved if present.
+
+When the callback calls a Velvet method, the HOF call becomes monadic (e.g., `arr.mapM f`). Pure callbacks use the non-monadic variant (`arr.map f`).
+
+### 4.8 Method Dispatch
+
+Two strategies for translating `receiver.method(args)`:
+
+1. **Remapped methods** (`METHOD_TABLE`): TS name → fully qualified Lean name, emitted as `leanFn receiver args`. Used when the Lean function lives in a separate module or has a different name. Example: `s.indexOf(sub)` → `JSString.indexOf s sub`.
+
+2. **Dot-notation methods** (`DOT_METHODS`): TS name → Lean method name, emitted as `receiver.leanName args`. Lean resolves argument order via dot notation. Used for methods that exist directly on the Lean type.
+
+| TS method | Lean method | Dispatch |
+|-----------|-------------|----------|
+| `s.indexOf(sub)` | `JSString.indexOf s sub` | Remapped |
+| `s.slice(start, end)` | `JSString.slice s start end` | Remapped |
+| `[...arr, e]` | `Array.push arr e` | Remapped |
+| `arr.map(f)` | `arr.map f` | Dot-notation |
+| `arr.filter(f)` | `arr.filter f` | Dot-notation |
+| `arr.every(f)` | `arr.all f` | Dot-notation |
+| `arr.some(f)` | `arr.any f` | Dot-notation |
+| `arr.includes(x)` | `arr.contains x` | Dot-notation |
+
+The transform checks `METHOD_TABLE` first, then `DOT_METHODS`. If neither matches, it errors.
 
 ---
 
