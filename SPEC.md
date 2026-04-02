@@ -175,6 +175,7 @@ No normalization of operators. Lean and `loom_solve` handle all comparison direc
 | `arr.some((x) => e)` | `arr.any (fun x => e)` | TS `some` → Lean `any`. |
 | `[a, b, c]` | `#[a, b, c]` | Array literal (any length, including `[]` → `#[]`). |
 | `{ ...obj, f: v }` | `{ obj with f := v }` | Functional record update. |
+| `arr.with(i, v)` | `arr.set! i v` | Functional array update (ES2023). |
 | `\result` | `res` | Only valid in `ensures`. |
 | `"foo"` (string literal, enum context) | `.foo` | Constructor. Lean infers type from context. |
 | `"foo"` (plain string context) | `"foo"` | String literal. Context-directed: user type → constructor, otherwise string. |
@@ -267,6 +268,7 @@ Two strategies for translating `receiver.method(args)`:
 | `s.slice(start, end)` | `JSString.slice s start end` | Remapped |
 | `[a, b, c]` | `#[a, b, c]` | Array literal |
 | `[...arr, e]` | `Array.push arr e` | Remapped |
+| `arr.with(i, v)` | `arr.set! i v` | Dot-notation |
 | `arr.map(f)` | `arr.map f` | Dot-notation |
 | `arr.filter(f)` | `arr.filter f` | Dot-notation |
 | `arr.every(f)` | `arr.all f` | Dot-notation |

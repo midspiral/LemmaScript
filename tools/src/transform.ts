@@ -40,6 +40,7 @@ const DOT_METHODS: Record<string, Record<string, string>> = {
     some: "any",
     includes: "contains",
     find: "find?",
+    with: "set!",
   },
 };
 
