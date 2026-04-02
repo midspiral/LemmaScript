@@ -85,6 +85,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `ensures` | Before first statement of function body | Postcondition (`\result` refers to return value) |
 | `invariant` | Before first statement of loop body | Loop invariant |
 | `decreases` | Before first statement of loop body | Termination metric |
+| `done_with` | Before first statement of loop body | Post-loop condition (see §5.2) |
 | `type` | Before first statement of function body | Type override for a variable (see §3.3) |
 
 ### 3.2 Spec Expression Grammar
@@ -106,6 +107,7 @@ atom     := NUMBER | IDENT | 'true' | 'false' | '\result'
           | 'forall' '(' IDENT (':' TYPE)? ',' expr ')'
           | 'exists' '(' IDENT (':' TYPE)? ',' expr ')'
           | '(' expr ')'
+          | '{' (IDENT ':' expr ',')* IDENT ':' expr '}'
 TYPE     := 'nat' | 'int'
 ```
 
@@ -139,8 +141,8 @@ The translation is purely syntactic. `lsc` does not infer types beyond what `//@
 
 | Spec | Lean |
 |------|------|
-| `===` | `=` |
-| `!==` | `≠` |
+| `===` / `==` | `=` |
+| `!==` / `!=` | `≠` |
 | `>=` | `≥` |
 | `<=` | `≤` |
 | `>` | `>` |
@@ -245,9 +247,9 @@ arr.some((x) => x < 0)   // → arr.any (fun x => x < 0)
 
 Lambda bodies can be expressions (`(x) => x + 1`) or statement blocks (`(x) => { ... }`). Expression bodies emit as `(fun x => expr)`. Block bodies emit as `(fun x => do stmts)`.
 
-Lambda parameter types are inferred by Lean (emitted as `_`). Explicit TS type annotations are preserved if present.
+Lambda parameter types are inferred by Lean (omitted from emission). Explicit TS type annotations are preserved if present.
 
-When the callback calls a Velvet method, the HOF call becomes monadic (e.g., `arr.mapM f`). Pure callbacks use the non-monadic variant (`arr.map f`).
+**TODO:** When the callback calls a Velvet method, the HOF call should become monadic (e.g., `arr.mapM f`). Pure callbacks use the non-monadic variant (`arr.map f`). Currently all HOF calls emit the non-monadic variant.
 
 ### 4.8 Method Dispatch
 
@@ -268,6 +270,7 @@ Two strategies for translating `receiver.method(args)`:
 | `arr.every(f)` | `arr.all f` | Dot-notation |
 | `arr.some(f)` | `arr.any f` | Dot-notation |
 | `arr.includes(x)` | `arr.contains x` | Dot-notation |
+| `arr.find(f)` | `arr.find? f` | Dot-notation |
 
 The transform checks `METHOD_TABLE` first, then `DOT_METHODS`. If neither matches, it errors.
 
@@ -798,7 +801,7 @@ Empirical constraints discovered during prototyping. They inform the design but 
 
 - **Compound pattern matching** — conditions like `state === "idle" && event.kind === "syn"` where both variables are data-carrying unions would need nested match or match on a tuple. Currently, compound conditions work only when both types have `DecidableEq` (enum-like).
 - **Cross-file type imports** — types defined in a separate TS file and imported
-- For-of loops, object types, higher-order functions, async/await
+- async/await
 - Multiple functions per file with inter-function calls
 - Array mutation (`arr[i] = v`)
 - Error reporting (mapping Lean errors to TS source locations)
