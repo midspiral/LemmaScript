@@ -8,7 +8,7 @@ prove_correct evalPartial by
   unfold Pure.evalPartial; loom_solve
 
 prove_correct evalSwitch by
-  loom_solve
+  unfold Pure.evalSwitch; loom_solve
 
 prove_correct isHighPriority by
   unfold Pure.isHighPriority; loom_solve

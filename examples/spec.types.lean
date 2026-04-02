@@ -33,6 +33,15 @@ def evalPartial (e : Expr) : Int :=
   | _ =>
     0
 
+def evalSwitch (e : Expr) : Int :=
+  match e with
+  | .lit _val =>
+    _val
+  | .add _a _b =>
+    _a + _b
+  | .neg _inner =>
+    0 - _inner
+
 def isHighPriority (p : Priority) : Bool :=
   if p = .high then
     true

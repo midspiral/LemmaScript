@@ -18,13 +18,7 @@ method evalSwitch (e : Expr) return (res : Int)
   ensures match e with | .add _a _b => res = _a + _b | _ => true
   ensures match e with | .neg _inner => res = 0 - _inner | _ => true
   do
-    match e with
-    | .lit _val =>
-      return _val
-    | .add _a _b =>
-      return _a + _b
-    | .neg _inner =>
-      return 0 - _inner
+    return Pure.evalSwitch e
 
 method isHighPriority (p : Priority) return (res : Bool)
   ensures p = .high → res = true

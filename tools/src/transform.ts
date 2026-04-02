@@ -529,10 +529,33 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanExpr 
         if (!elseExpr) return null;
         return { kind: "if", cond: transformExpr(s.cond), then: thenExpr, else: elseExpr };
       }
+      case "switch": return transformPureSwitch(s, typeDecls);
       default: return null;
     }
   }
   return null;
+}
+
+function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): LeanExpr | null {
+  const decl = typeDecls.find(d => d.name === (s.expr.ty.kind === "user" ? s.expr.ty.name : ""));
+  if (!decl) return null;
+  const arms: LeanMatchArm[] = [];
+  for (const c of s.cases) {
+    const variant = decl.variants?.find(v => v.name === c.label);
+    const fields = variant?.fields ?? [];
+    const pattern = fields.length > 0 ? `.${c.label} ${fields.map(f => matchBinder(f.name)).join(" ")}` : `.${c.label}`;
+    let body = transformPureBody(c.body, typeDecls);
+    if (!body) return null;
+    if (fields.length > 0 && s.expr.kind === "var") body = replaceFieldAccess(body, s.expr.name, fields);
+    arms.push({ pattern, body });
+  }
+  if (s.defaultBody.length > 0) {
+    const body = transformPureBody(s.defaultBody, typeDecls);
+    if (!body) return null;
+    arms.push({ pattern: "_", body });
+  }
+  if (s.expr.kind !== "var") return null;
+  return { kind: "match", scrutinee: s.expr.name, arms };
 }
 
 function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): LeanExpr | null {
