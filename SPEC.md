@@ -252,7 +252,18 @@ Lambda bodies can be expressions (`(x) => x + 1`) or statement blocks (`(x) => {
 
 Lambda parameter types are inferred by Lean (omitted from emission). Explicit TS type annotations are preserved if present.
 
-**TODO:** When the callback calls a Velvet method, the HOF call should become monadic (e.g., `arr.mapM f`). Pure callbacks use the non-monadic variant (`arr.map f`). Currently all HOF calls emit the non-monadic variant.
+**Monadic callbacks:** When the callback calls a Velvet method, the HOF call uses the monadic variant (e.g., `arr.mapM f`). Pure callbacks use the non-monadic variant (`arr.map f`). The transform checks the transformed lambda body for monadic binds (`←`) and selects the variant accordingly.
+
+| Pure | Monadic | When |
+|------|---------|------|
+| `arr.map f` | `arr.mapM f` | callback calls a method |
+| `arr.filter f` | `arr.filterM f` | callback calls a method |
+| `arr.all f` | `arr.allM f` | callback calls a method |
+| `arr.any f` | `arr.anyM f` | callback calls a method |
+
+The monadic HOF call is itself monadic — it gets `←` at the call site via the existing monadic lifting mechanism. Purity classification accounts for this: functions that transitively call non-pure functions (including through lambda callbacks) are classified as non-pure via call-graph analysis (see §13).
+
+**Proof note:** Velvet's WPGen does not currently have rules for `mapM`/`filterM`/etc. Proofs involving monadic HOFs require manual tactics.
 
 ### 4.8 Method Dispatch
 
@@ -434,7 +445,7 @@ end Pure
 
 This enables proofs by standard Lean induction over sequences of calls. The Velvet method is also generated, but as a thin wrapper: `return Pure.foo params`. This avoids termination issues (the pure `def` handles termination natively) while keeping the method callable from other Velvet methods via `←`.
 
-Pure function detection: a function is pure if its body contains no `while` statements and no mutable `let` declarations.
+Pure function detection: a function is pure if its body contains no `while` statements and no mutable `let` declarations, and it does not transitively call any non-pure function (determined via call-graph analysis in the resolve phase).
 
 **Spec references:** In `//@ ensures`, `//@ requires`, and `//@ invariant` annotations, calls to pure functions are resolved as `Pure.fnName`. The resolve phase classifies these as `spec-pure` call kind, and the transform emits the qualified name. Calls to external Lean-defined spec helpers (e.g., `sumTo` in a hand-written `.spec.lean`) pass through unqualified.
 
@@ -836,7 +847,7 @@ extract (ts-morph → Raw IR) → resolve (→ Typed IR) → transform (→ Lean
 ```
 
 - **Extract**: ts-morph → structured AST. Body expressions are nodes, not strings. Annotations remain as strings.
-- **Resolve**: attaches types, classifies calls, identifies discriminants, rejects unsupported patterns. Uses linked environments for lexical scoping.
+- **Resolve**: attaches types, classifies calls, identifies discriminants, rejects unsupported patterns. Uses linked environments for lexical scoping. Computes purity via call-graph analysis: a function is pure if it is syntactically pure (no `while`/`for-of`/mutable `let`) AND does not transitively call any non-pure function.
 - **Transform**: Typed IR → Lean IR. Pattern-matches on types. Desugars `for-of` to `while`. Detects discriminant if-chains → `match`. Lifts embedded method calls to `let ←` binds (selective ANF, §4.6).
 - **Emit**: Lean IR → text. Trivial printer.
 

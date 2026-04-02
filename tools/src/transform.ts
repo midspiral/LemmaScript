@@ -32,20 +32,34 @@ const METHOD_TABLE: Record<string, Record<string, string>> = {
 };
 
 /** Dot-notation methods: emitted as obj.leanName args. Lean resolves argument order. */
-const DOT_METHODS: Record<string, Record<string, string>> = {
+const DOT_METHODS: Record<string, Record<string, { pure: string; monadic?: string }>> = {
   array: {
-    map: "map",
-    filter: "filter",
-    every: "all",
-    some: "any",
-    includes: "contains",
-    find: "find?",
-    with: "set!",
+    map:      { pure: "map",      monadic: "mapM" },
+    filter:   { pure: "filter",   monadic: "filterM" },
+    every:    { pure: "all",      monadic: "allM" },
+    some:     { pure: "any",      monadic: "anyM" },
+    includes: { pure: "contains" },
+    find:     { pure: "find?" },
+    with:     { pure: "set!" },
   },
 };
 
-function lookupDotMethod(recvTy: Ty, method: string): string | undefined {
+function lookupDotMethod(recvTy: Ty, method: string): { pure: string; monadic?: string } | undefined {
   return DOT_METHODS[recvTy.kind]?.[method];
+}
+
+/** Check if transformed lambda body contains monadic binds. */
+function isMonadicBody(stmts: LeanStmt[]): boolean {
+  for (const s of stmts) {
+    if (s.kind === "let-bind" || s.kind === "bind") return true;
+    if (s.kind === "if" && (isMonadicBody(s.then) || isMonadicBody(s.else))) return true;
+    if (s.kind === "while" && isMonadicBody(s.body)) return true;
+    if (s.kind === "forin" && isMonadicBody(s.body)) return true;
+    if (s.kind === "match") {
+      for (const arm of s.arms) if (isMonadicBody(arm.body)) return true;
+    }
+  }
+  return false;
 }
 
 /** Lean modules that don't need explicit imports. */
@@ -165,10 +179,21 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
         if (lean)
           return { kind: "app", fn: lean, args: [lowerExpr(e.fn.obj, binds), ...e.args.map(a => lowerExpr(a, binds))] };
         // Dot-notation methods: receiver.leanName args
-        const dotMethod = lookupDotMethod(e.fn.obj.ty, e.fn.field);
-        if (dotMethod) {
+        const dotEntry = lookupDotMethod(e.fn.obj.ty, e.fn.field);
+        if (dotEntry) {
           const recv = lowerExpr(e.fn.obj, binds);
-          return { kind: "dotCall", obj: recv, method: dotMethod, args: e.args.map(a => lowerExpr(a, binds)) };
+          const args = e.args.map(a => lowerExpr(a, binds));
+          // Check if any lambda arg has monadic body → use monadic variant
+          const needsMonadic = args.some(a => a.kind === "lambda" && isMonadicBody(a.body));
+          const method = needsMonadic && dotEntry.monadic ? dotEntry.monadic : dotEntry.pure;
+          const result: LeanExpr = { kind: "dotCall", obj: recv, method, args };
+          // Monadic HOF call is itself monadic — lift via binds like a method call
+          if (needsMonadic && binds) {
+            const name = `_t${_liftCounter++}`;
+            binds.push({ kind: "let-bind", name, value: result });
+            return { kind: "var", name };
+          }
+          return result;
         }
         throw new Error(`Unsupported method call: .${e.fn.field}() on ${e.fn.obj.ty.kind}`);
       }

@@ -289,16 +289,111 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
 
 // ── Pure / return-in-loop detection ──────────────────────────
 
-function isPure(stmts: RawStmt[]): boolean {
+/** Syntactic purity: no while, no for-of, no mutable let. */
+function isSyntacticallyPure(stmts: RawStmt[]): boolean {
   for (const s of stmts) {
     switch (s.kind) {
       case "while": case "forof": return false;
       case "let": if (s.mutable) return false; break;
-      case "if": if (!isPure(s.then) || !isPure(s.else)) return false; break;
-      case "switch": if (!s.cases.every(c => isPure(c.body)) || !isPure(s.defaultBody)) return false; break;
+      case "if": if (!isSyntacticallyPure(s.then) || !isSyntacticallyPure(s.else)) return false; break;
+      case "switch": if (!s.cases.every(c => isSyntacticallyPure(c.body)) || !isSyntacticallyPure(s.defaultBody)) return false; break;
     }
   }
   return true;
+}
+
+// ── Call graph ──────────────────────────────────────────────
+
+/** Collect all same-file function calls from expressions (including inside lambdas). */
+function collectCallsExpr(e: RawExpr, fns: Set<string>, out: Set<string>): void {
+  switch (e.kind) {
+    case "call":
+      if (e.fn.kind === "var" && fns.has(e.fn.name)) out.add(e.fn.name);
+      collectCallsExpr(e.fn, fns, out);
+      for (const a of e.args) collectCallsExpr(a, fns, out);
+      return;
+    case "binop": collectCallsExpr(e.left, fns, out); collectCallsExpr(e.right, fns, out); return;
+    case "unop": collectCallsExpr(e.expr, fns, out); return;
+    case "field": collectCallsExpr(e.obj, fns, out); return;
+    case "index": collectCallsExpr(e.obj, fns, out); collectCallsExpr(e.idx, fns, out); return;
+    case "record":
+      if (e.spread) collectCallsExpr(e.spread, fns, out);
+      for (const f of e.fields) collectCallsExpr(f.value, fns, out);
+      return;
+    case "arrayLiteral": for (const el of e.elems) collectCallsExpr(el, fns, out); return;
+    case "lambda":
+      if (Array.isArray(e.body)) collectCallsStmts(e.body, fns, out);
+      else collectCallsExpr(e.body, fns, out);
+      return;
+    case "forall": case "exists": collectCallsExpr(e.body, fns, out); return;
+  }
+}
+
+function collectCallsStmts(stmts: RawStmt[], fns: Set<string>, out: Set<string>): void {
+  for (const s of stmts) {
+    switch (s.kind) {
+      case "let": collectCallsExpr(s.init, fns, out); break;
+      case "assign": collectCallsExpr(s.value, fns, out); break;
+      case "return": collectCallsExpr(s.value, fns, out); break;
+      case "expr": collectCallsExpr(s.expr, fns, out); break;
+      case "if":
+        collectCallsExpr(s.cond, fns, out);
+        collectCallsStmts(s.then, fns, out);
+        collectCallsStmts(s.else, fns, out);
+        break;
+      case "while":
+        collectCallsExpr(s.cond, fns, out);
+        collectCallsStmts(s.body, fns, out);
+        break;
+      case "forof":
+        collectCallsExpr(s.iterable, fns, out);
+        collectCallsStmts(s.body, fns, out);
+        break;
+      case "switch":
+        collectCallsExpr(s.expr, fns, out);
+        for (const c of s.cases) collectCallsStmts(c.body, fns, out);
+        collectCallsStmts(s.defaultBody, fns, out);
+        break;
+    }
+  }
+}
+
+function computePureFns(functions: RawFunction[]): Set<string> {
+  const allFnNames = new Set(functions.map(fn => fn.name));
+
+  // Build call graph: fn → set of same-file functions it calls
+  const callGraph = new Map<string, Set<string>>();
+  for (const fn of functions) {
+    const calls = new Set<string>();
+    collectCallsStmts(fn.body, allFnNames, calls);
+    callGraph.set(fn.name, calls);
+  }
+
+  // Seed: syntactically non-pure functions
+  const nonPure = new Set(
+    functions.filter(fn => !isSyntacticallyPure(fn.body)).map(fn => fn.name)
+  );
+
+  // Build reverse graph: fn → set of functions that call it
+  const callers = new Map<string, Set<string>>();
+  for (const name of allFnNames) callers.set(name, new Set());
+  for (const [caller, callees] of callGraph) {
+    for (const callee of callees) callers.get(callee)!.add(caller);
+  }
+
+  // Propagate impurity through reverse call graph
+  const worklist = [...nonPure];
+  while (worklist.length > 0) {
+    const fn = worklist.pop()!;
+    for (const caller of callers.get(fn) ?? []) {
+      if (!nonPure.has(caller)) {
+        nonPure.add(caller);
+        worklist.push(caller);
+      }
+    }
+  }
+
+  return new Set(functions.map(fn => fn.name).filter(name => !nonPure.has(name)));
 }
 
 function hasReturnInLoop(stmts: RawStmt[]): boolean {
@@ -342,13 +437,13 @@ function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Se
     name: fn.name, params, returnTy,
     requires: resolveSpecs(fn.requires, requiresCtx),
     ensures: resolveSpecs(fn.ensures, ensuresCtx),
-    isPure: isPure(fn.body),
+    isPure: pureFns.has(fn.name),
     body: resolveBlock(fn.body, baseCtx),
   };
 }
 
 export function resolveModule(raw: RawModule): TModule {
-  const pureFns = new Set(raw.functions.filter(fn => isPure(fn.body)).map(fn => fn.name));
+  const pureFns = computePureFns(raw.functions);
   return {
     file: raw.file,
     typeDecls: raw.typeDecls,
