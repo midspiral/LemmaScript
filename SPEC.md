@@ -173,6 +173,8 @@ No normalization of operators. Lean and `loom_solve` handle all comparison direc
 | `arr.filter((x) => e)` | `arr.filter (fun x => e)` | Dot-notation dispatch. |
 | `arr.every((x) => e)` | `arr.all (fun x => e)` | TS `every` → Lean `all`. |
 | `arr.some((x) => e)` | `arr.any (fun x => e)` | TS `some` → Lean `any`. |
+| `[a, b, c]` | `#[a, b, c]` | Array literal (any length, including `[]` → `#[]`). |
+| `{ ...obj, f: v }` | `{ obj with f := v }` | Functional record update. |
 | `\result` | `res` | Only valid in `ensures`. |
 | `"foo"` (string literal, enum context) | `.foo` | Constructor. Lean infers type from context. |
 | `"foo"` (plain string context) | `"foo"` | String literal. Context-directed: user type → constructor, otherwise string. |
@@ -696,6 +698,18 @@ return { res: true, done: true, rec: true };
 
 ```lean
 return { res := true, done := true, rec := true }
+```
+
+**Spread update** translates to Lean's `with` syntax for functional record update:
+
+```typescript
+return { ...m, mood: newMood, baseHue: m.baseHue + delta };
+```
+
+→
+
+```lean
+return { m with mood := newMood, baseHue := m.baseHue + delta }
 ```
 
 **Detection:** ts-morph identifies `interface` and `type` declarations that are pure object shapes (no union, no discriminant). These generate `structure` instead of `inductive`.
