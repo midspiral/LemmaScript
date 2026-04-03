@@ -90,6 +90,9 @@ def hasValue (arr : Array Int) (v : Int) : Bool :=
 def replaceAt (arr : Array Int) (i : Nat) (v : Int) : Array Int :=
   arr.set! i v
 
+def replaceAtInt (arr : Array Int) (i : Int) (v : Int) : Array Int :=
+  arr.set! i.toNat v
+
 def findSubstr (s : String) (sub : String) : Int :=
   JSString.indexOf s sub
 

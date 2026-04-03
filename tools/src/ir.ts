@@ -17,7 +17,8 @@ export type LeanExpr =
   | { kind: "unop"; op: string; expr: LeanExpr }
   | { kind: "app"; fn: string; args: LeanExpr[] }            // f a b
   | { kind: "field"; obj: LeanExpr; field: string }           // x.res, arr.size
-  | { kind: "index"; arr: LeanExpr; idx: LeanExpr; toNat: boolean } // arr[i]! or arr[i.toNat]!
+  | { kind: "toNat"; expr: LeanExpr }                               // expr.toNat
+  | { kind: "index"; arr: LeanExpr; idx: LeanExpr }                // arr[idx]!
   | { kind: "record"; spread: LeanExpr | null; fields: { name: string; value: LeanExpr }[] }
   | { kind: "arrayLiteral"; elems: LeanExpr[] }
   | { kind: "dotCall"; obj: LeanExpr; method: string; args: LeanExpr[] }  // obj.method args

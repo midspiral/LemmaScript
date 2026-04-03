@@ -92,6 +92,10 @@ method replaceAt (arr : Array Int) (i : Nat) (v : Int) return (res : Array Int)
   do
     return Pure.replaceAt arr i v
 
+method replaceAtInt (arr : Array Int) (i : Int) (v : Int) return (res : Array Int)
+  do
+    return Pure.replaceAtInt arr i v
+
 method findSubstr (s : String) (sub : String) return (res : Int)
   do
     return Pure.findSubstr s sub

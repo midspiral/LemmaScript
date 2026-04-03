@@ -57,6 +57,9 @@ prove_correct hasValue by
 prove_correct replaceAt by
   unfold Pure.replaceAt; loom_solve
 
+prove_correct replaceAtInt by
+  unfold Pure.replaceAtInt; loom_solve
+
 -- String ops
 prove_correct findSubstr by
   unfold Pure.findSubstr; loom_solve

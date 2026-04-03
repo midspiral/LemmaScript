@@ -129,9 +129,14 @@ function hasValue(arr: number[], v: number): boolean {
   return arr.includes(v);
 }
 
-// with → set! (functional array update, §4.8)
+// with → set! (functional array update, §4.8), Nat index
 function replaceAt(arr: number[], i: number, v: number): number[] {
   //@ type i nat
+  return arr.with(i, v);
+}
+
+// with → set! with Int index — needs .toNat
+function replaceAtInt(arr: number[], i: number, v: number): number[] {
   return arr.with(i, v);
 }
 

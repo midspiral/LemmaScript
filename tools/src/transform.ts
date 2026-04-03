@@ -163,10 +163,11 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
         return { kind: "field", obj: transformExpr(e.obj), field: "length" };
       return { kind: "field", obj: transformExpr(e.obj), field: e.field };
 
-    case "index":
-      if (isArray(e.obj.ty))
-        return { kind: "index", arr: transformExpr(e.obj), idx: transformExpr(e.idx), toNat: !isNat(e.idx.ty) };
-      return { kind: "index", arr: transformExpr(e.obj), idx: transformExpr(e.idx), toNat: false };
+    case "index": {
+      const idx = transformExpr(e.idx);
+      const wrappedIdx = isArray(e.obj.ty) && !isNat(e.idx.ty) ? { kind: "toNat" as const, expr: idx } : idx;
+      return { kind: "index", arr: transformExpr(e.obj), idx: wrappedIdx };
+    }
 
     case "call": {
       // Math.floor(x) → x
@@ -182,7 +183,13 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
         const dotEntry = lookupDotMethod(e.fn.obj.ty, e.fn.field);
         if (dotEntry) {
           const recv = lowerExpr(e.fn.obj, binds);
-          const args = e.args.map(a => lowerExpr(a, binds));
+          const args = e.args.map((a, i) => {
+            const lowered = lowerExpr(a, binds);
+            // set! index (first arg) needs .toNat when Int-typed
+            if (dotEntry.pure === "set!" && i === 0 && !isNat(a.ty))
+              return { kind: "toNat" as const, expr: lowered };
+            return lowered;
+          });
           // Check if any lambda arg has monadic body → use monadic variant
           const needsMonadic = args.some(a => a.kind === "lambda" && isMonadicBody(a.body));
           const method = needsMonadic && dotEntry.monadic ? dotEntry.monadic : dotEntry.pure;
