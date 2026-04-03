@@ -148,7 +148,16 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     case "record": {
       const spread = e.spread ? resolveExpr(e.spread, ctx) : null;
       const ty = spread ? spread.ty : { kind: "unknown" as const };
-      return { kind: "record", spread, fields: e.fields.map(f => ({ name: f.name, value: resolveExpr(f.value, ctx) })), ty };
+      // Infer record type: from spread, or from return type context
+      const recordTy = ty.kind === "user" ? ty : ctx.returnTy.kind === "user" ? ctx.returnTy : null;
+      const decl = recordTy ? ctx.typeDecls.find(d => d.name === recordTy.name && d.kind === "record") : undefined;
+      const fields = e.fields.map(f => {
+        let value = resolveExpr(f.value, ctx);
+        const fieldDecl = decl?.fields?.find(df => df.name === f.name);
+        if (fieldDecl) value = coerceStr(value, parseTsType(fieldDecl.tsType));
+        return { name: f.name, value };
+      });
+      return { kind: "record", spread, fields, ty: recordTy ?? ty };
     }
 
     case "result":

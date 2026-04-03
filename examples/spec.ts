@@ -78,6 +78,16 @@ function demoteOnFail(p: Priority, ok: boolean): Priority {
   return ok ? p : "low";
 }
 
+// Record field string→constructor coercion
+export interface PriorityItem {
+  level: Priority;
+  value: number;
+}
+
+function makeHighItem(v: number): PriorityItem {
+  return { level: "high", value: v };
+}
+
 // §4.2: Math.floor (identity in Int division)
 function midpoint(lo: number, hi: number): number {
   //@ ensures \result === (lo + hi) / 2

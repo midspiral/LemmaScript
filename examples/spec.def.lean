@@ -49,6 +49,10 @@ method demoteOnFail (p : Priority) (ok : Bool) return (res : Priority)
   do
     return Pure.demoteOnFail p ok
 
+method makeHighItem (v : Int) return (res : PriorityItem)
+  do
+    return Pure.makeHighItem v
+
 method midpoint (lo : Int) (hi : Int) return (res : Int)
   ensures res = (lo + hi) / 2
   do

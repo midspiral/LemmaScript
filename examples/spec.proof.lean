@@ -25,6 +25,9 @@ prove_correct clampTernary by
 prove_correct demoteOnFail by
   unfold Pure.demoteOnFail; loom_solve
 
+prove_correct makeHighItem by
+  unfold Pure.makeHighItem; loom_solve
+
 prove_correct midpoint by
   unfold Pure.midpoint; loom_solve
 

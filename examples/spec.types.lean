@@ -22,6 +22,11 @@ structure Config where
   enabled : Bool
 deriving Repr, Inhabited, DecidableEq
 
+structure PriorityItem where
+  level : Priority
+  value : Int
+deriving Repr, Inhabited, DecidableEq
+
 namespace Pure
 
 def evalPartial (e : Expr) : Int :=
@@ -68,6 +73,9 @@ def demoteOnFail (p : Priority) (ok : Bool) : Priority :=
     p
   else
     .low
+
+def makeHighItem (v : Int) : PriorityItem :=
+  { level := .high, value := v }
 
 def midpoint (lo : Int) (hi : Int) : Int :=
   (lo + hi) / 2
