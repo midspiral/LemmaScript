@@ -166,6 +166,7 @@ No normalization of operators. Lean and `loom_solve` handle all comparison direc
 | `x = f(a, b)` (in body) | `x ← f a b` | Velvet method call uses monadic bind. |
 | `return f(a) + g(b)` (embedded calls) | `let _t0 ← f a`<br>`let _t1 ← g b`<br>`return _t0 + _t1` | Monadic lifting (selective ANF). See §4.4. |
 | `Math.floor(e)` | `e` | Int division in Lean is already floor. |
+| `c ? a : b` | `if c then a else b` | Ternary / conditional expression. |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | Returns `Int` (-1 if not found). |
 | `s.slice(start, end)` | `JSString.slice s start end` | Nat-indexed substring. |
 | `s.length` | `s.length` | String length, `Nat`. |

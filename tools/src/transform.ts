@@ -224,6 +224,9 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
 
     case "exists":
       return { kind: "exists", var: e.var, type: tyToLean(e.varTy), body: transformExpr(e.body) };
+
+    case "conditional":
+      return { kind: "if", cond: lowerExpr(e.cond, binds), then: lowerExpr(e.then, binds), else: lowerExpr(e.else, binds) };
   }
 }
 

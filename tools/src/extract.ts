@@ -123,6 +123,11 @@ function extractExpr(node: Expression): RawExpr {
     return { kind: "record", spread, fields };
   }
 
+  // Ternary: cond ? then : else
+  if (Node.isConditionalExpression(node)) {
+    return { kind: "conditional", cond: extractExpr(node.getCondition()), then: extractExpr(node.getWhenTrue()), else: extractExpr(node.getWhenFalse()) };
+  }
+
   throw new Error(`Unsupported expression: ${node.getText()}`);
 }
 

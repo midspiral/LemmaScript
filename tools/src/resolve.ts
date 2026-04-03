@@ -187,6 +187,13 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         : [{ kind: "return" as const, value: resolveExpr(e.body, lambdaCtx) }];
       return { kind: "lambda", params, body, ty: { kind: "unknown" } };
     }
+
+    case "conditional": {
+      const cond = resolveExpr(e.cond, ctx);
+      const then_ = resolveExpr(e.then, ctx);
+      const else_ = resolveExpr(e.else, ctx);
+      return { kind: "conditional", cond, then: then_, else: else_, ty: then_.ty };
+    }
   }
 }
 
@@ -327,6 +334,11 @@ function collectCallsExpr(e: RawExpr, fns: Set<string>, out: Set<string>): void 
       else collectCallsExpr(e.body, fns, out);
       return;
     case "forall": case "exists": collectCallsExpr(e.body, fns, out); return;
+    case "conditional":
+      collectCallsExpr(e.cond, fns, out);
+      collectCallsExpr(e.then, fns, out);
+      collectCallsExpr(e.else, fns, out);
+      return;
   }
 }
 

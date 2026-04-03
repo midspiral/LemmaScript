@@ -19,6 +19,9 @@ prove_correct defaultConfig by
 prove_correct withThreshold by
   unfold Pure.withThreshold; loom_solve
 
+prove_correct clampTernary by
+  unfold Pure.clampTernary; loom_solve
+
 prove_correct midpoint by
   unfold Pure.midpoint; loom_solve
 

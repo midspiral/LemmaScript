@@ -38,6 +38,13 @@ method withThreshold (c : Config) (t : Nat) return (res : Config)
   do
     return Pure.withThreshold c t
 
+method clampTernary (x : Int) (lo : Int) (hi : Int) return (res : Int)
+  require lo ≤ hi
+  ensures res ≥ lo
+  ensures res ≤ hi
+  do
+    return Pure.clampTernary x lo hi
+
 method midpoint (lo : Int) (hi : Int) return (res : Int)
   ensures res = (lo + hi) / 2
   do

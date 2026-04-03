@@ -54,6 +54,15 @@ def defaultConfig  : Config :=
 def withThreshold (c : Config) (t : Nat) : Config :=
   { c with threshold := t }
 
+def clampTernary (x : Int) (lo : Int) (hi : Int) : Int :=
+  if x < lo then
+    lo
+  else
+    if x > hi then
+      hi
+    else
+      x
+
 def midpoint (lo : Int) (hi : Int) : Int :=
   (lo + hi) / 2
 

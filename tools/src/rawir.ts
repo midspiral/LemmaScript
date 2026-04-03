@@ -23,6 +23,7 @@ export type RawExpr =
   | { kind: "record"; spread: RawExpr | null; fields: { name: string; value: RawExpr }[] }
   | { kind: "arrayLiteral"; elems: RawExpr[] }
   | { kind: "lambda"; params: { name: string; tsType?: string }[]; body: RawExpr | RawStmt[] }
+  | { kind: "conditional"; cond: RawExpr; then: RawExpr; else: RawExpr }  // ternary ? :
   // Spec-only (from //@ annotations, produced by specparser):
   | { kind: "result" }                                    // \result
   | { kind: "forall"; var: string; varType: "nat" | "int"; body: RawExpr }

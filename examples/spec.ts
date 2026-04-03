@@ -66,6 +66,13 @@ function withThreshold(c: Config, t: number): Config {
   return { ...c, threshold: t };
 }
 
+// Ternary / conditional expression
+function clampTernary(x: number, lo: number, hi: number): number {
+  //@ requires lo <= hi
+  //@ ensures \result >= lo && \result <= hi
+  return x < lo ? lo : x > hi ? hi : x;
+}
+
 // §4.2: Math.floor (identity in Int division)
 function midpoint(lo: number, hi: number): number {
   //@ ensures \result === (lo + hi) / 2
