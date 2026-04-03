@@ -8,6 +8,7 @@ See [SPEC.md](SPEC.md) for the full specification and [DESIGN.md](DESIGN.md) for
 
 - **[casbin-lemmascript](https://github.com/midspiral/casbin-lemmascript/blob/lemmascript/README_LemmaScript.md)** — brownfield verification of the [node-casbin](https://github.com/casbin/node-casbin) access control library. 5 functions verified (effector, keyMatch, keyGet, arrayEquals), 217 existing tests pass with verified code wired in.
 - **[clear-split-lemmascript](https://github.com/midspiral/clear-split-lemmascript/)** — greenfield verified expense splitting web app. React frontend calling verified TS logic directly. Conservation theorem (sum of all balances = 0), invariant preservation, delta laws — all proven, no sorry.
+- **[colorwheel-lemmascript](https://github.com/midspiral/colorwheel-lemmascript/)** — verified color palette generator with mood + harmony constraints. 30 functions, all proved with `loom_solve`.
 
 ## Setup
 
