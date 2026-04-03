@@ -45,6 +45,10 @@ method clampTernary (x : Int) (lo : Int) (hi : Int) return (res : Int)
   do
     return Pure.clampTernary x lo hi
 
+method demoteOnFail (p : Priority) (ok : Bool) return (res : Priority)
+  do
+    return Pure.demoteOnFail p ok
+
 method midpoint (lo : Int) (hi : Int) return (res : Int)
   ensures res = (lo + hi) / 2
   do

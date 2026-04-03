@@ -190,9 +190,12 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "conditional": {
       const cond = resolveExpr(e.cond, ctx);
-      const then_ = resolveExpr(e.then, ctx);
-      const else_ = resolveExpr(e.else, ctx);
-      return { kind: "conditional", cond, then: then_, else: else_, ty: then_.ty };
+      let then_ = resolveExpr(e.then, ctx);
+      let else_ = resolveExpr(e.else, ctx);
+      then_ = coerceStr(then_, else_.ty);
+      else_ = coerceStr(else_, then_.ty);
+      const ty = then_.ty.kind !== "unknown" ? then_.ty : else_.ty;
+      return { kind: "conditional", cond, then: then_, else: else_, ty };
     }
   }
 }

@@ -22,6 +22,9 @@ prove_correct withThreshold by
 prove_correct clampTernary by
   unfold Pure.clampTernary; loom_solve
 
+prove_correct demoteOnFail by
+  unfold Pure.demoteOnFail; loom_solve
+
 prove_correct midpoint by
   unfold Pure.midpoint; loom_solve
 

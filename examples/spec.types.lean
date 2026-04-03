@@ -63,6 +63,12 @@ def clampTernary (x : Int) (lo : Int) (hi : Int) : Int :=
     else
       x
 
+def demoteOnFail (p : Priority) (ok : Bool) : Priority :=
+  if ok then
+    p
+  else
+    .low
+
 def midpoint (lo : Int) (hi : Int) : Int :=
   (lo + hi) / 2
 

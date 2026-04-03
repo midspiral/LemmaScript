@@ -552,7 +552,7 @@ When a variable has a user-defined type, string literal comparisons map to Lean 
 | `state === "idle"` | `state = .idle` |
 | `"connecting"` (as value) | `.connecting` |
 
-Convention: the string literal and the Lean constructor have the same name. Lean infers the type from context (dot notation).
+Convention: the string literal and the Lean constructor have the same name. Lean infers the type from context (dot notation). The same coercion applies in ternary branches: `ok ? state : "idle"` emits `if ok then state else .idle` when `state` has a user type.
 
 ### 8.3 Discriminated Unions
 

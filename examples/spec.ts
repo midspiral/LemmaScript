@@ -73,6 +73,11 @@ function clampTernary(x: number, lo: number, hi: number): number {
   return x < lo ? lo : x > hi ? hi : x;
 }
 
+// Ternary with string→constructor coercion
+function demoteOnFail(p: Priority, ok: boolean): Priority {
+  return ok ? p : "low";
+}
+
 // §4.2: Math.floor (identity in Int division)
 function midpoint(lo: number, hi: number): number {
   //@ ensures \result === (lo + hi) / 2
