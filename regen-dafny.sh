@@ -7,6 +7,10 @@ cd "$(dirname "$0")"
 FILES=(
   examples/clamp.ts
   examples/binarySearch.ts
+  examples/linearSearch.ts
+  examples/arraySum.ts
+  examples/maxElement.ts
+  examples/isSorted.ts
 )
 
 for f in "${FILES[@]}"; do

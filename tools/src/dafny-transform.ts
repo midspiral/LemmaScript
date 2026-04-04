@@ -272,11 +272,8 @@ function transformWhileStmts(
     }
 
     case "if": {
-      const thenExpr = transformWhileStmts(s.then, 0, mutNames, loopName, fnParamNames);
-      if (!thenExpr) return null;
-      // If the then branch has a break, we need to handle it
+      // If the then branch has a break, it exits the loop
       if (hasBranch(s.then, "break")) {
-        // break → return current values (skip recursive call)
         const thenBreak = transformBreakBranch(s.then, stmts.slice(idx + 1), mutNames, loopName, fnParamNames);
         if (!thenBreak) return null;
         if (s.else.length > 0) {
@@ -284,20 +281,35 @@ function transformWhileStmts(
           if (!elseExpr) return null;
           return { kind: "if", cond: transformExpr(s.cond), then: thenBreak, else: elseExpr };
         }
-        // No else: else continues the loop normally
         const elseExpr = rest();
         if (!elseExpr) return null;
         return { kind: "if", cond: transformExpr(s.cond), then: thenBreak, else: elseExpr };
       }
+
       if (s.else.length > 0) {
+        // Both branches fully handle the rest (e.g. if/else if/else chains)
+        const thenExpr = transformWhileStmts(s.then, 0, mutNames, loopName, fnParamNames);
+        if (!thenExpr) return null;
         const elseExpr = transformWhileStmts(s.else, 0, mutNames, loopName, fnParamNames);
         if (!elseExpr) return null;
         return { kind: "if", cond: transformExpr(s.cond), then: thenExpr, else: elseExpr };
       }
-      // No else — the if just continues
-      const elseExpr = rest();
-      if (!elseExpr) return null;
-      return { kind: "if", cond: transformExpr(s.cond), then: thenExpr, else: elseExpr };
+
+      // No else — the if applies some assignments, then falls through to rest.
+      // Wrap the then-assignments around rest, and use if-then-else to choose.
+      const restExpr = rest();
+      if (!restExpr) return null;
+      // Apply then-branch assignments as let-bindings around restExpr
+      let thenWithRest: DafnyExpr = restExpr;
+      // Process then-branch assignments in reverse to build nested lets
+      const assigns: { target: string; value: TExpr }[] = [];
+      for (const ts of s.then) {
+        if (ts.kind === "assign") assigns.push({ target: ts.target, value: ts.value });
+      }
+      for (let i = assigns.length - 1; i >= 0; i--) {
+        thenWithRest = { kind: "let", name: assigns[i].target, value: transformExpr(assigns[i].value), body: thenWithRest };
+      }
+      return { kind: "if", cond: transformExpr(s.cond), then: thenWithRest, else: restExpr };
     }
 
     case "break":
