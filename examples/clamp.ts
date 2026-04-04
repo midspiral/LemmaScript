@@ -17,5 +17,6 @@ function clamp(x: number, lo: number, hi: number): number {
 }
 
 function clampAll(arr: number[], lo: number, hi: number): number[] {
+  //@ requires lo <= hi
   return arr.map((x) => clamp(x, lo, hi));
 }
