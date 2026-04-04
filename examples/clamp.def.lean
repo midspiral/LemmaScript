@@ -20,6 +20,7 @@ method clamp (x : Int) (lo : Int) (hi : Int) return (res : Int)
     return result
 
 method clampAll (arr : Array Int) (lo : Int) (hi : Int) return (res : Array Int)
+  require lo ≤ hi
   do
     let _t1 ← arr.mapM (fun x => do
     let _t0 ← clamp x lo hi
