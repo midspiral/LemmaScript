@@ -43,7 +43,10 @@ const DAFNY_KEYWORDS = new Set([
 ]);
 
 function escapeName(name: string): string {
-  return DAFNY_KEYWORDS.has(name) ? `${name}_` : name;
+  if (DAFNY_KEYWORDS.has(name)) return `${name}_`;
+  // Dafny doesn't allow identifiers starting with _
+  if (name.startsWith("_")) return `i${name}`;
+  return name;
 }
 
 /** Format a typed parameter list for Dafny: "x: int, y: seq<int>" */
@@ -229,14 +232,15 @@ function emitStmt(s: LeanStmt, indent: number): string {
 
     case "forin": {
       // Lean for-in → Dafny while loop over index
+      const idx = escapeName(s.idx);
       const lines = [
-        `${pad}var ${s.idx} := 0;`,
-        `${pad}while ${s.idx} < ${emitExpr(s.bound)}`,
+        `${pad}var ${idx} := 0;`,
+        `${pad}while ${idx} < ${emitExpr(s.bound)}`,
       ];
       for (const inv of s.invariants) lines.push(`${pad}  invariant ${emitExpr(inv)}`);
       lines.push(`${pad}{`);
       lines.push(emitStmts(s.body, indent + 1));
-      lines.push(`${pad}  ${s.idx} := ${s.idx} + 1;`);
+      lines.push(`${pad}  ${idx} := ${idx} + 1;`);
       lines.push(`${pad}}`);
       return lines.join("\n");
     }
