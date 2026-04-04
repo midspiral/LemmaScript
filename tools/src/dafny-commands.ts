@@ -6,9 +6,13 @@ import { existsSync, readFileSync, writeFileSync, copyFileSync } from "fs";
 import { execSync } from "child_process";
 import path from "path";
 
-export function dafnyGen(genPath: string, dfyPath: string, text: string) {
+function writeGen(genPath: string, text: string) {
   writeFileSync(genPath, text);
   console.log(`Generated: ${genPath}`);
+}
+
+export function dafnyGen(genPath: string, dfyPath: string, text: string) {
+  writeGen(genPath, text);
   if (!existsSync(dfyPath)) {
     writeFileSync(dfyPath, text);
     console.log(`Created: ${dfyPath}`);
@@ -63,44 +67,33 @@ function dafnyApplyPatch(genPath: string, dfyPath: string, patchPath: string): b
 }
 
 export function dafnyRegen(genPath: string, dfyPath: string, patchPath: string, text: string, dir: string) {
-  // 1. No .dfy yet — generate both, done
+  // 1. No .dfy yet — create both, verify, done
   if (!existsSync(dfyPath)) {
-    writeFileSync(genPath, text);
-    console.log(`Generated: ${genPath}`);
-    writeFileSync(dfyPath, text);
-    console.log(`Created: ${dfyPath}`);
+    dafnyGen(genPath, dfyPath, text);
     dafnyVerify(dfyPath, dir);
     return;
   }
 
-  // 2. Capture patch from current .dfy.gen → .dfy BEFORE overwriting .dfy.gen
+  // 2. Capture patch from current gen → dfy BEFORE overwriting gen
   let hasPatch = false;
   if (existsSync(genPath)) {
     dafnySavePatch(genPath, dfyPath, patchPath);
-    const patch = readFileSync(patchPath, "utf-8").trim();
-    hasPatch = patch.length > 0;
+    hasPatch = readFileSync(patchPath, "utf-8").trim().length > 0;
   }
 
-  // 3. Generate new .dfy.gen
-  writeFileSync(genPath, text);
-  console.log(`Generated: ${genPath}`);
+  // 3. Write new gen
+  writeGen(genPath, text);
 
-  // 4. Try verifying existing .dfy as-is
-  if (dafnyVerify(dfyPath, dir)) {
-    return;
-  }
+  // 4. Try verifying existing dfy as-is
+  if (dafnyVerify(dfyPath, dir)) return;
 
-  // 5. Verification failed — try applying patch to new .dfy.gen
+  // 5. Failed — try applying captured patch to new gen
   if (hasPatch) {
     console.log("Verification failed. Trying to apply patch...");
-    if (dafnyApplyPatch(genPath, dfyPath, patchPath)) {
-      if (dafnyVerify(dfyPath, dir)) {
-        return;
-      }
-    }
+    if (dafnyApplyPatch(genPath, dfyPath, patchPath) && dafnyVerify(dfyPath, dir)) return;
   }
 
-  // 6. Patch failed or didn't verify — needs LLM re-adaptation
+  // 6. Needs LLM re-adaptation
   console.error(`FAILED: ${path.basename(dfyPath)} needs manual re-adaptation.`);
   console.error(`  ${genPath} has the new generated code.`);
   if (hasPatch) console.error(`  ${patchPath} has the captured patch.`);

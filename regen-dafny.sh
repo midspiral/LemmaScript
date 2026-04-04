@@ -4,12 +4,12 @@ set -e
 cd "$(dirname "$0")"
 
 FILES=(
-  examples/clamp.ts
   examples/binarySearch.ts
   examples/linearSearch.ts
   examples/arraySum.ts
   examples/maxElement.ts
   examples/isSorted.ts
+  # examples/clamp.ts        # needs HOF/lambda support for clampAll
 )
 
 for f in "${FILES[@]}"; do

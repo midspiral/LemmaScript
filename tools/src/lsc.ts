@@ -13,7 +13,7 @@ import { extractModule } from "./extract.js";
 import { resolveModule } from "./resolve.js";
 import { transformModule } from "./transform.js";
 import { emitFile } from "./emit.js";
-import { transformDafnyModule } from "./dafny-transform.js";
+import { transformModuleDafny } from "./transform.js";
 import { emitDafnyFile } from "./dafny-emit.js";
 import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-commands.js";
 
@@ -54,8 +54,11 @@ function main() {
 
   // ── Dafny backend ─────────────────────────────────────────
   if (backend === "dafny") {
-    const dafnyFile = transformDafnyModule(typed);
-    const text = emitDafnyFile(dafnyFile);
+    const { typesFile, defFile } = transformModuleDafny(typed);
+    // Emit types + def into a single Dafny file
+    const allDecls = [...(typesFile?.decls ?? []), ...defFile.decls];
+    const merged = { ...defFile, decls: allDecls };
+    const text = emitDafnyFile(merged, path.basename(filePath));
     const genPath = path.join(dir, `${base}.dfy.gen`);
     const dfyPath = path.join(dir, `${base}.dfy`);
     const patchPath = path.join(dir, `${base}.dfy.patch`);
