@@ -119,13 +119,13 @@ function transformStmt(s: TStmt): DafnyStmt[] {
         body: transformStmts(s.body),
       }];
     case "expr":
-      return [];
+      throw new UnsupportedError("expression statement");
     case "continue":
-      return [];
+      throw new UnsupportedError("continue");
     case "switch":
-      return [];
+      throw new UnsupportedError("switch");
     case "forof":
-      return [];
+      throw new UnsupportedError("for-of loop");
   }
 }
 
