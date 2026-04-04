@@ -90,3 +90,7 @@ prove_correct sumSearchResults by
 -- For-of loop
 prove_correct forOfContains by
   loom_solve
+
+-- Monadic lifting in records and nested args
+prove_correct clampedItem by loom_solve
+prove_correct clampedMidpoint by loom_solve

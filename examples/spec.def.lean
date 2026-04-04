@@ -176,3 +176,20 @@ method forOfContains (arr : Array Int) (target : Int) return (res : Bool)
         found := true
         break
     return found
+
+method clampedItem (x : Int) return (res : PriorityItem)
+  ensures res.level = .high
+  do
+    let mut tmp : Int := x
+    let _t2 ← clampTernary tmp 0 100
+    return { level := .high, value := _t2 }
+
+method clampedMidpoint (a : Int) (b : Int) return (res : Int)
+  require a ≤ b
+  ensures res ≥ a
+  ensures res ≤ b
+  do
+    let _t3 ← midpoint a b
+    let mut mid : Int := _t3
+    let _t4 ← clampTernary mid a b
+    return _t4

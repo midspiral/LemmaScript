@@ -255,3 +255,22 @@ function forOfContains(arr: number[], target: number): boolean {
   }
   return found;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Monadic lifting in records and nested args
+// ═══════════════════════════════════════════════════════════════
+
+// Method call results in record fields — needs monadic lifting in records
+function clampedItem(x: number): PriorityItem {
+  //@ ensures \result.level === "high"
+  let tmp = x;  // mutable → non-pure → full method body
+  return { level: "high", value: clampTernary(tmp, 0, 100) };
+}
+
+// Nested method call: method result passed as arg to another method call
+function clampedMidpoint(a: number, b: number): number {
+  //@ requires a <= b
+  //@ ensures \result >= a && \result <= b
+  let mid = midpoint(a, b);  // mutable → non-pure → full method body
+  return clampTernary(mid, a, b);
+}

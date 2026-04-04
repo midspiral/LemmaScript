@@ -103,9 +103,12 @@ function transformExpr(e: TExpr): LeanExpr { return lowerExpr(e, null); }
  */
 function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
   // Monadic lifting: extract embedded method calls to let-binds
+  // Pass binds through to args so nested method calls are also lifted
   if (binds && e.kind === "call" && e.callKind === "method") {
     const name = `_t${_liftCounter++}`;
-    binds.push({ kind: "let-bind", name, value: lowerExpr(e, null) });
+    const fn = e.fn.kind === "var" ? e.fn.name : `${lowerExpr(e.fn, binds)}`;
+    const args = e.args.map(a => lowerExpr(a, binds));
+    binds.push({ kind: "let-bind", name, value: { kind: "app", fn, args } });
     return { kind: "var", name };
   }
 
@@ -211,7 +214,7 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
     }
 
     case "record":
-      return { kind: "record", spread: e.spread ? transformExpr(e.spread) : null, fields: e.fields.map(f => ({ name: f.name, value: transformExpr(f.value) })) };
+      return { kind: "record", spread: e.spread ? lowerExpr(e.spread, binds) : null, fields: e.fields.map(f => ({ name: f.name, value: lowerExpr(f.value, binds) })) };
 
     case "arrayLiteral":
       return { kind: "arrayLiteral", elems: e.elems.map(el => lowerExpr(el, binds)) };
@@ -659,7 +662,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
   }
 
   // Def file: Velvet methods
-  // Pure functions get a wrapper that calls Pure.fnName
+  // Pure functions get a thin wrapper that calls Pure.fnName
   const pureDefNames = new Set(pureDefs.map(d => d.name));
   const methods: LeanMethod[] = mod.functions.map(fn => {
     const ensures: LeanExpr[] = [];
