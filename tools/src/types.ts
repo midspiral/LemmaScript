@@ -50,6 +50,19 @@ export function tyToLean(ty: Ty): string {
   }
 }
 
+export function tyToDafny(ty: Ty): string {
+  switch (ty.kind) {
+    case "nat": return "nat";
+    case "int": return "int";
+    case "bool": return "bool";
+    case "string": return "string";
+    case "void": return "()";
+    case "array": return `seq<${tyToDafny(ty.elem)}>`;
+    case "user": return ty.name;
+    case "unknown": return "int";
+  }
+}
+
 export function parseTsType(tsType: string): Ty {
   const t = tsType.trim();
   if (t === "number") return { kind: "int" };

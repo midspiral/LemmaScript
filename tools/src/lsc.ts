@@ -13,11 +13,18 @@ import { extractModule } from "./extract.js";
 import { resolveModule } from "./resolve.js";
 import { transformModule } from "./transform.js";
 import { emitFile } from "./emit.js";
+import { transformDafnyModule } from "./dafny-transform.js";
+import { emitDafnyFile } from "./dafny-emit.js";
 
 function main() {
-  const [cmd, filePath] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const backendIdx = args.indexOf("--backend=dafny");
+  const backend = backendIdx >= 0 ? "dafny" : "lean";
+  if (backendIdx >= 0) args.splice(backendIdx, 1);
+
+  const [cmd, filePath] = args;
   if (!cmd || !filePath) {
-    console.error("Usage: lsc <gen|check|extract> <file.ts>");
+    console.error("Usage: lsc <gen|check|extract> [--backend=dafny] <file.ts>");
     process.exit(1);
   }
 
@@ -43,6 +50,55 @@ function main() {
 
   const dir = path.dirname(absPath);
   const base = path.basename(filePath, ".ts");
+
+  // ── Dafny backend ─────────────────────────────────────────
+  if (backend === "dafny") {
+    const dafnyFile = transformDafnyModule(typed);
+    const genPath = path.join(dir, `${base}.dfy.gen`);
+    const dfyPath = path.join(dir, `${base}.dfy`);
+
+    if (cmd === "gen") {
+      const text = emitDafnyFile(dafnyFile);
+      writeFileSync(genPath, text);
+      console.log(`Generated: ${genPath}`);
+      if (!existsSync(dfyPath)) {
+        writeFileSync(dfyPath, text);
+        console.log(`Created: ${dfyPath}`);
+      }
+      return;
+    }
+
+    if (cmd === "check") {
+      const text = emitDafnyFile(dafnyFile);
+      writeFileSync(genPath, text);
+      console.log(`Generated: ${genPath}`);
+
+      // Check additions-only invariant
+      if (existsSync(dfyPath)) {
+        try {
+          const diff = execSync(`git diff --no-index -- "${genPath}" "${dfyPath}" 2>/dev/null || true`, { encoding: "utf-8" });
+          const deletions = diff.split("\n").filter(l => l.startsWith("-") && !l.startsWith("---"));
+          if (deletions.length > 0) {
+            console.error("WARNING: foo.dfy has modifications to generated lines (not additions-only):");
+            for (const d of deletions.slice(0, 5)) console.error("  " + d);
+          }
+        } catch { /* diff not available */ }
+      }
+
+      console.log("Running dafny verify...");
+      try {
+        execSync(`dafny verify "${dfyPath}"`, { cwd: dir, stdio: "inherit" });
+      } catch {
+        process.exit(1);
+      }
+      return;
+    }
+
+    console.error(`Unknown command: ${cmd}`);
+    process.exit(1);
+  }
+
+  // ── Lean backend ──────────────────────────────────────────
   const specPath = path.join(dir, `${base}.spec.lean`);
   const specImport = existsSync(specPath) ? `«${base}.spec»` : undefined;
 
