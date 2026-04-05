@@ -12,7 +12,7 @@ export type LeanExpr =
   | { kind: "num"; value: number }
   | { kind: "bool"; value: boolean }
   | { kind: "str"; value: string }
-  | { kind: "constructor"; name: string }                     // .idle, .allow
+  | { kind: "constructor"; name: string; type?: string }       // .idle, .allow (type = parent datatype name)
   | { kind: "binop"; op: string; left: LeanExpr; right: LeanExpr }
   | { kind: "unop"; op: string; expr: LeanExpr }
   | { kind: "app"; fn: string; args: LeanExpr[] }            // f a b

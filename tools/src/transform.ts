@@ -56,8 +56,11 @@ export const DAFNY_OPTIONS: TransformOptions = {
   },
   methodTable: {
     string: {
-      indexOf: "indexOf",
-      slice:   "slice",
+      indexOf: "StringIndexOf",
+      slice:   "StringSlice",
+    },
+    array: {
+      push: "SeqPush",
     },
   },
 };
@@ -151,7 +154,7 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
     case "result": return { kind: "var", name: "res" };
 
     case "str":
-      if (e.ty.kind === "user") return { kind: "constructor", name: e.value };
+      if (e.ty.kind === "user") return { kind: "constructor", name: e.value, type: e.ty.name };
       return { kind: "str", value: e.value };
 
     case "unop":
@@ -168,18 +171,20 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
       }
       // Discriminant check: x.discriminant === "foo" → x = .foo (before generic string literal comparison)
       if ((e.op === "===" || e.op === "!==") && e.left.kind === "field" && e.left.isDiscriminant && e.right.kind === "str") {
+        const objTy = e.left.obj.ty.kind === "user" ? e.left.obj.ty.name : undefined;
         return {
           kind: "binop",
           op: e.op === "===" ? "=" : "≠",
           left: transformExpr(e.left.obj),
-          right: { kind: "constructor", name: e.right.value },
+          right: { kind: "constructor", name: e.right.value, type: objTy },
         };
       }
       // String literal comparison — constructor if user type, string literal if string
       if ((e.op === "===" || e.op === "!==") && e.right.kind === "str") {
         const left = lowerExpr(e.left, binds);
+        const leftTy = e.left.ty.kind === "user" ? e.left.ty.name : undefined;
         const right: LeanExpr = isUser(e.left.ty)
-          ? { kind: "constructor", name: e.right.value }
+          ? { kind: "constructor", name: e.right.value, type: leftTy }
           : { kind: "str", value: e.right.value };
         return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right };
       }
@@ -241,7 +246,7 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
       }
       if (e.fn.kind !== "var")
         throw new Error(`Unsupported call expression: ${e.fn.kind}`);
-      const prefix = e.callKind === "spec-pure" ? "Pure." : "";
+      const prefix = e.callKind === "spec-pure" && _opts.monadic ? "Pure." : "";
       return { kind: "app", fn: prefix + e.fn.name, args: e.args.map(a => lowerExpr(a, binds)) };
     }
 

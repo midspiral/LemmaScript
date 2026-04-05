@@ -16,12 +16,15 @@ function leanTypeToDafny(t: string): string {
     "String": "string", "Unit": "()", "_": "int",
   };
   if (MAP[t]) return MAP[t];
+  // Array (X Y) → seq<...>
+  const arrParenMatch = t.match(/^Array\s+\((.+)\)$/);
+  if (arrParenMatch) return `seq<${leanTypeToDafny(arrParenMatch[1])}>`;
   // Array X → seq<X>
   const arrMatch = t.match(/^Array\s+(.+)$/);
   if (arrMatch) return `seq<${leanTypeToDafny(arrMatch[1])}>`;
-  // Array (X) → seq<X>
-  const arrParenMatch = t.match(/^Array\s+\((.+)\)$/);
-  if (arrParenMatch) return `seq<${leanTypeToDafny(arrParenMatch[1])}>`;
+  // Strip parens: (X) → X
+  const parenMatch = t.match(/^\((.+)\)$/);
+  if (parenMatch) return leanTypeToDafny(parenMatch[1]);
   // User types pass through
   return t;
 }
@@ -71,7 +74,7 @@ function emitExpr(e: LeanExpr): string {
     case "num": return `${e.value}`;
     case "bool": return e.value ? "true" : "false";
     case "str": return `"${e.value}"`;
-    case "constructor": return e.name.replace(/^\./, "");
+    case "constructor": return qualifyCtor(e.name, e.type);
 
     case "arrayLiteral":
       if (e.elems.length === 0) return `[]`;
@@ -112,13 +115,22 @@ function emitExpr(e: LeanExpr): string {
 
     case "app": {
       const args = e.args.map(emitExpr);
+      // Dafny built-in translations
+      if (e.fn === "StringIndexOf") {
+        needsStringIndexOf = true;
+        return `StringIndexOf(${args.join(", ")})`;
+      }
+      if (e.fn === "StringSlice")
+        return `${args[0]}[${args[1]}..${args[2]}]`;
+      if (e.fn === "SeqPush")
+        return `(${args[0]} + [${args[1]}])`;
       return `${e.fn}(${args.join(", ")})`;
     }
 
     case "field": {
       const obj = emitExpr(e.obj);
-      if (e.field === "size") return `|${obj}|`;
-      if (e.field === "toNat") return obj; // Dafny doesn't need toNat
+      if (e.field === "size" || e.field === "length") return `|${obj}|`;
+      if (e.field === "toNat") return obj;
       return `${obj}.${escapeName(e.field)}`;
     }
 
@@ -130,9 +142,14 @@ function emitExpr(e: LeanExpr): string {
       return `${emitExpr(e.arr)}[${emitExpr(e.idx)}]`;
 
     case "record": {
-      const fields = e.fields.map(f => `${escapeName(f.name)} := ${emitExpr(f.value)}`);
-      if (e.spread) return `${emitExpr(e.spread)}.(${fields.join(", ")})`;
-      return `(${fields.join(", ")})`;
+      if (e.spread) {
+        const updates = e.fields.map(f => `${escapeName(f.name)} := ${emitExpr(f.value)}`);
+        return `${emitExpr(e.spread)}.(${updates.join(", ")})`;
+      }
+      const ctorName = e.fields.length > 0 ? _recordCtors.get(e.fields[0].name) : undefined;
+      const vals = e.fields.map(f => emitExpr(f.value));
+      if (ctorName) return `${ctorName}(${vals.join(", ")})`;
+      return `(${vals.join(", ")})`;
     }
 
     case "if":
@@ -159,7 +176,7 @@ function emitPureExpr(e: LeanExpr, indent: number): string {
     case "match": {
       const lines = [`${pad}match ${e.scrutinee} {`];
       for (const arm of e.arms) {
-        lines.push(`${pad}  case ${arm.pattern.replace(/^\./, "")} =>`);
+        lines.push(`${pad}  case ${translatePattern(arm.pattern)} =>`);
         lines.push(emitPureExpr(arm.body, indent + 2));
       }
       lines.push(`${pad}}`);
@@ -213,7 +230,7 @@ function emitStmt(s: LeanStmt, indent: number): string {
     case "match": {
       const lines = [`${pad}match ${s.scrutinee} {`];
       for (const arm of s.arms) {
-        lines.push(`${pad}  case ${arm.pattern.replace(/^\./, "")} =>`);
+        lines.push(`${pad}  case ${translatePattern(arm.pattern)} =>`);
         lines.push(emitStmts(arm.body, indent + 2));
       }
       lines.push(`${pad}}`);
@@ -286,12 +303,90 @@ function emitDecl(d: LeanDecl): string {
 
 // ── File emission ───────────────────────────────────────────
 
+// ── Preamble helpers ────────────────────────────────────────
+
+let needsStringIndexOf = false;
+
+const STRING_INDEX_OF = `function StringIndexOf(s: string, sub: string): int
+{
+  StringIndexOfFrom(s, sub, 0)
+}
+
+function StringIndexOfFrom(s: string, sub: string, from: nat): int
+  decreases |s| - from
+{
+  if from + |sub| > |s| then -1
+  else if s[from..from + |sub|] == sub then from as int
+  else StringIndexOfFrom(s, sub, from + 1)
+}`;
+
+// ── Constructor and record helpers ───────────────────────────
+
+let _recordCtors = new Map<string, string>();
+
+function buildRecordCtorMap(decls: LeanDecl[]) {
+  _recordCtors = new Map();
+  for (const d of decls) {
+    if (d.kind === "structure" && d.fields.length > 0)
+      _recordCtors.set(d.fields[0].name, d.name);
+    if (d.kind === "namespace") for (const inner of d.decls) {
+      if (inner.kind === "structure" && inner.fields.length > 0)
+        _recordCtors.set(inner.fields[0].name, inner.name);
+    }
+  }
+}
+
+function qualifyCtor(name: string, type?: string): string {
+  const rawName = name.replace(/^\./, "");
+  if (type) return `${type}.${escapeName(rawName)}`;
+  return escapeName(rawName);
+}
+
+/** Translate a Lean match pattern to Dafny syntax.
+ *  ".ctorName field1 field2" → "ctorName(field1, field2)"
+ *  ".ctorName" → "ctorName"
+ *  "_" → "_"
+ */
+function translatePattern(pattern: string): string {
+  if (pattern === "_") return "_";
+  const m = pattern.match(/^\.(\w+)\s*(.*)$/);
+  if (!m) return pattern;
+  const ctorName = escapeName(m[1]);
+  const fields = m[2].trim();
+  if (!fields) return ctorName;
+  const fieldNames = fields.split(/\s+/).map(escapeName);
+  return `${ctorName}(${fieldNames.join(", ")})`;
+}
+
+const PREAMBLES: Record<string, string> = {
+  StringIndexOf: STRING_INDEX_OF,
+};
+
 export function emitDafnyFile(file: LeanFile, tsFileName?: string): string {
+  buildRecordCtorMap(file.decls);
+  needsStringIndexOf = false;
+
+  // Collect pure def names so we can skip their method wrappers
+  const pureDefs = new Set<string>();
+  for (const d of file.decls) {
+    if (d.kind === "namespace") {
+      for (const inner of d.decls) if (inner.kind === "def") pureDefs.add(inner.name);
+    }
+    if (d.kind === "def") pureDefs.add(d.name);
+  }
+
+  // Emit declarations
+  const declLines: string[] = [];
+  for (const decl of file.decls) {
+    if (decl.kind === "method" && pureDefs.has(decl.name)) continue;
+    declLines.push("");
+    declLines.push(emitDecl(decl));
+  }
+
+  // Build output with needed preambles
   const lines: string[] = [];
   if (tsFileName) lines.push(`// Generated by lsc from ${tsFileName}`);
-  for (const decl of file.decls) {
-    lines.push("");
-    lines.push(emitDecl(decl));
-  }
+  if (needsStringIndexOf) { lines.push(""); lines.push(PREAMBLES.StringIndexOf); }
+  lines.push(...declLines);
   return lines.join("\n") + "\n";
 }
