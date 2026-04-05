@@ -85,6 +85,7 @@ function emitExpr(e: LeanExpr): string {
       const args = e.args.map(emitExpr);
       if (e.method === "with" && args.length === 2)
         return `${obj}[${args[0]} := ${args[1]}]`;
+      if (e.method === "includes" && args.length === 1) return `(${args[0]} in ${obj})`;
       if (e.method === "map" && args.length === 1) { needsStdCollections = true; return `Seq.Map(${args[0]}, ${obj})`; }
       if (e.method === "filter" && args.length === 1) { needsStdCollections = true; return `Seq.Filter(${args[0]}, ${obj})`; }
       if (e.method === "every" && args.length === 1) { needsStdCollections = true; return `Seq.All(${obj}, ${args[0]})`; }

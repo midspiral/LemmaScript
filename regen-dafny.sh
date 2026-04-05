@@ -14,7 +14,7 @@ FILES=(
   examples/packet.ts
   examples/clamp.ts
   examples/hof.ts
-  # examples/spec.ts         # kitchen sink, needs HOF + string ops
+  examples/spec.ts
 )
 
 for f in "${FILES[@]}"; do

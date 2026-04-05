@@ -154,11 +154,13 @@ function hasValue(arr: number[], v: number): boolean {
 // with → set! (functional array update, §4.8), Nat index
 function replaceAt(arr: number[], i: number, v: number): number[] {
   //@ type i nat
+  //@ requires i < arr.length
   return arr.with(i, v);
 }
 
 // with → set! with Int index — needs .toNat
 function replaceAtInt(arr: number[], i: number, v: number): number[] {
+  //@ requires i >= 0 && i < arr.length
   return arr.with(i, v);
 }
 
@@ -175,6 +177,7 @@ function findSubstr(s: string, sub: string): number {
 function getSlice(s: string, start: number, end: number): string {
   //@ type start nat
   //@ type end nat
+  //@ requires start <= end && end <= s.length
   return s.slice(start, end);
 }
 
