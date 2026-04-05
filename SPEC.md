@@ -69,7 +69,7 @@ import «binarySearch.def»
 
 All files live in `src/`, which Lake is configured to scan. No nested `lean/` directory.
 
-**`lsc init`** (planned) would scaffold `lakefile.lean`, `lean-toolchain`, and the LemmaScript dependency. For now, copy these from an existing case study.
+To set up a new project, copy `lakefile.lean`, `lean-toolchain`, and `dependencies.toml` from an existing case study.
 
 ---
 
@@ -743,7 +743,6 @@ The module provides:
 ## 9. `lsc` CLI
 
 ```
-lsc init                    — scaffold lakefile.lean + lean-toolchain (planned)
 lsc gen <file.ts>           — generate .def.lean from TS
 lsc check <file.ts>        — gen + lake build (checks .def.lean + .proof.lean)
 lsc extract <file.ts>       — print IR JSON (debugging)
