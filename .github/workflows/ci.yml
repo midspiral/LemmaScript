@@ -28,8 +28,24 @@ jobs:
       - name: Regenerate Lean from TypeScript
         run: ./regen.sh
 
-      - name: Check generated files are up to date
+      - name: Check Lean generated files are up to date
         run: git diff --exit-code
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Setup Dafny
+        uses: dafny-lang/setup-dafny-action@v1
+        with:
+          dafny-version: '4.11.0'
+
+      - name: Regenerate Dafny and verify
+        run: ./regen-dafny.sh
+
+      - name: Check Dafny generated files are up to date
+        run: git diff --exit-code -- '*.dfy.gen'
 
   lean:
     runs-on: ubuntu-latest

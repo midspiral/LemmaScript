@@ -10,6 +10,69 @@ import type { LeanExpr, LeanStmt, LeanDecl, LeanFile, LeanDef, LeanMethod, LeanM
 import type { TypeDeclInfo } from "./types.js";
 import { parseTsType, tyToLean } from "./types.js";
 
+// ── Backend configuration ───────────────────────────────────
+
+export type Backend = "lean" | "dafny";
+
+export interface TransformOptions {
+  backend: Backend;
+  monadic: boolean;
+  dotMethods: Record<string, Record<string, { pure: string; monadic?: string }>>;
+  methodTable: Record<string, Record<string, string>>;
+}
+
+export const LEAN_OPTIONS: TransformOptions = {
+  backend: "lean",
+  monadic: true,
+  dotMethods: {
+    array: {
+      map:      { pure: "map",      monadic: "mapM" },
+      filter:   { pure: "filter",   monadic: "filterM" },
+      every:    { pure: "all",      monadic: "allM" },
+      some:     { pure: "any",      monadic: "anyM" },
+      includes: { pure: "contains" },
+      find:     { pure: "find?" },
+      with:     { pure: "set!" },
+    },
+  },
+  methodTable: {
+    string: {
+      indexOf: "JSString.indexOf",
+      slice:   "JSString.slice",
+    },
+    array: {
+      push: "Array.push",
+    },
+  },
+};
+
+export const DAFNY_OPTIONS: TransformOptions = {
+  backend: "dafny",
+  monadic: false,
+  dotMethods: {
+    array: {
+      map:      { pure: "map" },
+      filter:   { pure: "filter" },
+      every:    { pure: "every" },
+      some:     { pure: "some" },
+      includes: { pure: "includes" },
+      with:     { pure: "with" },
+    },
+  },
+  methodTable: {
+    string: {
+      indexOf: "StringIndexOf",
+      slice:   "StringSlice",
+    },
+    array: {
+      push: "SeqPush",
+    },
+  },
+};
+
+/** Active options — set before each transform call. */
+let _opts: TransformOptions = LEAN_OPTIONS;
+
 /** Prefix match-bound field names to avoid capturing user variables. */
 function matchBinder(fieldName: string): string {
   return `_${fieldName}`;
@@ -19,33 +82,10 @@ function isNat(ty: Ty): boolean { return ty.kind === "nat"; }
 function isArray(ty: Ty): boolean { return ty.kind === "array"; }
 function isUser(ty: Ty): boolean { return ty.kind === "user"; }
 
-// ── Built-in method table ───────────────────────────────────
-
-const METHOD_TABLE: Record<string, Record<string, string>> = {
-  string: {
-    indexOf: "JSString.indexOf",
-    slice:   "JSString.slice",
-  },
-  array: {
-    push: "Array.push",
-  },
-};
-
-/** Dot-notation methods: emitted as obj.leanName args. Lean resolves argument order. */
-const DOT_METHODS: Record<string, Record<string, { pure: string; monadic?: string }>> = {
-  array: {
-    map:      { pure: "map",      monadic: "mapM" },
-    filter:   { pure: "filter",   monadic: "filterM" },
-    every:    { pure: "all",      monadic: "allM" },
-    some:     { pure: "any",      monadic: "anyM" },
-    includes: { pure: "contains" },
-    find:     { pure: "find?" },
-    with:     { pure: "set!" },
-  },
-};
+// ── Method lookup (uses active options) ─────────────────────
 
 function lookupDotMethod(recvTy: Ty, method: string): { pure: string; monadic?: string } | undefined {
-  return DOT_METHODS[recvTy.kind]?.[method];
+  return _opts.dotMethods[recvTy.kind]?.[method];
 }
 
 /** Check if transformed lambda body contains monadic binds. */
@@ -74,7 +114,7 @@ const usedImports = new Set<string>();
 
 function lookupMethod(recvTy: Ty, method: string): string | undefined {
   const tyKey = recvTy.kind === "array" ? "array" : recvTy.kind;
-  const lean = METHOD_TABLE[tyKey]?.[method];
+  const lean = _opts.methodTable[tyKey]?.[method];
   if (lean) {
     const mod = lean.split(".")[0];
     if (!BUILTIN_MODULES.has(mod)) usedImports.add(mod);
@@ -119,7 +159,7 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
     case "result": return { kind: "var", name: "res" };
 
     case "str":
-      if (e.ty.kind === "user") return { kind: "constructor", name: e.value };
+      if (e.ty.kind === "user") return { kind: "constructor", name: e.value, type: e.ty.name };
       return { kind: "str", value: e.value };
 
     case "unop":
@@ -136,18 +176,20 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
       }
       // Discriminant check: x.discriminant === "foo" → x = .foo (before generic string literal comparison)
       if ((e.op === "===" || e.op === "!==") && e.left.kind === "field" && e.left.isDiscriminant && e.right.kind === "str") {
+        const objTy = e.left.obj.ty.kind === "user" ? e.left.obj.ty.name : undefined;
         return {
           kind: "binop",
           op: e.op === "===" ? "=" : "≠",
           left: transformExpr(e.left.obj),
-          right: { kind: "constructor", name: e.right.value },
+          right: { kind: "constructor", name: e.right.value, type: objTy },
         };
       }
       // String literal comparison — constructor if user type, string literal if string
       if ((e.op === "===" || e.op === "!==") && e.right.kind === "str") {
         const left = lowerExpr(e.left, binds);
+        const leftTy = e.left.ty.kind === "user" ? e.left.ty.name : undefined;
         const right: LeanExpr = isUser(e.left.ty)
-          ? { kind: "constructor", name: e.right.value }
+          ? { kind: "constructor", name: e.right.value, type: leftTy }
           : { kind: "str", value: e.right.value };
         return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right };
       }
@@ -173,9 +215,13 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
     }
 
     case "call": {
-      // Math.floor(x) → x
-      if (e.fn.kind === "field" && e.fn.field === "floor" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1)
-        return lowerExpr(e.args[0], binds);
+      // Math.floor(a / b): Lean int div floors (erase), Dafny truncates (emit JSFloorDiv)
+      if (e.fn.kind === "field" && e.fn.field === "floor" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1) {
+        const arg = e.args[0];
+        if (_opts.backend === "dafny" && arg.kind === "binop" && arg.op === "/")
+          return { kind: "app", fn: "JSFloorDiv", args: [lowerExpr(arg.left, binds), lowerExpr(arg.right, binds)] };
+        return lowerExpr(arg, binds);
+      }
       // Built-in method call: receiver.method(args)
       if (e.fn.kind === "field") {
         // Remapped methods: leanFn receiver args
@@ -194,11 +240,11 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
             return lowered;
           });
           // Check if any lambda arg has monadic body → use monadic variant
-          const needsMonadic = args.some(a => a.kind === "lambda" && isMonadicBody(a.body));
+          const needsMonadic = _opts.monadic && args.some(a => a.kind === "lambda" && isMonadicBody(a.body));
           const method = needsMonadic && dotEntry.monadic ? dotEntry.monadic : dotEntry.pure;
           const result: LeanExpr = { kind: "dotCall", obj: recv, method, args };
           // Monadic HOF call is itself monadic — lift via binds like a method call
-          if (needsMonadic && binds) {
+          if (_opts.monadic && needsMonadic && binds) {
             const name = `_t${_liftCounter++}`;
             binds.push({ kind: "let-bind", name, value: result });
             return { kind: "var", name };
@@ -209,7 +255,7 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
       }
       if (e.fn.kind !== "var")
         throw new Error(`Unsupported call expression: ${e.fn.kind}`);
-      const prefix = e.callKind === "spec-pure" ? "Pure." : "";
+      const prefix = e.callKind === "spec-pure" && _opts.backend === "lean" ? "Pure." : "";
       return { kind: "app", fn: prefix + e.fn.name, args: e.args.map(a => lowerExpr(a, binds)) };
     }
 
@@ -322,7 +368,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanStmt[] {
       const idx: LeanExpr = { kind: "var", name: idxName };
       const arrSize: LeanExpr = { kind: "field", obj: arrExpr, field: "size" };
       const bodyStmts = transformStmts(s.body, typeDecls);
-      const letElem: LeanStmt = { kind: "let", name: s.varName, type: tyToLean(s.varTy), mutable: false, value: { kind: "index", arr: arrExpr, idx, toNat: false } };
+      const letElem: LeanStmt = { kind: "let", name: s.varName, type: tyToLean(s.varTy), mutable: false, value: { kind: "index", arr: arrExpr, idx } };
       result.push({
         kind: "forin",
         idx: idxName,
@@ -624,6 +670,17 @@ function transformTypeDecl(d: TypeDeclInfo): LeanDecl {
 
 // ── Top-level transform ──────────────────────────────────────
 
+/** Transform for Dafny backend — same logic, Dafny options. */
+export function transformModuleDafny(mod: TModule): { typesFile: LeanFile | null; defFile: LeanFile } {
+  const prev = _opts;
+  _opts = DAFNY_OPTIONS;
+  try {
+    return transformModule(mod);
+  } finally {
+    _opts = prev;
+  }
+}
+
 export function transformModule(mod: TModule, specImport?: string): { typesFile: LeanFile | null; defFile: LeanFile } {
   const typeDecls = mod.typeDecls.map(transformTypeDecl);
 
@@ -638,6 +695,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
       name: fn.name,
       params: fn.params.map(p => ({ name: p.name, type: tyToLean(p.ty) })),
       returnType: tyToLean(fn.returnTy),
+      requires: fn.requires.map(transformExpr),
       body,
     });
   }

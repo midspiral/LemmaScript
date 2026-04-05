@@ -13,11 +13,19 @@ import { extractModule } from "./extract.js";
 import { resolveModule } from "./resolve.js";
 import { transformModule } from "./transform.js";
 import { emitFile } from "./emit.js";
+import { transformModuleDafny } from "./transform.js";
+import { emitDafnyFile } from "./dafny-emit.js";
+import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-commands.js";
 
 function main() {
-  const [cmd, filePath] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const backendIdx = args.indexOf("--backend=dafny");
+  const backend = backendIdx >= 0 ? "dafny" : "lean";
+  if (backendIdx >= 0) args.splice(backendIdx, 1);
+
+  const [cmd, filePath] = args;
   if (!cmd || !filePath) {
-    console.error("Usage: lsc <gen|check|extract> <file.ts>");
+    console.error("Usage: lsc <gen|check|regen|extract> [--backend=dafny] <file.ts>");
     process.exit(1);
   }
 
@@ -43,6 +51,40 @@ function main() {
 
   const dir = path.dirname(absPath);
   const base = path.basename(filePath, ".ts");
+
+  // ── Dafny backend ─────────────────────────────────────────
+  if (backend === "dafny") {
+    const { typesFile, defFile } = transformModuleDafny(typed);
+    // Emit types + def into a single Dafny file
+    const allDecls = [...(typesFile?.decls ?? []), ...defFile.decls];
+    const merged = { ...defFile, decls: allDecls };
+    const text = emitDafnyFile(merged, path.basename(filePath));
+    const genPath = path.join(dir, `${base}.dfy.gen`);
+    const dfyPath = path.join(dir, `${base}.dfy`);
+    const patchPath = path.join(dir, `${base}.dfy.patch`);
+
+    if (cmd === "gen") {
+      dafnyGen(genPath, dfyPath, text);
+      return;
+    }
+
+    if (cmd === "check") {
+      dafnyGen(genPath, dfyPath, text);
+      dafnyCheckDiff(genPath, dfyPath);
+      dafnyVerify(dfyPath, dir);
+      return;
+    }
+
+    if (cmd === "regen") {
+      dafnyRegen(genPath, dfyPath, patchPath, text, dir);
+      return;
+    }
+
+    console.error(`Unknown command: ${cmd}`);
+    process.exit(1);
+  }
+
+  // ── Lean backend ──────────────────────────────────────────
   const specPath = path.join(dir, `${base}.spec.lean`);
   const specImport = existsSync(specPath) ? `«${base}.spec»` : undefined;
 
