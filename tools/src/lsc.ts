@@ -70,8 +70,8 @@ function main() {
 
     if (cmd === "check") {
       dafnyGen(genPath, dfyPath, text);
-      dafnyCheckDiff(genPath, dfyPath);
-      dafnyVerify(dfyPath, dir);
+      dafnyCheckDiff(genPath, dfyPath);  // warn only
+      if (!dafnyVerify(dfyPath, dir)) process.exit(1);
       return;
     }
 
