@@ -1,23 +1,8 @@
 #!/bin/bash
-# Regenerate Dafny files for ported examples.
+# Regenerate and verify all Dafny files from TypeScript sources.
 set -e
 cd "$(dirname "$0")"
-
-FILES=(
-  examples/binarySearch.ts
-  examples/linearSearch.ts
-  examples/arraySum.ts
-  examples/maxElement.ts
-  examples/isSorted.ts
-  examples/arrayContains.ts
-  examples/transition.ts
-  examples/packet.ts
-  examples/clamp.ts
-  examples/hof.ts
-  examples/spec.ts
-)
-
-for f in "${FILES[@]}"; do
+for f in examples/*.ts; do
   echo "=== $f ==="
   npx tsx tools/src/lsc.ts regen --backend=dafny "$f"
   echo
