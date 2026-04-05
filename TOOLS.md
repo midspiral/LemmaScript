@@ -74,6 +74,47 @@ interface Env { name: string; ty: Ty; parent: Env | null }
 - **For-of desugaring leaks index variable**: `_x_idx` is visible in `//@ invariant` and `//@ done_with` annotations.
 - **Spec annotations are strings**: `//@ ` expressions are parsed by the specparser, not extracted from ts-morph. They don't benefit from the structured raw IR.
 
+## Dafny Backend
+
+The Dafny backend shares the same pipeline up through Lean IR, then uses a separate emitter.
+
+### Pipeline
+
+```
+TS source (.ts)
+  → extract    (ts-morph → Raw IR)
+  → resolve    (Raw IR → Typed IR)
+  → transform  (Typed IR → Lean IR, with DAFNY_OPTIONS)
+  → dafny-emit (Lean IR → Dafny text)
+```
+
+The transform phase uses `transformModuleDafny()` which sets Dafny-specific options (e.g. integer division → `JSFloorDiv`), then the Dafny emitter (`dafny-emit.ts`) translates Lean IR to Dafny syntax.
+
+### Two-File System
+
+Each TS source produces two Dafny files:
+
+- **`foo.dfy.gen`** — always regeneratable from TS. The merge base.
+- **`foo.dfy`** — source of truth. Starts as a copy of `.dfy.gen`, then accumulates user/LLM proof additions. The diff between `.dfy.gen` and `.dfy` must be additions-only.
+
+### Commands
+
+- `lsc gen --backend=dafny foo.ts` — generate `.dfy.gen` + `.dfy` (initial)
+- `lsc regen --backend=dafny foo.ts` — regenerate `.dfy.gen`, save patch, reapply, verify
+- `lsc check --backend=dafny foo.ts` — run `dafny verify`
+
+### Key Differences from Lean Backend
+
+- **Integer division**: TS `Math.floor(a/b)` → `JSFloorDiv(a, b)` (a preamble function)
+- **Array access**: `arr[i]` → `arr[i]` (Dafny has built-in bounds checking via requires)
+- **Namespaces**: Dafny has no `namespace Pure` — pure defs are emitted as top-level `function`s
+- **Requires/ensures**: emitted directly on `function` and `method` declarations
+- **Companion lemmas**: pure functions with `ensures` get a companion `lemma foo_ensures` with empty body
+
+### Proof Files
+
+Separate `.proofs.dfy` / `.props.dfy` files can `include` the generated `.dfy` and add standalone proofs. These are not affected by `regen`.
+
 ## Current State
 
 | File | Phase | Role |
@@ -85,6 +126,8 @@ interface Env { name: string; ty: Ty; parent: Env | null }
 | `typedir.ts` | Types | Typed IR type definitions |
 | `ir.ts` | Types | Lean IR type definitions |
 | `transform.ts` | Transform | Typed IR → Lean IR |
-| `emit.ts` | Emit | Lean IR → text |
+| `emit.ts` | Emit | Lean IR → Lean text |
+| `dafny-emit.ts` | Emit | Lean IR → Dafny text |
+| `dafny-commands.ts` | CLI | Dafny gen/regen/check/patch commands |
 | `types.ts` | (shared) | Type mapping helpers |
 | `lsc.ts` | CLI | Wires the pipeline |
