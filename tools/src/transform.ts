@@ -368,7 +368,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanStmt[] {
       const idx: LeanExpr = { kind: "var", name: idxName };
       const arrSize: LeanExpr = { kind: "field", obj: arrExpr, field: "size" };
       const bodyStmts = transformStmts(s.body, typeDecls);
-      const letElem: LeanStmt = { kind: "let", name: s.varName, type: tyToLean(s.varTy), mutable: false, value: { kind: "index", arr: arrExpr, idx, toNat: false } };
+      const letElem: LeanStmt = { kind: "let", name: s.varName, type: tyToLean(s.varTy), mutable: false, value: { kind: "index", arr: arrExpr, idx } };
       result.push({
         kind: "forin",
         idx: idxName,
