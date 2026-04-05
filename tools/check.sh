@@ -5,7 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LSC="npx tsx $SCRIPT_DIR/src/lsc.ts"
+LSC="npx --prefix $SCRIPT_DIR tsx $SCRIPT_DIR/src/lsc.ts"
 
 backend="$1"; shift
 
