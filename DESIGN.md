@@ -76,6 +76,8 @@ Regenerating `.def.lean` from changed TS annotations never destroys proof work.
 
 **The trust question.** Does the generated Lean embedding faithfully model the TypeScript code? This is a one-directional question (TS → Lean) validated by inspection of the code generator. The code generator is a straightforward syntactic translation — it does not optimize, reorder, or transform.
 
+**Pure defs are total.** `//@ requires` annotations are emitted on Velvet methods (as `require` clauses) but dropped from `Pure` namespace defs. Pure defs must be total Lean functions — they accept any input, including invalid ones. This is because Pure defs are called from runtime-check functions (e.g., `validExpense` calls `sumTo` to *test* whether shares sum to the amount, before knowing that they do). Dafny handles this differently: its verifier tracks path conditions through if-branches, so a function guarded by a runtime check can satisfy a callee's `requires`. Lean's type checker does not track path conditions, so proof-carrying Pure defs would break at these call sites. Array access uses `arr[i]!` (unchecked, defaults to `Inhabited` value on out-of-bounds) for the same reason.
+
 ---
 
 ## 4. The Computational Fragment

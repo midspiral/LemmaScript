@@ -57,6 +57,8 @@ The diff between gen and dfy must be **additions only** — the LLM may insert h
 | Arrays | `Array T` (value semantics) | `seq<T>` (immutable) |
 | String ops | `JSString.indexOf`, `JSString.slice` | `StringIndexOf` (inlined), `s[lo..hi]` |
 | Pure functions | `def` in `Pure` namespace + `method` wrapper | `function` (no wrapper, no namespace) |
+| Requires on Pure defs | Dropped — Pure defs are total; Velvet `method` enforces requires | Emitted as `requires` preconditions on `function` |
+| Array access | `arr[i]!` (unchecked, default on OOB) | `arr[i]` (Dafny verifier checks bounds via requires) |
 | Soundness | Lean kernel | Dafny verifier, no `{:verify false}` |
 
 ## Status
