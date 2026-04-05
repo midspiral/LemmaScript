@@ -1,8 +1,8 @@
 # LemmaScript
 
-A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations; write proofs in Lean 4. The toolchain generates Lean from your TypeScript and Lean checks it.
+A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations. The toolchain generates verified code from your TypeScript — either Lean 4 (with Velvet/Loom) or Dafny (with Z3).
 
-See [SPEC.md](SPEC.md) for the full specification and [DESIGN.md](DESIGN.md) for why this exists.
+See [SPEC.md](SPEC.md) for the full specification, [DESIGN.md](DESIGN.md) for the Lean backend design, and [DESIGN_DAFNY.md](DESIGN_DAFNY.md) for the Dafny backend design.
 
 ## Case Studies
 
@@ -12,16 +12,7 @@ See [SPEC.md](SPEC.md) for the full specification and [DESIGN.md](DESIGN.md) for
 
 ## Setup
 
-**Prerequisites:** [elan](https://github.com/leanprover/elan) (Lean toolchain manager), Node.js >= 18.
-
-**Clone the Loom and Velvet forks:**
-
-```sh
-git clone https://github.com/namin/loom.git -b lemma ../loom
-git clone https://github.com/namin/velvet.git -b lemma ../velvet
-```
-
-LemmaScript depends on Velvet, which depends on Loom.
+**Prerequisites:** Node.js >= 18. For the Lean backend: [elan](https://github.com/leanprover/elan). For the Dafny backend: [Dafny](https://github.com/dafny-lang/dafny) >= 4.x.
 
 **Install Node.js dependencies:**
 
@@ -29,24 +20,31 @@ LemmaScript depends on Velvet, which depends on Loom.
 cd tools && npm install
 ```
 
+**Lean backend** additionally requires the Loom and Velvet forks:
+
+```sh
+git clone https://github.com/namin/loom.git -b lemma ../loom
+git clone https://github.com/namin/velvet.git -b lemma ../velvet
+```
+
 ## Usage
 
-**Generate Lean from TypeScript:**
+### Lean backend (default)
 
 ```sh
-cd tools
-npx tsx src/lsc.ts gen ../examples/binarySearch.ts
+npx tsx tools/src/lsc.ts gen examples/binarySearch.ts        # generate .def.lean
+lake build                                                    # verify with Lean
 ```
 
-This produces `binarySearch.types.lean` (if the TS has type declarations) and `binarySearch.def.lean` next to the TS file.
-
-**Verify with Lean:**
+### Dafny backend
 
 ```sh
-lake build
+npx tsx tools/src/lsc.ts gen --backend=dafny examples/binarySearch.ts   # generate .dfy.gen + .dfy
+dafny verify examples/binarySearch.dfy                                  # verify with Z3
+npx tsx tools/src/lsc.ts regen --backend=dafny examples/binarySearch.ts # regen with patch support
 ```
 
-Builds all examples. First run downloads mathlib cache and Z3/cvc5 (~5 min). Subsequent builds are fast.
+The Dafny backend generates two files per TS source: `foo.dfy.gen` (always regeneratable) and `foo.dfy` (source of truth, with LLM/user proof additions). The diff between them must be additions-only.
 
 ## What's Supported
 
@@ -62,7 +60,7 @@ Builds all examples. First run downloads mathlib cache and Z3/cvc5 (~5 min). Sub
 
 ## File Structure
 
-For each verified function `foo.ts`:
+### Lean backend
 
 | File | Generated? | Purpose |
 |------|-----------|---------|
@@ -71,6 +69,14 @@ For each verified function `foo.ts`:
 | `foo.spec.lean` | No | Ghost definitions, helper lemmas |
 | `foo.def.lean` | Yes | Velvet method definitions |
 | `foo.proof.lean` | No | `prove_correct` with proof tactics |
+
+### Dafny backend
+
+| File | Generated? | Purpose |
+|------|-----------|---------|
+| `foo.ts` | — | TypeScript source with `//@ ` annotations |
+| `foo.dfy.gen` | Yes | Generated Dafny (merge base, always regeneratable) |
+| `foo.dfy` | Yes (initial) | Annotated Dafny (gen + proof additions) |
 
 ## Examples
 
