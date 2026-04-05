@@ -36,7 +36,9 @@ export function dafnyCheckDiff(genPath: string, dfyPath: string): boolean {
 export function dafnyVerify(dfyPath: string, dir: string): boolean {
   console.log("Running dafny verify...");
   try {
-    execSync(`dafny verify "${dfyPath}"`, { cwd: dir, stdio: "inherit" });
+    const content = readFileSync(dfyPath, "utf-8");
+    const stdLibFlag = content.includes("import Std.") ? " --standard-libraries" : "";
+    execSync(`dafny verify${stdLibFlag} "${dfyPath}"`, { cwd: dir, stdio: "inherit" });
     return true;
   } catch {
     return false;

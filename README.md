@@ -43,9 +43,9 @@ lake build
 ```sh
 # generate .dfy.gen + .dfy
 npx tsx tools/src/lsc.ts gen --backend=dafny examples/binarySearch.ts
-# verify with Dafny
-dafny verify examples/binarySearch.dfy
-# regen with patch support
+# verify (--standard-libraries needed if file uses Seq.Map/Filter/All)
+npx tsx tools/src/lsc.ts check --backend=dafny examples/binarySearch.ts
+# regen with patch support after TS changes
 npx tsx tools/src/lsc.ts regen --backend=dafny examples/binarySearch.ts
 ```
 

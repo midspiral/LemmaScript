@@ -13,7 +13,7 @@ FILES=(
   examples/transition.ts
   examples/packet.ts
   examples/clamp.ts
-  # examples/hof.ts          # uses arr.map/filter/every/some (not supported on seq)
+  examples/hof.ts
   # examples/spec.ts         # kitchen sink, needs HOF + string ops
 )
 
