@@ -32,16 +32,21 @@ git clone https://github.com/namin/velvet.git -b lemma ../velvet
 ### Lean backend (default)
 
 ```sh
-npx tsx tools/src/lsc.ts gen examples/binarySearch.ts        # generate .def.lean
-lake build                                                    # verify with Lean
+# generate .def.lean
+npx tsx tools/src/lsc.ts gen examples/binarySearch.ts
+# verify with Lean
+lake build
 ```
 
 ### Dafny backend
 
 ```sh
-npx tsx tools/src/lsc.ts gen --backend=dafny examples/binarySearch.ts   # generate .dfy.gen + .dfy
-dafny verify examples/binarySearch.dfy                                  # verify with Z3
-npx tsx tools/src/lsc.ts regen --backend=dafny examples/binarySearch.ts # regen with patch support
+# generate .dfy.gen + .dfy
+npx tsx tools/src/lsc.ts gen --backend=dafny examples/binarySearch.ts
+# verify with Dafny
+dafny verify examples/binarySearch.dfy
+# regen with patch support
+npx tsx tools/src/lsc.ts regen --backend=dafny examples/binarySearch.ts
 ```
 
 The Dafny backend generates two files per TS source: `foo.dfy.gen` (always regeneratable) and `foo.dfy` (source of truth, with LLM/user proof additions). The diff between them must be additions-only.
