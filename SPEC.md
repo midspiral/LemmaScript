@@ -69,7 +69,7 @@ import «binarySearch.def»
 
 All files live in `src/`, which Lake is configured to scan. No nested `lean/` directory.
 
-**`lsc init`** scaffolds `lakefile.lean`, `lean-toolchain`, and the LemmaScript dependency.
+**`lsc init`** (planned) would scaffold `lakefile.lean`, `lean-toolchain`, and the LemmaScript dependency. For now, copy these from an existing case study.
 
 ---
 
