@@ -104,10 +104,13 @@ method hasValue (arr : Array Int) (v : Int) return (res : Bool)
     return Pure.hasValue arr v
 
 method replaceAt (arr : Array Int) (i : Nat) (v : Int) return (res : Array Int)
+  require i < arr.size
   do
     return Pure.replaceAt arr i v
 
 method replaceAtInt (arr : Array Int) (i : Int) (v : Int) return (res : Array Int)
+  require i ≥ 0
+  require i < arr.size
   do
     return Pure.replaceAtInt arr i v
 
@@ -116,6 +119,8 @@ method findSubstr (s : String) (sub : String) return (res : Int)
     return Pure.findSubstr s sub
 
 method getSlice (s : String) (start : Nat) («end» : Nat) return (res : String)
+  require start ≤ «end»
+  require «end» ≤ s.length
   do
     return Pure.getSlice s start «end»
 
