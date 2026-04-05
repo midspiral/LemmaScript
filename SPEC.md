@@ -743,10 +743,9 @@ The module provides:
 ## 9. `lsc` CLI
 
 ```
-lsc init                    — scaffold lakefile.lean + lean-toolchain
+lsc init                    — scaffold lakefile.lean + lean-toolchain (planned)
 lsc gen <file.ts>           — generate .def.lean from TS
 lsc check <file.ts>        — gen + lake build (checks .def.lean + .proof.lean)
-lsc check --watch           — re-check on file changes
 lsc extract <file.ts>       — print IR JSON (debugging)
 ```
 
