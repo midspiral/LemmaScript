@@ -72,7 +72,10 @@ export function dafnyRegen(genPath: string, dfyPath: string, patchPath: string, 
   // 1. No .dfy yet — create both, verify, done
   if (!existsSync(dfyPath)) {
     dafnyGen(genPath, dfyPath, text);
-    dafnyVerify(dfyPath, dir);
+    if (!dafnyVerify(dfyPath, dir)) {
+      console.error(`FAILED: ${path.basename(dfyPath)} verification failed on first run.`);
+      process.exit(1);
+    }
     return;
   }
 

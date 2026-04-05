@@ -29,7 +29,14 @@ jobs:
         run: ./regen.sh
 
       - name: Check Lean generated files are up to date
-        run: git diff --exit-code
+        run: |
+          git diff --exit-code
+          untracked=$(git ls-files --others --exclude-standard -- '*.def.lean' '*.types.lean')
+          if [ -n "$untracked" ]; then
+            echo "ERROR: Untracked generated Lean files:"
+            echo "$untracked"
+            exit 1
+          fi
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -44,8 +51,22 @@ jobs:
       - name: Regenerate Dafny and verify
         run: ./regen-dafny.sh
 
+      - name: Check Dafny additions-only and verify
+        run: |
+          for f in examples/*.ts; do
+            echo "=== checking $f ==="
+            npx tsx tools/src/lsc.ts check --backend=dafny "$f"
+          done
+
       - name: Check Dafny generated files are up to date
-        run: git diff --exit-code -- '*.dfy.gen'
+        run: |
+          git diff --exit-code -- '*.dfy.gen' '*.dfy'
+          untracked=$(git ls-files --others --exclude-standard -- '*.dfy.gen')
+          if [ -n "$untracked" ]; then
+            echo "ERROR: Untracked .dfy.gen files:"
+            echo "$untracked"
+            exit 1
+          fi
 
   lean:
     runs-on: ubuntu-latest

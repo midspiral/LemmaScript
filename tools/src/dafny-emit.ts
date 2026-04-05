@@ -234,7 +234,7 @@ function emitStmt(s: LeanStmt, indent: number): string {
     case "break":
       return `${pad}break;`;
     case "continue":
-      return `${pad}// continue; (unsupported)`;
+      throw new Error("Unsupported Dafny construct: 'continue' statement");
 
     case "if": {
       let out = `${pad}if ${emitExpr(s.cond)} {\n${emitStmts(s.then, indent + 1)}\n${pad}}`;
@@ -427,6 +427,7 @@ export function emitDafnyFile(file: LeanFile, tsFileName?: string): string {
 
   // Emit declarations
   const declLines: string[] = [];
+  const skipped: string[] = [];
   for (const decl of file.decls) {
     if (decl.kind === "method" && pureDefs.has(decl.name)) continue;
     try {
@@ -434,8 +435,12 @@ export function emitDafnyFile(file: LeanFile, tsFileName?: string): string {
       declLines.push(emitDecl(decl));
     } catch (e) {
       const name = "name" in decl ? decl.name : "unknown";
-      console.error(`Skipping ${name}: ${(e as Error).message}`);
+      console.error(`WARNING: skipping '${name}': ${(e as Error).message}`);
+      skipped.push(name);
     }
+  }
+  if (skipped.length > 0) {
+    console.error(`WARNING: ${skipped.length} declaration(s) skipped: ${skipped.join(", ")}`);
   }
 
   // Build output with needed preambles
