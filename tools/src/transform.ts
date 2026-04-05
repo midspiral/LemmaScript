@@ -139,7 +139,7 @@ function transformExpr(e: TExpr): LeanExpr { return lowerExpr(e, null); }
 function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
   // Monadic lifting: extract embedded method calls to let-binds
   // Pass binds through to args so nested method calls are also lifted
-  if (_opts.monadic && binds && e.kind === "call" && e.callKind === "method") {
+  if (binds && e.kind === "call" && e.callKind === "method") {
     const name = `_t${_liftCounter++}`;
     const fn = e.fn.kind === "var" ? e.fn.name : `${lowerExpr(e.fn, binds)}`;
     const args = e.args.map(a => lowerExpr(a, binds));
@@ -394,7 +394,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): LeanStmt[] {
 
     case "assign": {
       // Top-level method call → direct monadic bind, no lifting needed
-      if (_opts.monadic && s.value.kind === "call" && s.value.callKind === "method")
+      if (s.value.kind === "call" && s.value.callKind === "method")
         return [{ kind: "bind", target: s.target, value: transformExpr(s.value) }];
       const { binds, expr } = liftMethodCalls(s.value);
       return [...binds, { kind: "assign", target: s.target, value: expr }];
