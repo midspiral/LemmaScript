@@ -1,6 +1,6 @@
 # LemmaScript (Tech Preview)
 
-A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations. The toolchain generates verified code from your TypeScript — either Lean 4 (with Velvet/Loom) or Dafny.
+A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations. The toolchain generates verifiable code from your TypeScript — either Lean 4 (with Velvet/Loom) or Dafny.
 
 See [SPEC.md](SPEC.md) for the full specification, [DESIGN.md](DESIGN.md) for the Lean backend design, and [DESIGN_DAFNY.md](DESIGN_DAFNY.md) for the Dafny backend design.
 
