@@ -435,7 +435,9 @@ export function emitDafnyFile(file: LeanFile, tsFileName?: string): string {
       declLines.push(emitDecl(decl));
     } catch (e) {
       const name = "name" in decl ? decl.name : "unknown";
-      console.error(`WARNING: skipping '${name}': ${(e as Error).message}`);
+      const msg = (e as Error).message;
+      console.error(`WARNING: skipping '${name}': ${msg}`);
+      declLines.push(`// LemmaScript: skipped ${name}`);
       skipped.push(name);
     }
   }
