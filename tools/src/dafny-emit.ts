@@ -83,7 +83,9 @@ function emitExpr(e: LeanExpr): string {
     case "dotCall": {
       const obj = emitExpr(e.obj);
       const args = e.args.map(emitExpr);
-      // map/filter etc. — emit as function call for now
+      // seq update: arr.with(idx, val) → arr[idx := val]
+      if (e.method === "with" && args.length === 2)
+        return `${obj}[${args[0]} := ${args[1]}]`;
       return `${obj}.${e.method}(${args.join(", ")})`;
     }
 
