@@ -686,6 +686,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
       name: fn.name,
       params: fn.params.map(p => ({ name: p.name, type: tyToLean(p.ty) })),
       returnType: tyToLean(fn.returnTy),
+      requires: fn.requires.map(transformExpr),
       body,
     });
   }

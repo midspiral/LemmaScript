@@ -77,6 +77,7 @@ export interface LeanDef {
   name: string;
   params: { name: string; type: string }[];
   returnType: string;
+  requires: LeanExpr[];  // used by Dafny backend; Lean backend ignores
   body: LeanExpr;
 }
 

@@ -281,7 +281,12 @@ function emitDecl(d: LeanDecl): string {
     }
 
     case "def": {
-      return `function ${d.name}(${paramList(d.params)}): ${leanTypeToDafny(d.returnType)}\n{\n${emitPureExpr(d.body, 1)}\n}`;
+      const lines = [`function ${d.name}(${paramList(d.params)}): ${leanTypeToDafny(d.returnType)}`];
+      for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
+      lines.push(`{`);
+      lines.push(emitPureExpr(d.body, 1));
+      lines.push(`}`);
+      return lines.join("\n");
     }
 
     case "method": {
