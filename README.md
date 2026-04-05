@@ -4,6 +4,8 @@ A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` s
 
 See [SPEC.md](SPEC.md) for the full specification, [DESIGN.md](DESIGN.md) for the Lean backend design, and [DESIGN_DAFNY.md](DESIGN_DAFNY.md) for the Dafny backend design.
 
+This is a **Tech Preview**: the core idea is there, but support, semantics, and ergonomics are still evolving.
+
 ## Case Studies
 
 - **[casbin-lemmascript](https://github.com/midspiral/casbin-lemmascript/blob/lemmascript/README_LemmaScript.md)** — brownfield verification of the [node-casbin](https://github.com/casbin/node-casbin) access control library. 5 functions verified (effector, keyMatch, keyGet, arrayEquals), 217 existing tests pass with verified code wired in.
