@@ -15,8 +15,3 @@ method clamp(x: int, lo: int, hi: int) returns (res: int)
   return result;
 }
 
-method clampAll(arr: seq<int>, lo: int, hi: int) returns (res: seq<int>)
-  requires (lo <= hi)
-{
-  return arr.map((x: int) => clamp(x, lo, hi));
-}

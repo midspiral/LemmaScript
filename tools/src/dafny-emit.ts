@@ -93,9 +93,7 @@ function emitExpr(e: LeanExpr): string {
       const ps = paramList(e.params);
       if (e.body.length === 1 && e.body[0].kind === "return")
         return `(${ps}) => ${emitExpr(e.body[0].value)}`;
-      const last = e.body[e.body.length - 1];
-      if (last?.kind === "return") return `(${ps}) => ${emitExpr(last.value)}`;
-      return `/* unsupported multi-statement lambda */`;
+      throw new Error("Unsupported: multi-statement lambda in Dafny");
     }
 
     case "unop": {
@@ -400,8 +398,13 @@ export function emitDafnyFile(file: LeanFile, tsFileName?: string): string {
   const declLines: string[] = [];
   for (const decl of file.decls) {
     if (decl.kind === "method" && pureDefs.has(decl.name)) continue;
-    declLines.push("");
-    declLines.push(emitDecl(decl));
+    try {
+      declLines.push("");
+      declLines.push(emitDecl(decl));
+    } catch (e) {
+      const name = "name" in decl ? decl.name : "unknown";
+      console.error(`Skipping ${name}: ${(e as Error).message}`);
+    }
   }
 
   // Build output with needed preambles

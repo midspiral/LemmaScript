@@ -9,7 +9,12 @@ FILES=(
   examples/arraySum.ts
   examples/maxElement.ts
   examples/isSorted.ts
-  # examples/clamp.ts        # needs HOF/lambda support for clampAll
+  examples/arrayContains.ts
+  examples/transition.ts
+  examples/packet.ts
+  examples/clamp.ts
+  # examples/hof.ts          # uses arr.map/filter/every/some (not supported on seq)
+  # examples/spec.ts         # kitchen sink, needs HOF + string ops
 )
 
 for f in "${FILES[@]}"; do
