@@ -18,10 +18,17 @@ Each case study is verified in both Lean 4 and Dafny from the same annotated Typ
 
 **Prerequisites:** Node.js >= 18. For the Lean backend: [elan](https://github.com/leanprover/elan). For the Dafny backend: [Dafny](https://github.com/dafny-lang/dafny) >= 4.x.
 
-**Install Node.js dependencies:**
+**Install from npm:**
 
 ```sh
-cd tools && npm install
+npm install lemmascript
+```
+
+**Or from source:**
+
+```sh
+git clone https://github.com/midspiral/LemmaScript.git
+cd LemmaScript && npm install && npm run build
 ```
 
 **Lean backend** additionally requires the Loom and Velvet forks:
@@ -36,21 +43,16 @@ git clone https://github.com/namin/velvet.git -b lemma ../velvet
 ### Lean backend (default)
 
 ```sh
-# generate .def.lean
-npx tsx tools/src/lsc.ts gen examples/binarySearch.ts
-# verify with Lean
+npx lsc gen src/myModule.ts
 lake build
 ```
 
 ### Dafny backend
 
 ```sh
-# generate .dfy.gen + .dfy
-npx tsx tools/src/lsc.ts gen --backend=dafny examples/binarySearch.ts
-# verify (--standard-libraries needed if file uses Seq.Map/Filter/All)
-npx tsx tools/src/lsc.ts check --backend=dafny examples/binarySearch.ts
-# regen with patch support after TS changes
-npx tsx tools/src/lsc.ts regen --backend=dafny examples/binarySearch.ts
+npx lsc gen --backend=dafny src/myModule.ts
+npx lsc check --backend=dafny src/myModule.ts
+npx lsc regen --backend=dafny src/myModule.ts
 ```
 
 The Dafny backend generates two files per TS source: `foo.dfy.gen` (always regeneratable) and `foo.dfy` (source of truth, with LLM/user proof additions). The diff between them must be additions-only.
