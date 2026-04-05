@@ -1,0 +1,37 @@
+{
+  "name": "lemmascript",
+  "version": "0.1.0",
+  "description": "A verification toolchain for TypeScript — generates Lean 4 or Dafny from annotated TS",
+  "type": "module",
+  "bin": {
+    "lsc": "tools/dist/lsc.js"
+  },
+  "files": [
+    "tools/dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tools/tsconfig.json",
+    "prepublishOnly": "npm run build",
+    "typecheck": "tsc -p tools/tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "ts-morph": "^25.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/midspiral/LemmaScript"
+  },
+  "keywords": [
+    "verification",
+    "typescript",
+    "lean4",
+    "dafny",
+    "formal-methods"
+  ]
+}
