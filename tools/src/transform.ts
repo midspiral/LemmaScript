@@ -12,13 +12,17 @@ import { parseTsType, tyToLean } from "./types.js";
 
 // ── Backend configuration ───────────────────────────────────
 
+export type Backend = "lean" | "dafny";
+
 export interface TransformOptions {
+  backend: Backend;
   monadic: boolean;
   dotMethods: Record<string, Record<string, { pure: string; monadic?: string }>>;
   methodTable: Record<string, Record<string, string>>;
 }
 
 export const LEAN_OPTIONS: TransformOptions = {
+  backend: "lean",
   monadic: true,
   dotMethods: {
     array: {
@@ -43,6 +47,7 @@ export const LEAN_OPTIONS: TransformOptions = {
 };
 
 export const DAFNY_OPTIONS: TransformOptions = {
+  backend: "dafny",
   monadic: false,
   dotMethods: {
     array: {
@@ -210,9 +215,13 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
     }
 
     case "call": {
-      // Math.floor(x) → x
-      if (e.fn.kind === "field" && e.fn.field === "floor" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1)
-        return lowerExpr(e.args[0], binds);
+      // Math.floor(a / b): Lean int div floors (erase), Dafny truncates (emit JSFloorDiv)
+      if (e.fn.kind === "field" && e.fn.field === "floor" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1) {
+        const arg = e.args[0];
+        if (_opts.backend === "dafny" && arg.kind === "binop" && arg.op === "/")
+          return { kind: "app", fn: "JSFloorDiv", args: [lowerExpr(arg.left, binds), lowerExpr(arg.right, binds)] };
+        return lowerExpr(arg, binds);
+      }
       // Built-in method call: receiver.method(args)
       if (e.fn.kind === "field") {
         // Remapped methods: leanFn receiver args
@@ -246,7 +255,7 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
       }
       if (e.fn.kind !== "var")
         throw new Error(`Unsupported call expression: ${e.fn.kind}`);
-      const prefix = e.callKind === "spec-pure" && _opts.monadic ? "Pure." : "";
+      const prefix = e.callKind === "spec-pure" && _opts.backend === "lean" ? "Pure." : "";
       return { kind: "app", fn: prefix + e.fn.name, args: e.args.map(a => lowerExpr(a, binds)) };
     }
 
