@@ -668,6 +668,33 @@ function transformTypeDecl(d: TypeDeclInfo): LeanDecl {
   }
 }
 
+// ── Helpers ──────────────────────────────────────────────────
+
+/** Replace all occurrences of a variable name with a new expression. */
+function replaceVar(e: LeanExpr, name: string, replacement: LeanExpr): LeanExpr {
+  const r = (x: LeanExpr) => replaceVar(x, name, replacement);
+  switch (e.kind) {
+    case "var": return e.name === name ? replacement : e;
+    case "num": case "bool": case "str": case "constructor": return e;
+    case "binop": return { ...e, left: r(e.left), right: r(e.right) };
+    case "unop": return { ...e, expr: r(e.expr) };
+    case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };
+    case "app": return { ...e, args: e.args.map(r) };
+    case "field": return { ...e, obj: r(e.obj) };
+    case "toNat": return { ...e, expr: r(e.expr) };
+    case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
+    case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(f => ({ ...f, value: r(f.value) })) };
+    case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
+    case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
+    case "match": return { ...e, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
+    case "forall": return { ...e, body: e.var === name ? e : { ...e, body: r(e.body) } };
+    case "exists": return { ...e, body: e.var === name ? e : { ...e, body: r(e.body) } };
+    case "let": return { ...e, value: r(e.value), body: e.name === name ? e : { ...e, body: r(e.body) } };
+    case "dotCall": return { ...e, obj: r(e.obj), args: e.args.map(r) };
+    case "lambda": return e; // don't descend into lambdas
+  }
+}
+
 // ── Top-level transform ──────────────────────────────────────
 
 /** Transform for Dafny backend — same logic, Dafny options. */
@@ -690,12 +717,16 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     if (!fn.isPure) continue;
     const body = transformPureBody(fn.body, mod.typeDecls);
     if (!body) continue;
+    // For ensures, replace \result (→ "res") with the function call
+    const fnCall: LeanExpr = { kind: "app", fn: fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) };
+    const ensures = fn.ensures.map(e => replaceVar(transformExpr(e), "res", fnCall));
     pureDefs.push({
       kind: "def",
       name: fn.name,
       params: fn.params.map(p => ({ name: p.name, type: tyToLean(p.ty) })),
       returnType: tyToLean(fn.returnTy),
       requires: fn.requires.map(transformExpr),
+      ensures,
       body,
     });
   }

@@ -105,8 +105,16 @@ function emitExpr(e: LeanExpr): string {
       return `${op}(${emitExpr(e.expr)})`;
     }
 
-    case "binop":
-      return `(${emitExpr(e.left)} ${mapOp(e.op)} ${emitExpr(e.right)})`;
+    case "binop": {
+      // Discriminant check: x == .Ctor → x.Ctor?
+      const op = mapOp(e.op);
+      if ((op === "==" || op === "!=") && e.right.kind === "constructor") {
+        const ctorName = escapeName(e.right.name.replace(/^\./, ""));
+        const pred = `${emitExpr(e.left)}.${ctorName}?`;
+        return op === "!=" ? `(!${pred})` : pred;
+      }
+      return `(${emitExpr(e.left)} ${op} ${emitExpr(e.right)})`;
+    }
 
     case "implies": {
       const parts = [...e.premises.map(emitExpr), emitExpr(e.conclusion)];
@@ -287,6 +295,15 @@ function emitDecl(d: LeanDecl): string {
       lines.push(`{`);
       lines.push(emitPureExpr(d.body, 1));
       lines.push(`}`);
+      // Companion lemma for ensures (proof target for LLM)
+      if (d.ensures.length > 0) {
+        lines.push("");
+        lines.push(`lemma ${d.name}_ensures(${paramList(d.params)})`);
+        for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
+        for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
+        lines.push(`{`);
+        lines.push(`}`);
+      }
       return lines.join("\n");
     }
 

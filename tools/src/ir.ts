@@ -78,6 +78,7 @@ export interface LeanDef {
   params: { name: string; type: string }[];
   returnType: string;
   requires: LeanExpr[];  // used by Dafny backend; Lean backend ignores
+  ensures: LeanExpr[];   // used by Dafny backend for companion lemma
   body: LeanExpr;
 }
 
