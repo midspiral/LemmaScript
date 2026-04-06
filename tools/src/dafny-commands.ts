@@ -75,29 +75,40 @@ export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, t
     return;
   }
 
-  // 6. Gen changed — write base for merge (if not already on disk)
+  // 6. Gen changed — save dfy, write base, merge
+  const savedDfy = readFileSync(dfyPath, "utf-8");
   if (!existsSync(basePath)) writeFileSync(basePath, anchor);
+  const mergedPath = dfyPath + ".merged";
   console.log("Gen changed. Three-way merging...");
   try {
     execSync(`git merge-file "${dfyPath}" "${basePath}" "${genPath}"`, { stdio: "pipe" });
     console.log(`Merged: ${path.basename(dfyPath)}`);
   } catch (e: any) {
     if (e.status > 0) {
-      console.error(`CONFLICT: ${path.basename(dfyPath)} has merge conflicts — resolve manually.`);
-      // Update base so next run doesn't re-merge the same change
-      copyFileSync(genPath, basePath);
+      copyFileSync(dfyPath, mergedPath);
+      writeFileSync(dfyPath, savedDfy);
+      console.error(`CONFLICT: ${path.basename(dfyPath)} — merge had conflicts, dfy restored. See ${path.basename(mergedPath)}`);
       process.exit(1);
     }
     throw e;
   }
 
-  // 7. Verify merged result
-  if (!dafnyVerify(dfyPath, dir)) {
-    console.error(`FAILED: ${path.basename(dfyPath)} verification failed after merge.`);
-    copyFileSync(genPath, basePath);
+  // 7. Check gen invariant survived the merge
+  if (!dafnyCheckDiff(genPath, dfyPath)) {
+    copyFileSync(dfyPath, mergedPath);
+    writeFileSync(dfyPath, savedDfy);
+    console.error(`MERGE ERROR: ${path.basename(dfyPath)} lost gen content, dfy restored. See ${path.basename(mergedPath)}`);
     process.exit(1);
   }
 
-  // 8. Success — delete base (gen is now the anchor)
+  // 8. Verify merged result
+  if (!dafnyVerify(dfyPath, dir)) {
+    copyFileSync(dfyPath, mergedPath);
+    writeFileSync(dfyPath, savedDfy);
+    console.error(`FAILED: ${path.basename(dfyPath)} verification failed after merge, dfy restored. See ${path.basename(mergedPath)}`);
+    process.exit(1);
+  }
+
+  // 9. Success — delete base (gen is now the anchor)
   if (existsSync(basePath)) unlinkSync(basePath);
 }
