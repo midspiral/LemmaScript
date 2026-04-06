@@ -66,49 +66,38 @@ export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, t
   // 4. Determine anchor: base file if it exists (dirty state), otherwise old gen
   const anchor = existsSync(basePath) ? readFileSync(basePath, "utf-8") : oldGen;
 
-  // 5. If gen hasn't changed, just verify existing dfy
-  if (text === anchor) {
-    if (!dafnyVerify(dfyPath, dir)) {
-      console.error(`FAILED: ${path.basename(dfyPath)} verification failed.`);
-      process.exit(1);
+  // 5. If gen changed, three-way merge
+  if (text !== anchor) {
+    const savedDfy = readFileSync(dfyPath, "utf-8");
+    if (!existsSync(basePath)) writeFileSync(basePath, anchor);
+    const mergedPath = dfyPath + ".merged";
+    console.log("Gen changed. Three-way merging...");
+    try {
+      execSync(`git merge-file "${dfyPath}" "${basePath}" "${genPath}"`, { stdio: "pipe" });
+      console.log(`Merged: ${path.basename(dfyPath)}`);
+    } catch (e: any) {
+      if (e.status > 0) {
+        copyFileSync(dfyPath, mergedPath);
+        writeFileSync(dfyPath, savedDfy);
+        console.error(`CONFLICT: ${path.basename(dfyPath)} — merge had conflicts, dfy restored. See ${path.basename(mergedPath)}`);
+        process.exit(1);
+      }
+      throw e;
     }
-    return;
   }
 
-  // 6. Gen changed — save dfy, write base, merge
-  const savedDfy = readFileSync(dfyPath, "utf-8");
-  if (!existsSync(basePath)) writeFileSync(basePath, anchor);
-  const mergedPath = dfyPath + ".merged";
-  console.log("Gen changed. Three-way merging...");
-  try {
-    execSync(`git merge-file "${dfyPath}" "${basePath}" "${genPath}"`, { stdio: "pipe" });
-    console.log(`Merged: ${path.basename(dfyPath)}`);
-  } catch (e: any) {
-    if (e.status > 0) {
-      copyFileSync(dfyPath, mergedPath);
-      writeFileSync(dfyPath, savedDfy);
-      console.error(`CONFLICT: ${path.basename(dfyPath)} — merge had conflicts, dfy restored. See ${path.basename(mergedPath)}`);
-      process.exit(1);
-    }
-    throw e;
-  }
-
-  // 7. Check gen invariant survived the merge
+  // 6. Check gen invariant (unconditional)
   if (!dafnyCheckDiff(genPath, dfyPath)) {
-    copyFileSync(dfyPath, mergedPath);
-    writeFileSync(dfyPath, savedDfy);
-    console.error(`MERGE ERROR: ${path.basename(dfyPath)} lost gen content, dfy restored. See ${path.basename(mergedPath)}`);
+    console.error(`FAILED: ${path.basename(dfyPath)} has modifications to generated lines.`);
     process.exit(1);
   }
 
-  // 8. Verify merged result
+  // 7. Verify
   if (!dafnyVerify(dfyPath, dir)) {
-    copyFileSync(dfyPath, mergedPath);
-    writeFileSync(dfyPath, savedDfy);
-    console.error(`FAILED: ${path.basename(dfyPath)} verification failed after merge, dfy restored. See ${path.basename(mergedPath)}`);
+    console.error(`FAILED: ${path.basename(dfyPath)} verification failed.`);
     process.exit(1);
   }
 
-  // 9. Success — delete base (gen is now the anchor)
+  // 8. Success — delete base (gen is now the anchor)
   if (existsSync(basePath)) unlinkSync(basePath);
 }
