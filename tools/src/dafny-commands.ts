@@ -2,7 +2,7 @@
  * Dafny backend commands: gen, check, regen.
  */
 
-import { existsSync, readFileSync, writeFileSync, copyFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, copyFileSync, unlinkSync } from "fs";
 import { execSync } from "child_process";
 import path from "path";
 
@@ -45,33 +45,17 @@ export function dafnyVerify(dfyPath: string, dir: string): boolean {
   }
 }
 
-export function dafnySavePatch(genPath: string, dfyPath: string, patchPath: string) {
-  try {
-    const patch = execSync(`diff -u "${genPath}" "${dfyPath}" || true`, { encoding: "utf-8" });
-    writeFileSync(patchPath, patch);
-    console.log(`Saved: ${patchPath}`);
-  } catch { /* diff not available */ }
-}
+export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, text: string, dir: string) {
+  // 1. Read old gen before overwriting (needed for base seeding)
+  const oldGen = existsSync(genPath) ? readFileSync(genPath, "utf-8") : "";
 
-function dafnyApplyPatch(genPath: string, dfyPath: string, patchPath: string): boolean {
-  if (!existsSync(patchPath)) return false;
-  const patch = readFileSync(patchPath, "utf-8").trim();
-  if (!patch) return false;
-  copyFileSync(genPath, dfyPath);
-  try {
-    execSync(`patch --no-backup-if-mismatch -p0 "${dfyPath}" < "${patchPath}"`, { stdio: "pipe" });
-    console.log(`Applied: ${patchPath}`);
-    return true;
-  } catch {
-    copyFileSync(genPath, dfyPath);
-    return false;
-  }
-}
+  // 2. Always write new gen so user can inspect latest output
+  writeGen(genPath, text);
 
-export function dafnyRegen(genPath: string, dfyPath: string, patchPath: string, text: string, dir: string) {
-  // 1. No .dfy yet — create both, verify, done
+  // 3. No .dfy yet — create dfy, verify, done
   if (!existsSync(dfyPath)) {
-    dafnyGen(genPath, dfyPath, text);
+    writeFileSync(dfyPath, text);
+    console.log(`Created: ${path.basename(dfyPath)}`);
     if (!dafnyVerify(dfyPath, dir)) {
       console.error(`FAILED: ${path.basename(dfyPath)} verification failed on first run.`);
       process.exit(1);
@@ -79,28 +63,41 @@ export function dafnyRegen(genPath: string, dfyPath: string, patchPath: string, 
     return;
   }
 
-  // 2. Capture patch from current gen → dfy BEFORE overwriting gen
-  let hasPatch = false;
-  if (existsSync(genPath)) {
-    dafnySavePatch(genPath, dfyPath, patchPath);
-    hasPatch = readFileSync(patchPath, "utf-8").trim().length > 0;
+  // 4. Determine anchor: base file if it exists (dirty state), otherwise old gen
+  const anchor = existsSync(basePath) ? readFileSync(basePath, "utf-8") : oldGen;
+
+  // 5. If gen hasn't changed, just verify existing dfy
+  if (text === anchor) {
+    if (!dafnyVerify(dfyPath, dir)) {
+      console.error(`FAILED: ${path.basename(dfyPath)} verification failed.`);
+      process.exit(1);
+    }
+    return;
   }
 
-  // 3. Write new gen
-  writeGen(genPath, text);
-
-  // 4. Try verifying existing dfy as-is
-  if (dafnyVerify(dfyPath, dir)) return;
-
-  // 5. Failed — try applying captured patch to new gen
-  if (hasPatch) {
-    console.log("Verification failed. Trying to apply patch...");
-    if (dafnyApplyPatch(genPath, dfyPath, patchPath) && dafnyVerify(dfyPath, dir)) return;
+  // 6. Gen changed — write base for merge (if not already on disk)
+  if (!existsSync(basePath)) writeFileSync(basePath, anchor);
+  console.log("Gen changed. Three-way merging...");
+  try {
+    execSync(`git merge-file "${dfyPath}" "${basePath}" "${genPath}"`, { stdio: "pipe" });
+    console.log(`Merged: ${path.basename(dfyPath)}`);
+  } catch (e: any) {
+    if (e.status > 0) {
+      console.error(`CONFLICT: ${path.basename(dfyPath)} has merge conflicts — resolve manually.`);
+      // Update base so next run doesn't re-merge the same change
+      copyFileSync(genPath, basePath);
+      process.exit(1);
+    }
+    throw e;
   }
 
-  // 6. Needs LLM re-adaptation
-  console.error(`FAILED: ${path.basename(dfyPath)} needs manual re-adaptation.`);
-  console.error(`  ${genPath} has the new generated code.`);
-  if (hasPatch) console.error(`  ${patchPath} has the captured patch.`);
-  process.exit(1);
+  // 7. Verify merged result
+  if (!dafnyVerify(dfyPath, dir)) {
+    console.error(`FAILED: ${path.basename(dfyPath)} verification failed after merge.`);
+    copyFileSync(genPath, basePath);
+    process.exit(1);
+  }
+
+  // 8. Success — delete base (gen is now the anchor)
+  if (existsSync(basePath)) unlinkSync(basePath);
 }

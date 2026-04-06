@@ -5,6 +5,4 @@
 node_modules/
 dist/
 
-# Dafny (ephemeral patch files)
-*.dfy.patch
 

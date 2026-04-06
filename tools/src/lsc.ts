@@ -61,7 +61,7 @@ function main() {
     const text = emitDafnyFile(merged, path.basename(filePath));
     const genPath = path.join(dir, `${base}.dfy.gen`);
     const dfyPath = path.join(dir, `${base}.dfy`);
-    const patchPath = path.join(dir, `${base}.dfy.patch`);
+    const basePath = path.join(dir, `${base}.dfy.base`);
 
     if (cmd === "gen") {
       dafnyGen(genPath, dfyPath, text);
@@ -76,7 +76,7 @@ function main() {
     }
 
     if (cmd === "regen") {
-      dafnyRegen(genPath, dfyPath, patchPath, text, dir);
+      dafnyRegen(genPath, dfyPath, basePath, text, dir);
       return;
     }
 
