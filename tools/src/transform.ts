@@ -823,9 +823,9 @@ function replaceVar(e: LeanExpr, name: string, replacement: LeanExpr): LeanExpr 
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
     case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
     case "match": return { ...e, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
-    case "forall": return { ...e, body: e.var === name ? e : { ...e, body: r(e.body) } };
-    case "exists": return { ...e, body: e.var === name ? e : { ...e, body: r(e.body) } };
-    case "let": return { ...e, value: r(e.value), body: e.name === name ? e : { ...e, body: r(e.body) } };
+    case "forall": return e.var === name ? e : { ...e, body: r(e.body) };
+    case "exists": return e.var === name ? e : { ...e, body: r(e.body) };
+    case "let": return { ...e, value: r(e.value), body: e.name === name ? e.body : r(e.body) };
     case "dotCall": return { ...e, obj: r(e.obj), args: e.args.map(r) };
     case "lambda": return e; // don't descend into lambdas
   }

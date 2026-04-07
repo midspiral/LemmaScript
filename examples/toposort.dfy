@@ -146,7 +146,7 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
     invariant forall k :: 0 <= k < |queue| ==> queue[k] in enqueued
     invariant forall i, j :: 0 <= i < j < |queue| ==> queue[i] != queue[j]
     invariant forall k :: ((k in enqueued) ==> exists j: int :: (((0 <= j) && (j < i_id_idx3)) && (nodeIds[j] == k)))
-    invariant forall v :: v in enqueued ==> v in inDegree && inDegree[v] == 0
+    invariant forall k :: ((k in enqueued) ==> ((k in inDegree) && (inDegree[k] == 0)))
     invariant forall k :: 0 <= k < i_id_idx3 ==> nodeIds[k] in inDegree
     invariant forall v :: v in inDegree ==> inDegree[v] >= 0
     invariant forall k :: 0 <= k < i_id_idx3 ==> nodeIds[k] !in enqueued ==> inDegree[nodeIds[k]] >= 1
@@ -177,7 +177,7 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
     invariant forall k :: 0 <= k < |queue| ==> queue[k] in enqueued
     invariant forall i, j :: 0 <= i < j < |queue| ==> queue[i] != queue[j]
     invariant forall k :: k in adjacency ==> forall v :: v in adjacency[k] ==> v in universe
-    invariant forall v :: v in enqueued ==> v in inDegree && inDegree[v] <= 0
+    invariant forall k :: ((k in enqueued) ==> ((k in inDegree) && (inDegree[k] <= 0)))
     invariant forall v :: v in universe && v !in enqueued && v in inDegree ==> inDegree[v] >= 1
     decreases (|nodeIds| - |sorted|)
   {
@@ -199,10 +199,10 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
           invariant (|enqueued| <= |nodeIds|)
           invariant (|enqueued| <= |queue|)
           invariant (|queue| <= |enqueued|)
+          invariant forall k :: ((k in enqueued) ==> ((k in inDegree) && (inDegree[k] <= 0)))
           invariant enqueued <= universe
           invariant forall k :: 0 <= k < |queue| ==> queue[k] in enqueued
           invariant forall i, j :: 0 <= i < j < |queue| ==> queue[i] != queue[j]
-          invariant forall v :: v in enqueued ==> v in inDegree && inDegree[v] <= 0
           invariant forall v :: v in universe && v !in enqueued && v in inDegree ==> inDegree[v] >= 1
         {
           var neighbor := i_neighbors_val[i_neighbor_idx];

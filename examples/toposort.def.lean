@@ -55,6 +55,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
       invariant enqueued.size ≤ queue.size
       invariant queue.size ≤ enqueued.size
       invariant ∀ k : String, enqueued.contains k → ∃ j : Int, 0 ≤ j ∧ j < _id_idx3 ∧ nodeIds[j.toNat]! = k
+      invariant ∀ k : String, enqueued.contains k → inDegree.contains k ∧ inDegree.get! k = 0
     do
       let id := nodeIds[_id_idx3]!
       if match inDegree.get? id with | .some _value => _value == 0 | .none => false then
@@ -71,6 +72,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
       invariant enqueued.size ≤ nodeIds.size
       invariant enqueued.size ≤ queue.size
       invariant queue.size ≤ enqueued.size
+      invariant ∀ k : String, enqueued.contains k → inDegree.contains k ∧ inDegree.get! k ≤ 0
       decreasing nodeIds.size - sorted.size
     do
       let id := queue[qHead.toNat]!
@@ -86,6 +88,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
           invariant enqueued.size ≤ nodeIds.size
           invariant enqueued.size ≤ queue.size
           invariant queue.size ≤ enqueued.size
+          invariant ∀ k : String, enqueued.contains k → inDegree.contains k ∧ inDegree.get! k ≤ 0
         do
           let neighbor := _neighbors_val[_neighbor_idx]!
           let deg := inDegree.get? neighbor
