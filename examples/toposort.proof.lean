@@ -34,12 +34,13 @@ theorem allDistinct_means_no_dups (s : Array String) (n : Nat)
 theorem not_enqueued_of_distinct (nodeIds : Array String) (enqueued : Std.HashSet String)
     (i : Nat) (hi : i < nodeIds.size)
     (hdist : allDistinct nodeIds nodeIds.size)
-    (hsub : ∀ k, enqueued.contains k = true → ∃ j, 0 ≤ j ∧ j < i ∧ nodeIds[j]! = k) :
+    (hsub : ∀ k, enqueued.contains k = true → ∃ j : Int, 0 ≤ j ∧ j < ↑i ∧ nodeIds[j.toNat]! = k) :
     ¬(enqueued.contains nodeIds[i]! = true) := by
   intro hc
-  obtain ⟨j, _, hjlt, hjeq⟩ := hsub _ hc
+  obtain ⟨j, hj0, hjlt, hjeq⟩ := hsub _ hc
+  have hj_nat : j.toNat < i := by omega
   exact allDistinct_means_no_dups nodeIds nodeIds.size hdist (Nat.le_refl _)
-    j i hjlt hi (by rw [hjeq])
+    j.toNat i hj_nat hi (by rw [hjeq])
 
 section TopoProof
 set_option loom.solver "custom"
@@ -57,11 +58,11 @@ macro_rules
 prove_correct topologicalSort by
   loom_goals_intro
   all_goals (first | (loom_unfold; loom_solver) | skip)
-  -- Handle assert and remaining goals
+  -- Handle remaining goals
   all_goals (first
     | (simp only [WithName] at *;
-       apply not_enqueued_of_distinct _ _ _ (by omega) (by assumption)
-         (by intro k hk; simp only [WithName] at *; exact ‹_› k hk))
+       exact not_enqueued_of_distinct _ _ _ (by omega) (by assumption) (by assumption))
+    | (simp only [WithName] at *; grind (splits := 50))
     | sorry)
 
 end TopoProof
