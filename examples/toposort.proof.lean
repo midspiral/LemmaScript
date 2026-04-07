@@ -13,8 +13,9 @@ macro_rules
   | omega
   | (simp only [WithName] at *;
      simp only [Array.size_push, Std.HashSet.size_insert];
-     (try (generalize Std.HashSet.size _ = _es at *));
-     split <;> omega)
+     first
+     | (generalize Std.HashSet.size _ = _es at *; split <;> omega)
+     | ((have _heq := Nat.le_antisymm ‹_ ≤ _› ‹_ ≤ _›); rw [_heq]; split <;> omega))
   | (simp only [WithName] at *; omega))
 
 prove_correct topologicalSort by
