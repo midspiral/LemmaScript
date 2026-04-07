@@ -19,6 +19,8 @@ export function topologicalSort(
   // Phase 1: initialize maps
   for (const id of nodeIds) {
     //@ invariant forall(k, 0 <= k && k < _id_idx ==> inDegree.has(nodeIds[k]))
+    //@ invariant forall(k, inDegree.has(k) ==> inDegree.get(k) === 0)
+    //@ invariant forall(k, adjacency.has(k) ==> adjacency.get(k) === [])
     inDegree.set(id, 0);
     adjacency.set(id, []);
   }
@@ -26,6 +28,7 @@ export function topologicalSort(
   // Phase 2: build adjacency and in-degree from deps
   for (const id of nodeIds) {
     //@ invariant forall(k, 0 <= k && k < nodeIds.length ==> inDegree.has(nodeIds[k]))
+    //@ invariant forall(k, inDegree.has(k) ==> inDegree.get(k) >= 0)
     const nodeDeps = deps.get(id);
     if (nodeDeps !== undefined) {
       inDegree.set(id, nodeDeps.size);
@@ -42,6 +45,7 @@ export function topologicalSort(
   const queue: string[] = [];
   for (const id of nodeIds) {
     //@ invariant queue.length <= nodeIds.length
+    //@ invariant queue.length <= _id_idx3
     if (inDegree.get(id) === 0) {
       queue = [...queue, id];
     }
@@ -54,6 +58,8 @@ export function topologicalSort(
     //@ type qHead nat
     //@ invariant qHead <= queue.length
     //@ invariant sorted.length === qHead
+    //@ invariant sorted.length <= nodeIds.length
+    //@ invariant queue.length <= nodeIds.length
     //@ decreases nodeIds.length - sorted.length
     const id = queue[qHead];
     sorted = [...sorted, id];
@@ -64,6 +70,7 @@ export function topologicalSort(
       for (const neighbor of neighbors) {
         //@ invariant qHead <= queue.length
         //@ invariant sorted.length === qHead
+        //@ invariant queue.length <= nodeIds.length
         const deg = inDegree.get(neighbor);
         if (deg !== undefined) {
           const newDeg = deg - 1;

@@ -99,6 +99,7 @@ function emitExpr(e: LeanExpr): string {
         return `${obj}[${args[0]} := ${args[1]}]`;
       if (e.method === "includes" && args.length === 1) return `(${args[0]} in ${obj})`;
       // Map operations
+      if (e.method === "mapGetDirect" && args.length === 1) return `${obj}[${args[0]}]`;
       if (e.method === "mapGet" && args.length === 1) {
         needsOptionType = true;
         return `(if ${args[0]} in ${obj} then Some(${obj}[${args[0]}]) else None)`;
@@ -205,8 +206,16 @@ function emitExpr(e: LeanExpr): string {
       return `(match ${scrut} { ${arms.join(" ")} })`;
     }
 
-    case "forall": return `forall ${e.var}: ${leanTypeToDafny(e.type)} :: ${emitExpr(e.body)}`;
-    case "exists": return `exists ${e.var}: ${leanTypeToDafny(e.type)} :: ${emitExpr(e.body)}`;
+    case "forall": {
+      const dty = leanTypeToDafny(e.type);
+      const ann = dty === "string" ? "" : `: ${dty}`;
+      return `forall ${e.var}${ann} :: ${emitExpr(e.body)}`;
+    }
+    case "exists": {
+      const dty = leanTypeToDafny(e.type);
+      const ann = dty === "string" ? "" : `: ${dty}`;
+      return `exists ${e.var}${ann} :: ${emitExpr(e.body)}`;
+    }
 
     case "let": return `var ${escapeName(e.name)} := ${emitExpr(e.value)}; ${emitExpr(e.body)}`;
   }

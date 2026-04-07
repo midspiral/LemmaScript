@@ -16,6 +16,8 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
     for _id_idx in [:nodeIds.size]
       invariant _id_idx ≤ nodeIds.size
       invariant ∀ k : Int, 0 ≤ k → k < _id_idx → inDegree.contains nodeIds[k.toNat]!
+      invariant ∀ k : String, inDegree.contains k → inDegree.get! k = 0
+      invariant ∀ k : String, adjacency.contains k → adjacency.get! k = #[]
     do
       let id := nodeIds[_id_idx]!
       inDegree := inDegree.insert id 0
@@ -23,6 +25,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
     for _id_idx2 in [:nodeIds.size]
       invariant _id_idx2 ≤ nodeIds.size
       invariant ∀ k : Int, 0 ≤ k → k < nodeIds.size → inDegree.contains nodeIds[k.toNat]!
+      invariant ∀ k : String, inDegree.contains k → inDegree.get! k ≥ 0
     do
       let id := nodeIds[_id_idx2]!
       let nodeDeps := deps.get? id
@@ -46,6 +49,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
     for _id_idx3 in [:nodeIds.size]
       invariant _id_idx3 ≤ nodeIds.size
       invariant queue.size ≤ nodeIds.size
+      invariant queue.size ≤ _id_idx3
     do
       let id := nodeIds[_id_idx3]!
       if match inDegree.get? id with | .some _value => _value == 0 | .none => false then
@@ -55,6 +59,8 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
     while qHead < queue.size
       invariant qHead ≤ queue.size
       invariant sorted.size = qHead
+      invariant sorted.size ≤ nodeIds.size
+      invariant queue.size ≤ nodeIds.size
       decreasing nodeIds.size - sorted.size
     do
       let id := queue[qHead.toNat]!
@@ -67,6 +73,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
           invariant _neighbor_idx ≤ _neighbors_val.size
           invariant qHead ≤ queue.size
           invariant sorted.size = qHead
+          invariant queue.size ≤ nodeIds.size
         do
           let neighbor := _neighbors_val[_neighbor_idx]!
           let deg := inDegree.get? neighbor

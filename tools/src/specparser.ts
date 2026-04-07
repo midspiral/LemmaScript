@@ -222,6 +222,16 @@ class Parser {
       this.expect("punc", ")");
       return expr;
     }
+    if (t.type === "punc" && t.value === "[") {
+      this.advance();
+      const elems: Expr[] = [];
+      if (!this.match("punc", "]")) {
+        elems.push(this.parseImplies());
+        while (this.match("punc", ",")) elems.push(this.parseImplies());
+        this.expect("punc", "]");
+      }
+      return { kind: "arrayLiteral", elems };
+    }
     if (t.type === "punc" && t.value === "{") {
       this.advance();
       const fields: { name: string; value: Expr }[] = [];

@@ -89,6 +89,48 @@ function getDiscriminant(ctx: Ctx, typeName: string): string | undefined {
   return findDecl(ctx, typeName)?.discriminant;
 }
 
+/** Infer quantifier variable type from usage in body.
+ *  If the variable is used as a map/set key (e.g. map.has(k), map.get(k)),
+ *  return the collection's key type. Otherwise return null (default to int). */
+function inferQuantVarType(varName: string, body: RawExpr, ctx: Ctx): Ty | null {
+  // Look for calls like map.has(k) or map.get(k) where k is our variable
+  if (body.kind === "call" && body.fn.kind === "field" &&
+      (body.fn.field === "has" || body.fn.field === "get") &&
+      body.args.length === 1 && body.args[0].kind === "var" && body.args[0].name === varName) {
+    const objTy = lookup(ctx.env, body.fn.obj.kind === "var" ? body.fn.obj.name : "");
+    if (objTy?.kind === "map") return objTy.key;
+    if (objTy?.kind === "set") return objTy.elem;
+  }
+  // Recurse into subexpressions
+  if (body.kind === "binop") {
+    return inferQuantVarType(varName, body.left, ctx) ?? inferQuantVarType(varName, body.right, ctx);
+  }
+  if (body.kind === "unop") return inferQuantVarType(varName, body.expr, ctx);
+  if (body.kind === "call") {
+    for (const a of body.args) { const r = inferQuantVarType(varName, a, ctx); if (r) return r; }
+    return inferQuantVarType(varName, body.fn, ctx);
+  }
+  if (body.kind === "field") return inferQuantVarType(varName, body.obj, ctx);
+  if (body.kind === "index") {
+    return inferQuantVarType(varName, body.obj, ctx) ?? inferQuantVarType(varName, body.idx, ctx);
+  }
+  if (body.kind === "conditional") {
+    return inferQuantVarType(varName, body.cond, ctx) ??
+      inferQuantVarType(varName, body.then, ctx) ?? inferQuantVarType(varName, body.else, ctx);
+  }
+  if ((body.kind === "forall" || body.kind === "exists") && body.var !== varName) {
+    return inferQuantVarType(varName, body.body, ctx);
+  }
+  if (body.kind === "arrayLiteral") {
+    for (const el of body.elems) { const r = inferQuantVarType(varName, el, ctx); if (r) return r; }
+  }
+  if (body.kind === "record") {
+    if (body.spread) { const r = inferQuantVarType(varName, body.spread, ctx); if (r) return r; }
+    for (const f of body.fields) { const r = inferQuantVarType(varName, f.value, ctx); if (r) return r; }
+  }
+  return null;
+}
+
 function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Math") return "pure";
   if (fn.kind === "var" && (ctx.inSpec || ctx.inLambda) && ctx.pureFns.has(fn.name)) return "spec-pure";
@@ -141,7 +183,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let ty: Ty = { kind: "unknown" };
       // Infer return types for collection methods
       if (fn.kind === "field" && fn.obj.ty.kind === "map") {
-        if (fn.field === "get") ty = { kind: "optional", inner: fn.obj.ty.value };
+        if (fn.field === "get") ty = ctx.inSpec ? fn.obj.ty.value : { kind: "optional", inner: fn.obj.ty.value };
         else if (fn.field === "has") ty = { kind: "bool" };
         else if (fn.field === "set") ty = fn.obj.ty;
       } else if (fn.kind === "field" && fn.obj.ty.kind === "set") {
@@ -198,12 +240,14 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       return { kind: "result", ty: ctx.returnTy };
 
     case "forall": {
-      const varTy: Ty = e.varType === "nat" ? { kind: "nat" } : { kind: "int" };
+      const varTy: Ty = e.varType === "nat" ? { kind: "nat" }
+        : inferQuantVarType(e.var, e.body, ctx) ?? { kind: "int" };
       return { kind: "forall", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
     }
 
     case "exists": {
-      const varTy: Ty = e.varType === "nat" ? { kind: "nat" } : { kind: "int" };
+      const varTy: Ty = e.varType === "nat" ? { kind: "nat" }
+        : inferQuantVarType(e.var, e.body, ctx) ?? { kind: "int" };
       return { kind: "exists", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
     }
 

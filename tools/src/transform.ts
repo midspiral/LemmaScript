@@ -143,10 +143,16 @@ function lookupMethod(recvTy: Ty, method: string): string | undefined {
 
 // ── Transform expressions ────────────────────────────────────
 
+/** Prop-valued operators (for specs/invariants). */
 const OP_MAP: Record<string, string> = {
   "===": "=", "!==": "≠", ">=": "≥", "<=": "≤", ">": ">", "<": "<",
   "&&": "∧", "||": "∨", "+": "+", "-": "-", "*": "*", "/": "/", "%": "%",
   "==": "=", "!=": "≠",
+};
+
+/** Bool-valued operators (for code-level conditions needing Decidable). */
+const BOOL_OP_MAP: Record<string, string> = {
+  ...OP_MAP, "===": "==", "!==": "!=",
 };
 
 function transformExpr(e: TExpr): LeanExpr { return lowerExpr(e, null); }
@@ -212,15 +218,14 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
           : { kind: "str", value: e.right.value };
         return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right };
       }
-      // Optional comparison: optExpr === val → match optExpr { Some(v) => v == val, None => false }
-      if ((e.op === "===" || e.op === "!==") &&
+      // Optional comparison: optExpr op val → match optExpr { Some(v) => v op val, None => false/true }
+      if (["===", "!==", ">=", "<=", ">", "<"].includes(e.op) &&
           (e.left.ty.kind === "optional") !== (e.right.ty.kind === "optional")) {
         const [optSide, valSide] = e.left.ty.kind === "optional" ? [e.left, e.right] : [e.right, e.left];
         const optExpr = lowerExpr(optSide, binds);
         const valExpr = lowerExpr(valSide, binds);
-        // Use BEq (==) not Eq (=) so the match returns Bool, not Prop
-        const cmpOp = e.op === "===" ? "==" : "!=";
-        const noneVal = e.op === "===" ? false : true;
+        const cmpOp = BOOL_OP_MAP[e.op] ?? e.op;
+        const noneVal = e.op === "!==" ? true : false;
         const bound = matchBinder("value");
         return {
           kind: "match", scrutinee: optExpr,
@@ -280,7 +285,12 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
           });
           // Check if any lambda arg has monadic body → use monadic variant
           const needsMonadic = _opts.monadic && args.some(a => a.kind === "lambda" && isMonadicBody(a.body));
-          const method = needsMonadic && dotEntry.monadic ? dotEntry.monadic : dotEntry.pure;
+          // Spec-context map get: result type is non-optional → use direct access
+          let pure = dotEntry.pure;
+          if (e.fn.field === "get" && e.fn.obj.ty.kind === "map" && e.ty.kind !== "optional") {
+            pure = _opts.backend === "lean" ? "get!" : "mapGetDirect";
+          }
+          const method = needsMonadic && dotEntry.monadic ? dotEntry.monadic : pure;
           const result: LeanExpr = { kind: "dotCall", obj: recv, method, args };
           // Monadic HOF call is itself monadic — lift via binds like a method call
           if (_opts.monadic && needsMonadic && binds) {
