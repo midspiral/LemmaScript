@@ -14,32 +14,38 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
     let mut inDegree : Std.HashMap String Int := Std.HashMap.empty
     let mut adjacency : Std.HashMap String (Array String) := Std.HashMap.empty
     for _id_idx in [:nodeIds.size]
+      invariant _id_idx ≤ nodeIds.size
       invariant ∀ k : Int, 0 ≤ k → k < _id_idx → inDegree.contains nodeIds[k.toNat]!
     do
       let id := nodeIds[_id_idx]!
       inDegree := inDegree.insert id 0
       adjacency := adjacency.insert id #[]
     for _id_idx2 in [:nodeIds.size]
+      invariant _id_idx2 ≤ nodeIds.size
+      invariant ∀ k : Int, 0 ≤ k → k < nodeIds.size → inDegree.contains nodeIds[k.toNat]!
     do
       let id := nodeIds[_id_idx2]!
       let nodeDeps := deps.get? id
-      match nodeDeps with
-      | .some _nodeDeps_val =>
+      if h_nodeDeps : (nodeDeps).isSome = true then
+        let _nodeDeps_val := (nodeDeps).get h_nodeDeps
         inDegree := inDegree.insert id _nodeDeps_val.size
         let _dep_seq := _nodeDeps_val.toArray
         for _dep_idx in [:_dep_seq.size]
+          invariant _dep_idx ≤ _dep_seq.size
         do
           let dep := _dep_seq[_dep_idx]!
           let adj := adjacency.get? dep
-          match adj with
-          | .some _adj_val =>
+          if h_adj : (adj).isSome = true then
+            let _adj_val := (adj).get h_adj
             adjacency := adjacency.insert dep (Array.push _adj_val id)
-          | .none =>
+          else
             pure ()
-      | .none =>
+      else
         pure ()
     let mut queue : Array String := #[]
     for _id_idx3 in [:nodeIds.size]
+      invariant _id_idx3 ≤ nodeIds.size
+      invariant queue.size ≤ nodeIds.size
     do
       let id := nodeIds[_id_idx3]!
       if match inDegree.get? id with | .some _value => _value == 0 | .none => false then
@@ -55,20 +61,23 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
       sorted := Array.push sorted id
       qHead := qHead + 1
       let neighbors := adjacency.get? id
-      match neighbors with
-      | .some _neighbors_val =>
+      if h_neighbors : (neighbors).isSome = true then
+        let _neighbors_val := (neighbors).get h_neighbors
         for _neighbor_idx in [:_neighbors_val.size]
+          invariant _neighbor_idx ≤ _neighbors_val.size
+          invariant qHead ≤ queue.size
+          invariant sorted.size = qHead
         do
           let neighbor := _neighbors_val[_neighbor_idx]!
           let deg := inDegree.get? neighbor
-          match deg with
-          | .some _deg_val =>
+          if h_deg : (deg).isSome = true then
+            let _deg_val := (deg).get h_deg
             let newDeg := _deg_val - 1
             inDegree := inDegree.insert neighbor newDeg
             if newDeg = 0 then
               queue := Array.push queue neighbor
-          | .none =>
+          else
             pure ()
-      | .none =>
+      else
         pure ()
     return sorted

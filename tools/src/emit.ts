@@ -164,7 +164,34 @@ function emitStmt(s: LeanStmt, indent: number): string {
     }
 
     case "match": {
-      const lines = [`${pad}match ${typeof s.scrutinee === "string" ? s.scrutinee : emitExpr(s.scrutinee)} with`];
+      const scrut = typeof s.scrutinee === "string" ? s.scrutinee : emitExpr(s.scrutinee);
+      // Option match (.some/.none) → emit as if/let for WPGen.if compatibility
+      if (s.arms.length === 2) {
+        const someArm = s.arms.find(a => a.pattern.startsWith(".some "));
+        const noneArm = s.arms.find(a => a.pattern === ".none");
+        if (someArm && noneArm) {
+          const boundVar = someArm.pattern.slice(6); // strip ".some "
+          const hName = `h_${scrut.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+          const lines = [
+            `${pad}if ${hName} : (${scrut}).isSome = true then`,
+            `${pad}  let ${boundVar} := (${scrut}).get ${hName}`,
+          ];
+          if (someArm.body.length === 0) {
+            lines.push(`${pad}  pure ()`);
+          } else {
+            lines.push(emitStmts(someArm.body, indent + 1));
+          }
+          lines.push(`${pad}else`);
+          if (noneArm.body.length === 0) {
+            lines.push(`${pad}  pure ()`);
+          } else {
+            lines.push(emitStmts(noneArm.body, indent + 1));
+          }
+          return lines.join("\n");
+        }
+      }
+      // General match
+      const lines = [`${pad}match ${scrut} with`];
       for (const arm of s.arms) {
         lines.push(`${pad}| ${arm.pattern} =>`);
         if (arm.body.length === 0) {

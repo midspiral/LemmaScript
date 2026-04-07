@@ -2,3 +2,4 @@
 import Velvet.Syntax
 import Velvet.Std
 import LemmaScript.WPGenArrayM
+import LemmaScript.WPGenOption

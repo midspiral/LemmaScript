@@ -16,13 +16,16 @@ export function topologicalSort(
   const inDegree = new Map<string, number>();
   const adjacency = new Map<string, string[]>();
 
+  // Phase 1: initialize maps
   for (const id of nodeIds) {
     //@ invariant forall(k, 0 <= k && k < _id_idx ==> inDegree.has(nodeIds[k]))
     inDegree.set(id, 0);
     adjacency.set(id, []);
   }
 
+  // Phase 2: build adjacency and in-degree from deps
   for (const id of nodeIds) {
+    //@ invariant forall(k, 0 <= k && k < nodeIds.length ==> inDegree.has(nodeIds[k]))
     const nodeDeps = deps.get(id);
     if (nodeDeps !== undefined) {
       inDegree.set(id, nodeDeps.size);
@@ -35,13 +38,16 @@ export function topologicalSort(
     }
   }
 
+  // Phase 3: seed queue with zero in-degree nodes
   const queue: string[] = [];
   for (const id of nodeIds) {
+    //@ invariant queue.length <= nodeIds.length
     if (inDegree.get(id) === 0) {
       queue = [...queue, id];
     }
   }
 
+  // Phase 4: Kahn's loop
   let sorted: string[] = [];
   let qHead = 0;
   while (qHead < queue.length) {
@@ -56,6 +62,8 @@ export function topologicalSort(
     const neighbors = adjacency.get(id);
     if (neighbors !== undefined) {
       for (const neighbor of neighbors) {
+        //@ invariant qHead <= queue.length
+        //@ invariant sorted.length === qHead
         const deg = inDegree.get(neighbor);
         if (deg !== undefined) {
           const newDeg = deg - 1;

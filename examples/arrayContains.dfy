@@ -7,7 +7,7 @@ method arrayContains(arr: seq<int>, target: int) returns (res: bool)
   var found := false;
   var i_x_idx := 0;
   while i_x_idx < |arr|
-    invariant i_x_idx <= |arr|
+    invariant (i_x_idx <= |arr|)
     invariant ((found == false) ==> forall k: nat :: ((k < i_x_idx) ==> (arr[k] != target)))
     invariant ((found == true) ==> exists k: nat :: ((k < |arr|) && (arr[k] == target)))
   {

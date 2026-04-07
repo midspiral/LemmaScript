@@ -428,11 +428,13 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanStmt[] {
       const arrSize: LeanExpr = { kind: "field", obj: iterExpr, field: "size" };
       const bodyStmts = transformStmts(s.body, typeDecls);
       const letElem: LeanStmt = { kind: "let", name: s.varName, type: tyToLean(s.varTy), mutable: false, value: { kind: "index", arr: iterExpr, idx } };
+      // Auto-add bound invariant: idx ≤ bound (always true for range loops)
+      const boundInv: LeanExpr = { kind: "binop", op: "≤", left: idx, right: arrSize };
       result.push({
         kind: "forin",
         idx: idxName,
         bound: arrSize,
-        invariants: s.invariants.map(transformExpr),
+        invariants: [boundInv, ...s.invariants.map(transformExpr)],
         body: [letElem, ...bodyStmts],
       });
       i++;
