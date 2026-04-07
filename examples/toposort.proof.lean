@@ -21,7 +21,14 @@ theorem allDistinct_means_no_dups (s : Array String) (n : Nat)
       have hjk : j = k := by omega
       subst hjk
       simp only [show j + 1 - 1 = j from by omega] at h_not_mem ⊢
-      exact h_not_mem (by sorry) -- s[i]! ∈ s.toList.take j from i < j and heq
+      apply h_not_mem; rw [← heq]
+      have him : i < s.size := by omega
+      simp only [getElem!, Array.get!Internal, Array.getD, him,
+                 dite_true, Array.getInternal, List.get_eq_getElem]
+      have htl : i < (s.toList.take j).length := by simp; omega
+      rw [show s.toList[i] = (s.toList.take j)[i] from
+        List.getElem_take' (show i < s.toList.length by simp; omega) hij]
+      exact List.getElem_mem htl
 
 section TopoProof
 set_option loom.solver "custom"
