@@ -4,7 +4,6 @@ set_option loom.semantics.termination "total"
 set_option loom.semantics.choice "demonic"
 set_option maxHeartbeats 80000000
 
--- allDistinct means pairwise inequality
 theorem allDistinct_means_no_dups (s : Array String) (n : Nat)
     (h : allDistinct s n) (hn : n ≤ s.size) :
     ∀ i j, i < j → j < n → s[i]! ≠ s[j]! := by
@@ -30,6 +29,18 @@ theorem allDistinct_means_no_dups (s : Array String) (n : Nat)
         List.getElem_take' (show i < s.toList.length by simp; omega) hij]
       exact List.getElem_mem htl
 
+-- Helper: if all enqueued elements come from nodeIds[0..i] and nodeIds are distinct,
+-- then nodeIds[i] is not enqueued.
+theorem not_enqueued_of_distinct (nodeIds : Array String) (enqueued : Std.HashSet String)
+    (i : Nat) (hi : i < nodeIds.size)
+    (hdist : allDistinct nodeIds nodeIds.size)
+    (hsub : ∀ k, enqueued.contains k = true → ∃ j, 0 ≤ j ∧ j < i ∧ nodeIds[j]! = k) :
+    ¬(enqueued.contains nodeIds[i]! = true) := by
+  intro hc
+  obtain ⟨j, _, hjlt, hjeq⟩ := hsub _ hc
+  exact allDistinct_means_no_dups nodeIds nodeIds.size hdist (Nat.le_refl _)
+    j i hjlt hi (by rw [hjeq])
+
 section TopoProof
 set_option loom.solver "custom"
 set_option hygiene false in
@@ -46,6 +57,11 @@ macro_rules
 prove_correct topologicalSort by
   loom_goals_intro
   all_goals (first | (loom_unfold; loom_solver) | skip)
-  all_goals sorry
+  -- Handle assert and remaining goals
+  all_goals (first
+    | (simp only [WithName] at *;
+       apply not_enqueued_of_distinct _ _ _ (by omega) (by assumption)
+         (by intro k hk; simp only [WithName] at *; exact ‹_› k hk))
+    | sorry)
 
 end TopoProof
