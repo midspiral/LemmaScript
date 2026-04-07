@@ -63,6 +63,9 @@ prove_correct topologicalSort by
     | (simp only [WithName] at *;
        exact not_enqueued_of_distinct _ _ _ (by omega) (by assumption) (by assumption))
     | (simp only [WithName] at *; grind (splits := 50))
+    | (simp only [WithName] at *;
+       intro k hk; obtain ⟨j, hj0, hjlt, hjeq⟩ := ‹∀ k, _ → _› k hk;
+       exact ⟨j, hj0, by omega, hjeq⟩)
     | sorry)
 
 end TopoProof
