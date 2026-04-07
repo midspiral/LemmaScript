@@ -74,6 +74,7 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
     invariant (|queue| <= |nodeIds|)
     invariant (|queue| <= i_id_idx3)
     invariant (|enqueued| <= i_id_idx3)
+    invariant (|enqueued| <= |queue|)
     invariant (|queue| <= |enqueued|)
   {
     var id := nodeIds[i_id_idx3];
@@ -91,6 +92,7 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
     invariant (|sorted| <= |nodeIds|)
     invariant (|queue| <= |nodeIds|)
     invariant (|enqueued| <= |nodeIds|)
+    invariant (|enqueued| <= |queue|)
     invariant (|queue| <= |enqueued|)
     decreases (|nodeIds| - |sorted|)
   {
@@ -106,6 +108,7 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
           invariant (qHead <= |queue|)
           invariant (|sorted| == qHead)
           invariant (|enqueued| <= |nodeIds|)
+          invariant (|enqueued| <= |queue|)
           invariant (|queue| <= |enqueued|)
         {
           var neighbor := i_neighbors_val[i_neighbor_idx];

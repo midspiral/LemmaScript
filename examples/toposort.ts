@@ -48,6 +48,7 @@ export function topologicalSort(
     //@ invariant queue.length <= nodeIds.length
     //@ invariant queue.length <= _id_idx3
     //@ invariant enqueued.size <= _id_idx3
+    //@ invariant enqueued.size <= queue.length
     //@ invariant queue.length <= enqueued.size
     if (inDegree.get(id) === 0) {
       queue = [...queue, id];
@@ -65,6 +66,7 @@ export function topologicalSort(
     //@ invariant sorted.length <= nodeIds.length
     //@ invariant queue.length <= nodeIds.length
     //@ invariant enqueued.size <= nodeIds.length
+    //@ invariant enqueued.size <= queue.length
     //@ invariant queue.length <= enqueued.size
     //@ decreases nodeIds.length - sorted.length
     const id = queue[qHead];
@@ -77,6 +79,7 @@ export function topologicalSort(
         //@ invariant qHead <= queue.length
         //@ invariant sorted.length === qHead
         //@ invariant enqueued.size <= nodeIds.length
+        //@ invariant enqueued.size <= queue.length
         //@ invariant queue.length <= enqueued.size
         const deg = inDegree.get(neighbor);
         if (deg !== undefined) {
