@@ -52,6 +52,8 @@ export type LeanStmt =
   | { kind: "while"; cond: LeanExpr; invariants: LeanExpr[]; decreasing: LeanExpr | null;
       doneWith: LeanExpr | null; body: LeanStmt[] }
   | { kind: "forin"; idx: string; bound: LeanExpr; invariants: LeanExpr[]; body: LeanStmt[] }
+  | { kind: "ghostLet"; name: string; type: string; value: LeanExpr }
+  | { kind: "ghostAssign"; target: string; value: LeanExpr }
 
 export interface LeanStmtMatchArm {
   pattern: string;

@@ -143,6 +143,9 @@ function emitStmt(s: LeanStmt, indent: number): string {
         ? `${pad}let mut ${escapeName(s.name)} : ${s.type} := ${emitExpr(s.value)}`
         : `${pad}let ${escapeName(s.name)} := ${emitExpr(s.value)}`;
     case "assign": return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)}`;
+    case "ghostLet":
+      return `${pad}let mut ${escapeName(s.name)} : ${s.type} := ${emitExpr(s.value)}`;
+    case "ghostAssign": return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)}`;
     case "bind": return `${pad}${escapeName(s.target)} ← ${emitExpr(s.value)}`;
     case "let-bind": return `${pad}let ${s.name} ← ${emitExpr(s.value)}`;
     case "return": return `${pad}return ${emitExpr(s.value)}`;

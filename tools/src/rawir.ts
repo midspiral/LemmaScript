@@ -105,7 +105,22 @@ export interface RawForOf {
   line: number;
 }
 
-export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawContinue | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf;
+export interface RawGhostLet {
+  kind: "ghostLet";
+  name: string;
+  tsType: string | null;   // explicit type annotation, or null to infer
+  init: string;            // spec expression string (parsed later)
+  line: number;
+}
+
+export interface RawGhostAssign {
+  kind: "ghostAssign";
+  target: string;
+  value: string;           // spec expression string (parsed later)
+  line: number;
+}
+
+export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawContinue | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf | RawGhostLet | RawGhostAssign;
 
 // ── Top-level ────────────────────────────────────────────────
 

@@ -522,6 +522,12 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): LeanStmt[] {
 
     case "switch":
       return [emitSwitchStmt(s, typeDecls)];
+
+    case "ghostLet":
+      return [{ kind: "ghostLet", name: s.name, type: tyToLean(s.ty), value: transformExpr(s.init) }];
+
+    case "ghostAssign":
+      return [{ kind: "ghostAssign", target: s.target, value: transformExpr(s.value) }];
   }
 }
 
@@ -606,6 +612,8 @@ function mapStmtExprs(s: LeanStmt, r: (e: LeanExpr) => LeanExpr): LeanStmt {
     case "match": return { ...s, arms: s.arms.map(a => ({ ...a, body: a.body.map(t => mapStmtExprs(t, r)) })) };
     case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r), body: s.body.map(t => mapStmtExprs(t, r)) };
     case "forin": return { ...s, bound: r(s.bound), invariants: s.invariants.map(r), body: s.body.map(t => mapStmtExprs(t, r)) };
+    case "ghostLet": return { ...s, value: r(s.value) };
+    case "ghostAssign": return { ...s, value: r(s.value) };
   }
 }
 
@@ -679,6 +687,8 @@ function replaceFieldAccessInStmt(s: LeanStmt, varName: string, fields: { name: 
     case "match": return { ...s, arms: s.arms.map(a => ({ ...a, body: replaceFieldAccessInStmts(a.body, varName, fields) })) };
     case "while": return { ...s, cond: r(s.cond), body: replaceFieldAccessInStmts(s.body, varName, fields) };
     case "forin": return { ...s, invariants: s.invariants.map(r), body: replaceFieldAccessInStmts(s.body, varName, fields) };
+    case "ghostLet": return { ...s, value: r(s.value) };
+    case "ghostAssign": return { ...s, value: r(s.value) };
   }
 }
 

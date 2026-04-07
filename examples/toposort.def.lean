@@ -45,6 +45,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
             pure ()
       else
         pure ()
+    let mut enqueued : Std.HashSet String := Std.HashSet.empty
     let mut queue : Array String := #[]
     for _id_idx3 in [:nodeIds.size]
       invariant _id_idx3 ≤ nodeIds.size
@@ -54,6 +55,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
       let id := nodeIds[_id_idx3]!
       if match inDegree.get? id with | .some _value => _value == 0 | .none => false then
         queue := Array.push queue id
+        enqueued := enqueued.insert id
     let mut sorted : Array String := #[]
     let mut qHead : Int := 0
     while qHead < queue.size
@@ -83,6 +85,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
             inDegree := inDegree.insert neighbor newDeg
             if newDeg = 0 then
               queue := Array.push queue neighbor
+              enqueued := enqueued.insert neighbor
           else
             pure ()
       else

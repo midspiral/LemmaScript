@@ -7,7 +7,7 @@
 
 import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression } from "ts-morph";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
-import type { RawExpr, RawStmt, RawFunction, RawModule } from "./rawir.js";
+import type { RawExpr, RawStmt, RawFunction, RawModule, RawGhostLet, RawGhostAssign } from "./rawir.js";
 
 // ── Expression extraction ────────────────────────────────────
 
@@ -278,10 +278,37 @@ const COMPOUND_OPS: Record<string, string> = {
 
 // ── Statement extraction ─────────────────────────────────────
 
+/** Parse ghost annotations from comment ranges. */
+function parseGhostComments(ranges: ReturnType<Node["getLeadingCommentRanges"]>, line: number): (RawGhostLet | RawGhostAssign)[] {
+  const result: (RawGhostLet | RawGhostAssign)[] = [];
+  for (const range of ranges) {
+    const text = range.getText().trim();
+    if (!text.startsWith(PREFIX)) continue;
+    const content = text.slice(PREFIX.length);
+    if (!content.startsWith("ghost ")) continue;
+    const ghostBody = content.slice(6).trim();
+    // ghost let varName: type = expr  OR  ghost let varName = expr
+    const letMatch = ghostBody.match(/^let\s+(\w+)(?:\s*:\s*(\w+))?\s*=\s*(.+)$/);
+    if (letMatch) {
+      result.push({ kind: "ghostLet", name: letMatch[1], tsType: letMatch[2] ?? null, init: letMatch[3].trim(), line });
+      continue;
+    }
+    // ghost varName = expr
+    const assignMatch = ghostBody.match(/^(\w+)\s*=\s*(.+)$/);
+    if (assignMatch) {
+      result.push({ kind: "ghostAssign", target: assignMatch[1], value: assignMatch[2].trim(), line });
+    }
+  }
+  return result;
+}
+
 function extractStmts(stmts: Node[]): RawStmt[] {
   const result: RawStmt[] = [];
   for (const s of stmts) {
     const line = s.getStartLineNumber();
+
+    // Ghost annotations from leading comments → inject before this statement
+    result.push(...parseGhostComments(s.getLeadingCommentRanges(), line));
 
     if (Node.isVariableStatement(s)) {
       for (const d of s.getDeclarations()) {
@@ -413,6 +440,27 @@ function extractStmts(stmts: Node[]): RawStmt[] {
     }
 
     throw new Error(`Unsupported statement at line ${line}: ${s.getText().slice(0, 80)}`);
+  }
+  // Ghost comments after the last statement (before closing brace) appear as sibling trivia nodes
+  if (stmts.length > 0) {
+    const last = stmts[stmts.length - 1];
+    const line = last.getStartLineNumber();
+    for (const sib of last.getNextSiblings()) {
+      const text = sib.getText().trim();
+      if (!text.startsWith(PREFIX)) continue;
+      const content = text.slice(PREFIX.length);
+      if (!content.startsWith("ghost ")) continue;
+      const ghostBody = content.slice(6).trim();
+      const letMatch = ghostBody.match(/^let\s+(\w+)(?:\s*:\s*(\w+))?\s*=\s*(.+)$/);
+      if (letMatch) {
+        result.push({ kind: "ghostLet", name: letMatch[1], tsType: letMatch[2] ?? null, init: letMatch[3].trim(), line });
+        continue;
+      }
+      const assignMatch = ghostBody.match(/^(\w+)\s*=\s*(.+)$/);
+      if (assignMatch) {
+        result.push({ kind: "ghostAssign", target: assignMatch[1], value: assignMatch[2].trim(), line });
+      }
+    }
   }
   return result;
 }

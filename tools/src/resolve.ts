@@ -399,6 +399,23 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         cases: s.cases.map(c => ({ label: c.label, body: resolveBlock(c.body, ctx) })),
         defaultBody: resolveBlock(s.defaultBody, ctx),
       }, ctx.env];
+
+    case "ghostLet": {
+      const specCtx = { ...ctx, inSpec: true };
+      // Handle new Set<T>() / new Map<K,V>() constructors
+      const collMatch = s.init.match(/^new\s+(Set|Map)<(.+)>\(\)$/);
+      const init = collMatch
+        ? resolveExpr({ kind: "emptyCollection", collectionType: collMatch[1] as "Set" | "Map", tsType: `${collMatch[1]}<${collMatch[2]}>` }, specCtx)
+        : resolveExpr(parseExpr(s.init), specCtx);
+      const ty = s.tsType ? parseTsType(s.tsType) : init.ty;
+      return [{ kind: "ghostLet", name: s.name, ty, init }, extend(ctx.env, s.name, ty)];
+    }
+
+    case "ghostAssign": {
+      const specCtx = { ...ctx, inSpec: true };
+      const value = resolveExpr(parseExpr(s.value), specCtx);
+      return [{ kind: "ghostAssign", target: s.target, value }, ctx.env];
+    }
   }
 }
 

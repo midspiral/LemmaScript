@@ -155,7 +155,7 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
         assert id !in nodeIds[..i_id_idx3];
       }
       queue := (queue + [id]);
-      enqueued := enqueued + {id};
+      enqueued := (enqueued + {id});
     }
     i_id_idx3 := i_id_idx3 + 1;
   }
@@ -211,7 +211,7 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
               inDegree := inDegree[neighbor := newDeg];
               if (newDeg == 0) {
                 queue := (queue + [neighbor]);
-                enqueued := enqueued + {neighbor};
+                enqueued := (enqueued + {neighbor});
                 subset_size(enqueued, universe);
                 distinct_seq_in_set_bound(queue, enqueued);
               }

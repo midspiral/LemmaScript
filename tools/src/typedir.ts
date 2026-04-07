@@ -64,6 +64,8 @@ export type TStmt =
       defaultBody: TStmt[] }
   | { kind: "forof"; varName: string; varTy: Ty; iterable: TExpr;
       invariants: TExpr[]; doneWith: TExpr | null; body: TStmt[] }
+  | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
+  | { kind: "ghostAssign"; target: string; value: TExpr }
 
 // ── Top-level ────────────────────────────────────────────────
 

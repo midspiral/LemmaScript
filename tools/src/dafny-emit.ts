@@ -257,6 +257,10 @@ function emitStmt(s: LeanStmt, indent: number): string {
       return `${pad}var ${escapeName(s.name)} := ${emitExpr(s.value)};`;
     case "assign":
       return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)};`;
+    case "ghostLet":
+      return `${pad}ghost var ${escapeName(s.name)}: ${leanTypeToDafny(s.type)} := ${emitExpr(s.value)};`;
+    case "ghostAssign":
+      return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)};`;
     case "bind":
       // Monadic bind shouldn't appear in Dafny mode, emit as regular assign
       return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)};`;
