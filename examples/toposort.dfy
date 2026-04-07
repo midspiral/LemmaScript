@@ -140,6 +140,8 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
     invariant (i_id_idx3 <= |nodeIds|)
     invariant (|queue| <= |nodeIds|)
     invariant (|queue| <= i_id_idx3)
+    invariant (|enqueued| <= i_id_idx3)
+    invariant (|queue| <= |enqueued|)
     invariant forall k :: 0 <= k < |queue| ==> queue[k] in enqueued
     invariant forall i, j :: 0 <= i < j < |queue| ==> queue[i] != queue[j]
     invariant enqueued <= set x | x in nodeIds[..i_id_idx3]
@@ -170,8 +172,9 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
     invariant (|sorted| == qHead)
     invariant (|sorted| <= |nodeIds|)
     invariant (|queue| <= |nodeIds|)
+    invariant (|enqueued| <= |nodeIds|)
+    invariant (|queue| <= |enqueued|)
     invariant enqueued <= universe
-    invariant |enqueued| <= |nodeIds|
     invariant forall k :: 0 <= k < |queue| ==> queue[k] in enqueued
     invariant forall i, j :: 0 <= i < j < |queue| ==> queue[i] != queue[j]
     invariant forall k :: k in adjacency ==> forall v :: v in adjacency[k] ==> v in universe
@@ -194,9 +197,9 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
           invariant (i_neighbor_idx <= |i_neighbors_val|)
           invariant (qHead <= |queue|)
           invariant (|sorted| == qHead)
-          invariant (|queue| <= |nodeIds|)
+          invariant (|enqueued| <= |nodeIds|)
+          invariant (|queue| <= |enqueued|)
           invariant enqueued <= universe
-          invariant |enqueued| <= |nodeIds|
           invariant forall k :: 0 <= k < |queue| ==> queue[k] in enqueued
           invariant forall i, j :: 0 <= i < j < |queue| ==> queue[i] != queue[j]
           invariant forall v :: v in enqueued ==> v in inDegree && inDegree[v] <= 0

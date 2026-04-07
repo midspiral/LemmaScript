@@ -73,6 +73,8 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
     invariant (i_id_idx3 <= |nodeIds|)
     invariant (|queue| <= |nodeIds|)
     invariant (|queue| <= i_id_idx3)
+    invariant (|enqueued| <= i_id_idx3)
+    invariant (|queue| <= |enqueued|)
   {
     var id := nodeIds[i_id_idx3];
     if (match (if id in inDegree then Some(inDegree[id]) else None) { case Some(i_value) => (i_value == 0) case None => false }) {
@@ -88,6 +90,8 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
     invariant (|sorted| == qHead)
     invariant (|sorted| <= |nodeIds|)
     invariant (|queue| <= |nodeIds|)
+    invariant (|enqueued| <= |nodeIds|)
+    invariant (|queue| <= |enqueued|)
     decreases (|nodeIds| - |sorted|)
   {
     var id := queue[qHead];
@@ -101,7 +105,8 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
           invariant (i_neighbor_idx <= |i_neighbors_val|)
           invariant (qHead <= |queue|)
           invariant (|sorted| == qHead)
-          invariant (|queue| <= |nodeIds|)
+          invariant (|enqueued| <= |nodeIds|)
+          invariant (|queue| <= |enqueued|)
         {
           var neighbor := i_neighbors_val[i_neighbor_idx];
           var deg := (if neighbor in inDegree then Some(inDegree[neighbor]) else None);

@@ -12,13 +12,13 @@ macro_rules
   | grind (splits := 30)
   | omega
   | (simp only [WithName, typeWithName, WithName.mk', WithName.erase] at *;
-     simp_all [Array.size_push]; omega))
+     simp_all [Array.size_push, Std.HashSet.size_insert]; split <;> omega))
 
 prove_correct topologicalSort by
   loom_goals_intro
   all_goals (first | (loom_unfold; loom_solver) | skip)
-  -- Remaining: queue.push(neighbor).size ≤ nodeIds.size
-  -- Needs ghost tracking (enqueued ⊆ nodeIds) as in the Dafny proof
+  -- Remaining: queue.size ≤ enqueued.size at while loop entry
+  -- Loom doesn't carry Phase 3 loop exit invariant to while loop initial check
   all_goals sorry
 
 end TopoProof
