@@ -2,7 +2,7 @@ import «toposort.def»
 
 set_option loom.semantics.termination "total"
 set_option loom.semantics.choice "demonic"
-set_option maxHeartbeats 12800000
+set_option maxHeartbeats 40000000
 
 section TopoProof
 set_option loom.solver "custom"
@@ -11,11 +11,9 @@ macro_rules
 | `(tactic|loom_solver) => `(tactic| first
   | grind (splits := 30)
   | omega
-  | (simp only [WithName] at *;
+  | (simp only [WithName] at *; strip_withname;
      simp only [Array.size_push, Std.HashSet.size_insert];
-     first
-     | (generalize Std.HashSet.size _ = _es at *; split <;> omega)
-     | ((have _heq := Nat.le_antisymm ‹_ ≤ _› ‹_ ≤ _›); rw [_heq]; split <;> omega))
+     split <;> omega)
   | (simp only [WithName] at *; omega))
 
 prove_correct topologicalSort by
