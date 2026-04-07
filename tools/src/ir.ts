@@ -21,10 +21,12 @@ export type LeanExpr =
   | { kind: "index"; arr: LeanExpr; idx: LeanExpr }                // arr[idx]!
   | { kind: "record"; spread: LeanExpr | null; fields: { name: string; value: LeanExpr }[] }
   | { kind: "arrayLiteral"; elems: LeanExpr[] }
+  | { kind: "emptyMap" }
+  | { kind: "emptySet" }
   | { kind: "dotCall"; obj: LeanExpr; method: string; args: LeanExpr[] }  // obj.method args
   | { kind: "lambda"; params: { name: string; type: string }[]; body: LeanStmt[] }
   | { kind: "if"; cond: LeanExpr; then: LeanExpr; else: LeanExpr }
-  | { kind: "match"; scrutinee: string; arms: LeanMatchArm[] }
+  | { kind: "match"; scrutinee: string | LeanExpr; arms: LeanMatchArm[] }
   | { kind: "forall"; var: string; type: string; body: LeanExpr }
   | { kind: "exists"; var: string; type: string; body: LeanExpr }
   | { kind: "implies"; premises: LeanExpr[]; conclusion: LeanExpr }

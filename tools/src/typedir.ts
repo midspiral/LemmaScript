@@ -14,6 +14,9 @@ export type Ty =
   | { kind: "string" }
   | { kind: "void" }
   | { kind: "array"; elem: Ty }
+  | { kind: "map"; key: Ty; value: Ty }
+  | { kind: "set"; elem: Ty }
+  | { kind: "optional"; inner: Ty }
   | { kind: "user"; name: string }
   | { kind: "unknown" }
 

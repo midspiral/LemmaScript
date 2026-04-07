@@ -43,6 +43,8 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
     case "arrayLiteral":
       if (e.elems.length === 0) return `#[]`;
       return `#[${e.elems.map(el => emitExpr(el)).join(", ")}]`;
+    case "emptyMap": return `Std.HashMap.empty`;
+    case "emptySet": return `Std.HashSet.empty`;
 
     case "dotCall": {
       const obj = emitExpr(e.obj);
@@ -84,11 +86,14 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
       const args = e.args.map(a =>
         (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app") ? `(${emitExpr(a)})` : emitExpr(a)
       );
+      // SetToSeq → .toArray for Lean (HashSet has native toArray)
+      if (e.fn === "SetToSeq" && args.length === 1) return `${args[0]}.toArray`;
       return `${e.fn} ${args.join(" ")}`;
     }
 
     case "field": {
       const obj = emitExpr(e.obj);
+      if (e.field === "collectionSize") return `${obj}.size`;
       const wrap = e.obj.kind !== "var" && e.obj.kind !== "num" && e.obj.kind !== "bool";
       return wrap ? `(${obj}).${escapeName(e.field)}` : `${obj}.${escapeName(e.field)}`;
     }
@@ -113,7 +118,7 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
 
     case "match": {
       const arms = e.arms.map(a => `| ${a.pattern} => ${emitExpr(a.body)}`);
-      return `match ${e.scrutinee} with ${arms.join(" ")}`;
+      return `match ${typeof e.scrutinee === "string" ? e.scrutinee : emitExpr(e.scrutinee)} with ${arms.join(" ")}`;
     }
 
     case "forall": return `∀ ${e.var} : ${e.type}, ${emitExpr(e.body)}`;
@@ -159,10 +164,14 @@ function emitStmt(s: LeanStmt, indent: number): string {
     }
 
     case "match": {
-      const lines = [`${pad}match ${s.scrutinee} with`];
+      const lines = [`${pad}match ${typeof s.scrutinee === "string" ? s.scrutinee : emitExpr(s.scrutinee)} with`];
       for (const arm of s.arms) {
         lines.push(`${pad}| ${arm.pattern} =>`);
-        lines.push(emitStmts(arm.body, indent + 1));
+        if (arm.body.length === 0) {
+          lines.push(`${pad}  pure ()`);
+        } else {
+          lines.push(emitStmts(arm.body, indent + 1));
+        }
       }
       return lines.join("\n");
     }
@@ -243,7 +252,7 @@ function emitPureExpr(e: LeanExpr, indent: number): string {
     case "if":
       return `${pad}if ${emitExpr(e.cond)} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
     case "match": {
-      const lines = [`${pad}match ${e.scrutinee} with`];
+      const lines = [`${pad}match ${typeof e.scrutinee === "string" ? e.scrutinee : emitExpr(e.scrutinee)} with`];
       for (const arm of e.arms) {
         lines.push(`${pad}| ${arm.pattern} =>`);
         lines.push(emitPureExpr(arm.body, indent + 1));

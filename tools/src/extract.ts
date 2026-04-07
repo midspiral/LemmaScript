@@ -128,6 +128,18 @@ function extractExpr(node: Expression): RawExpr {
     return { kind: "conditional", cond: extractExpr(node.getCondition()), then: extractExpr(node.getWhenTrue()), else: extractExpr(node.getWhenFalse()) };
   }
 
+  // new Map<K,V>() / new Set<T>()
+  if (Node.isNewExpression(node)) {
+    const name = node.getExpression().getText();
+    if (name === "Map" || name === "Set") {
+      const typeArgs = node.getTypeArguments();
+      const tsType = typeArgs && typeArgs.length > 0
+        ? `${name}<${typeArgs.map(t => t.getText()).join(", ")}>`
+        : name;
+      return { kind: "emptyCollection", collectionType: name as "Map" | "Set", tsType };
+    }
+  }
+
   throw new Error(`Unsupported expression: ${node.getText()}`);
 }
 
@@ -235,15 +247,28 @@ function findDiscriminant(members: Type[]): string | null {
 }
 
 function typeToString(type: Type): string {
+  if (type.isUndefined()) return "undefined";
   if (type.isNumber()) return "number";
   if (type.isString()) return "string";
   if (type.isBoolean()) return "boolean";
+  // Named type alias (e.g. Priority = "low" | "medium" | "high") — use the alias name
+  if (type.getAliasSymbol()) return type.getAliasSymbol()!.getName();
+  if (type.isUnion()) {
+    return type.getUnionTypes().map(typeToString).join(" | ");
+  }
   if (type.isArray()) {
     const elem = type.getArrayElementTypeOrThrow();
     return `${typeToString(elem)}[]`;
   }
   const symbol = type.getSymbol() ?? type.getAliasSymbol();
-  if (symbol) return symbol.getName();
+  if (symbol) {
+    const name = symbol.getName();
+    const typeArgs = type.getTypeArguments();
+    if (typeArgs.length > 0) {
+      return `${name}<${typeArgs.map(t => typeToString(t)).join(", ")}>`;
+    }
+    return name;
+  }
   return type.getText();
 }
 
