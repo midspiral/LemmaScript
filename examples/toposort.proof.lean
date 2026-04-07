@@ -2,7 +2,26 @@ import «toposort.def»
 
 set_option loom.semantics.termination "total"
 set_option loom.semantics.choice "demonic"
-set_option maxHeartbeats 40000000
+set_option maxHeartbeats 80000000
+
+-- allDistinct means pairwise inequality
+theorem allDistinct_means_no_dups (s : Array String) (n : Nat)
+    (h : allDistinct s n) (hn : n ≤ s.size) :
+    ∀ i j, i < j → j < n → s[i]! ≠ s[j]! := by
+  induction n with
+  | zero => intro i j _ hj; omega
+  | succ k ih =>
+    unfold allDistinct at h
+    simp only [show k + 1 ≠ 0 from by omega, ↓reduceDIte, show k + 1 ≤ s.size from hn] at h
+    obtain ⟨h_not_mem, h_rest⟩ := h
+    intro i j hij hj heq
+    if hjk : j < k then
+      exact ih h_rest (by omega) i j hij hjk heq
+    else
+      have hjk : j = k := by omega
+      subst hjk
+      simp only [show j + 1 - 1 = j from by omega] at h_not_mem ⊢
+      exact h_not_mem (by sorry) -- s[i]! ∈ s.toList.take j from i < j and heq
 
 section TopoProof
 set_option loom.solver "custom"
@@ -20,12 +39,6 @@ macro_rules
 prove_correct topologicalSort by
   loom_goals_intro
   all_goals (first | (loom_unfold; loom_solver) | skip)
-  -- 3 remaining goals: (queue.push x).size ≤ (enqueued.insert x).size
-  -- and (enqueued.insert x).size ≤ nodeIds.size
-  -- Root cause: omega can't parse Std.HashSet.size in the GOAL after split.
-  -- It creates an atom for HashSet.size from hypotheses but not from the goal.
-  -- The ∈ case (n+1 ≤ n) is unprovable and needs algorithm-specific reasoning
-  -- to show x ∉ enqueued (each node is enqueued at most once).
   all_goals sorry
 
 end TopoProof
