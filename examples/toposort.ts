@@ -50,7 +50,9 @@ export function topologicalSort(
     //@ invariant enqueued.size <= _id_idx3
     //@ invariant enqueued.size <= queue.length
     //@ invariant queue.length <= enqueued.size
+    //@ invariant forall(k, enqueued.has(k) ==> exists(j, 0 <= j && j < _id_idx3 && nodeIds[j] === k))
     if (inDegree.get(id) === 0) {
+      //@ assert !enqueued.has(id)
       queue = [...queue, id];
       //@ ghost enqueued = enqueued.add(id)
     }
@@ -86,6 +88,7 @@ export function topologicalSort(
           const newDeg = deg - 1;
           inDegree.set(neighbor, newDeg);
           if (newDeg === 0) {
+            //@ assert !enqueued.has(neighbor)
             queue = [...queue, neighbor];
             //@ ghost enqueued = enqueued.add(neighbor)
           }

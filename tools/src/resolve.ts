@@ -416,6 +416,12 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       const value = resolveExpr(parseExpr(s.value), specCtx);
       return [{ kind: "ghostAssign", target: s.target, value }, ctx.env];
     }
+
+    case "assert": {
+      const specCtx = { ...ctx, inSpec: true };
+      const expr = resolveExpr(parseExpr(s.expr), specCtx);
+      return [{ kind: "assert", expr }, ctx.env];
+    }
   }
 }
 

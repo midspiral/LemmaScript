@@ -120,7 +120,13 @@ export interface RawGhostAssign {
   line: number;
 }
 
-export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawContinue | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf | RawGhostLet | RawGhostAssign;
+export interface RawAssert {
+  kind: "assert";
+  expr: string;              // spec expression string (parsed later)
+  line: number;
+}
+
+export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawContinue | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf | RawGhostLet | RawGhostAssign | RawAssert;
 
 // ── Top-level ────────────────────────────────────────────────
 

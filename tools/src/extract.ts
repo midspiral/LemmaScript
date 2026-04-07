@@ -278,13 +278,18 @@ const COMPOUND_OPS: Record<string, string> = {
 
 // ── Statement extraction ─────────────────────────────────────
 
-/** Parse ghost annotations from comment ranges. */
-function parseGhostComments(ranges: ReturnType<Node["getLeadingCommentRanges"]>, line: number): (RawGhostLet | RawGhostAssign)[] {
-  const result: (RawGhostLet | RawGhostAssign)[] = [];
+/** Parse ghost and assert annotations from comment ranges. */
+function parseSpecComments(ranges: ReturnType<Node["getLeadingCommentRanges"]>, line: number): (RawGhostLet | RawGhostAssign | import("./rawir.js").RawAssert)[] {
+  const result: (RawGhostLet | RawGhostAssign | import("./rawir.js").RawAssert)[] = [];
   for (const range of ranges) {
     const text = range.getText().trim();
     if (!text.startsWith(PREFIX)) continue;
     const content = text.slice(PREFIX.length);
+    // assert expr
+    if (content.startsWith("assert ")) {
+      result.push({ kind: "assert", expr: content.slice(7).trim(), line });
+      continue;
+    }
     if (!content.startsWith("ghost ")) continue;
     const ghostBody = content.slice(6).trim();
     // ghost let varName: type = expr  OR  ghost let varName = expr
@@ -308,7 +313,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
     const line = s.getStartLineNumber();
 
     // Ghost annotations from leading comments → inject before this statement
-    result.push(...parseGhostComments(s.getLeadingCommentRanges(), line));
+    result.push(...parseSpecComments(s.getLeadingCommentRanges(), line));
 
     if (Node.isVariableStatement(s)) {
       for (const d of s.getDeclarations()) {
@@ -449,6 +454,11 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       const text = sib.getText().trim();
       if (!text.startsWith(PREFIX)) continue;
       const content = text.slice(PREFIX.length);
+      // assert expr
+      if (content.startsWith("assert ")) {
+        result.push({ kind: "assert", expr: content.slice(7).trim(), line });
+        continue;
+      }
       if (!content.startsWith("ghost ")) continue;
       const ghostBody = content.slice(6).trim();
       const letMatch = ghostBody.match(/^let\s+(\w+)(?:\s*:\s*(\w+))?\s*=\s*(.+)$/);

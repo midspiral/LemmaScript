@@ -528,6 +528,9 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): LeanStmt[] {
 
     case "ghostAssign":
       return [{ kind: "ghostAssign", target: s.target, value: transformExpr(s.value) }];
+
+    case "assert":
+      return [{ kind: "assert", expr: transformExpr(s.expr) }];
   }
 }
 
@@ -614,6 +617,7 @@ function mapStmtExprs(s: LeanStmt, r: (e: LeanExpr) => LeanExpr): LeanStmt {
     case "forin": return { ...s, bound: r(s.bound), invariants: s.invariants.map(r), body: s.body.map(t => mapStmtExprs(t, r)) };
     case "ghostLet": return { ...s, value: r(s.value) };
     case "ghostAssign": return { ...s, value: r(s.value) };
+    case "assert": return { ...s, expr: r(s.expr) };
   }
 }
 
@@ -689,6 +693,7 @@ function replaceFieldAccessInStmt(s: LeanStmt, varName: string, fields: { name: 
     case "forin": return { ...s, invariants: s.invariants.map(r), body: replaceFieldAccessInStmts(s.body, varName, fields) };
     case "ghostLet": return { ...s, value: r(s.value) };
     case "ghostAssign": return { ...s, value: r(s.value) };
+    case "assert": return { ...s, expr: r(s.expr) };
   }
 }
 

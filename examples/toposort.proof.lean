@@ -2,7 +2,7 @@ import «toposort.def»
 
 set_option loom.semantics.termination "total"
 set_option loom.semantics.choice "demonic"
-set_option maxHeartbeats 12800000
+set_option maxHeartbeats 40000000
 
 section TopoProof
 set_option loom.solver "custom"

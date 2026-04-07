@@ -66,6 +66,7 @@ export type TStmt =
       invariants: TExpr[]; doneWith: TExpr | null; body: TStmt[] }
   | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
   | { kind: "ghostAssign"; target: string; value: TExpr }
+  | { kind: "assert"; expr: TExpr }
 
 // ── Top-level ────────────────────────────────────────────────
 
