@@ -2,7 +2,7 @@ import «toposort.def»
 
 set_option loom.semantics.termination "total"
 set_option loom.semantics.choice "demonic"
-set_option maxHeartbeats 80000000
+set_option maxHeartbeats 1600000
 
 theorem allDistinct_means_no_dups (s : Array String) (n : Nat)
     (h : allDistinct s n) (hn : n ≤ s.size) :
@@ -42,6 +42,18 @@ theorem not_enqueued_of_distinct (nodeIds : Array String) (enqueued : Std.HashSe
   exact allDistinct_means_no_dups nodeIds nodeIds.size hdist (Nat.le_refl _)
     j.toNat i hj_nat hi (by rw [hjeq])
 
+-- HashMap get! + insert helpers (the Std API uses getElem! not get!)
+theorem hashmap_get!_insert_self_string {m : Std.HashMap String Int} {k : String} {v : Int} :
+    (m.insert k v).get! k = v := by
+  show (m.insert k v)[k]! = v; simp
+
+theorem hashmap_get!_insert_ne_string {m : Std.HashMap String Int} {k a : String} {v : Int}
+    (h : ¬(k = a)) : (m.insert k v).get! a = m.get! a := by
+  show (m.insert k v)[a]! = m[a]!
+  rw [Std.HashMap.getElem!_insert]; split
+  · next heq => exact absurd (eq_of_beq heq) h
+  · rfl
+
 section TopoProof
 set_option loom.solver "custom"
 set_option hygiene false in
@@ -62,10 +74,40 @@ prove_correct topologicalSort by
   all_goals (first
     | (simp only [WithName] at *;
        exact not_enqueued_of_distinct _ _ _ (by omega) (by assumption) (by assumption))
-    | (simp only [WithName] at *; grind (splits := 50))
-    | (simp only [WithName] at *;
-       intro k hk; obtain ⟨j, hj0, hjlt, hjeq⟩ := ‹∀ k, _ → _› k hk;
-       exact ⟨j, hj0, by omega, hjeq⟩)
-    | sorry)
+    | skip)
+  -- Goal 1: Phase 3 push — subset invariant after enqueued.insert
+  next => simp only [WithName] at *; intro k hk
+          simp [Std.HashSet.contains_insert, Bool.or_eq_true, beq_iff_eq] at hk
+          rcases hk with rfl | hk
+          · exact ⟨↑i_4, by omega, by omega, rfl⟩
+          · obtain ⟨j, hj0, hjlt, hjeq⟩ := invariant_15 k hk; exact ⟨j, hj0, by omega, hjeq⟩
+  -- Goal 2: Phase 3 no-push — weaken j < i_4 to j < i_4+1
+  next => simp only [WithName] at *; intro k hk
+          obtain ⟨j, hj0, hjlt, hjeq⟩ := invariant_15 k hk; exact ⟨j, hj0, by omega, hjeq⟩
+  -- Goal 3: Inner loop insert — enqueued size bound (TODO: needs extra invariant)
+  next => sorry
+  -- Goal 4: Inner loop push — inDegree invariant (enqueued.insert, newDeg = 0)
+  next => simp only [WithName] at *; intro k hk
+          simp only [Std.HashSet.contains_insert, Bool.or_eq_true, beq_iff_eq] at hk
+          rcases hk with rfl | hk
+          · -- k = neighbor: use insert_self
+            refine ⟨?_, ?_⟩
+            · simp [Std.HashMap.contains_insert_self]
+            · simp_all [hashmap_get!_insert_self_string]
+          · -- k ∈ enqueued_2, k ≠ neighbor
+            obtain ⟨hc, hg⟩ := invariant_31 k hk
+            have hne : ¬(((i_2.get? queue_2[qHead.toNat]!).get ‹_›)[i_6]! = k) :=
+              fun h => a_2 (h ▸ hk)
+            refine ⟨?_, ?_⟩
+            · simp only [Std.HashMap.contains_insert, Bool.or_eq_true]; right; exact hc
+            · rw [hashmap_get!_insert_ne_string hne]; exact hg
+  -- Goal 5: Inner loop no-push — inDegree invariant (enqueued unchanged, newDeg ≠ 0)
+  next => simp only [WithName] at *; intro k hk
+          obtain ⟨hc, hg⟩ := invariant_31 k hk
+          refine ⟨?_, ?_⟩
+          · simp only [Std.HashMap.contains_insert, Bool.or_eq_true]; right; exact hc
+          · by_cases heq : ((i_2.get? queue_2[qHead.toNat]!).get ‹_›)[i_6]! = k
+            · simp_all [hashmap_get!_insert_self_string]; omega
+            · rw [hashmap_get!_insert_ne_string heq]; exact hg
 
 end TopoProof
