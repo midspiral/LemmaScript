@@ -15,14 +15,17 @@ export function topologicalSort(
 
   const inDegree = new Map<string, number>();
   const adjacency = new Map<string, string[]>();
+  //@ ghost let nodeIdSet = new Set<string>()
 
   // Phase 1: initialize maps
   for (const id of nodeIds) {
     //@ invariant forall(k, 0 <= k && k < _id_idx ==> inDegree.has(nodeIds[k]))
     //@ invariant forall(k, inDegree.has(k) ==> inDegree.get(k) === 0)
     //@ invariant forall(k, adjacency.has(k) ==> adjacency.get(k) === [])
+    //@ invariant nodeIdSet.size <= _id_idx
     inDegree.set(id, 0);
     adjacency.set(id, []);
+    //@ ghost nodeIdSet = nodeIdSet.add(id)
   }
 
   // Phase 2: build adjacency and in-degree from deps
@@ -52,6 +55,7 @@ export function topologicalSort(
     //@ invariant queue.length <= enqueued.size
     //@ invariant forall(k, enqueued.has(k) ==> exists(j, 0 <= j && j < _id_idx3 && nodeIds[j] === k))
     //@ invariant forall(k, enqueued.has(k) ==> inDegree.has(k) && inDegree.get(k) === 0)
+    //@ invariant forall(k, enqueued.has(k) ==> nodeIdSet.has(k))
     if (inDegree.get(id) === 0) {
       //@ assert !enqueued.has(id)
       queue = [...queue, id];
@@ -72,6 +76,8 @@ export function topologicalSort(
     //@ invariant enqueued.size <= queue.length
     //@ invariant queue.length <= enqueued.size
     //@ invariant forall(k, enqueued.has(k) ==> inDegree.has(k) && inDegree.get(k) <= 0)
+    //@ invariant forall(k, enqueued.has(k) ==> nodeIdSet.has(k))
+    //@ invariant nodeIdSet.size <= nodeIds.length
     //@ decreases nodeIds.length - sorted.length
     const id = queue[qHead];
     sorted = [...sorted, id];
@@ -86,11 +92,14 @@ export function topologicalSort(
         //@ invariant enqueued.size <= queue.length
         //@ invariant queue.length <= enqueued.size
         //@ invariant forall(k, enqueued.has(k) ==> inDegree.has(k) && inDegree.get(k) <= 0)
+        //@ invariant forall(k, enqueued.has(k) ==> nodeIdSet.has(k))
+        //@ invariant nodeIdSet.size <= nodeIds.length
         const deg = inDegree.get(neighbor);
         if (deg !== undefined) {
           const newDeg = deg - 1;
           inDegree.set(neighbor, newDeg);
           if (newDeg === 0) {
+            //@ assert nodeIdSet.has(neighbor)
             //@ assert !enqueued.has(neighbor)
             queue = [...queue, neighbor];
             //@ ghost enqueued = enqueued.add(neighbor)
