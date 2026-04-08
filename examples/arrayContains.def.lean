@@ -13,6 +13,7 @@ method arrayContains (arr : Array Int) (target : Int) return (res : Bool)
   do
     let mut found : Bool := false
     for _x_idx in [:arr.size]
+      invariant _x_idx ≤ arr.size
       invariant found = false → ∀ k : Nat, k < _x_idx → arr[k]! ≠ target
       invariant found = true → ∃ k : Nat, k < arr.size ∧ arr[k]! = target
     do

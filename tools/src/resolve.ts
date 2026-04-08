@@ -63,12 +63,73 @@ function coerceStr(expr: TExpr, targetTy: Ty): TExpr {
 
 // ── Helpers ──────────────────────────────────────────────────
 
+/** Detect `v !== undefined` or `undefined !== v` where v: optional<T>. */
+function narrowOptional(cond: RawExpr, env: Env | null): { varName: string; innerTy: Ty; inThen: boolean } | null {
+  if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) return null;
+  // v !== undefined  OR  undefined !== v
+  let varName: string | null = null;
+  if (cond.left.kind === "var" && cond.right.kind === "var" && cond.right.name === "undefined") varName = cond.left.name;
+  if (cond.right.kind === "var" && cond.left.kind === "var" && cond.left.name === "undefined") varName = cond.right.name;
+  if (!varName) return null;
+  const ty = lookup(env, varName);
+  if (!ty || ty.kind !== "optional") return null;
+  return { varName, innerTy: ty.inner, inThen: cond.op === "!==" };
+}
+
+/** TS reference types that become value types in Dafny/Lean — const bindings need mutable var. */
+function isRefMutableInTS(ty: Ty): boolean {
+  return ty.kind === "array" || ty.kind === "map" || ty.kind === "set";
+}
+
 function findDecl(ctx: Ctx, name: string): TypeDeclInfo | undefined {
   return ctx.typeDecls.find(d => d.name === name);
 }
 
 function getDiscriminant(ctx: Ctx, typeName: string): string | undefined {
   return findDecl(ctx, typeName)?.discriminant;
+}
+
+/** Infer quantifier variable type from usage in body.
+ *  If the variable is used as a map/set key (e.g. map.has(k), map.get(k)),
+ *  return the collection's key type. Otherwise return null (default to int). */
+function inferQuantVarType(varName: string, body: RawExpr, ctx: Ctx): Ty | null {
+  // Look for calls like map.has(k), map.get(k), or array.includes(k) where k is our variable
+  if (body.kind === "call" && body.fn.kind === "field" &&
+      (body.fn.field === "has" || body.fn.field === "get" || body.fn.field === "includes") &&
+      body.args.length === 1 && body.args[0].kind === "var" && body.args[0].name === varName) {
+    const objTy = lookup(ctx.env, body.fn.obj.kind === "var" ? body.fn.obj.name : "");
+    if (objTy?.kind === "map") return objTy.key;
+    if (objTy?.kind === "set") return objTy.elem;
+    if (objTy?.kind === "array") return objTy.elem;
+  }
+  // Recurse into subexpressions
+  if (body.kind === "binop") {
+    return inferQuantVarType(varName, body.left, ctx) ?? inferQuantVarType(varName, body.right, ctx);
+  }
+  if (body.kind === "unop") return inferQuantVarType(varName, body.expr, ctx);
+  if (body.kind === "call") {
+    for (const a of body.args) { const r = inferQuantVarType(varName, a, ctx); if (r) return r; }
+    return inferQuantVarType(varName, body.fn, ctx);
+  }
+  if (body.kind === "field") return inferQuantVarType(varName, body.obj, ctx);
+  if (body.kind === "index") {
+    return inferQuantVarType(varName, body.obj, ctx) ?? inferQuantVarType(varName, body.idx, ctx);
+  }
+  if (body.kind === "conditional") {
+    return inferQuantVarType(varName, body.cond, ctx) ??
+      inferQuantVarType(varName, body.then, ctx) ?? inferQuantVarType(varName, body.else, ctx);
+  }
+  if ((body.kind === "forall" || body.kind === "exists") && body.var !== varName) {
+    return inferQuantVarType(varName, body.body, ctx);
+  }
+  if (body.kind === "arrayLiteral") {
+    for (const el of body.elems) { const r = inferQuantVarType(varName, el, ctx); if (r) return r; }
+  }
+  if (body.kind === "record") {
+    if (body.spread) { const r = inferQuantVarType(varName, body.spread, ctx); if (r) return r; }
+    for (const f of body.fields) { const r = inferQuantVarType(varName, f.value, ctx); if (r) return r; }
+  }
+  return null;
 }
 
 function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
@@ -117,8 +178,23 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       return { kind: "unop", op: e.op, expr, ty: e.op === "!" ? { kind: "bool" } : expr.ty };
     }
 
-    case "call":
-      return { kind: "call", fn: resolveExpr(e.fn, ctx), args: e.args.map(a => resolveExpr(a, ctx)), ty: { kind: "unknown" }, callKind: classifyCall(e.fn, ctx) };
+    case "call": {
+      const fn = resolveExpr(e.fn, ctx);
+      const args = e.args.map(a => resolveExpr(a, ctx));
+      let ty: Ty = { kind: "unknown" };
+      // Infer return types for collection methods
+      if (fn.kind === "field" && fn.obj.ty.kind === "map") {
+        if (fn.field === "get") ty = ctx.inSpec ? fn.obj.ty.value : { kind: "optional", inner: fn.obj.ty.value };
+        else if (fn.field === "has") ty = { kind: "bool" };
+        else if (fn.field === "set") ty = fn.obj.ty;
+      } else if (fn.kind === "field" && fn.obj.ty.kind === "set") {
+        if (fn.field === "has") ty = { kind: "bool" };
+        else if (fn.field === "add") ty = fn.obj.ty;
+      } else if (fn.kind === "field" && fn.obj.ty.kind === "array") {
+        if (fn.field === "includes") ty = { kind: "bool" };
+      }
+      return { kind: "call", fn, args, ty, callKind: classifyCall(e.fn, ctx) };
+    }
 
     case "index": {
       const obj = resolveExpr(e.obj, ctx);
@@ -132,6 +208,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let ty: Ty = { kind: "unknown" };
 
       if (e.field === "length" && (obj.ty.kind === "array" || obj.ty.kind === "string")) {
+        ty = { kind: "nat" };
+      } else if (e.field === "size" && (obj.ty.kind === "map" || obj.ty.kind === "set")) {
         ty = { kind: "nat" };
       } else if (obj.ty.kind === "user") {
         if (getDiscriminant(ctx, obj.ty.name) === e.field) isDiscriminant = true;
@@ -165,12 +243,14 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       return { kind: "result", ty: ctx.returnTy };
 
     case "forall": {
-      const varTy: Ty = e.varType === "nat" ? { kind: "nat" } : { kind: "int" };
+      const varTy: Ty = e.varType === "nat" ? { kind: "nat" }
+        : inferQuantVarType(e.var, e.body, ctx) ?? { kind: "int" };
       return { kind: "forall", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
     }
 
     case "exists": {
-      const varTy: Ty = e.varType === "nat" ? { kind: "nat" } : { kind: "int" };
+      const varTy: Ty = e.varType === "nat" ? { kind: "nat" }
+        : inferQuantVarType(e.var, e.body, ctx) ?? { kind: "int" };
       return { kind: "exists", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
     }
 
@@ -205,6 +285,11 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       else_ = coerceStr(else_, then_.ty);
       const ty = then_.ty.kind !== "unknown" ? then_.ty : else_.ty;
       return { kind: "conditional", cond, then: then_, else: else_, ty };
+    }
+
+    case "emptyCollection": {
+      const ty = parseTsType(e.tsType);
+      return { kind: "arrayLiteral", elems: [], ty };
     }
   }
 }
@@ -248,7 +333,9 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     case "let": {
       const ty = resolveTsType(s.tsType, ctx.overrides, s.name);
       const init = coerceStr(resolveExpr(s.init, ctx), ty);
-      return [{ kind: "let", name: s.name, ty, mutable: s.mutable, init }, extend(ctx.env, s.name, ty)];
+      // const collections are mutable in value-semantics world (TS mutates in place, Dafny/Lean reassign)
+      const mutable = s.mutable || isRefMutableInTS(ty);
+      return [{ kind: "let", name: s.name, ty, mutable, init }, extend(ctx.env, s.name, ty)];
     }
 
     case "assign": {
@@ -268,8 +355,17 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     case "expr":
       return [{ kind: "expr", expr: resolveExpr(s.expr, ctx) }, ctx.env];
 
-    case "if":
-      return [{ kind: "if", cond: resolveExpr(s.cond, ctx), then: resolveBlock(s.then, ctx), else: resolveBlock(s.else, ctx) }, ctx.env];
+    case "if": {
+      // Narrow optional<T> → T when checking !== undefined or undefined !==
+      let thenCtx = ctx, elseCtx = ctx;
+      const narrowed = narrowOptional(s.cond, ctx.env);
+      if (narrowed) {
+        const env = extend(ctx.env, narrowed.varName, narrowed.innerTy);
+        if (narrowed.inThen) thenCtx = withEnv(ctx, env);
+        else elseCtx = withEnv(ctx, env);
+      }
+      return [{ kind: "if", cond: resolveExpr(s.cond, ctx), then: resolveBlock(s.then, thenCtx), else: resolveBlock(s.else, elseCtx) }, ctx.env];
+    }
 
     case "while": {
       const whileSpecCtx = { ...ctx, inSpec: true };
@@ -285,7 +381,9 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
 
     case "forof": {
       const iterable = resolveExpr(s.iterable, ctx);
-      const elemTy: Ty = iterable.ty.kind === "array" ? iterable.ty.elem : { kind: "unknown" };
+      const elemTy: Ty = iterable.ty.kind === "array" ? iterable.ty.elem
+        : iterable.ty.kind === "set" ? iterable.ty.elem
+        : { kind: "unknown" };
       const idxName = `_${s.varName}_idx`;
       const withIdx = extend(ctx.env, idxName, { kind: "nat" });
       const withElem = extend(withIdx, s.varName, elemTy);
@@ -304,6 +402,29 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         cases: s.cases.map(c => ({ label: c.label, body: resolveBlock(c.body, ctx) })),
         defaultBody: resolveBlock(s.defaultBody, ctx),
       }, ctx.env];
+
+    case "ghostLet": {
+      const specCtx = { ...ctx, inSpec: true };
+      // Handle new Set<T>() / new Map<K,V>() constructors
+      const collMatch = s.init.match(/^new\s+(Set|Map)<(.+)>\(\)$/);
+      const init = collMatch
+        ? resolveExpr({ kind: "emptyCollection", collectionType: collMatch[1] as "Set" | "Map", tsType: `${collMatch[1]}<${collMatch[2]}>` }, specCtx)
+        : resolveExpr(parseExpr(s.init), specCtx);
+      const ty = s.tsType ? parseTsType(s.tsType) : init.ty;
+      return [{ kind: "ghostLet", name: s.name, ty, init }, extend(ctx.env, s.name, ty)];
+    }
+
+    case "ghostAssign": {
+      const specCtx = { ...ctx, inSpec: true };
+      const value = resolveExpr(parseExpr(s.value), specCtx);
+      return [{ kind: "ghostAssign", target: s.target, value }, ctx.env];
+    }
+
+    case "assert": {
+      const specCtx = { ...ctx, inSpec: true };
+      const expr = resolveExpr(parseExpr(s.expr), specCtx);
+      return [{ kind: "assert", expr }, ctx.env];
+    }
   }
 }
 

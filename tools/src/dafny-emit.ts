@@ -22,6 +22,15 @@ function leanTypeToDafny(t: string): string {
   // Array X → seq<X>
   const arrMatch = t.match(/^Array\s+(.+)$/);
   if (arrMatch) return `seq<${leanTypeToDafny(arrMatch[1])}>`;
+  // HashMap K V → map<K, V>  (with or without Std. prefix)
+  const hmMatch = t.match(/^(?:Std\.)?HashMap\s+(\S+)\s+(.+)$/);
+  if (hmMatch) return `map<${leanTypeToDafny(hmMatch[1])}, ${leanTypeToDafny(hmMatch[2])}>`;
+  // HashSet T → set<T>
+  const hsMatch = t.match(/^(?:Std\.)?HashSet\s+(.+)$/);
+  if (hsMatch) return `set<${leanTypeToDafny(hsMatch[1])}>`;
+  // Option T → Option<T>
+  const optMatch = t.match(/^Option\s+(.+)$/);
+  if (optMatch) { needsOptionType = true; return `Option<${leanTypeToDafny(optMatch[1])}>`; }
   // Strip parens: (X) → X
   const parenMatch = t.match(/^\((.+)\)$/);
   if (parenMatch) return leanTypeToDafny(parenMatch[1]);
@@ -80,12 +89,26 @@ function emitExpr(e: LeanExpr): string {
       if (e.elems.length === 0) return `[]`;
       return `[${e.elems.map(emitExpr).join(", ")}]`;
 
+    case "emptyMap": return `map[]`;
+    case "emptySet": return `{}`;
+
     case "dotCall": {
       const obj = emitExpr(e.obj);
       const args = e.args.map(emitExpr);
       if (e.method === "with" && args.length === 2)
         return `${obj}[${args[0]} := ${args[1]}]`;
       if (e.method === "includes" && args.length === 1) return `(${args[0]} in ${obj})`;
+      // Map operations
+      if (e.method === "mapGetDirect" && args.length === 1) return `${obj}[${args[0]}]`;
+      if (e.method === "mapGet" && args.length === 1) {
+        needsOptionType = true;
+        return `(if ${args[0]} in ${obj} then Some(${obj}[${args[0]}]) else None)`;
+      }
+      if (e.method === "mapSet" && args.length === 2) return `${obj}[${args[0]} := ${args[1]}]`;
+      if (e.method === "mapHas" && args.length === 1) return `(${args[0]} in ${obj})`;
+      // Set operations
+      if (e.method === "setHas" && args.length === 1) return `(${args[0]} in ${obj})`;
+      if (e.method === "setAdd" && args.length === 1) return `(${obj} + {${args[0]}})`;
       if (e.method === "map" && args.length === 1) { needsStdCollections = true; return `Seq.Map(${args[0]}, ${obj})`; }
       if (e.method === "filter" && args.length === 1) { needsStdCollections = true; return `Seq.Filter(${args[0]}, ${obj})`; }
       if (e.method === "every" && args.length === 1) { needsStdCollections = true; return `Seq.All(${obj}, ${args[0]})`; }
@@ -144,13 +167,14 @@ function emitExpr(e: LeanExpr): string {
         return `${args[0]}[${args[1]}..${args[2]}]`;
       if (e.fn === "SeqPush")
         return `(${args[0]} + [${args[1]}])`;
+      if (e.fn === "SetToSeq") { needsSetToSeq = true; return `SetToSeq(${args.join(", ")})`; }
       if (e.fn === "JSFloorDiv") needsJSFloorDiv = true;
       return `${e.fn}(${args.join(", ")})`;
     }
 
     case "field": {
       const obj = emitExpr(e.obj);
-      if (e.field === "size" || e.field === "length") return `|${obj}|`;
+      if (e.field === "size" || e.field === "length" || e.field === "collectionSize") return `|${obj}|`;
       if (e.field === "toNat") return obj;
       return `${obj}.${escapeName(e.field)}`;
     }
@@ -177,12 +201,21 @@ function emitExpr(e: LeanExpr): string {
       return `if ${emitExpr(e.cond)} then ${emitExpr(e.then)} else ${emitExpr(e.else)}`;
 
     case "match": {
-      const arms = e.arms.map(a => `case ${a.pattern.replace(/^\./, "")} => ${emitExpr(a.body)}`);
-      return `match ${e.scrutinee} { ${arms.join(" ")} }`;
+      const scrut = typeof e.scrutinee === "string" ? escapeName(e.scrutinee) : emitExpr(e.scrutinee);
+      const arms = e.arms.map(a => `case ${translatePattern(a.pattern)} => ${emitExpr(a.body)}`);
+      return `(match ${scrut} { ${arms.join(" ")} })`;
     }
 
-    case "forall": return `forall ${e.var}: ${leanTypeToDafny(e.type)} :: ${emitExpr(e.body)}`;
-    case "exists": return `exists ${e.var}: ${leanTypeToDafny(e.type)} :: ${emitExpr(e.body)}`;
+    case "forall": {
+      const dty = leanTypeToDafny(e.type);
+      const ann = dty === "string" ? "" : `: ${dty}`;
+      return `forall ${e.var}${ann} :: ${emitExpr(e.body)}`;
+    }
+    case "exists": {
+      const dty = leanTypeToDafny(e.type);
+      const ann = dty === "string" ? "" : `: ${dty}`;
+      return `exists ${e.var}${ann} :: ${emitExpr(e.body)}`;
+    }
 
     case "let": return `var ${escapeName(e.name)} := ${emitExpr(e.value)}; ${emitExpr(e.body)}`;
   }
@@ -195,7 +228,8 @@ function emitPureExpr(e: LeanExpr, indent: number): string {
     case "if":
       return `${pad}if ${emitExpr(e.cond)} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
     case "match": {
-      const lines = [`${pad}match ${e.scrutinee} {`];
+      const scrut = typeof e.scrutinee === "string" ? escapeName(e.scrutinee) : emitExpr(e.scrutinee);
+      const lines = [`${pad}match ${scrut} {`];
       for (const arm of e.arms) {
         lines.push(`${pad}  case ${translatePattern(arm.pattern)} =>`);
         lines.push(emitPureExpr(arm.body, indent + 2));
@@ -223,6 +257,12 @@ function emitStmt(s: LeanStmt, indent: number): string {
       return `${pad}var ${escapeName(s.name)} := ${emitExpr(s.value)};`;
     case "assign":
       return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)};`;
+    case "ghostLet":
+      return `${pad}ghost var ${escapeName(s.name)}: ${leanTypeToDafny(s.type)} := ${emitExpr(s.value)};`;
+    case "ghostAssign":
+      return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)};`;
+    case "assert":
+      return `${pad}assert ${emitExpr(s.expr)};`;
     case "bind":
       // Monadic bind shouldn't appear in Dafny mode, emit as regular assign
       return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)};`;
@@ -249,7 +289,8 @@ function emitStmt(s: LeanStmt, indent: number): string {
     }
 
     case "match": {
-      const lines = [`${pad}match ${s.scrutinee} {`];
+      const scrut = typeof s.scrutinee === "string" ? escapeName(s.scrutinee) : emitExpr(s.scrutinee);
+      const lines = [`${pad}match ${scrut} {`];
       for (const arm of s.arms) {
         lines.push(`${pad}  case ${translatePattern(arm.pattern)} =>`);
         lines.push(emitStmts(arm.body, indent + 2));
@@ -343,6 +384,8 @@ function emitDecl(d: LeanDecl): string {
 let needsStringIndexOf = false;
 let needsJSFloorDiv = false;
 let needsStdCollections = false;
+let needsOptionType = false;
+let needsSetToSeq = false;
 
 const JS_FLOOR_DIV = `function JSFloorDiv(a: int, b: int): int
   requires b != 0
@@ -395,11 +438,13 @@ function qualifyCtor(name: string, type?: string): string {
  *  ".ctorName" → "ctorName"
  *  "_" → "_"
  */
+const CTOR_MAP: Record<string, string> = { "some": "Some", "none": "None" };
+
 function translatePattern(pattern: string): string {
   if (pattern === "_") return "_";
   const m = pattern.match(/^\.(\w+)\s*(.*)$/);
   if (!m) return pattern;
-  const ctorName = escapeName(m[1]);
+  const ctorName = CTOR_MAP[m[1]] ?? escapeName(m[1]);
   const fields = m[2].trim();
   if (!fields) return ctorName;
   const fieldNames = fields.split(/\s+/).map(escapeName);
@@ -415,6 +460,8 @@ export function emitDafnyFile(file: LeanFile, tsFileName?: string): string {
   needsStringIndexOf = false;
   needsJSFloorDiv = false;
   needsStdCollections = false;
+  needsOptionType = false;
+  needsSetToSeq = false;
 
   // Collect pure def names so we can skip their method wrappers
   const pureDefs = new Set<string>();
@@ -449,6 +496,24 @@ export function emitDafnyFile(file: LeanFile, tsFileName?: string): string {
   const lines: string[] = [];
   if (tsFileName) lines.push(`// Generated by lsc from ${tsFileName}`);
   if (needsStdCollections) lines.push("import Std.Collections.Seq");
+  if (needsOptionType) { lines.push(""); lines.push("datatype Option<T> = None | Some(value: T)"); }
+  if (needsSetToSeq) {
+    lines.push("");
+    lines.push(`method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
+  ensures forall x :: x in s <==> x in res
+  ensures |res| == |s|
+{
+  var remaining := s;
+  res := [];
+  while remaining != {}
+    decreases remaining
+  {
+    var x :| x in remaining;
+    res := res + [x];
+    remaining := remaining - {x};
+  }
+}`);
+  }
   if (needsJSFloorDiv) { lines.push(""); lines.push(JS_FLOOR_DIV); }
   if (needsStringIndexOf) { lines.push(""); lines.push(PREAMBLES.StringIndexOf); }
   lines.push(...declLines);

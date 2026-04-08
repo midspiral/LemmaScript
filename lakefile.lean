@@ -117,6 +117,7 @@ lean_lib Examples where
     `«arrayContains.def», `«arrayContains.proof»,
     `«hof.types», `«hof.def», `«hof.proof»,
     `«spec.types», `«spec.def», `«spec.proof»,
-    `«clamp.def», `«clamp.proof»
+    `«clamp.def», `«clamp.proof»,
+    `«toposort.spec», `«toposort.def», `«toposort.proof»
   ]
   extraDepTargets := #[``downloadDependencies]

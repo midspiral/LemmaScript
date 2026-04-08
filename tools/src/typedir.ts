@@ -14,6 +14,9 @@ export type Ty =
   | { kind: "string" }
   | { kind: "void" }
   | { kind: "array"; elem: Ty }
+  | { kind: "map"; key: Ty; value: Ty }
+  | { kind: "set"; elem: Ty }
+  | { kind: "optional"; inner: Ty }
   | { kind: "user"; name: string }
   | { kind: "unknown" }
 
@@ -61,6 +64,9 @@ export type TStmt =
       defaultBody: TStmt[] }
   | { kind: "forof"; varName: string; varTy: Ty; iterable: TExpr;
       invariants: TExpr[]; doneWith: TExpr | null; body: TStmt[] }
+  | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
+  | { kind: "ghostAssign"; target: string; value: TExpr }
+  | { kind: "assert"; expr: TExpr }
 
 // ── Top-level ────────────────────────────────────────────────
 
