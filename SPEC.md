@@ -117,7 +117,7 @@ TYPE     := 'nat' | 'int'
 
 **`\result`** refers to the function's return value (following Frama-C/ACSL convention). It is only valid in `ensures` annotations. The `\` prefix distinguishes it from any TS variable named `result`.
 
-**`forall(k, P)`** infers the type of `k`: explicit `: nat` → `Nat`; if `k` is used as a map/set key (e.g., `map.has(k)`) → the collection's key type; otherwise `Int`. Same for `exists`.
+**`forall(k, P)`** infers the type of `k`: explicit `: nat` → `Nat`; if `k` is used as a collection key or element (e.g., `map.has(k)`, `set.has(k)`, `arr.includes(k)`) → the collection's key/element type; otherwise `Int`. Same for `exists`.
 
 ### 3.3 Ghost Variables and Assertions
 
@@ -212,7 +212,7 @@ No normalization of operators. Lean and `loom_solve` handle all comparison direc
 | `"foo"` (plain string context) | `"foo"` | String literal. Context-directed: user type → constructor, otherwise string. |
 | `x.tag === "foo"` (discriminant check) | `match` arm | See §5.4 and §8.3. |
 | `x.field` (in narrowed branch) | bound variable | From match pattern. See §5.4. |
-| `forall(k, P)` | `∀ k : T, P'` | Type inferred: explicit `: nat` → `Nat`; collection key usage (e.g. `map.has(k)`) → key type; otherwise `Int`. See §4.9. |
+| `forall(k, P)` | `∀ k : T, P'` | Type inferred: explicit `: nat` → `Nat`; collection usage (e.g. `map.has(k)`, `arr.includes(k)`) → key/element type; otherwise `Int`. See §4.9. |
 | `forall(k: nat, P)` | `∀ k : Nat, P'` | Explicit Nat quantification. |
 
 ### 4.3 Nat-Typing Rules
@@ -341,7 +341,7 @@ enqueued.add(id);        // → enqueued := enqueued.insert id  (ghost context)
 
 **Optional narrowing:** `v !== undefined` where `v : T | undefined` emits an `if h : v.isSome = true then let val := v.get h ... else ...` pattern, binding the unwrapped value in the then-branch. Optional comparisons like `opt === 0` emit a match on `Some`/`None`.
 
-**Quantifier type inference:** When a quantifier variable is used as a map/set key (e.g., `forall(k, map.has(k) ==> ...)`), the variable type is inferred from the collection's key type instead of defaulting to `Int`.
+**Quantifier type inference:** When a quantifier variable is used as a collection key or element (e.g., `forall(k, map.has(k) ==> ...)`, `forall(v, arr.includes(v) ==> ...)`), the variable type is inferred from the collection's key/element type instead of defaulting to `Int`.
 
 **Set iteration:** `for (const x of s)` where `s` is a `Set<T>` converts to `SetToSeq` (Lean: `.toArray`, Dafny: a helper method) followed by a standard for-in loop.
 

@@ -28,6 +28,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
     for _id_idx2 in [:nodeIds.size]
       invariant _id_idx2 ≤ nodeIds.size
       invariant ∀ k : Int, 0 ≤ k → k < nodeIds.size → inDegree.contains nodeIds[k.toNat]!
+      invariant ∀ k : String, adjacency.contains k → ∀ v : String, (adjacency.get! k).contains v → nodeIdSet.contains v
       invariant ∀ k : String, inDegree.contains k → inDegree.get! k ≥ 0
     do
       let id := nodeIds[_id_idx2]!

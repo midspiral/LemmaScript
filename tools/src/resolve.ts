@@ -93,13 +93,14 @@ function getDiscriminant(ctx: Ctx, typeName: string): string | undefined {
  *  If the variable is used as a map/set key (e.g. map.has(k), map.get(k)),
  *  return the collection's key type. Otherwise return null (default to int). */
 function inferQuantVarType(varName: string, body: RawExpr, ctx: Ctx): Ty | null {
-  // Look for calls like map.has(k) or map.get(k) where k is our variable
+  // Look for calls like map.has(k), map.get(k), or array.includes(k) where k is our variable
   if (body.kind === "call" && body.fn.kind === "field" &&
-      (body.fn.field === "has" || body.fn.field === "get") &&
+      (body.fn.field === "has" || body.fn.field === "get" || body.fn.field === "includes") &&
       body.args.length === 1 && body.args[0].kind === "var" && body.args[0].name === varName) {
     const objTy = lookup(ctx.env, body.fn.obj.kind === "var" ? body.fn.obj.name : "");
     if (objTy?.kind === "map") return objTy.key;
     if (objTy?.kind === "set") return objTy.elem;
+    if (objTy?.kind === "array") return objTy.elem;
   }
   // Recurse into subexpressions
   if (body.kind === "binop") {
@@ -189,6 +190,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       } else if (fn.kind === "field" && fn.obj.ty.kind === "set") {
         if (fn.field === "has") ty = { kind: "bool" };
         else if (fn.field === "add") ty = fn.obj.ty;
+      } else if (fn.kind === "field" && fn.obj.ty.kind === "array") {
+        if (fn.field === "includes") ty = { kind: "bool" };
       }
       return { kind: "call", fn, args, ty, callKind: classifyCall(e.fn, ctx) };
     }

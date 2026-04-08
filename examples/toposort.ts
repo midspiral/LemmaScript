@@ -31,6 +31,7 @@ export function topologicalSort(
   // Phase 2: build adjacency and in-degree from deps
   for (const id of nodeIds) {
     //@ invariant forall(k, 0 <= k && k < nodeIds.length ==> inDegree.has(nodeIds[k]))
+    //@ invariant forall(k, adjacency.has(k) ==> forall(v, adjacency.get(k).includes(v) ==> nodeIdSet.has(v)))
     //@ invariant forall(k, inDegree.has(k) ==> inDegree.get(k) >= 0)
     const nodeDeps = deps.get(id);
     if (nodeDeps !== undefined) {
