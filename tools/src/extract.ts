@@ -5,7 +5,7 @@
  * The only strings are //@ annotation expressions (parsed later by specparser).
  */
 
-import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ScriptTarget } from "ts-morph";
+import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget } from "ts-morph";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawGhostLet, RawGhostAssign } from "./rawir.js";
 
@@ -420,8 +420,17 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     if (Node.isExpressionStatement(s)) {
       const expr = s.getExpression();
+      // arr[i] = v → arr = arr.with(i, v)
+      if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getText() === "=" && Node.isElementAccessExpression(expr.getLeft())) {
+        const left = expr.getLeft() as ElementAccessExpression;
+        const obj = extractExpr(left.getExpression());
+        const idx = extractExpr(left.getArgumentExpression()!);
+        const val = extractExpr(expr.getRight());
+        const target = left.getExpression().getText();
+        const withCall: RawExpr = { kind: "call", fn: { kind: "field", obj, field: "with" }, args: [idx, val] };
+        result.push({ kind: "assign", target, value: withCall, line });
       // x = e
-      if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getText() === "=") {
+      } else if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getText() === "=") {
         result.push({ kind: "assign", target: expr.getLeft().getText(), value: extractExpr(expr.getRight()), line });
       // x += e, x -= e, etc.
       } else if (Node.isBinaryExpression(expr) && COMPOUND_OPS[expr.getOperatorToken().getText()]) {
