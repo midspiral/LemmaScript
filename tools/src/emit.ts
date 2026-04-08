@@ -65,6 +65,37 @@ const PREC: Record<string, number> = {
 
 function prec(op: string): number { return PREC[op] ?? 10; }
 
+// ── Semantic method → Lean name ─────────────────────────────
+
+const DOT_METHOD_MAP: Record<string, string> = {
+  "map": "map", "mapM": "mapM",
+  "filter": "filter", "filterM": "filterM",
+  "every": "all", "everyM": "allM",
+  "some": "any", "someM": "anyM",
+  "includes": "contains",
+  "find": "find?",
+  "arraySet": "set!",
+  "mapGet": "get?", "mapGetDirect": "get!",
+  "mapHas": "contains",
+  "mapSet": "insert",
+  "setHas": "contains",
+  "setAdd": "insert",
+};
+
+const APP_FN_MAP: Record<string, string> = {
+  "stringIndexOf": "JSString.indexOf",
+  "stringSlice": "JSString.slice",
+  "arrayPush": "Array.push",
+};
+
+/** Lean modules that need explicit imports. */
+const LEAN_IMPORT_MAP: Record<string, string> = {
+  "JSString": "LemmaScript.JSString",
+};
+
+function mapDotMethod(name: string): string { return DOT_METHOD_MAP[name] ?? name; }
+function mapAppFn(name: string): string { return APP_FN_MAP[name] ?? name; }
+
 // ── Expression emission ─────────────────────────────────────
 
 function emitExpr(e: Expr, parentPrec?: number): string {
@@ -84,10 +115,11 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       const obj = emitExpr(e.obj);
       const wrap = e.obj.kind === "binop" || e.obj.kind === "app" || e.obj.kind === "dotCall";
       const receiver = wrap ? `(${obj})` : obj;
+      const leanMethod = mapDotMethod(e.method);
       const args = e.args.map(a =>
         (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app") ? `(${emitExpr(a)})` : emitExpr(a)
       );
-      return args.length > 0 ? `${receiver}.${e.method} ${args.join(" ")}` : `${receiver}.${e.method}`;
+      return args.length > 0 ? `${receiver}.${leanMethod} ${args.join(" ")}` : `${receiver}.${leanMethod}`;
     }
 
     case "lambda": {
@@ -117,12 +149,13 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "app": {
+      const fn = mapAppFn(e.fn);
       const args = e.args.map(a =>
         (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app") ? `(${emitExpr(a)})` : emitExpr(a)
       );
       // SetToSeq → .toArray for Lean (HashSet has native toArray)
       if (e.fn === "SetToSeq" && args.length === 1) return `${args[0]}.toArray`;
-      return `${e.fn} ${args.join(" ")}`;
+      return `${fn} ${args.join(" ")}`;
     }
 
     case "field": {

@@ -17,75 +17,46 @@ export type Backend = "lean" | "dafny";
 export interface TransformOptions {
   backend: Backend;
   monadic: boolean;
-  dotMethods: Record<string, Record<string, { pure: string; monadic?: string }>>;
-  methodTable: Record<string, Record<string, string>>;
 }
 
 export const LEAN_OPTIONS: TransformOptions = {
   backend: "lean",
   monadic: true,
-  dotMethods: {
-    array: {
-      map:      { pure: "map",      monadic: "mapM" },
-      filter:   { pure: "filter",   monadic: "filterM" },
-      every:    { pure: "all",      monadic: "allM" },
-      some:     { pure: "any",      monadic: "anyM" },
-      includes: { pure: "contains" },
-      find:     { pure: "find?" },
-      with:     { pure: "set!" },
-    },
-    map: {
-      get:  { pure: "get?" },
-      has:  { pure: "contains" },
-      set:  { pure: "insert" },
-    },
-    set: {
-      has:  { pure: "contains" },
-      add:  { pure: "insert" },
-    },
-  },
-  methodTable: {
-    string: {
-      indexOf: "JSString.indexOf",
-      slice:   "JSString.slice",
-    },
-    array: {
-      push: "Array.push",
-    },
-  },
 };
 
 export const DAFNY_OPTIONS: TransformOptions = {
   backend: "dafny",
   monadic: false,
-  dotMethods: {
-    array: {
-      map:      { pure: "map" },
-      filter:   { pure: "filter" },
-      every:    { pure: "every" },
-      some:     { pure: "some" },
-      includes: { pure: "includes" },
-      with:     { pure: "with" },
-    },
-    map: {
-      get:  { pure: "mapGet" },
-      has:  { pure: "mapHas" },
-      set:  { pure: "mapSet" },
-    },
-    set: {
-      has:  { pure: "setHas" },
-      add:  { pure: "setAdd" },
-    },
+};
+
+// ── Semantic method tables (backend-neutral) ────────────────
+
+/** Dot methods: TS method name → semantic IR name (+ optional monadic variant). */
+const DOT_METHODS: Record<string, Record<string, { name: string; monadic?: string }>> = {
+  array: {
+    map:      { name: "map", monadic: "mapM" },
+    filter:   { name: "filter", monadic: "filterM" },
+    every:    { name: "every", monadic: "everyM" },
+    some:     { name: "some", monadic: "someM" },
+    includes: { name: "includes" },
+    find:     { name: "find" },
+    with:     { name: "arraySet" },
   },
-  methodTable: {
-    string: {
-      indexOf: "StringIndexOf",
-      slice:   "StringSlice",
-    },
-    array: {
-      push: "SeqPush",
-    },
+  map: {
+    get: { name: "mapGet" },
+    has: { name: "mapHas" },
+    set: { name: "mapSet" },
   },
+  set: {
+    has: { name: "setHas" },
+    add: { name: "setAdd" },
+  },
+};
+
+/** Helper-function methods: receiver.method(args) → fn(receiver, args). */
+const METHOD_TABLE: Record<string, Record<string, string>> = {
+  string: { indexOf: "stringIndexOf", slice: "stringSlice" },
+  array: { push: "arrayPush" },
 };
 
 /** Active options — set before each transform call. */
@@ -103,8 +74,8 @@ function isUser(ty: Ty): boolean { return ty.kind === "user"; }
 
 // ── Method lookup (uses active options) ─────────────────────
 
-function lookupDotMethod(recvTy: Ty, method: string): { pure: string; monadic?: string } | undefined {
-  return _opts.dotMethods[recvTy.kind]?.[method];
+function lookupDotMethod(recvTy: Ty, method: string): { name: string; monadic?: string } | undefined {
+  return DOT_METHODS[recvTy.kind]?.[method];
 }
 
 /** Check if transformed lambda body contains monadic binds. */
@@ -121,24 +92,56 @@ function isMonadicBody(stmts: Stmt[]): boolean {
   return false;
 }
 
-/** Lean modules that don't need explicit imports. */
-const BUILTIN_MODULES = new Set(["Array", "String", "List", "Nat", "Int"]);
-
-/** Map from Lean module prefix → import path. */
-const MODULE_IMPORTS: Record<string, string> = {
-  "JSString": "LemmaScript.JSString",
+/** Semantic app names that require extra Lean imports. */
+const IMPORT_FOR_METHOD: Record<string, string> = {
+  "stringIndexOf": "LemmaScript.JSString",
+  "stringSlice": "LemmaScript.JSString",
 };
-
-const usedImports = new Set<string>();
 
 function lookupMethod(recvTy: Ty, method: string): string | undefined {
   const tyKey = recvTy.kind === "array" ? "array" : recvTy.kind;
-  const lean = _opts.methodTable[tyKey]?.[method];
-  if (lean) {
-    const mod = lean.split(".")[0];
-    if (!BUILTIN_MODULES.has(mod)) usedImports.add(mod);
+  return METHOD_TABLE[tyKey]?.[method];
+}
+
+/** Scan an IR module for semantic app names that need extra imports. */
+function collectImports(decls: Decl[]): string[] {
+  const imports = new Set<string>();
+  function scanExpr(e: Expr) {
+    if (e.kind === "app" && IMPORT_FOR_METHOD[e.fn]) imports.add(IMPORT_FOR_METHOD[e.fn]);
+    if (e.kind === "app") e.args.forEach(scanExpr);
+    if (e.kind === "binop") { scanExpr(e.left); scanExpr(e.right); }
+    if (e.kind === "unop") scanExpr(e.expr);
+    if (e.kind === "field") scanExpr(e.obj);
+    if (e.kind === "toNat") scanExpr(e.expr);
+    if (e.kind === "index") { scanExpr(e.arr); scanExpr(e.idx); }
+    if (e.kind === "record") { if (e.spread) scanExpr(e.spread); e.fields.forEach(f => scanExpr(f.value)); }
+    if (e.kind === "arrayLiteral") e.elems.forEach(scanExpr);
+    if (e.kind === "dotCall") { scanExpr(e.obj); e.args.forEach(scanExpr); }
+    if (e.kind === "lambda") e.body.forEach(scanStmt);
+    if (e.kind === "if") { scanExpr(e.cond); scanExpr(e.then); scanExpr(e.else); }
+    if (e.kind === "match") { e.arms.forEach(a => scanExpr(a.body)); }
+    if (e.kind === "implies") { e.premises.forEach(scanExpr); scanExpr(e.conclusion); }
+    if (e.kind === "forall" || e.kind === "exists") scanExpr(e.body);
+    if (e.kind === "let") { scanExpr(e.value); scanExpr(e.body); }
   }
-  return lean;
+  function scanStmt(s: Stmt) {
+    if (s.kind === "let" || s.kind === "ghostLet") scanExpr(s.value);
+    if (s.kind === "assign" || s.kind === "ghostAssign" || s.kind === "bind") scanExpr(s.value);
+    if (s.kind === "let-bind") scanExpr(s.value);
+    if (s.kind === "return") scanExpr(s.value);
+    if (s.kind === "assert") scanExpr(s.expr);
+    if (s.kind === "if") { scanExpr(s.cond); s.then.forEach(scanStmt); s.else.forEach(scanStmt); }
+    if (s.kind === "match") s.arms.forEach(a => a.body.forEach(scanStmt));
+    if (s.kind === "while") { scanExpr(s.cond); s.invariants.forEach(scanExpr); s.body.forEach(scanStmt); }
+    if (s.kind === "forin") { scanExpr(s.bound); s.invariants.forEach(scanExpr); s.body.forEach(scanStmt); }
+  }
+  function scanDecl(d: Decl) {
+    if (d.kind === "def") { d.requires.forEach(scanExpr); d.ensures.forEach(scanExpr); scanExpr(d.body); }
+    if (d.kind === "method") { d.requires.forEach(scanExpr); d.ensures.forEach(scanExpr); d.body.forEach(scanStmt); }
+    if (d.kind === "namespace") d.decls.forEach(scanDecl);
+  }
+  decls.forEach(scanDecl);
+  return [...imports];
 }
 
 // ── Transform expressions ────────────────────────────────────
@@ -278,19 +281,19 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           const recv = lowerExpr(e.fn.obj, binds);
           const args = e.args.map((a, i) => {
             const lowered = lowerExpr(a, binds);
-            // set! index (first arg) needs .toNat when Int-typed
-            if (dotEntry.pure === "set!" && i === 0 && !isNat(a.ty))
+            // arraySet index (first arg) needs .toNat when Int-typed
+            if (dotEntry.name === "arraySet" && i === 0 && !isNat(a.ty))
               return { kind: "toNat" as const, expr: lowered };
             return lowered;
           });
           // Check if any lambda arg has monadic body → use monadic variant
           const needsMonadic = _opts.monadic && args.some(a => a.kind === "lambda" && isMonadicBody(a.body));
           // Spec-context map get: result type is non-optional → use direct access
-          let pure = dotEntry.pure;
+          let name = dotEntry.name;
           if (e.fn.field === "get" && e.fn.obj.ty.kind === "map" && e.ty.kind !== "optional") {
-            pure = _opts.backend === "lean" ? "get!" : "mapGetDirect";
+            name = "mapGetDirect";
           }
-          const method = needsMonadic && dotEntry.monadic ? dotEntry.monadic : pure;
+          const method = needsMonadic && dotEntry.monadic ? dotEntry.monadic : name;
           const result: Expr = { kind: "dotCall", obj: recv, method, args };
           // Monadic HOF call is itself monadic — lift via binds like a method call
           if (_opts.monadic && needsMonadic && binds) {
@@ -872,8 +875,6 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
 
   // Types file
   const typesImports: string[] = ["LemmaScript"];
-  for (const m of usedImports) typesImports.push(MODULE_IMPORTS[m] ?? m);
-  usedImports.clear();
   let typesFile: Module | null = null;
   const pureNamespace: Decl[] = pureDefs.length > 0
     ? [{ kind: "namespace", name: "Pure", decls: pureDefs }]
@@ -916,8 +917,16 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
 
   const defImport = specImport ?? (typesFile ? `«${base}.types»` : null);
   const defBaseImports: string[] = defImport ? [defImport] : ["LemmaScript"];
-  if (!typesFile) for (const m of usedImports) defBaseImports.push(MODULE_IMPORTS[m] ?? m);
-  usedImports.clear();
+  // Scan for semantic names that need extra imports (e.g. JSString)
+  const extraImports = collectImports(methods);
+  if (typesFile) {
+    for (const imp of collectImports(typesFile.decls)) {
+      if (!typesFile.imports.includes(imp)) typesFile.imports.push(imp);
+    }
+  }
+  for (const imp of extraImports) {
+    if (!defBaseImports.includes(imp)) defBaseImports.push(imp);
+  }
   const defFile: Module = {
     comment: "  Generated by lsc from " + (mod.file.split("/").pop() ?? "") + "\n  Do not edit — re-run `lsc gen` to regenerate.",
     imports: defBaseImports,

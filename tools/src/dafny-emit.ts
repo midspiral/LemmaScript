@@ -80,7 +80,7 @@ function emitExpr(e: Expr): string {
     case "dotCall": {
       const obj = emitExpr(e.obj);
       const args = e.args.map(emitExpr);
-      if (e.method === "with" && args.length === 2)
+      if (e.method === "arraySet" && args.length === 2)
         return `${obj}[${args[0]} := ${args[1]}]`;
       if (e.method === "includes" && args.length === 1) return `(${args[0]} in ${obj})`;
       // Map operations
@@ -144,13 +144,13 @@ function emitExpr(e: Expr): string {
     case "app": {
       const args = e.args.map(emitExpr);
       // Dafny built-in translations
-      if (e.fn === "StringIndexOf") {
+      if (e.fn === "stringIndexOf") {
         needsStringIndexOf = true;
         return `StringIndexOf(${args.join(", ")})`;
       }
-      if (e.fn === "StringSlice")
+      if (e.fn === "stringSlice")
         return `${args[0]}[${args[1]}..${args[2]}]`;
-      if (e.fn === "SeqPush")
+      if (e.fn === "arrayPush")
         return `(${args[0]} + [${args[1]}])`;
       if (e.fn === "SetToSeq") { needsSetToSeq = true; return `SetToSeq(${args.join(", ")})`; }
       if (e.fn === "JSFloorDiv") needsJSFloorDiv = true;
