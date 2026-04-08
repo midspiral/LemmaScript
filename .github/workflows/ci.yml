@@ -26,7 +26,7 @@ jobs:
         run: npm run typecheck
 
       - name: Regenerate Lean from TypeScript
-        run: ./regen.sh
+        run: ./regen-lean.sh
 
       - name: Check Lean generated files are up to date
         run: |
