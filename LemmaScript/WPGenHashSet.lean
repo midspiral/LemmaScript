@@ -16,6 +16,12 @@ theorem hashset_size_le_insert [BEq α] [Hashable α] [EquivBEq α] [LawfulHasha
     s.size ≤ (s.insert k).size :=
   Std.HashSet.size_le_size_insert
 
+@[loomAbstractionSimp, simp]
+theorem array_contains_getElem! [BEq α] [LawfulBEq α] [Inhabited α]
+    (arr : Array α) (i : Nat) (h : i < arr.size) : arr.contains arr[i]! = true := by
+  rw [getElem!_pos arr i h, Array.contains_iff]
+  exact Array.getElem_mem h
+
 open Lean Elab Tactic Meta in
 private partial def stripOnce : TacticM Bool := do
   let goal ← getMainGoal
