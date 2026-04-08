@@ -47,7 +47,7 @@ Type names: `Expr`, `Stmt`, `Decl`, `Module`, `FnDef`, `FnMethod`, `Inductive`, 
 
 **Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Uses semantic method names (e.g., `arraySet`, `mapGet`, `stringIndexOf`) — each emitter maps these to backend syntax. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). No type lookups, no string parsing.
 
-**Emit** (`emit.ts` / `dafny-emit.ts`): IR → text. Each emitter maps `Ty` objects to backend type syntax and semantic method names to backend-specific syntax.
+**Emit** (`lean-emit.ts` / `dafny-emit.ts`): IR → text. Each emitter maps `Ty` objects to backend type syntax and semantic method names to backend-specific syntax.
 
 ## Semantic Method Names
 
@@ -140,7 +140,7 @@ Each TS source produces two Dafny files:
 | `ir.ts` | Types | Backend-neutral IR type definitions |
 | `transform.ts` | Transform | Typed IR → IR |
 | `types.ts` | (shared) | TypeDeclInfo, parseTsType |
-| `emit.ts` | Emit | IR → Lean text |
+| `lean-emit.ts` | Emit | IR → Lean text |
 | `dafny-emit.ts` | Emit | IR → Dafny text |
 | `lean-commands.ts` | CLI | Lean gen/check commands |
 | `dafny-commands.ts` | CLI | Dafny gen/regen/check commands |

@@ -366,7 +366,7 @@ function emitPureExpr(e: Expr, indent: number): string {
 
 // ── File emission ────────────────────────────────────────────
 
-export function emitFile(file: Module): string {
+export function emitLeanFile(file: Module): string {
   const lines: string[] = [];
   if (file.comment) {
     lines.push("/-");

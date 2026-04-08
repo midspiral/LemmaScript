@@ -190,8 +190,8 @@ tools/src/
   types.ts            TypeDeclInfo, parseTsType (remove tyToLean)
   ir.ts               Backend-neutral IR (renamed types, Ty preserved)
   transform.ts        Phase 3: Typed IR -> IR (backend config for lifting/methods)
-  emit-dafny.ts       Phase 4a: IR -> Dafny text (primary)
-  emit-lean.ts        Phase 4b: IR -> Lean text
+  dafny-emit.ts       Phase 4a: IR -> Dafny text (primary)
+  lean-emit.ts        Phase 4b: IR -> Lean text
   dafny-commands.ts   Dafny gen/check/regen operations
   lean-commands.ts    Lean gen/check operations (new, extracted from lsc.ts)
 ```
@@ -209,7 +209,7 @@ Mechanical find-and-replace. All tests pass with no semantic change. This is the
 Parse `--backend=` flag properly in `lsc.ts`. Both values accepted, Lean remains default for now. Update help text.
 
 ### Step 3: Preserve Ty in the IR
-Change IR type fields from `string` to `Ty`. Update transform to stop calling `tyToLean()`. Add `tyToLean(ty: Ty): string` to `emit-lean.ts` and `tyToDafny(ty: Ty): string` to `emit-dafny.ts`. Remove the regex type parsing from `dafny-emit.ts`.
+Change IR type fields from `string` to `Ty`. Update transform to stop calling `tyToLean()`. Add `tyToLean(ty: Ty): string` to `lean-emit.ts` and `tyToDafny(ty: Ty): string` to `dafny-emit.ts`. Remove the regex type parsing from `dafny-emit.ts`.
 
 ### Step 4: Semantic method names
 Replace `TransformOptions.dotMethods`/`methodTable` with a semantic method vocabulary. Update each emitter to map semantic names to syntax.

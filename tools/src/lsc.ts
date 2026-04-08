@@ -11,7 +11,7 @@ import path from "path";
 import { extractModule } from "./extract.js";
 import { resolveModule } from "./resolve.js";
 import { transformModule, transformModuleDafny } from "./transform.js";
-import { emitFile } from "./emit.js";
+import { emitLeanFile } from "./lean-emit.js";
 import { emitDafnyFile } from "./dafny-emit.js";
 import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-commands.js";
 import { leanGen, leanCheck } from "./lean-commands.js";
@@ -87,9 +87,9 @@ function main() {
   const { typesFile, defFile } = transformModule(typed, specImport);
 
   const typesPath = typesFile ? path.join(dir, `${base}.types.lean`) : null;
-  const typesText = typesFile ? emitFile(typesFile) : null;
+  const typesText = typesFile ? emitLeanFile(typesFile) : null;
   const defPath = path.join(dir, `${base}.def.lean`);
-  const defText = emitFile(defFile);
+  const defText = emitLeanFile(defFile);
 
   if (cmd === "gen") { leanGen(typesPath, defPath, typesText, defText); return; }
   if (cmd === "check") {

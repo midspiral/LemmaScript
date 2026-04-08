@@ -591,7 +591,7 @@ return { res: true, done: true, rec: true };
 
 ### 6.5 Type Mapping Implementation
 
-Type mapping logic lives in `types.ts`: `parseTsType(tsType: string): Ty`. Each emitter has its own `Ty → string` function (`tyToLean` in `emit.ts`, `tyToDafny` in `dafny-emit.ts`).
+Type mapping logic lives in `types.ts`: `parseTsType(tsType: string): Ty`. Each emitter has its own `Ty → string` function (`tyToLean` in `lean-emit.ts`, `tyToDafny` in `dafny-emit.ts`).
 
 ### 6.6 Full Examples
 
@@ -695,7 +695,7 @@ extract (ts-morph → Raw IR) → resolve (→ Typed IR) → transform (→ IR) 
 - **Extract** (`extract.ts`): ts-morph → structured AST. Body expressions are nodes, not strings. Annotations remain as strings.
 - **Resolve** (`resolve.ts`): attaches types, classifies calls (pure/method/spec-pure/unknown), identifies discriminants, rejects unsupported patterns. Uses linked environments for lexical scoping. Computes purity via call-graph analysis: a function is pure if it is syntactically pure (no `while`/`for-of`/mutable `let`) AND does not transitively call any non-pure function.
 - **Transform** (`transform.ts`): Typed IR → backend-neutral IR. Desugars `for-of` to indexed loops. Detects discriminant if-chains → `match`. Lifts embedded method calls to statement-level bindings (selective ANF, §3.6). Configured with `TransformOptions` for backend-specific behavior (monadic lifting, method name selection).
-- **Emit** (`emit.ts` / `dafny-emit.ts`): IR → backend text.
+- **Emit** (`lean-emit.ts` / `dafny-emit.ts`): IR → backend text.
 
 ---
 
