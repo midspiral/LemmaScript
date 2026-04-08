@@ -150,6 +150,20 @@ foo.dfy         (user = annotated gen)
 
 **No change proposed** to either scheme — they reflect genuine differences in how each prover works. But the Lean-side commands (`gen`, `check`) should be factored into a `lean-commands.ts` parallel to `dafny-commands.ts`, instead of being inline in `lsc.ts`.
 
+The `gen` command is not shared between backends — each has its own file output strategy:
+- **Dafny gen**: emitted text → write `.dfy.gen`, seed `.dfy` if missing
+- **Lean gen**: emitted Modules → write `.types.lean` + `.def.lean`
+
+The shared part (extract → resolve) stays in `lsc.ts`, which dispatches to the backend after the Typed IR is produced. The backend commands follow the `dafny-commands.ts` pattern: receive already-emitted text + file paths, handle file I/O and verification.
+
+```typescript
+// lean-commands.ts (parallel to dafny-commands.ts)
+export function leanGen(typesPath, defPath, typesText, defText): void
+export function leanCheck(dir, base): void  // find lakefile, check proof, lake build
+```
+
+Lean has no `regen` — generated files are always overwritten, user files are separate.
+
 ### 9. Factor SPEC.md into shared + per-backend docs
 
 SPEC.md is currently Lean-only. It documents the annotation language and pipeline (shared) alongside Lean file layout, import chain, and Velvet/Loom specifics (Lean-only). With Dafny as primary backend, this needs to be restructured.
