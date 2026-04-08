@@ -34,36 +34,6 @@ export interface TypeDeclInfo {
 
 import type { Ty } from "./typedir.js";
 
-export function tyToLean(ty: Ty): string {
-  switch (ty.kind) {
-    case "nat": return "Nat";
-    case "int": return "Int";
-    case "bool": return "Bool";
-    case "string": return "String";
-    case "void": return "Unit";
-    case "array": {
-      const elem = tyToLean(ty.elem);
-      return elem.includes(" ") ? `Array (${elem})` : `Array ${elem}`;
-    }
-    case "map": {
-      const k = tyToLean(ty.key);
-      const v = tyToLean(ty.value);
-      const kStr = k.includes(" ") ? `(${k})` : k;
-      const vStr = v.includes(" ") ? `(${v})` : v;
-      return `Std.HashMap ${kStr} ${vStr}`;
-    }
-    case "set": {
-      const elem = tyToLean(ty.elem);
-      return elem.includes(" ") ? `Std.HashSet (${elem})` : `Std.HashSet ${elem}`;
-    }
-    case "optional": {
-      const inner = tyToLean(ty.inner);
-      return inner.includes(" ") ? `Option (${inner})` : `Option ${inner}`;
-    }
-    case "user": return ty.name;
-    case "unknown": return "_";
-  }
-}
 
 /** Split generic type arguments respecting nested angle brackets. */
 function splitTypeArgs(s: string): string[] {

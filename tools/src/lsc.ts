@@ -19,13 +19,21 @@ import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-comma
 
 function main() {
   const args = process.argv.slice(2);
-  const backendIdx = args.indexOf("--backend=dafny");
-  const backend = backendIdx >= 0 ? "dafny" : "lean";
-  if (backendIdx >= 0) args.splice(backendIdx, 1);
+  const backendIdx = args.findIndex(a => a.startsWith("--backend="));
+  let backend: "lean" | "dafny" = "lean";
+  if (backendIdx >= 0) {
+    const val = args[backendIdx].split("=")[1];
+    if (val !== "lean" && val !== "dafny") {
+      console.error(`Unknown backend: ${val}. Use --backend=lean or --backend=dafny`);
+      process.exit(1);
+    }
+    backend = val;
+    args.splice(backendIdx, 1);
+  }
 
   const [cmd, filePath] = args;
   if (!cmd || !filePath) {
-    console.error("Usage: lsc <gen|check|regen|extract> [--backend=dafny] <file.ts>");
+    console.error("Usage: lsc <gen|check|regen|extract> [--backend=lean|dafny] <file.ts>");
     process.exit(1);
   }
 

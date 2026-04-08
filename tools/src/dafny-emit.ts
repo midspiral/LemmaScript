@@ -1,41 +1,26 @@
 /**
- * Dafny emitter — translates Lean IR to Dafny syntax on the fly.
- *
- * No separate Dafny IR. The shared transform produces Lean IR,
- * and this emitter maps it to Dafny syntax.
+ * Dafny emitter — IR → Dafny text.
  */
 
-import type { LeanExpr, LeanStmt, LeanDecl, LeanFile } from "./ir.js";
+import type { Expr, Stmt, Decl, Module } from "./ir.js";
+import type { Ty } from "./typedir.js";
 
-// ── Lean type → Dafny type ──────────────────────────────────
+// ── Ty → Dafny type string ─────────────────────────────────
 
-function leanTypeToDafny(t: string): string {
-  // Simple mappings
-  const MAP: Record<string, string> = {
-    "Int": "int", "Nat": "nat", "Bool": "bool",
-    "String": "string", "Unit": "()", "_": "int",
-  };
-  if (MAP[t]) return MAP[t];
-  // Array (X Y) → seq<...>
-  const arrParenMatch = t.match(/^Array\s+\((.+)\)$/);
-  if (arrParenMatch) return `seq<${leanTypeToDafny(arrParenMatch[1])}>`;
-  // Array X → seq<X>
-  const arrMatch = t.match(/^Array\s+(.+)$/);
-  if (arrMatch) return `seq<${leanTypeToDafny(arrMatch[1])}>`;
-  // HashMap K V → map<K, V>  (with or without Std. prefix)
-  const hmMatch = t.match(/^(?:Std\.)?HashMap\s+(\S+)\s+(.+)$/);
-  if (hmMatch) return `map<${leanTypeToDafny(hmMatch[1])}, ${leanTypeToDafny(hmMatch[2])}>`;
-  // HashSet T → set<T>
-  const hsMatch = t.match(/^(?:Std\.)?HashSet\s+(.+)$/);
-  if (hsMatch) return `set<${leanTypeToDafny(hsMatch[1])}>`;
-  // Option T → Option<T>
-  const optMatch = t.match(/^Option\s+(.+)$/);
-  if (optMatch) { needsOptionType = true; return `Option<${leanTypeToDafny(optMatch[1])}>`; }
-  // Strip parens: (X) → X
-  const parenMatch = t.match(/^\((.+)\)$/);
-  if (parenMatch) return leanTypeToDafny(parenMatch[1]);
-  // User types pass through
-  return t;
+function tyToDafny(ty: Ty): string {
+  switch (ty.kind) {
+    case "nat": return "nat";
+    case "int": return "int";
+    case "bool": return "bool";
+    case "string": return "string";
+    case "void": return "()";
+    case "array": return `seq<${tyToDafny(ty.elem)}>`;
+    case "map": return `map<${tyToDafny(ty.key)}, ${tyToDafny(ty.value)}>`;
+    case "set": return `set<${tyToDafny(ty.elem)}>`;
+    case "optional": { needsOptionType = true; return `Option<${tyToDafny(ty.inner)}>`; }
+    case "user": return ty.name;
+    case "unknown": return "int";
+  }
 }
 
 // ── Dafny keyword escaping ──────────────────────────────────
@@ -62,8 +47,8 @@ function escapeName(name: string): string {
 }
 
 /** Format a typed parameter list for Dafny: "x: int, y: seq<int>" */
-function paramList(params: { name: string; type: string }[]): string {
-  return params.map(p => `${escapeName(p.name)}: ${leanTypeToDafny(p.type)}`).join(", ");
+function paramList(params: { name: string; type: Ty }[]): string {
+  return params.map(p => `${escapeName(p.name)}: ${tyToDafny(p.type)}`).join(", ");
 }
 
 // ── Lean op → Dafny op ─────────────────────────────────────
@@ -77,7 +62,7 @@ function mapOp(op: string): string { return OP_MAP[op] ?? op; }
 
 // ── Expression emission ─────────────────────────────────────
 
-function emitExpr(e: LeanExpr): string {
+function emitExpr(e: Expr): string {
   switch (e.kind) {
     case "var": return escapeName(e.name);
     case "num": return `${e.value}`;
@@ -207,12 +192,12 @@ function emitExpr(e: LeanExpr): string {
     }
 
     case "forall": {
-      const dty = leanTypeToDafny(e.type);
+      const dty = tyToDafny(e.type);
       const ann = dty === "string" ? "" : `: ${dty}`;
       return `forall ${e.var}${ann} :: ${emitExpr(e.body)}`;
     }
     case "exists": {
-      const dty = leanTypeToDafny(e.type);
+      const dty = tyToDafny(e.type);
       const ann = dty === "string" ? "" : `: ${dty}`;
       return `exists ${e.var}${ann} :: ${emitExpr(e.body)}`;
     }
@@ -222,7 +207,7 @@ function emitExpr(e: LeanExpr): string {
 }
 
 /** Emit a pure expression with indentation for if/match/let. */
-function emitPureExpr(e: LeanExpr, indent: number): string {
+function emitPureExpr(e: Expr, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (e.kind) {
     case "if":
@@ -246,11 +231,11 @@ function emitPureExpr(e: LeanExpr, indent: number): string {
 
 // ── Statement emission ──────────────────────────────────────
 
-function emitStmts(stmts: LeanStmt[], indent: number): string {
+function emitStmts(stmts: Stmt[], indent: number): string {
   return stmts.map(s => emitStmt(s, indent)).join("\n");
 }
 
-function emitStmt(s: LeanStmt, indent: number): string {
+function emitStmt(s: Stmt, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (s.kind) {
     case "let":
@@ -258,7 +243,7 @@ function emitStmt(s: LeanStmt, indent: number): string {
     case "assign":
       return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)};`;
     case "ghostLet":
-      return `${pad}ghost var ${escapeName(s.name)}: ${leanTypeToDafny(s.type)} := ${emitExpr(s.value)};`;
+      return `${pad}ghost var ${escapeName(s.name)}: ${tyToDafny(s.type)} := ${emitExpr(s.value)};`;
     case "ghostAssign":
       return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)};`;
     case "assert":
@@ -328,7 +313,7 @@ function emitStmt(s: LeanStmt, indent: number): string {
 
 // ── Declaration emission ────────────────────────────────────
 
-function emitDecl(d: LeanDecl): string {
+function emitDecl(d: Decl): string {
   switch (d.kind) {
     case "inductive": {
       const ctors = d.constructors.map(c => {
@@ -343,7 +328,7 @@ function emitDecl(d: LeanDecl): string {
     }
 
     case "def": {
-      const lines = [`function ${d.name}(${paramList(d.params)}): ${leanTypeToDafny(d.returnType)}`];
+      const lines = [`function ${d.name}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       lines.push(`{`);
       lines.push(emitPureExpr(d.body, 1));
@@ -361,7 +346,7 @@ function emitDecl(d: LeanDecl): string {
     }
 
     case "method": {
-      const lines = [`method ${d.name}(${paramList(d.params)}) returns (res: ${leanTypeToDafny(d.returnType)})`];
+      const lines = [`method ${d.name}(${paramList(d.params)}) returns (res: ${tyToDafny(d.returnType)})`];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
       lines.push(`{`);
@@ -415,7 +400,7 @@ function StringIndexOfFrom(s: string, sub: string, from: nat): int
 
 let _recordCtors = new Map<string, string>();
 
-function buildRecordCtorMap(decls: LeanDecl[]) {
+function buildRecordCtorMap(decls: Decl[]) {
   _recordCtors = new Map();
   for (const d of decls) {
     if (d.kind === "structure" && d.fields.length > 0)
@@ -455,7 +440,7 @@ const PREAMBLES: Record<string, string> = {
   StringIndexOf: STRING_INDEX_OF,
 };
 
-export function emitDafnyFile(file: LeanFile, tsFileName?: string): string {
+export function emitDafnyFile(file: Module, tsFileName?: string): string {
   buildRecordCtorMap(file.decls);
   needsStringIndexOf = false;
   needsJSFloorDiv = false;

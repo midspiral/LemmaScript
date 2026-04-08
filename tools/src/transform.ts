@@ -6,9 +6,9 @@
  */
 
 import type { TExpr, TStmt, TFunction, TModule, Ty } from "./typedir.js";
-import type { LeanExpr, LeanStmt, LeanDecl, LeanFile, LeanDef, LeanMethod, LeanMatchArm, LeanStmtMatchArm } from "./ir.js";
+import type { Expr, Stmt, Decl, Module, FnDef, FnMethod, MatchArm, StmtMatchArm } from "./ir.js";
 import type { TypeDeclInfo } from "./types.js";
-import { parseTsType, tyToLean } from "./types.js";
+import { parseTsType } from "./types.js";
 
 // ── Backend configuration ───────────────────────────────────
 
@@ -108,7 +108,7 @@ function lookupDotMethod(recvTy: Ty, method: string): { pure: string; monadic?: 
 }
 
 /** Check if transformed lambda body contains monadic binds. */
-function isMonadicBody(stmts: LeanStmt[]): boolean {
+function isMonadicBody(stmts: Stmt[]): boolean {
   for (const s of stmts) {
     if (s.kind === "let-bind" || s.kind === "bind") return true;
     if (s.kind === "if" && (isMonadicBody(s.then) || isMonadicBody(s.else))) return true;
@@ -155,7 +155,7 @@ const BOOL_OP_MAP: Record<string, string> = {
   ...OP_MAP, "===": "==", "!==": "!=",
 };
 
-function transformExpr(e: TExpr): LeanExpr { return lowerExpr(e, null); }
+function transformExpr(e: TExpr): Expr { return lowerExpr(e, null); }
 
 /**
  * Lower a typed expression to Lean IR.
@@ -166,7 +166,7 @@ function transformExpr(e: TExpr): LeanExpr { return lowerExpr(e, null); }
  * a method call can appear inline in TS.  It does NOT propagate into
  * field, index, record, forall, or exists sub-expressions.
  */
-function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
+function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
   // Monadic lifting: extract embedded method calls to let-binds
   // Pass binds through to args so nested method calls are also lifted
   if (binds && e.kind === "call" && e.callKind === "method") {
@@ -213,7 +213,7 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
       if ((e.op === "===" || e.op === "!==") && e.right.kind === "str") {
         const left = lowerExpr(e.left, binds);
         const leftTy = e.left.ty.kind === "user" ? e.left.ty.name : undefined;
-        const right: LeanExpr = isUser(e.left.ty)
+        const right: Expr = isUser(e.left.ty)
           ? { kind: "constructor", name: e.right.value, type: leftTy }
           : { kind: "str", value: e.right.value };
         return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right };
@@ -291,7 +291,7 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
             pure = _opts.backend === "lean" ? "get!" : "mapGetDirect";
           }
           const method = needsMonadic && dotEntry.monadic ? dotEntry.monadic : pure;
-          const result: LeanExpr = { kind: "dotCall", obj: recv, method, args };
+          const result: Expr = { kind: "dotCall", obj: recv, method, args };
           // Monadic HOF call is itself monadic — lift via binds like a method call
           if (_opts.monadic && needsMonadic && binds) {
             const name = `_t${_liftCounter++}`;
@@ -317,13 +317,13 @@ function lowerExpr(e: TExpr, binds: LeanStmt[] | null): LeanExpr {
       return { kind: "arrayLiteral", elems: e.elems.map(el => lowerExpr(el, binds)) };
 
     case "lambda":
-      return { kind: "lambda", params: e.params.map(p => ({ name: p.name, type: tyToLean(p.ty) })), body: transformStmts(e.body, []) };
+      return { kind: "lambda", params: e.params.map(p => ({ name: p.name, type: p.ty })), body: transformStmts(e.body, []) };
 
     case "forall":
-      return { kind: "forall", var: e.var, type: tyToLean(e.varTy), body: transformExpr(e.body) };
+      return { kind: "forall", var: e.var, type: e.varTy, body: transformExpr(e.body) };
 
     case "exists":
-      return { kind: "exists", var: e.var, type: tyToLean(e.varTy), body: transformExpr(e.body) };
+      return { kind: "exists", var: e.var, type: e.varTy, body: transformExpr(e.body) };
 
     case "conditional":
       return { kind: "if", cond: lowerExpr(e.cond, binds), then: lowerExpr(e.then, binds), else: lowerExpr(e.else, binds) };
@@ -346,7 +346,7 @@ function splitConj(e: TExpr): TExpr[] {
 
 // ── Ensures-to-match for discriminated unions ────────────────
 
-function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): LeanExpr | null {
+function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): Expr | null {
   if (e.kind !== "binop" || e.op !== "==>") return null;
   if (e.left.kind !== "binop" || e.left.op !== "===") return null;
   if (e.left.left.kind !== "field" || !e.left.left.isDiscriminant || e.left.right.kind !== "str") return null;
@@ -370,12 +370,12 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): LeanExpr | null {
   return { kind: "match", scrutinee: obj.name, arms: [{ pattern, body: rhs }, { pattern: "_", body: { kind: "bool", value: true } }] };
 }
 
-function replaceFieldAccess(e: LeanExpr, varName: string, fields: { name: string; tsType: string }[]): LeanExpr {
+function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; tsType: string }[]): Expr {
   if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === varName) {
     const f = fields.find(f => f.name === e.field);
     if (f) return { kind: "var", name: matchBinder(f.name) };
   }
-  const r = (x: LeanExpr) => replaceFieldAccess(x, varName, fields);
+  const r = (x: Expr) => replaceFieldAccess(x, varName, fields);
   switch (e.kind) {
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
@@ -398,8 +398,8 @@ function replaceFieldAccess(e: LeanExpr, varName: string, fields: { name: string
 
 // ── Transform statements ─────────────────────────────────────
 
-function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanStmt[] {
-  const result: LeanStmt[] = [];
+function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
+  const result: Stmt[] = [];
   let i = 0;
   while (i < stmts.length) {
     const s = stmts[i];
@@ -425,21 +425,21 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanStmt[] {
       // Sets aren't indexable — bind SetToSeq to a variable for iteration
       if (s.iterable.ty.kind === "set") {
         const seqName = `_${s.varName}_seq`;
-        const convExpr: LeanExpr = { kind: "app", fn: "SetToSeq", args: [iterExpr] };
-        const elemType = s.varTy.kind !== "unknown" ? tyToLean(s.varTy) : "String";
-        result.push({ kind: "let", name: seqName, type: `Array ${elemType}`, mutable: false, value: convExpr });
+        const convExpr: Expr = { kind: "app", fn: "SetToSeq", args: [iterExpr] };
+        const elemTy: Ty = s.varTy.kind !== "unknown" ? s.varTy : { kind: "string" };
+        result.push({ kind: "let", name: seqName, type: { kind: "array", elem: elemTy }, mutable: false, value: convExpr });
         iterExpr = { kind: "var", name: seqName };
       }
       const count = _forofCounters.get(s.varName) ?? 0;
       _forofCounters.set(s.varName, count + 1);
       const suffix = count === 0 ? "" : `${count + 1}`;
       const idxName = `_${s.varName}_idx${suffix}`;
-      const idx: LeanExpr = { kind: "var", name: idxName };
-      const arrSize: LeanExpr = { kind: "field", obj: iterExpr, field: "size" };
+      const idx: Expr = { kind: "var", name: idxName };
+      const arrSize: Expr = { kind: "field", obj: iterExpr, field: "size" };
       const bodyStmts = transformStmts(s.body, typeDecls);
-      const letElem: LeanStmt = { kind: "let", name: s.varName, type: tyToLean(s.varTy), mutable: false, value: { kind: "index", arr: iterExpr, idx } };
+      const letElem: Stmt = { kind: "let", name: s.varName, type: s.varTy, mutable: false, value: { kind: "index", arr: iterExpr, idx } };
       // Auto-add bound invariant: idx ≤ bound (always true for range loops)
-      const boundInv: LeanExpr = { kind: "binop", op: "≤", left: idx, right: arrSize };
+      const boundInv: Expr = { kind: "binop", op: "≤", left: idx, right: arrSize };
       result.push({
         kind: "forin",
         idx: idxName,
@@ -458,18 +458,18 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanStmt[] {
 
 let _liftCounter = 0;
 
-function liftMethodCalls(e: TExpr): { binds: LeanStmt[]; expr: LeanExpr } {
-  const binds: LeanStmt[] = [];
+function liftMethodCalls(e: TExpr): { binds: Stmt[]; expr: Expr } {
+  const binds: Stmt[] = [];
   return { binds, expr: lowerExpr(e, binds) };
 }
 
 // ── Transform statements ─────────────────────────────────────
 
-function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): LeanStmt[] {
+function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
   switch (s.kind) {
     case "let": {
       const { binds, expr } = liftMethodCalls(s.init);
-      return [...binds, { kind: "let", name: s.name, type: tyToLean(s.ty), mutable: s.mutable, value: expr }];
+      return [...binds, { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: expr }];
     }
 
     case "assign": {
@@ -524,7 +524,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): LeanStmt[] {
       return [emitSwitchStmt(s, typeDecls)];
 
     case "ghostLet":
-      return [{ kind: "ghostLet", name: s.name, type: tyToLean(s.ty), value: transformExpr(s.init) }];
+      return [{ kind: "ghostLet", name: s.name, type: s.ty, value: transformExpr(s.init) }];
 
     case "ghostAssign":
       return [{ kind: "ghostAssign", target: s.target, value: transformExpr(s.value) }];
@@ -588,14 +588,14 @@ function parseDiscriminantCond(cond: TExpr): { varName: string; typeName: string
   return { varName: cond.left.obj.name, typeName: cond.left.obj.ty.name, variant: cond.right.value };
 }
 
-function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind: "if" }, typeDecls: TypeDeclInfo[]): LeanStmt {
+function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind: "if" }, typeDecls: TypeDeclInfo[]): Stmt {
   const someBranch = negated ? s.else : s.then;
   const noneBranch = negated ? s.then : s.else;
   const bound = matchBinder(`${varName}_val`);
   const someBody = transformStmts(someBranch, typeDecls);
-  const r = (e: LeanExpr): LeanExpr => replaceVar(e, varName, { kind: "var", name: bound });
+  const r = (e: Expr): Expr => replaceVar(e, varName, { kind: "var", name: bound });
   const someReplaced = someBody.map(stmt => mapStmtExprs(stmt, r));
-  const arms: LeanStmtMatchArm[] = [
+  const arms: StmtMatchArm[] = [
     { pattern: `.some ${bound}`, body: someReplaced },
     { pattern: ".none", body: noneBranch.length > 0 ? transformStmts(noneBranch, typeDecls) : [] },
   ];
@@ -603,7 +603,7 @@ function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind:
 }
 
 /** Apply an expression transform to all expressions in a statement. */
-function mapStmtExprs(s: LeanStmt, r: (e: LeanExpr) => LeanExpr): LeanStmt {
+function mapStmtExprs(s: Stmt, r: (e: Expr) => Expr): Stmt {
   switch (s.kind) {
     case "let": return { ...s, value: r(s.value) };
     case "assign": return { ...s, value: r(s.value) };
@@ -631,9 +631,9 @@ function parseOptionalCheck(cond: TExpr): { varName: string; negated: boolean } 
   return { varName: varExpr.name, negated: cond.op === "===" };
 }
 
-function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): LeanStmt {
+function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): Stmt {
   const decl = typeDecls.find(d => d.name === chain.typeName);
-  const arms: LeanStmtMatchArm[] = chain.cases.map(c => {
+  const arms: StmtMatchArm[] = chain.cases.map(c => {
     const variant = decl?.variants?.find(v => v.name === c.variant);
     const fields = variant?.fields ?? [];
     const pattern = fields.length > 0 ? `.${c.variant} ${fields.map(f => matchBinder(f.name)).join(" ")}` : `.${c.variant}`;
@@ -645,11 +645,11 @@ function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): LeanStmt {
   return { kind: "match", scrutinee: chain.varName, arms };
 }
 
-function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): LeanStmt {
+function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Stmt {
   const varName = s.expr.kind === "var" ? s.expr.name : "?";
   const typeName = s.expr.ty.kind === "user" ? s.expr.ty.name : undefined;
   const decl = typeName ? typeDecls.find(d => d.name === typeName) : undefined;
-  const arms: LeanStmtMatchArm[] = s.cases.map(c => {
+  const arms: StmtMatchArm[] = s.cases.map(c => {
     const variant = decl?.variants?.find(v => v.name === c.label);
     const fields = variant?.fields ?? [];
     const pattern = fields.length > 0 ? `.${c.label} ${fields.map(f => matchBinder(f.name)).join(" ")}` : `.${c.label}`;
@@ -661,13 +661,13 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
   return { kind: "match", scrutinee: varName, arms };
 }
 
-function replaceFieldAccessInStmts(stmts: LeanStmt[], varName: string, fields: { name: string; tsType: string }[]): LeanStmt[] {
+function replaceFieldAccessInStmts(stmts: Stmt[], varName: string, fields: { name: string; tsType: string }[]): Stmt[] {
   if (fields.length === 0) return stmts;
-  const result: LeanStmt[] = [];
+  const result: Stmt[] = [];
   for (const s of stmts) {
     // If a let shadows the matched variable, stop replacing from here on
     if (s.kind === "let" && s.name === varName) {
-      const r = (e: LeanExpr) => replaceFieldAccess(e, varName, fields);
+      const r = (e: Expr) => replaceFieldAccess(e, varName, fields);
       result.push({ ...s, value: r(s.value) });
       // Remaining statements see the shadowed name — no more replacement
       result.push(...stmts.slice(result.length));
@@ -678,8 +678,8 @@ function replaceFieldAccessInStmts(stmts: LeanStmt[], varName: string, fields: {
   return result;
 }
 
-function replaceFieldAccessInStmt(s: LeanStmt, varName: string, fields: { name: string; tsType: string }[]): LeanStmt {
-  const r = (e: LeanExpr) => replaceFieldAccess(e, varName, fields);
+function replaceFieldAccessInStmt(s: Stmt, varName: string, fields: { name: string; tsType: string }[]): Stmt {
+  const r = (e: Expr) => replaceFieldAccess(e, varName, fields);
   switch (s.kind) {
     case "let": return { ...s, value: r(s.value) };
     case "assign": return { ...s, value: r(s.value) };
@@ -699,7 +699,7 @@ function replaceFieldAccessInStmt(s: LeanStmt, varName: string, fields: { name: 
 
 // ── Pure function generation ─────────────────────────────────
 
-function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanExpr | null {
+function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | null {
   // Detect discriminant if-chain
   if (stmts.length > 0 && stmts[0].kind === "if") {
     const chain = detectDiscriminantChain(stmts);
@@ -731,10 +731,10 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): LeanExpr 
   return null;
 }
 
-function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): LeanExpr | null {
+function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Expr | null {
   const decl = typeDecls.find(d => d.name === (s.expr.ty.kind === "user" ? s.expr.ty.name : ""));
   if (!decl) return null;
-  const arms: LeanMatchArm[] = [];
+  const arms: MatchArm[] = [];
   for (const c of s.cases) {
     const variant = decl.variants?.find(v => v.name === c.label);
     const fields = variant?.fields ?? [];
@@ -753,9 +753,9 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
   return { kind: "match", scrutinee: s.expr.name, arms };
 }
 
-function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): LeanExpr | null {
+function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | null {
   const decl = typeDecls.find(d => d.name === chain.typeName);
-  const arms: LeanMatchArm[] = [];
+  const arms: MatchArm[] = [];
   for (const c of chain.cases) {
     const variant = decl?.variants?.find(v => v.name === c.variant);
     const fields = variant?.fields ?? [];
@@ -779,7 +779,7 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): LeanExpr |
 
 // ── Generate type declarations ───────────────────────────────
 
-function transformTypeDecl(d: TypeDeclInfo): LeanDecl {
+function transformTypeDecl(d: TypeDeclInfo): Decl {
   if (d.kind === "string-union") {
     return {
       kind: "inductive", name: d.name,
@@ -791,14 +791,14 @@ function transformTypeDecl(d: TypeDeclInfo): LeanDecl {
       kind: "inductive", name: d.name,
       constructors: d.variants!.map(v => ({
         name: v.name,
-        fields: v.fields.map(f => ({ name: f.name, type: tyToLean(parseTsType(f.tsType)) })),
+        fields: v.fields.map(f => ({ name: f.name, type: parseTsType(f.tsType) })),
       })),
       deriving: ["Repr", "Inhabited"],
     };
   } else {
     return {
       kind: "structure", name: d.name,
-      fields: d.fields!.map(f => ({ name: f.name, type: tyToLean(parseTsType(f.tsType)) })),
+      fields: d.fields!.map(f => ({ name: f.name, type: parseTsType(f.tsType) })),
       deriving: ["Repr", "Inhabited", "DecidableEq"],
     };
   }
@@ -807,8 +807,8 @@ function transformTypeDecl(d: TypeDeclInfo): LeanDecl {
 // ── Helpers ──────────────────────────────────────────────────
 
 /** Replace all occurrences of a variable name with a new expression. */
-function replaceVar(e: LeanExpr, name: string, replacement: LeanExpr): LeanExpr {
-  const r = (x: LeanExpr) => replaceVar(x, name, replacement);
+function replaceVar(e: Expr, name: string, replacement: Expr): Expr {
+  const r = (x: Expr) => replaceVar(x, name, replacement);
   switch (e.kind) {
     case "var": return e.name === name ? replacement : e;
     case "num": case "bool": case "str": case "constructor": case "emptyMap": case "emptySet": return e;
@@ -834,7 +834,7 @@ function replaceVar(e: LeanExpr, name: string, replacement: LeanExpr): LeanExpr 
 // ── Top-level transform ──────────────────────────────────────
 
 /** Transform for Dafny backend — same logic, Dafny options. */
-export function transformModuleDafny(mod: TModule): { typesFile: LeanFile | null; defFile: LeanFile } {
+export function transformModuleDafny(mod: TModule): { typesFile: Module | null; defFile: Module } {
   const prev = _opts;
   _opts = DAFNY_OPTIONS;
   try {
@@ -844,24 +844,24 @@ export function transformModuleDafny(mod: TModule): { typesFile: LeanFile | null
   }
 }
 
-export function transformModule(mod: TModule, specImport?: string): { typesFile: LeanFile | null; defFile: LeanFile } {
+export function transformModule(mod: TModule, specImport?: string): { typesFile: Module | null; defFile: Module } {
   _forofCounters.clear();
   const typeDecls = mod.typeDecls.map(transformTypeDecl);
 
   // Pure function mirrors
-  const pureDefs: LeanDef[] = [];
+  const pureDefs: FnDef[] = [];
   for (const fn of mod.functions) {
     if (!fn.isPure) continue;
     const body = transformPureBody(fn.body, mod.typeDecls);
     if (!body) continue;
     // For ensures, replace \result (→ "res") with the function call
-    const fnCall: LeanExpr = { kind: "app", fn: fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) };
+    const fnCall: Expr = { kind: "app", fn: fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) };
     const ensures = fn.ensures.map(e => replaceVar(transformExpr(e), "res", fnCall));
     pureDefs.push({
       kind: "def",
       name: fn.name,
-      params: fn.params.map(p => ({ name: p.name, type: tyToLean(p.ty) })),
-      returnType: tyToLean(fn.returnTy),
+      params: fn.params.map(p => ({ name: p.name, type: p.ty })),
+      returnType: fn.returnTy,
       requires: fn.requires.map(transformExpr),
       ensures,
       body,
@@ -874,8 +874,8 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
   const typesImports: string[] = ["LemmaScript"];
   for (const m of usedImports) typesImports.push(MODULE_IMPORTS[m] ?? m);
   usedImports.clear();
-  let typesFile: LeanFile | null = null;
-  const pureNamespace: LeanDecl[] = pureDefs.length > 0
+  let typesFile: Module | null = null;
+  const pureNamespace: Decl[] = pureDefs.length > 0
     ? [{ kind: "namespace", name: "Pure", decls: pureDefs }]
     : [];
   if (typeDecls.length > 0 || pureDefs.length > 0) {
@@ -890,8 +890,8 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
   // Def file: Velvet methods
   // Pure functions get a thin wrapper that calls Pure.fnName
   const pureDefNames = new Set(pureDefs.map(d => d.name));
-  const methods: LeanMethod[] = mod.functions.map(fn => {
-    const ensures: LeanExpr[] = [];
+  const methods: FnMethod[] = mod.functions.map(fn => {
+    const ensures: Expr[] = [];
     for (const e of fn.ensures) {
       const m = ensuresToMatch(e, mod.typeDecls);
       if (m) ensures.push(m);
@@ -906,8 +906,8 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     return {
       kind: "method" as const,
       name: fn.name,
-      params: fn.params.map(p => ({ name: p.name, type: tyToLean(p.ty) })),
-      returnType: tyToLean(fn.returnTy),
+      params: fn.params.map(p => ({ name: p.name, type: p.ty })),
+      returnType: fn.returnTy,
       requires: fn.requires.map(transformExpr),
       ensures,
       body,
@@ -918,7 +918,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
   const defBaseImports: string[] = defImport ? [defImport] : ["LemmaScript"];
   if (!typesFile) for (const m of usedImports) defBaseImports.push(MODULE_IMPORTS[m] ?? m);
   usedImports.clear();
-  const defFile: LeanFile = {
+  const defFile: Module = {
     comment: "  Generated by lsc from " + (mod.file.split("/").pop() ?? "") + "\n  Do not edit — re-run `lsc gen` to regenerate.",
     imports: defBaseImports,
     options: [
