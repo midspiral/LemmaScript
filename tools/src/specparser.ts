@@ -17,7 +17,7 @@ type Token =
   | { type: "punc"; value: string }
   | { type: "result"; value: undefined };
 
-const MULTI_OPS = ["==>", "===", "!==", ">=", "<=", "&&", "||"];
+const MULTI_OPS = ["==>", "===", "!==", "==", "!=", ">=", "<=", "&&", "||"];
 
 function tokenize(input: string): Token[] {
   const tokens: Token[] = [];
@@ -129,9 +129,11 @@ class Parser {
   parseCmp(): Expr {
     const left = this.parseAdd();
     const t = this.peek();
-    if (t?.type === "op" && ["===", "!==", ">=", "<=", ">", "<"].includes(t.value)) {
+    if (t?.type === "op" && ["===", "!==", "==", "!=", ">=", "<=", ">", "<"].includes(t.value)) {
       this.advance();
-      return { kind: "binop", op: t.value, left, right: this.parseAdd() };
+      // Normalize == to ===, != to !== so downstream sees one spelling
+      const op = t.value === "==" ? "===" : t.value === "!=" ? "!==" : t.value;
+      return { kind: "binop", op, left, right: this.parseAdd() };
     }
     return left;
   }
