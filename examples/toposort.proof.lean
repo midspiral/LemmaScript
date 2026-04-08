@@ -2,7 +2,7 @@ import «toposort.def»
 
 set_option loom.semantics.termination "total"
 set_option loom.semantics.choice "demonic"
-set_option maxHeartbeats 16000000
+set_option maxHeartbeats 400000
 
 theorem allDistinct_means_no_dups (s : Array String) (n : Nat)
     (h : allDistinct s n) (hn : n ≤ s.size) :
