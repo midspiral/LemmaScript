@@ -77,36 +77,49 @@ function emitExpr(e: Expr): string {
     case "emptyMap": return `map[]`;
     case "emptySet": return `{}`;
 
-    case "dotCall": {
+    case "methodCall": {
       const obj = emitExpr(e.obj);
       const args = e.args.map(emitExpr);
-      if (e.method === "arraySet" && args.length === 2)
-        return `${obj}[${args[0]} := ${args[1]}]`;
-      if (e.method === "includes" && args.length === 1) return `(${args[0]} in ${obj})`;
-      // Map operations
-      if (e.method === "mapGetDirect" && args.length === 1) return `${obj}[${args[0]}]`;
-      if (e.method === "mapGet" && args.length === 1) {
-        needsOptionType = true;
-        return `(if ${args[0]} in ${obj} then Some(${obj}[${args[0]}]) else None)`;
+      const ty = e.objTy.kind;
+      // Array methods
+      if (ty === "array") {
+        if (e.method === "with")     return `${obj}[${args[0]} := ${args[1]}]`;
+        if (e.method === "includes") return `(${args[0]} in ${obj})`;
+        if (e.method === "push")     return `(${obj} + [${args[0]}])`;
+        if (e.method === "map")    { needsStdCollections = true; return `Seq.Map(${args[0]}, ${obj})`; }
+        if (e.method === "filter") { needsStdCollections = true; return `Seq.Filter(${args[0]}, ${obj})`; }
+        if (e.method === "every")  { needsStdCollections = true; return `Seq.All(${obj}, ${args[0]})`; }
+        if (e.method === "some" && e.args[0].kind === "lambda" &&
+            e.args[0].body.length === 1 && e.args[0].body[0].kind === "return") {
+          const lam = e.args[0];
+          const ret = lam.body[0];
+          if (ret.kind !== "return") throw new Error("unreachable");
+          const p = escapeName(lam.params[0]?.name ?? "x");
+          const body = emitExpr(ret.value);
+          return `(exists ${p} :: ${p} in ${obj} && ${body})`;
+        }
       }
-      if (e.method === "mapSet" && args.length === 2) return `${obj}[${args[0]} := ${args[1]}]`;
-      if (e.method === "mapHas" && args.length === 1) return `(${args[0]} in ${obj})`;
-      // Set operations
-      if (e.method === "setHas" && args.length === 1) return `(${args[0]} in ${obj})`;
-      if (e.method === "setAdd" && args.length === 1) return `(${obj} + {${args[0]}})`;
-      if (e.method === "map" && args.length === 1) { needsStdCollections = true; return `Seq.Map(${args[0]}, ${obj})`; }
-      if (e.method === "filter" && args.length === 1) { needsStdCollections = true; return `Seq.Filter(${args[0]}, ${obj})`; }
-      if (e.method === "every" && args.length === 1) { needsStdCollections = true; return `Seq.All(${obj}, ${args[0]})`; }
-      if (e.method === "some" && args.length === 1 && e.args[0].kind === "lambda" &&
-          e.args[0].body.length === 1 && e.args[0].body[0].kind === "return") {
-        const lam = e.args[0];
-        const ret = lam.body[0];
-        if (ret.kind !== "return") throw new Error("unreachable");
-        const p = escapeName(lam.params[0]?.name ?? "x");
-        const body = emitExpr(ret.value);
-        return `(exists ${p} :: ${p} in ${obj} && ${body})`;
+      // String methods
+      if (ty === "string") {
+        if (e.method === "indexOf") { needsStringIndexOf = true; return `StringIndexOf(${obj}, ${args[0]})`; }
+        if (e.method === "slice")   return `${obj}[${args[0]}..${args[1]}]`;
       }
-      return `${obj}.${e.method}(${args.join(", ")})`;
+      // Map methods
+      if (ty === "map") {
+        if (e.method === "getDirect") return `${obj}[${args[0]}]`;
+        if (e.method === "get") {
+          needsOptionType = true;
+          return `(if ${args[0]} in ${obj} then Some(${obj}[${args[0]}]) else None)`;
+        }
+        if (e.method === "set") return `${obj}[${args[0]} := ${args[1]}]`;
+        if (e.method === "has") return `(${args[0]} in ${obj})`;
+      }
+      // Set methods
+      if (ty === "set") {
+        if (e.method === "has") return `(${args[0]} in ${obj})`;
+        if (e.method === "add") return `(${obj} + {${args[0]}})`;
+      }
+      throw new Error(`Unsupported Dafny method call: .${e.method}() on ${ty}`);
     }
 
     case "lambda": {
@@ -143,15 +156,6 @@ function emitExpr(e: Expr): string {
 
     case "app": {
       const args = e.args.map(emitExpr);
-      // Dafny built-in translations
-      if (e.fn === "stringIndexOf") {
-        needsStringIndexOf = true;
-        return `StringIndexOf(${args.join(", ")})`;
-      }
-      if (e.fn === "stringSlice")
-        return `${args[0]}[${args[1]}..${args[2]}]`;
-      if (e.fn === "arrayPush")
-        return `(${args[0]} + [${args[1]}])`;
       if (e.fn === "SetToSeq") { needsSetToSeq = true; return `SetToSeq(${args.join(", ")})`; }
       if (e.fn === "JSFloorDiv") needsJSFloorDiv = true;
       return `${e.fn}(${args.join(", ")})`;

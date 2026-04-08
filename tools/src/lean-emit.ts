@@ -65,36 +65,42 @@ const PREC: Record<string, number> = {
 
 function prec(op: string): number { return PREC[op] ?? 10; }
 
-// ── Semantic method → Lean name ─────────────────────────────
+// ── Method call → Lean syntax ───────────────────────────────
 
-const DOT_METHOD_MAP: Record<string, string> = {
-  "map": "map", "mapM": "mapM",
-  "filter": "filter", "filterM": "filterM",
-  "every": "all", "everyM": "allM",
-  "some": "any", "someM": "anyM",
-  "includes": "contains",
-  "find": "find?",
-  "arraySet": "set!",
-  "mapGet": "get?", "mapGetDirect": "get!",
-  "mapHas": "contains",
-  "mapSet": "insert",
-  "setHas": "contains",
-  "setAdd": "insert",
-};
+let _needsJSString = false;
 
-const APP_FN_MAP: Record<string, string> = {
-  "stringIndexOf": "JSString.indexOf",
-  "stringSlice": "JSString.slice",
-  "arrayPush": "Array.push",
-};
-
-/** Lean modules that need explicit imports. */
-const LEAN_IMPORT_MAP: Record<string, string> = {
-  "JSString": "LemmaScript.JSString",
-};
-
-function mapDotMethod(name: string): string { return DOT_METHOD_MAP[name] ?? name; }
-function mapAppFn(name: string): string { return APP_FN_MAP[name] ?? name; }
+function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: string, args: string[]): string {
+  // Array methods
+  if (tyKind === "array") {
+    if (method === "map")      return `${obj}.${monadic ? "mapM" : "map"} ${args[0]}`;
+    if (method === "filter")   return `${obj}.${monadic ? "filterM" : "filter"} ${args[0]}`;
+    if (method === "every")    return `${obj}.${monadic ? "allM" : "all"} ${args[0]}`;
+    if (method === "some")     return `${obj}.${monadic ? "anyM" : "any"} ${args[0]}`;
+    if (method === "includes") return `${obj}.contains ${args[0]}`;
+    if (method === "find")     return `${obj}.find? ${args[0]}`;
+    if (method === "with")     return `${obj}.set! ${args[0]} ${args[1]}`;
+    if (method === "push")     return `Array.push ${obj} ${args[0]}`;
+  }
+  // String methods
+  if (tyKind === "string") {
+    _needsJSString = true;
+    if (method === "indexOf") return `JSString.indexOf ${obj} ${args[0]}`;
+    if (method === "slice")   return `JSString.slice ${obj} ${args[0]} ${args[1]}`;
+  }
+  // Map methods
+  if (tyKind === "map") {
+    if (method === "get")       return `${obj}.get? ${args[0]}`;
+    if (method === "getDirect") return `${obj}.get! ${args[0]}`;
+    if (method === "has")       return `${obj}.contains ${args[0]}`;
+    if (method === "set")       return `${obj}.insert ${args[0]} ${args[1]}`;
+  }
+  // Set methods
+  if (tyKind === "set") {
+    if (method === "has") return `${obj}.contains ${args[0]}`;
+    if (method === "add") return `${obj}.insert ${args[0]}`;
+  }
+  throw new Error(`Unsupported Lean method call: .${method}() on ${tyKind}`);
+}
 
 // ── Expression emission ─────────────────────────────────────
 
@@ -111,15 +117,14 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "emptyMap": return `Std.HashMap.empty`;
     case "emptySet": return `Std.HashSet.empty`;
 
-    case "dotCall": {
+    case "methodCall": {
       const obj = emitExpr(e.obj);
-      const wrap = e.obj.kind === "binop" || e.obj.kind === "app" || e.obj.kind === "dotCall";
+      const wrap = e.obj.kind === "binop" || e.obj.kind === "app" || e.obj.kind === "methodCall";
       const receiver = wrap ? `(${obj})` : obj;
-      const leanMethod = mapDotMethod(e.method);
       const args = e.args.map(a =>
-        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app") ? `(${emitExpr(a)})` : emitExpr(a)
+        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall") ? `(${emitExpr(a)})` : emitExpr(a)
       );
-      return args.length > 0 ? `${receiver}.${leanMethod} ${args.join(" ")}` : `${receiver}.${leanMethod}`;
+      return emitMethodCall(e.objTy.kind, e.method, e.monadic, receiver, args);
     }
 
     case "lambda": {
@@ -149,13 +154,12 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "app": {
-      const fn = mapAppFn(e.fn);
       const args = e.args.map(a =>
-        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app") ? `(${emitExpr(a)})` : emitExpr(a)
+        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall") ? `(${emitExpr(a)})` : emitExpr(a)
       );
       // SetToSeq → .toArray for Lean (HashSet has native toArray)
       if (e.fn === "SetToSeq" && args.length === 1) return `${args[0]}.toArray`;
-      return `${fn} ${args.join(" ")}`;
+      return `${e.fn} ${args.join(" ")}`;
     }
 
     case "field": {
@@ -367,6 +371,13 @@ function emitPureExpr(e: Expr, indent: number): string {
 // ── File emission ────────────────────────────────────────────
 
 export function emitLeanFile(file: Module): string {
+  _needsJSString = false;
+  // Emit declarations first so _needsJSString is set
+  const declLines: string[] = [];
+  for (const decl of file.decls) {
+    declLines.push("");
+    declLines.push(emitDecl(decl));
+  }
   const lines: string[] = [];
   if (file.comment) {
     lines.push("/-");
@@ -374,11 +385,10 @@ export function emitLeanFile(file: Module): string {
     lines.push("-/");
   }
   for (const imp of file.imports) lines.push(`import ${imp}`);
+  if (_needsJSString && !file.imports.includes("LemmaScript.JSString"))
+    lines.push("import LemmaScript.JSString");
   if (file.options.length > 0) lines.push("");
   for (const opt of file.options) lines.push(`set_option ${opt.key} ${opt.value}`);
-  for (const decl of file.decls) {
-    lines.push("");
-    lines.push(emitDecl(decl));
-  }
+  lines.push(...declLines);
   return lines.join("\n") + "\n";
 }

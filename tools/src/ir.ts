@@ -25,7 +25,7 @@ export type Expr =
   | { kind: "arrayLiteral"; elems: Expr[] }
   | { kind: "emptyMap" }
   | { kind: "emptySet" }
-  | { kind: "dotCall"; obj: Expr; method: string; args: Expr[] }  // obj.method args
+  | { kind: "methodCall"; obj: Expr; objTy: Ty; method: string; args: Expr[]; monadic: boolean }
   | { kind: "lambda"; params: { name: string; type: Ty }[]; body: Stmt[] }
   | { kind: "if"; cond: Expr; then: Expr; else: Expr }
   | { kind: "match"; scrutinee: string | Expr; arms: MatchArm[] }
