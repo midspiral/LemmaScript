@@ -1,8 +1,8 @@
 # LemmaScript (Tech Preview)
 
-A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations. The toolchain generates verifiable code from your TypeScript — either Lean 4 (with Velvet/Loom) or Dafny.
+A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations. The toolchain generates verifiable code from your TypeScript — either in Dafny or Lean 4 (with Velvet/Loom).
 
-See [SPEC.md](SPEC.md) for the full specification, [DESIGN.md](DESIGN.md) for the Lean backend design, and [DESIGN_DAFNY.md](DESIGN_DAFNY.md) for the Dafny backend design.
+See [SPEC.md](SPEC.md) and [DESIGN.md](DESIGN.md).
 
 This is a **Tech Preview**: the core idea is there, but support, semantics, and ergonomics are still evolving.
 
@@ -40,13 +40,6 @@ git clone https://github.com/namin/velvet.git -b lemma ../velvet
 
 ## Usage
 
-### Lean backend (default)
-
-```sh
-npx lsc gen src/myModule.ts
-lake build
-```
-
 ### Dafny backend
 
 ```sh
@@ -56,6 +49,13 @@ npx lsc regen --backend=dafny src/myModule.ts
 ```
 
 The Dafny backend generates two files per TS source: `foo.dfy.gen` (always regeneratable) and `foo.dfy` (source of truth, with LLM/user proof additions). The diff between them must be additions-only.
+
+### Lean backend
+
+```sh
+npx lsc gen src/myModule.ts
+lake build
+```
 
 ## What's Supported
 
@@ -71,6 +71,14 @@ The Dafny backend generates two files per TS source: `foo.dfy.gen` (always regen
 
 ## File Structure
 
+### Dafny backend
+
+| File | Generated? | Purpose |
+|------|-----------|---------|
+| `foo.ts` | — | TypeScript source with `//@ ` annotations |
+| `foo.dfy.gen` | Yes | Generated Dafny (merge base, always regeneratable) |
+| `foo.dfy` | Yes (initial) | Annotated Dafny (gen + proof additions) |
+
 ### Lean backend
 
 | File | Generated? | Purpose |
@@ -81,15 +89,9 @@ The Dafny backend generates two files per TS source: `foo.dfy.gen` (always regen
 | `foo.def.lean` | Yes | Velvet method definitions |
 | `foo.proof.lean` | No | `prove_correct` with proof tactics |
 
-### Dafny backend
-
-| File | Generated? | Purpose |
-|------|-----------|---------|
-| `foo.ts` | — | TypeScript source with `//@ ` annotations |
-| `foo.dfy.gen` | Yes | Generated Dafny (merge base, always regeneratable) |
-| `foo.dfy` | Yes (initial) | Annotated Dafny (gen + proof additions) |
-
 ## Examples
+
+See [examples/](examples/):
 
 | Example | Pattern |
 |---------|---------|
