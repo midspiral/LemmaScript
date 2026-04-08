@@ -214,6 +214,7 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
           invariant forall v :: v in universe && v !in enqueued && v in inDegree ==> inDegree[v] >= 1
         {
           var neighbor := i_neighbors_val[i_neighbor_idx];
+          assert (neighbor in nodeIdSet);
           assert neighbor in universe;
           var deg := (if neighbor in inDegree then Some(inDegree[neighbor]) else None);
           match deg {
@@ -221,7 +222,6 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
               var newDeg := (i_deg_val - 1);
               inDegree := inDegree[neighbor := newDeg];
               if (newDeg == 0) {
-                assert (neighbor in nodeIdSet);
                 assert !((neighbor in enqueued));
                 queue := (queue + [neighbor]);
                 enqueued := (enqueued + {neighbor});

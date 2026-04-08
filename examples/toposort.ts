@@ -94,12 +94,12 @@ export function topologicalSort(
         //@ invariant forall(k, enqueued.has(k) ==> inDegree.has(k) && inDegree.get(k) <= 0)
         //@ invariant forall(k, enqueued.has(k) ==> nodeIdSet.has(k))
         //@ invariant nodeIdSet.size <= nodeIds.length
+        //@ assert nodeIdSet.has(neighbor)
         const deg = inDegree.get(neighbor);
         if (deg !== undefined) {
           const newDeg = deg - 1;
           inDegree.set(neighbor, newDeg);
           if (newDeg === 0) {
-            //@ assert nodeIdSet.has(neighbor)
             //@ assert !enqueued.has(neighbor)
             queue = [...queue, neighbor];
             //@ ghost enqueued = enqueued.add(neighbor)

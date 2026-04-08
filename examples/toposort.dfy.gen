@@ -125,13 +125,13 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
           invariant (|nodeIdSet| <= |nodeIds|)
         {
           var neighbor := i_neighbors_val[i_neighbor_idx];
+          assert (neighbor in nodeIdSet);
           var deg := (if neighbor in inDegree then Some(inDegree[neighbor]) else None);
           match deg {
             case Some(i_deg_val) =>
               var newDeg := (i_deg_val - 1);
               inDegree := inDegree[neighbor := newDeg];
               if (newDeg == 0) {
-                assert (neighbor in nodeIdSet);
                 assert !((neighbor in enqueued));
                 queue := (queue + [neighbor]);
                 enqueued := (enqueued + {neighbor});

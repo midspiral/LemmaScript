@@ -99,13 +99,13 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
           invariant nodeIdSet.size ≤ nodeIds.size
         do
           let neighbor := _neighbors_val[_neighbor_idx]!
+          assertGadget (nodeIdSet.contains neighbor)
           let deg := inDegree.get? neighbor
           if h_deg : (deg).isSome = true then
             let _deg_val := (deg).get h_deg
             let newDeg := _deg_val - 1
             inDegree := inDegree.insert neighbor newDeg
             if newDeg = 0 then
-              assertGadget (nodeIdSet.contains neighbor)
               assertGadget (¬(enqueued.contains neighbor))
               queue := Array.push queue neighbor
               enqueued := enqueued.insert neighbor
