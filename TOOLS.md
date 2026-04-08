@@ -45,19 +45,17 @@ Type names: `Expr`, `Stmt`, `Decl`, `Module`, `FnDef`, `FnMethod`, `Inductive`, 
 
 **Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser.
 
-**Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Uses semantic method names (e.g., `arraySet`, `mapGet`, `stringIndexOf`) — each emitter maps these to backend syntax. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). No type lookups, no string parsing.
+**Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). No type lookups, no string parsing.
 
-**Emit** (`lean-emit.ts` / `dafny-emit.ts`): IR → text. Each emitter maps `Ty` objects to backend type syntax and semantic method names to backend-specific syntax.
+**Emit** (`lean-emit.ts` / `dafny-emit.ts`): IR → text. Each emitter maps `Ty` objects to backend type syntax and method calls to backend-specific syntax.
 
-## Semantic Method Names
+## Method Calls
 
-The transform uses a fixed vocabulary of semantic method names, independent of the backend:
+All TS `receiver.method(args)` calls produce `methodCall` IR nodes carrying the receiver, its type, the TS method name, the args, and a `monadic` flag. No renaming — the IR stores the TS name (`"map"`, `"indexOf"`, `"with"`, `"get"`, etc.) and the receiver type disambiguates.
 
-**Dot methods** (produce `dotCall` IR nodes): `map`, `filter`, `every`, `some`, `includes`, `find`, `arraySet`, `mapGet`, `mapGetDirect`, `mapHas`, `mapSet`, `setHas`, `setAdd`.
+Each emitter dispatches on `(receiverTy, method)` to decide syntax. For example, `(array, "map")` → Lean: `arr.map f`, Dafny: `Seq.Map(f, arr)`. Unsupported `(type, method)` pairs error at emit time.
 
-**Helper-function methods** (produce `app` IR nodes): `stringIndexOf`, `stringSlice`, `arrayPush`.
-
-Each emitter maps these to backend syntax. For example, `arraySet` → `arr.set! i v` (Lean) or `arr[i := v]` (Dafny).
+`app` is reserved for receiver-less calls: user-defined functions, `Pure.fnName(...)`, `JSFloorDiv(a, b)`, `SetToSeq(s)`.
 
 ## Spec Expression Parser
 
