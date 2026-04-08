@@ -5,7 +5,7 @@
  * The only strings are //@ annotation expressions (parsed later by specparser).
  */
 
-import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression } from "ts-morph";
+import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ScriptTarget } from "ts-morph";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawGhostLet, RawGhostAssign } from "./rawir.js";
 
@@ -530,6 +530,6 @@ export function extractModule(sourceFile: SourceFile): RawModule {
 if (process.argv[1]?.match(/extract\.(ts|js)$/)) {
   const file = process.argv[2];
   if (!file) { console.error("Usage: extract <file.ts>"); process.exit(1); }
-  const proj = new Project({ compilerOptions: { strict: true } });
+  const proj = new Project({ compilerOptions: { strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"] } });
   console.log(JSON.stringify(extractModule(proj.addSourceFileAtPath(file)), null, 2));
 }

@@ -5,7 +5,7 @@
  * Pipeline: extract → resolve → transform → emit
  */
 
-import { Project } from "ts-morph";
+import { Project, ScriptTarget } from "ts-morph";
 import { existsSync, writeFileSync } from "fs";
 import { execSync } from "child_process";
 import path from "path";
@@ -35,7 +35,7 @@ function main() {
     process.exit(1);
   }
 
-  const project = new Project({ compilerOptions: { strict: true } });
+  const project = new Project({ compilerOptions: { strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"] } });
   const sourceFile = project.addSourceFileAtPath(absPath);
 
   // Extract: ts-morph → Raw IR
