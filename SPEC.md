@@ -86,7 +86,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `invariant` | Before first statement of loop body | Loop invariant |
 | `decreases` | Before first statement of loop body | Termination metric |
 | `done_with` | Before first statement of loop body | Post-loop condition (see §5.2) |
-| `type` | Before first statement of function body | Type override for a variable (see §3.3) |
+| `type` | Before first statement of function body | Type override for a variable (see §3.4) |
 | `ghost let x = e` | Before any statement | Ghost variable (proof-only, not runtime). See §3.4. |
 | `ghost x = e` | Before any statement | Ghost variable reassignment. |
 | `assert e` | Before any statement | Assertion (`assertGadget` in Lean, `assert` in Dafny). |
@@ -117,7 +117,7 @@ TYPE     := 'nat' | 'int'
 
 **`\result`** refers to the function's return value (following Frama-C/ACSL convention). It is only valid in `ensures` annotations. The `\` prefix distinguishes it from any TS variable named `result`.
 
-**`forall(k, P)`** quantifies `k` as `Int` by default. **`forall(k: nat, P)`** quantifies as `Nat`.
+**`forall(k, P)`** infers the type of `k`: explicit `: nat` → `Nat`; if `k` is used as a map/set key (e.g., `map.has(k)`) → the collection's key type; otherwise `Int`. Same for `exists`.
 
 ### 3.3 Ghost Variables and Assertions
 
@@ -212,8 +212,8 @@ No normalization of operators. Lean and `loom_solve` handle all comparison direc
 | `"foo"` (plain string context) | `"foo"` | String literal. Context-directed: user type → constructor, otherwise string. |
 | `x.tag === "foo"` (discriminant check) | `match` arm | See §5.4 and §8.3. |
 | `x.field` (in narrowed branch) | bound variable | From match pattern. See §5.4. |
-| `forall(k, P)` | `∀ k : Int, P'` | Default Int quantification. |
-| `forall(k: nat, P)` | `∀ k : Nat, P'` | Nat quantification. |
+| `forall(k, P)` | `∀ k : T, P'` | Type inferred: explicit `: nat` → `Nat`; collection key usage (e.g. `map.has(k)`) → key type; otherwise `Int`. See §4.9. |
+| `forall(k: nat, P)` | `∀ k : Nat, P'` | Explicit Nat quantification. |
 
 ### 4.3 Nat-Typing Rules
 
@@ -353,8 +353,8 @@ enqueued.add(id);        // → enqueued := enqueued.insert id  (ghost context)
 
 | TypeScript | Lean | Notes |
 |-----------|------|-------|
-| `let x = e` | `let mut x : T := e'` | Mutable. `T` from type map (§3.3). |
-| `const x = e` | `let x := e'` | Immutable. No type annotation. |
+| `let x = e` | `let mut x : T := e'` | Mutable. `T` from type map (§3.4). |
+| `const x = e` | `let x := e'` | Immutable — except `const` collections (Array, Map, Set) become `let mut` since TS mutates in place but Lean/Dafny require reassignment. |
 | `x = e` | `x := e'` | Assignment. |
 | `x += e`, `x -= e`, etc. | `x := x + e'` | Compound assignment (desugared). |
 | `i++`, `++i`, `i--`, `--i` | `i := i + 1` / `i := i - 1` | Increment/decrement (desugared). |
