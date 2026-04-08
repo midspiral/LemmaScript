@@ -87,6 +87,9 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `decreases` | Before first statement of loop body | Termination metric |
 | `done_with` | Before first statement of loop body | Post-loop condition (see §5.2) |
 | `type` | Before first statement of function body | Type override for a variable (see §3.3) |
+| `ghost let x = e` | Before any statement | Ghost variable (proof-only, not runtime). See §3.4. |
+| `ghost x = e` | Before any statement | Ghost variable reassignment. |
+| `assert e` | Before any statement | Assertion (`assertGadget` in Lean, `assert` in Dafny). |
 
 ### 3.2 Spec Expression Grammar
 
@@ -107,6 +110,7 @@ atom     := NUMBER | IDENT | 'true' | 'false' | '\result'
           | 'forall' '(' IDENT (':' TYPE)? ',' expr ')'
           | 'exists' '(' IDENT (':' TYPE)? ',' expr ')'
           | '(' expr ')'
+          | '[' (expr ',')* expr? ']'
           | '{' (IDENT ':' expr ',')* IDENT ':' expr '}'
 TYPE     := 'nat' | 'int'
 ```
@@ -115,7 +119,21 @@ TYPE     := 'nat' | 'int'
 
 **`forall(k, P)`** quantifies `k` as `Int` by default. **`forall(k: nat, P)`** quantifies as `Nat`.
 
-### 3.3 Type Annotations
+### 3.3 Ghost Variables and Assertions
+
+Ghost annotations introduce proof-only state that does not exist at runtime:
+
+```typescript
+//@ ghost let enqueued = new Set<string>()   // ghost variable declaration
+//@ ghost enqueued = enqueued.add(id)        // ghost assignment
+//@ assert !enqueued.has(id)                 // assertion
+```
+
+Ghost `let` declarations become mutable `let mut` in Lean (since they are typically reassigned). Ghost assignments become regular assignments. Assertions become `assertGadget` in Lean and `assert` in Dafny.
+
+The init expression in `ghost let` supports `new Set<T>()` and `new Map<K,V>()` constructors, as well as any spec expression. An optional type annotation is supported: `//@ ghost let x: type = expr`.
+
+### 3.4 Type Annotations
 
 `lsc` reads TS types from ts-morph and maps them to Lean (see §8). For `number` variables, the default mapping is `Int`. The `type` annotation overrides this to `Nat`:
 
@@ -177,6 +195,18 @@ No normalization of operators. Lean and `loom_solve` handle all comparison direc
 | `[a, b, c]` | `#[a, b, c]` | Array literal (any length, including `[]` → `#[]`). |
 | `{ ...obj, f: v }` | `{ obj with f := v }` | Functional record update. |
 | `arr.with(i, v)` | `arr.set! i v` | Functional array update (ES2023). |
+| `new Map<K,V>()` | `Std.HashMap.empty` | Empty map. |
+| `m.get(k)` (in code) | `m.get? k` | Returns `Option V`. See §4.9. |
+| `m.get(k)` (in spec) | `m.get! k` | Direct access (no Option wrapper). |
+| `m.set(k, v)` | `m := m.insert k v` | Mutating call → reassignment. |
+| `m.has(k)` | `m.contains k` | Map membership test. |
+| `m.size` | `m.size` | Map size, `Nat`. |
+| `new Set<T>()` | `Std.HashSet.empty` | Empty set. |
+| `s.has(x)` | `s.contains x` | Set membership test. |
+| `s.add(x)` | `s := s.insert x` | Mutating call → reassignment. |
+| `s.size` | `s.size` | Set size, `Nat`. |
+| `for (const x of s)` | `SetToSeq` + for-in | Sets are converted to arrays for iteration. |
+| `v !== undefined` | `if h : v.isSome then ... else ...` | Optional narrowing. See §4.9. |
 | `\result` | `res` | Only valid in `ensures`. |
 | `"foo"` (string literal, enum context) | `.foo` | Constructor. Lean infers type from context. |
 | `"foo"` (plain string context) | `"foo"` | String literal. Context-directed: user type → constructor, otherwise string. |
@@ -289,8 +319,31 @@ Two strategies for translating `receiver.method(args)`:
 | `arr.some(f)` | `arr.any f` | Dot-notation |
 | `arr.includes(x)` | `arr.contains x` | Dot-notation |
 | `arr.find(f)` | `arr.find? f` | Dot-notation |
+| `m.get(k)` | `m.get? k` / `m.get! k` | Dot-notation (code/spec) |
+| `m.has(k)` | `m.contains k` | Dot-notation |
+| `m.set(k, v)` | `m.insert k v` | Dot-notation |
+| `s.has(x)` | `s.contains x` | Dot-notation |
+| `s.add(x)` | `s.insert x` | Dot-notation |
 
 The transform checks `METHOD_TABLE` first, then `DOT_METHODS`. If neither matches, it errors.
+
+### 4.9 Map, Set, and Optional Narrowing
+
+**Map and Set** (`Map<K,V>`, `Set<T>`) are immutable types in Lean/Dafny. `const` declarations of collection types are automatically promoted to mutable bindings, since TS mutates in place but Lean/Dafny require reassignment.
+
+Mutating calls (`m.set(k, v)`, `s.add(x)`) are transformed into reassignments:
+```typescript
+inDegree.set(id, 0);    // → inDegree := inDegree.insert id 0
+enqueued.add(id);        // → enqueued := enqueued.insert id  (ghost context)
+```
+
+**`Map.get` returns `Option`** in code context (since the key may not exist). In spec context (annotations), `map.get(k)` emits `map.get! k` (direct access without Option wrapper), matching how specs reason about map contents.
+
+**Optional narrowing:** `v !== undefined` where `v : T | undefined` emits an `if h : v.isSome = true then let val := v.get h ... else ...` pattern, binding the unwrapped value in the then-branch. Optional comparisons like `opt === 0` emit a match on `Some`/`None`.
+
+**Quantifier type inference:** When a quantifier variable is used as a map/set key (e.g., `forall(k, map.has(k) ==> ...)`), the variable type is inferred from the collection's key type instead of defaulting to `Int`.
+
+**Set iteration:** `for (const x of s)` where `s` is a `Set<T>` converts to `SetToSeq` (Lean: `.toArray`, Dafny: a helper method) followed by a standard for-in loop.
 
 ---
 
@@ -317,6 +370,8 @@ The transform checks `METHOD_TABLE` first, then `DOT_METHODS`. If neither matche
 All expressions `e` in the table above are translated using the spec expression rules (§4).
 
 **Discriminant if-chains (data-carrying unions only):** When `lsc` encounters an if-else chain where each condition tests `x.discriminantField === "variant"` on a discriminated union with data fields, it emits a Lean `match` instead of `if`. This is necessary because Lean's `if` cannot bind constructor fields — only `match` can. For enum-like types (string-literal unions, no data), `if` stays `if` with `DecidableEq`. See §5.4 and §8.3.
+
+**For-of loops** are desugared to `for idx in [:bound]` with an auto-generated index variable `_varName_idx`. A bound invariant `_varName_idx ≤ bound` is automatically prepended to the user's invariants. When multiple for-of loops use the same variable name, the index is disambiguated with a suffix: `_id_idx`, `_id_idx2`, `_id_idx3`, etc.
 
 ### 5.2 While Loops
 
@@ -523,6 +578,9 @@ The pattern: `unfold` the method to expose the body, then `loom_solve` to discha
 | `boolean` | `Bool` | |
 | `string` | `String` | |
 | `T[]` / `Array<T>` | `Array T'` | `T'` is the Lean mapping of `T`. |
+| `Map<K, V>` | `Std.HashMap K' V'` | Dafny: `map<K', V'>`. |
+| `Set<T>` | `Std.HashSet T'` | Dafny: `set<T'>`. |
+| `T \| undefined` | `Option T'` | From `Map.get` return type or explicit unions. |
 | Anything else | Pass through | `State` → `State`. Generated in `.types.lean`. |
 
 `lsc` reads parameter and variable types from ts-morph. Primitive types are mapped per the table. User-defined types (like `State`, `Event`) are passed through by name — the corresponding Lean type is generated in `.types.lean`.
@@ -772,7 +830,7 @@ The LemmaScript Lean library provides:
 
 1. **Re-exports of Velvet (forked) and Loom.** Users import `LemmaScript` and get everything.
 2. **Velvet fork:** One change from upstream — obligations are persisted across files so `prove_correct` works in a separate file from `method`.
-3. **Any LemmaScript-specific macros.** Currently none. May be added if the generated Lean needs constructs Velvet doesn't provide.
+3. **WPGen rules and simp lemmas** for Option (`WPGenOption.lean`: dependent if-then-else / `dite`) and HashSet (`WPGenHashSet.lean`: insert size bounds, `strip_withname` tactic).
 
 The library depends on:
 - Velvet (forked, which depends on Loom, which depends on mathlib)
