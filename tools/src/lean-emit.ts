@@ -1,9 +1,43 @@
 /**
- * Lean IR → text. Trivial pretty-printer.
+ * Lean emitter — IR → Lean text.
  * No logic, no type decisions — just serialization.
  */
 
-import type { LeanExpr, LeanStmt, LeanDecl, LeanFile, LeanMatchArm, LeanStmtMatchArm } from "./ir.js";
+import type { Expr, Stmt, Decl, Module } from "./ir.js";
+import type { Ty } from "./typedir.js";
+
+// ── Ty → Lean type string ──────────────────────────────────
+
+function tyToLean(ty: Ty): string {
+  switch (ty.kind) {
+    case "nat": return "Nat";
+    case "int": return "Int";
+    case "bool": return "Bool";
+    case "string": return "String";
+    case "void": return "Unit";
+    case "array": {
+      const elem = tyToLean(ty.elem);
+      return elem.includes(" ") ? `Array (${elem})` : `Array ${elem}`;
+    }
+    case "map": {
+      const k = tyToLean(ty.key);
+      const v = tyToLean(ty.value);
+      const kStr = k.includes(" ") ? `(${k})` : k;
+      const vStr = v.includes(" ") ? `(${v})` : v;
+      return `Std.HashMap ${kStr} ${vStr}`;
+    }
+    case "set": {
+      const elem = tyToLean(ty.elem);
+      return elem.includes(" ") ? `Std.HashSet (${elem})` : `Std.HashSet ${elem}`;
+    }
+    case "optional": {
+      const inner = tyToLean(ty.inner);
+      return inner.includes(" ") ? `Option (${inner})` : `Option ${inner}`;
+    }
+    case "user": return ty.name;
+    case "unknown": return "_";
+  }
+}
 
 // ── Lean keyword escaping ────────────────────────────────────
 
@@ -31,9 +65,40 @@ const PREC: Record<string, number> = {
 
 function prec(op: string): number { return PREC[op] ?? 10; }
 
+// ── Semantic method → Lean name ─────────────────────────────
+
+const DOT_METHOD_MAP: Record<string, string> = {
+  "map": "map", "mapM": "mapM",
+  "filter": "filter", "filterM": "filterM",
+  "every": "all", "everyM": "allM",
+  "some": "any", "someM": "anyM",
+  "includes": "contains",
+  "find": "find?",
+  "arraySet": "set!",
+  "mapGet": "get?", "mapGetDirect": "get!",
+  "mapHas": "contains",
+  "mapSet": "insert",
+  "setHas": "contains",
+  "setAdd": "insert",
+};
+
+const APP_FN_MAP: Record<string, string> = {
+  "stringIndexOf": "JSString.indexOf",
+  "stringSlice": "JSString.slice",
+  "arrayPush": "Array.push",
+};
+
+/** Lean modules that need explicit imports. */
+const LEAN_IMPORT_MAP: Record<string, string> = {
+  "JSString": "LemmaScript.JSString",
+};
+
+function mapDotMethod(name: string): string { return DOT_METHOD_MAP[name] ?? name; }
+function mapAppFn(name: string): string { return APP_FN_MAP[name] ?? name; }
+
 // ── Expression emission ─────────────────────────────────────
 
-function emitExpr(e: LeanExpr, parentPrec?: number): string {
+function emitExpr(e: Expr, parentPrec?: number): string {
   switch (e.kind) {
     case "var": return escapeName(e.name);
     case "num": return `${e.value}`;
@@ -50,10 +115,11 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
       const obj = emitExpr(e.obj);
       const wrap = e.obj.kind === "binop" || e.obj.kind === "app" || e.obj.kind === "dotCall";
       const receiver = wrap ? `(${obj})` : obj;
+      const leanMethod = mapDotMethod(e.method);
       const args = e.args.map(a =>
         (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app") ? `(${emitExpr(a)})` : emitExpr(a)
       );
-      return args.length > 0 ? `${receiver}.${e.method} ${args.join(" ")}` : `${receiver}.${e.method}`;
+      return args.length > 0 ? `${receiver}.${leanMethod} ${args.join(" ")}` : `${receiver}.${leanMethod}`;
     }
 
     case "lambda": {
@@ -83,12 +149,13 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
     }
 
     case "app": {
+      const fn = mapAppFn(e.fn);
       const args = e.args.map(a =>
         (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app") ? `(${emitExpr(a)})` : emitExpr(a)
       );
       // SetToSeq → .toArray for Lean (HashSet has native toArray)
       if (e.fn === "SetToSeq" && args.length === 1) return `${args[0]}.toArray`;
-      return `${e.fn} ${args.join(" ")}`;
+      return `${fn} ${args.join(" ")}`;
     }
 
     case "field": {
@@ -121,8 +188,8 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
       return `match ${typeof e.scrutinee === "string" ? e.scrutinee : emitExpr(e.scrutinee)} with ${arms.join(" ")}`;
     }
 
-    case "forall": return `∀ ${e.var} : ${e.type}, ${emitExpr(e.body)}`;
-    case "exists": return `∃ ${e.var} : ${e.type}, ${emitExpr(e.body)}`;
+    case "forall": return `∀ ${e.var} : ${tyToLean(e.type)}, ${emitExpr(e.body)}`;
+    case "exists": return `∃ ${e.var} : ${tyToLean(e.type)}, ${emitExpr(e.body)}`;
 
     case "let": return `let ${e.name} := ${emitExpr(e.value)}\n${emitExpr(e.body)}`;
   }
@@ -130,21 +197,21 @@ function emitExpr(e: LeanExpr, parentPrec?: number): string {
 
 // ── Statement emission ──────────────────────────────────────
 
-function emitStmts(stmts: LeanStmt[], indent: number): string {
+function emitStmts(stmts: Stmt[], indent: number): string {
   const pad = "  ".repeat(indent);
   return stmts.map(s => emitStmt(s, indent)).join("\n");
 }
 
-function emitStmt(s: LeanStmt, indent: number): string {
+function emitStmt(s: Stmt, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (s.kind) {
     case "let":
       return s.mutable
-        ? `${pad}let mut ${escapeName(s.name)} : ${s.type} := ${emitExpr(s.value)}`
+        ? `${pad}let mut ${escapeName(s.name)} : ${tyToLean(s.type)} := ${emitExpr(s.value)}`
         : `${pad}let ${escapeName(s.name)} := ${emitExpr(s.value)}`;
     case "assign": return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)}`;
     case "ghostLet":
-      return `${pad}let mut ${escapeName(s.name)} : ${s.type} := ${emitExpr(s.value)}`;
+      return `${pad}let mut ${escapeName(s.name)} : ${tyToLean(s.type)} := ${emitExpr(s.value)}`;
     case "ghostAssign": return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)}`;
     case "assert": return `${pad}assertGadget (${emitExpr(s.expr)})`;
     case "bind": return `${pad}${escapeName(s.target)} ← ${emitExpr(s.value)}`;
@@ -229,7 +296,7 @@ function emitStmt(s: LeanStmt, indent: number): string {
 
 // ── Declaration emission ─────────────────────────────────────
 
-function emitDecl(d: LeanDecl): string {
+function emitDecl(d: Decl): string {
   switch (d.kind) {
     case "inductive": {
       const lines = [`inductive ${d.name} where`];
@@ -237,7 +304,7 @@ function emitDecl(d: LeanDecl): string {
         if (c.fields.length === 0) {
           lines.push(`  | ${c.name} : ${d.name}`);
         } else {
-          const params = c.fields.map(f => `(${escapeName(f.name)} : ${f.type})`).join(" ");
+          const params = c.fields.map(f => `(${escapeName(f.name)} : ${tyToLean(f.type)})`).join(" ");
           lines.push(`  | ${c.name} ${params} : ${d.name}`);
         }
       }
@@ -247,19 +314,19 @@ function emitDecl(d: LeanDecl): string {
 
     case "structure": {
       const lines = [`structure ${d.name} where`];
-      for (const f of d.fields) lines.push(`  ${escapeName(f.name)} : ${f.type}`);
+      for (const f of d.fields) lines.push(`  ${escapeName(f.name)} : ${tyToLean(f.type)}`);
       if (d.deriving.length > 0) lines.push(`deriving ${d.deriving.join(", ")}`);
       return lines.join("\n");
     }
 
     case "def": {
-      const params = d.params.map(p => `(${escapeName(p.name)} : ${p.type})`).join(" ");
-      return `def ${d.name} ${params} : ${d.returnType} :=\n${emitPureExpr(d.body, 1)}`;
+      const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`).join(" ");
+      return `def ${d.name} ${params} : ${tyToLean(d.returnType)} :=\n${emitPureExpr(d.body, 1)}`;
     }
 
     case "method": {
-      const params = d.params.map(p => `(${escapeName(p.name)} : ${p.type})`).join(" ");
-      const lines = [`method ${d.name} ${params} return (res : ${d.returnType})`];
+      const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`).join(" ");
+      const lines = [`method ${d.name} ${params} return (res : ${tyToLean(d.returnType)})`];
       for (const r of d.requires) lines.push(`  require ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
       lines.push("  do");
@@ -277,7 +344,7 @@ function emitDecl(d: LeanDecl): string {
 }
 
 /** Emit a pure expression with indented if/match blocks. */
-function emitPureExpr(e: LeanExpr, indent: number): string {
+function emitPureExpr(e: Expr, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (e.kind) {
     case "if":
@@ -299,7 +366,7 @@ function emitPureExpr(e: LeanExpr, indent: number): string {
 
 // ── File emission ────────────────────────────────────────────
 
-export function emitFile(file: LeanFile): string {
+export function emitLeanFile(file: Module): string {
   const lines: string[] = [];
   if (file.comment) {
     lines.push("/-");

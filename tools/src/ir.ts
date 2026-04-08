@@ -1,113 +1,115 @@
 /**
- * Lean IR — the intermediate representation between transform and emit.
+ * IR — the intermediate representation between transform and emit.
  *
  * The transform phase produces these types.
- * The emit phase pretty-prints them to Lean syntax.
+ * The emit phase pretty-prints them to backend syntax (Lean or Dafny).
  */
+
+import type { Ty } from "./typedir.js";
 
 // ── Expressions ──────────────────────────────────────────────
 
-export type LeanExpr =
+export type Expr =
   | { kind: "var"; name: string }
   | { kind: "num"; value: number }
   | { kind: "bool"; value: boolean }
   | { kind: "str"; value: string }
   | { kind: "constructor"; name: string; type?: string }       // .idle, .allow (type = parent datatype name)
-  | { kind: "binop"; op: string; left: LeanExpr; right: LeanExpr }
-  | { kind: "unop"; op: string; expr: LeanExpr }
-  | { kind: "app"; fn: string; args: LeanExpr[] }            // f a b
-  | { kind: "field"; obj: LeanExpr; field: string }           // x.res, arr.size
-  | { kind: "toNat"; expr: LeanExpr }                               // expr.toNat
-  | { kind: "index"; arr: LeanExpr; idx: LeanExpr }                // arr[idx]!
-  | { kind: "record"; spread: LeanExpr | null; fields: { name: string; value: LeanExpr }[] }
-  | { kind: "arrayLiteral"; elems: LeanExpr[] }
+  | { kind: "binop"; op: string; left: Expr; right: Expr }
+  | { kind: "unop"; op: string; expr: Expr }
+  | { kind: "app"; fn: string; args: Expr[] }            // f a b
+  | { kind: "field"; obj: Expr; field: string }           // x.res, arr.size
+  | { kind: "toNat"; expr: Expr }                               // expr.toNat
+  | { kind: "index"; arr: Expr; idx: Expr }                // arr[idx]!
+  | { kind: "record"; spread: Expr | null; fields: { name: string; value: Expr }[] }
+  | { kind: "arrayLiteral"; elems: Expr[] }
   | { kind: "emptyMap" }
   | { kind: "emptySet" }
-  | { kind: "dotCall"; obj: LeanExpr; method: string; args: LeanExpr[] }  // obj.method args
-  | { kind: "lambda"; params: { name: string; type: string }[]; body: LeanStmt[] }
-  | { kind: "if"; cond: LeanExpr; then: LeanExpr; else: LeanExpr }
-  | { kind: "match"; scrutinee: string | LeanExpr; arms: LeanMatchArm[] }
-  | { kind: "forall"; var: string; type: string; body: LeanExpr }
-  | { kind: "exists"; var: string; type: string; body: LeanExpr }
-  | { kind: "implies"; premises: LeanExpr[]; conclusion: LeanExpr }
-  | { kind: "let"; name: string; value: LeanExpr; body: LeanExpr }
+  | { kind: "dotCall"; obj: Expr; method: string; args: Expr[] }  // obj.method args
+  | { kind: "lambda"; params: { name: string; type: Ty }[]; body: Stmt[] }
+  | { kind: "if"; cond: Expr; then: Expr; else: Expr }
+  | { kind: "match"; scrutinee: string | Expr; arms: MatchArm[] }
+  | { kind: "forall"; var: string; type: Ty; body: Expr }
+  | { kind: "exists"; var: string; type: Ty; body: Expr }
+  | { kind: "implies"; premises: Expr[]; conclusion: Expr }
+  | { kind: "let"; name: string; value: Expr; body: Expr }
 
-export interface LeanMatchArm {
+export interface MatchArm {
   pattern: string;    // ".syn seq", ".idle", "_"
-  body: LeanExpr;
+  body: Expr;
 }
 
-// ── Statements (Velvet method bodies) ────────────────────────
+// ── Statements ──────────────────────────────────────────────
 
-export type LeanStmt =
-  | { kind: "let"; name: string; type: string; mutable: boolean; value: LeanExpr }
-  | { kind: "assign"; target: string; value: LeanExpr }
-  | { kind: "bind"; target: string; value: LeanExpr }         // x ← f a b (mutation)
-  | { kind: "let-bind"; name: string; value: LeanExpr }       // let x ← f a b (new binding)
-  | { kind: "return"; value: LeanExpr }
+export type Stmt =
+  | { kind: "let"; name: string; type: Ty; mutable: boolean; value: Expr }
+  | { kind: "assign"; target: string; value: Expr }
+  | { kind: "bind"; target: string; value: Expr }         // x ← f a b (mutation)
+  | { kind: "let-bind"; name: string; value: Expr }       // let x ← f a b (new binding)
+  | { kind: "return"; value: Expr }
   | { kind: "break" }
   | { kind: "continue" }
-  | { kind: "if"; cond: LeanExpr; then: LeanStmt[]; else: LeanStmt[] }
-  | { kind: "match"; scrutinee: string; arms: LeanStmtMatchArm[] }
-  | { kind: "while"; cond: LeanExpr; invariants: LeanExpr[]; decreasing: LeanExpr | null;
-      doneWith: LeanExpr | null; body: LeanStmt[] }
-  | { kind: "forin"; idx: string; bound: LeanExpr; invariants: LeanExpr[]; body: LeanStmt[] }
-  | { kind: "ghostLet"; name: string; type: string; value: LeanExpr }
-  | { kind: "ghostAssign"; target: string; value: LeanExpr }
-  | { kind: "assert"; expr: LeanExpr }
+  | { kind: "if"; cond: Expr; then: Stmt[]; else: Stmt[] }
+  | { kind: "match"; scrutinee: string; arms: StmtMatchArm[] }
+  | { kind: "while"; cond: Expr; invariants: Expr[]; decreasing: Expr | null;
+      doneWith: Expr | null; body: Stmt[] }
+  | { kind: "forin"; idx: string; bound: Expr; invariants: Expr[]; body: Stmt[] }
+  | { kind: "ghostLet"; name: string; type: Ty; value: Expr }
+  | { kind: "ghostAssign"; target: string; value: Expr }
+  | { kind: "assert"; expr: Expr }
 
-export interface LeanStmtMatchArm {
+export interface StmtMatchArm {
   pattern: string;
-  body: LeanStmt[];
+  body: Stmt[];
 }
 
 // ── Top-level declarations ───────────────────────────────────
 
-export interface LeanInductive {
+export interface Inductive {
   kind: "inductive";
   name: string;
-  constructors: { name: string; fields: { name: string; type: string }[] }[];
+  constructors: { name: string; fields: { name: string; type: Ty }[] }[];
   deriving: string[];
 }
 
-export interface LeanStructure {
+export interface Structure {
   kind: "structure";
   name: string;
-  fields: { name: string; type: string }[];
+  fields: { name: string; type: Ty }[];
   deriving: string[];
 }
 
-export interface LeanDef {
+export interface FnDef {
   kind: "def";
   name: string;
-  params: { name: string; type: string }[];
-  returnType: string;
-  requires: LeanExpr[];  // used by Dafny backend; Lean backend ignores
-  ensures: LeanExpr[];   // used by Dafny backend for companion lemma
-  body: LeanExpr;
+  params: { name: string; type: Ty }[];
+  returnType: Ty;
+  requires: Expr[];  // used by Dafny backend; Lean backend ignores
+  ensures: Expr[];   // used by Dafny backend for companion lemma
+  body: Expr;
 }
 
-export interface LeanMethod {
+export interface FnMethod {
   kind: "method";
   name: string;
-  params: { name: string; type: string }[];
-  returnType: string;
-  requires: LeanExpr[];
-  ensures: LeanExpr[];
-  body: LeanStmt[];
+  params: { name: string; type: Ty }[];
+  returnType: Ty;
+  requires: Expr[];
+  ensures: Expr[];
+  body: Stmt[];
 }
 
-export interface LeanNamespace {
+export interface Namespace {
   kind: "namespace";
   name: string;
-  decls: LeanDecl[];
+  decls: Decl[];
 }
 
-export type LeanDecl = LeanInductive | LeanStructure | LeanDef | LeanMethod | LeanNamespace;
+export type Decl = Inductive | Structure | FnDef | FnMethod | Namespace;
 
-export interface LeanFile {
+export interface Module {
   comment: string;
   imports: string[];
   options: { key: string; value: string }[];
-  decls: LeanDecl[];
+  decls: Decl[];
 }

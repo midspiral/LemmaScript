@@ -1,19 +1,20 @@
 # LemmaScript — Design Rationale
 
-**Version:** 0.3
-**Date:** March 2026
+**Version:** 0.4
+**Date:** April 2026
 
-> For implementation details, see [SPEC.md](SPEC.md).
+> For implementation details, see [SPEC.md](SPEC.md), [SPEC_LEAN.md](SPEC_LEAN.md), [SPEC_DAFNY.md](SPEC_DAFNY.md).
+> For internal toolchain architecture, see [TOOLS.md](TOOLS.md).
 
 ---
 
 ## 1. What This Is
 
-LemmaScript is a verification toolchain for TypeScript. You write ordinary TypeScript with `//@ ` specification annotations. Ghost definitions and proofs live in Lean 4 files. The toolchain generates a Lean method definition from your TypeScript; Lean checks the proof.
+LemmaScript is a verification toolchain for TypeScript. You write ordinary TypeScript with `//@ ` specification annotations. The toolchain generates formal verification artifacts; a backend prover checks them.
 
-There is no new language. There are two languages: TypeScript and Lean. The toolchain bridges them.
+There is no new language. There is TypeScript, and there is a prover (Lean or Dafny). The toolchain bridges them.
 
-The core insight: Verus is to Rust as LemmaScript is to TypeScript — but where Verus embeds specifications in Rust syntax, LemmaScript keeps TypeScript clean and puts the proof machinery in Lean, where it belongs.
+The core insight: Verus is to Rust as LemmaScript is to TypeScript — but where Verus embeds specifications in Rust syntax, LemmaScript keeps TypeScript clean and puts the proof machinery in a purpose-built prover.
 
 ---
 
@@ -34,71 +35,108 @@ An earlier version of this design proposed a "LemmaScript" surface language — 
 
 1. **Parsing TypeScript is hard.** Even a "subset" of TS syntax is vast and evolving. Building and maintaining a custom parser is a major engineering burden unrelated to verification.
 2. **Erasure introduces a trust question.** Does the erased TS faithfully preserve the semantics of the source? With the current approach, the TS *is* the source — there is no erasure.
-3. **Three languages.** Developers would need TypeScript, the superset, and enough Lean to debug proof failures. Two languages (TS + Lean) is strictly better.
+3. **Three languages.** Developers would need TypeScript, the superset, and enough Lean to debug proof failures. Two languages (TS + prover) is strictly better.
 
 ### The Verus existence proof, adapted
 
-Verus demonstrates that verification annotations can coexist with production code. LemmaScript takes a different cut: instead of embedding specifications *in* the production language and erasing them, we keep specifications *beside* the production code in a language (Lean) that was purpose-built for proofs. The production code is never modified.
+Verus demonstrates that verification annotations can coexist with production code. LemmaScript takes a different cut: instead of embedding specifications *in* the production language and erasing them, we keep specifications *beside* the production code in a language purpose-built for proofs. The production code is never modified.
 
 ---
 
-## 3. Architecture
+## 3. Two Backends
+
+LemmaScript supports two verification backends:
+
+**Dafny** is the primary backend. It is currently easier for LLMs to verify programs in Dafny than in Lean/Loom/Velvet. This is true, despite a mismatch in tooling where Dafny has a generated stub that needs to be completed to a full verified program. See [SPEC_DAFNY.md](SPEC_DAFNY.md).
+
+**Lean** (via Velvet/Loom) is the secondary backend. It is more powerful for inductive proofs and offers a richer proof language, but automation is harder for LLMs. See [SPEC_LEAN.md](SPEC_LEAN.md).
+
+Both backends share the same TypeScript source, `//@ ` annotations, and pipeline (extract → resolve → transform). They differ only in the emitter and the proof workflow.
+
+---
+
+## 4. Architecture
 
 ```
   TypeScript source (.ts)
   with //@ annotations
        │
-       ├──→ [ts-morph] Parse AST + extract //@ annotations
+       ├──→ extract (ts-morph → Raw IR)
        │         │
-       │         └──→ [Code Generator] Emit Velvet method definition (.def.lean)
-       │                    │
-       │                    ├── imports .spec.lean (ghost defs, lemmas)
-       │                    │
-       │                    └──→ .proof.lean imports .def.lean
-       │                          │
-       │                          ├──→ loom_solve (automated VC discharge via Z3/cvc5)
-       │                          │
-       │                          └──→ Lean interactive mode / LLM proof filling
+       │         └──→ resolve (Raw IR → Typed IR)
+       │                   │
+       │                   └──→ transform (Typed IR → IR)
+       │                             │
+       │              ┌──────────────┴──────────────┐
+       │              │                             │
+       │         lean-emit.ts                  dafny-emit.ts
+       │              │                             │
+       │      .types.lean + .def.lean          .dfy.gen
+       │         (generated)                   (generated)
+       │              │                             │
+       │      .spec.lean + .proof.lean           .dfy
+       │         (user / LLM)              (gen + user additions)
+       │              │                             │
+       │        lake build                    dafny verify
        │
        └──→ TypeScript IS the production output. No erasure.
 ```
 
 ### Key properties
 
-**No erasure, no gap.** The TypeScript source *is* the production code. The `//@ ` annotations are comments — invisible to tsc, bundlers, and the runtime. The `.spec.lean` and `.proof.lean` files never touch the production build.
+**No erasure, no gap.** The TypeScript source *is* the production code. The `//@ ` annotations are comments — invisible to tsc, bundlers, and the runtime. Proof files never touch the production build.
 
-**Three-file separation.** For each verified function:
-- `.def.lean` — generated from TS, always regeneratable
+**Shared pipeline, separate emitters.** Extract, resolve, and transform are backend-agnostic. The IR uses semantic names (e.g., `arraySet`, `mapGet`) and preserves `Ty` objects — each emitter maps to its own syntax and type system.
+
+**The trust question.** Does the generated embedding faithfully model the TypeScript code? This is a one-directional question (TS → prover) validated by inspection of the code generator. The code generator is a straightforward syntactic translation — it does not optimize, reorder, or transform.
+
+### Lean backend file separation
+
+For each verified function:
+- `.types.lean` — generated type definitions, always regeneratable
 - `.spec.lean` — ghost definitions and lemmas, user-written, version-controlled
+- `.def.lean` — method definition, generated, always regeneratable
 - `.proof.lean` — proof tactics, user/LLM-written, version-controlled
 
-Regenerating `.def.lean` from changed TS annotations never destroys proof work.
+Regenerating `.types.lean` and `.def.lean` from changed TS never destroys proof work.
 
-**The trust question.** Does the generated Lean embedding faithfully model the TypeScript code? This is a one-directional question (TS → Lean) validated by inspection of the code generator. The code generator is a straightforward syntactic translation — it does not optimize, reorder, or transform.
+### Dafny backend file separation
 
-**Pure defs are total.** `//@ requires` annotations are emitted on Velvet methods (as `require` clauses) but dropped from `Pure` namespace defs. Pure defs must be total Lean functions — they accept any input, including invalid ones. This is because Pure defs are called from runtime-check functions (e.g., `validExpense` calls `sumTo` to *test* whether shares sum to the amount, before knowing that they do). Dafny handles this differently: its verifier tracks path conditions through if-branches, so a function guarded by a runtime check can satisfy a callee's `requires`. Lean's type checker does not track path conditions, so proof-carrying Pure defs would break at these call sites. Array access uses `arr[i]!` (unchecked, defaults to `Inhabited` value on out-of-bounds) for the same reason.
+For each verified function:
+- `.dfy.gen` — generated stub, always regeneratable, merge base
+- `.dfy` — source of truth, starts as copy of gen, accumulates proof annotations
+
+Regenerating `.dfy.gen` triggers a three-way merge to preserve user additions in `.dfy`.
+
+**Pure defs are total.** `//@ requires` annotations are emitted on Velvet methods (as `require` clauses) but dropped from Lean `Pure` namespace defs. Pure defs must be total Lean functions — they accept any input, including invalid ones. This is because Pure defs are called from runtime-check functions (e.g., `validExpense` calls `sumTo` to *test* whether shares sum to the amount, before knowing that they do). Dafny handles this differently: its verifier tracks path conditions through if-branches, so a function guarded by a runtime check can satisfy a callee's `requires`.
 
 ---
 
-## 4. The Computational Fragment
+## 5. The Computational Fragment
 
-LemmaScript verifies a subset of TypeScript chosen for clean, well-defined semantics that align with Lean/Loom.
+LemmaScript verifies a subset of TypeScript chosen for clean, well-defined semantics that align with both backends.
 
-### Supported (now)
+### Supported
 
 - Variables: `let`, `const`
-- Types: `number` (→ `Int` or `Nat`), `boolean`, `string`, `number[]`
-- Control flow: `if`/`else`, `while` (with `break`), `return`
-- Functions: named, with typed parameters
-- Array access: `arr[i]`, `arr.length`
+- Types: `number` (→ `Int`/`int` or `Nat`/`nat`), `boolean`, `string`
+- Arrays: `T[]`, `Array<T>` — access, length, `with`, `map`, `filter`, `every`, `some`, `includes`, `find`, `push`
+- Maps: `Map<K,V>` — `get`, `set`, `has`, `size`
+- Sets: `Set<T>` — `has`, `add`, `size`, iteration via `for-of`
+- Control flow: `if`/`else`, `while` (with `break`), `for-of`, `return`, `switch`
+- Functions: named, with typed parameters, inter-function calls
+- Higher-order functions: `map`, `filter`, `every`, `some` with lambda callbacks
+- Object/record types: interfaces, discriminated unions, string literal unions
+- String operations: `indexOf`, `slice`, `length`
+- Ghost state: ghost variables, assertions
+- Ternary expressions: `c ? a : b`
 
-### Supported (future)
+### Not yet supported
 
-- `for`-of loops
-- Object/record types
-- Higher-order functions (`map`, `filter`, `reduce`) with contracts
-- `async`/`await` (via Loom's monad transformers)
-- `Map`/`Set` operations
+- Array index assignment (`arr[i] = v`)
+- Compound pattern matching (nested match on multiple discriminated unions)
+- Cross-file type imports
+- `async`/`await`
 
 ### Excluded (by design)
 
@@ -109,24 +147,22 @@ LemmaScript verifies a subset of TypeScript chosen for clean, well-defined seman
 - Implicit coercions
 - `eval`, `with`, dynamic property access
 
-Excluded code lives outside the LemmaScript boundary and interacts through `@lemmafit/contracts`.
-
 ---
 
-## 5. The Number Problem
+## 6. The Number Problem
 
-JavaScript has one numeric type: IEEE 754 doubles. Lean and Loom reason about mathematical integers.
+JavaScript has one numeric type: IEEE 754 doubles. Both backends reason about mathematical integers.
 
-LemmaScript models `number` as `Int` by default. The user can annotate variables as `Nat` (`//@ type i nat`) for non-negative values like loop counters and array indices. This determines:
-- Lean type declarations (`Int` vs `Nat`)
-- Array indexing syntax (`arr[i.toNat]!` vs `arr[i]!`)
+LemmaScript models `number` as `Int`/`int` by default. The user can annotate variables as `Nat`/`nat` (`//@ type i nat`) for non-negative values like loop counters and array indices. This determines:
+- Backend type declarations (`Int` vs `Nat`, `int` vs `nat`)
+- Array indexing syntax (Lean: `arr[i.toNat]!` vs `arr[i]!`)
 - Interaction with ghost functions (which naturally take `Nat` for structural recursion)
 
 For most programs (array algorithms, business logic, state machines), integer reasoning is what you want. The safe-integer question (overflow at 2^53) is deferred — for now, we reason about mathematical integers and trust that production values stay in range.
 
 ---
 
-## 6. The Boundary: @lemmafit/contracts
+## 7. The Boundary: @lemmafit/contracts
 
 LemmaScript does not require verifying an entire codebase. It coexists with regular TypeScript through the `@lemmafit/contracts` boundary layer.
 
@@ -142,8 +178,7 @@ LemmaScript does not require verifying an entire codebase. It coexists with regu
 │    │   ┌───────────────────┐   │    │
 │    │   │  Verified TS      │   │    │
 │    │   │  (//@ annotations │   │    │
-│    │   │   + .spec.lean    │   │    │
-│    │   │   + .proof.lean)  │   │    │
+│    │   │   + specs/proofs) │   │    │
 │    │   └───────────────────┘   │    │
 │    │                           │    │
 │    └───────────────────────────┘    │
@@ -155,11 +190,11 @@ LemmaScript does not require verifying an entire codebase. It coexists with regu
 - **At the boundary**: contracts enforce that unverified TS interacts correctly with verified modules.
 - **Outside**: regular TypeScript. No verification claims.
 
-Developers adopt incrementally: start with contracts, then add `//@ ` annotations and `.spec.lean` files when the properties matter enough to prove.
+Developers adopt incrementally: start with contracts, then add `//@ ` annotations and proof files when the properties matter enough to prove.
 
 ---
 
-## 7. Building on Loom and Velvet
+## 8. Building on Loom and Velvet (Lean backend)
 
 ### What Loom provides
 
@@ -187,41 +222,41 @@ Velvet targets Lean developers writing Dafny-style verified programs. LemmaScrip
 
 ---
 
-## 8. LLM Integration
+## 9. LLM Integration
 
-When `loom_solve` can't discharge all verification conditions:
+When automated verification can't discharge all conditions:
 
 1. Unsolved goals are reported by `lsc check`.
-2. An LLM (via lean-lsp-mcp) can propose proof tactics or helper lemmas.
-3. Lean checks the LLM's proposals — the LLM is not trusted, only the kernel.
-4. Accepted proofs go into `.proof.lean` or `.spec.lean`.
+2. An LLM (via lean-lsp-mcp or direct Dafny interaction) can propose proof tactics, helper lemmas, or assert statements.
+3. The prover checks the LLM's proposals — the LLM is not trusted, only the prover.
+4. Accepted proofs go into the appropriate proof files.
 
-The LLM can help with proof tactics (in `.proof.lean`) and ghost function definitions / lemmas (in `.spec.lean`). It cannot help with missing invariants — those must be added as `//@ invariant` in the TS source and the `.def.lean` regenerated.
+The LLM can help with proof tactics and ghost definitions. It cannot help with missing invariants — those must be added as `//@ invariant` in the TS source and the artifacts regenerated.
 
 ---
 
-## 9. Relationship to Existing Work
+## 10. Relationship to Existing Work
 
 | System | Relationship |
 |--------|-------------|
-| **Verus** | Direct inspiration. Verus embeds specs in Rust and erases them. LemmaScript keeps specs beside TypeScript in Lean. Different cut, same goal. |
+| **Verus** | Direct inspiration. Verus embeds specs in Rust and erases them. LemmaScript keeps specs beside TypeScript in a prover. Different cut, same goal. |
 | **Frama-C / ACSL** | Closest architectural precedent. ACSL puts specs in C comments; Frama-C verifies them. LemmaScript's `//@ ` annotations follow this model. |
 | **JML** | External specification for Java. Similar separation of code and specs. |
-| **Dafny** | LemmaScript replaces Dafny in LemmaFit's stack for the TypeScript use case. |
-| **Velvet** | Sibling project on Loom. LemmaScript currently generates Velvet syntax. |
-| **Loom** | The foundational framework. LemmaScript is a Loom client. |
-| **RSC** | Prior art for TS verification. LemmaScript uses explicit annotations on a restricted fragment with full Lean proving power, rather than refinement type inference. |
+| **Dafny** | One of LemmaScript's verification backends. Also the model for Velvet's design. |
+| **Velvet** | Sibling project on Loom. LemmaScript currently generates Velvet syntax for the Lean backend. |
+| **Loom** | The foundational framework for the Lean backend. LemmaScript is a Loom client. |
+| **RSC** | Prior art for TS verification. LemmaScript uses explicit annotations on a restricted fragment with full proving power, rather than refinement type inference. |
 | **@lemmafit/contracts** | The interop layer between verified and unverified TypeScript. |
 | **lean-lsp-mcp** | The bridge between LLMs and Lean's proof engine. |
 
 ---
 
-## 10. Why Now
+## 11. Why Now
 
 Three things have converged:
 
 1. **Loom exists.** Building verification infrastructure from scratch requires years. Loom gives us WP calculi, SMT integration, proof automation, and machine-checked soundness as a library.
 
-2. **LLMs can fill proofs.** The interactive proof obligations that remain after SMT automation were, until recently, the exclusive domain of expert Lean users. LLMs can now handle many of these, with Lean checking their work.
+2. **LLMs can fill proofs.** The interactive proof obligations that remain after SMT automation were, until recently, the exclusive domain of expert Lean users. LLMs can now handle many of these, with the prover checking their work.
 
 3. **TypeScript is the world's most popular language** and has zero verified programming story. The market is not "TypeScript developers who want verification" (tiny, today). The market is "AI agents generating TypeScript that should be trustworthy" (enormous, growing). LemmaScript gives agents a target where correctness is provable, not just testable.

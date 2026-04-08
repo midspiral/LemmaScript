@@ -23,7 +23,7 @@ else
 fi
 
 check_lean() {
-  for f in "${FILES[@]}"; do $LSC gen "$f"; done
+  for f in "${FILES[@]}"; do $LSC gen --backend=lean "$f"; done
   lake build
 }
 
