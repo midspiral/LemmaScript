@@ -1,5 +1,5 @@
 /**
- * Transform — Typed IR → Lean IR.
+ * Transform — Typed IR → Backend IR.
  *
  * Consumes resolved types and classifications.
  * No type lookups, no string parsing, no re-inference.
@@ -74,7 +74,7 @@ const BOOL_OP_MAP: Record<string, string> = {
 function transformExpr(e: TExpr): Expr { return lowerExpr(e, null); }
 
 /**
- * Lower a typed expression to Lean IR.
+ * Lower a typed expression to Backend IR.
  *
  * When `binds` is non-null, embedded method calls are extracted into
  * `let ← ` binds (monadic lifting / selective ANF).  Lifting propagates
