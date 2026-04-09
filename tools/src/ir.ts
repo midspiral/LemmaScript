@@ -86,7 +86,7 @@ export interface FnDef {
   returnType: Ty;
   requires: Expr[];  // used by Dafny backend; Lean backend ignores
   ensures: Expr[];   // used by Dafny backend for companion lemma
-  body: Expr;
+  body?: Expr;       // absent for abstract functions
 }
 
 export interface FnMethod {

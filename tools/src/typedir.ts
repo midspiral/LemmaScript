@@ -83,6 +83,7 @@ export interface TFunction {
   requires: TExpr[];
   ensures: TExpr[];
   isPure: boolean;          // no while, no mutable let
+  isAbstract: boolean;      // //@ abstract — no body, uninterpreted
   body: TStmt[];
 }
 

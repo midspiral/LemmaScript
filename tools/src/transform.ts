@@ -934,6 +934,20 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     });
   }
 
+  // Abstract functions — bodiless declarations
+  const abstractDefs: FnDef[] = [];
+  for (const fn of mod.functions) {
+    if (!fn.isAbstract) continue;
+    abstractDefs.push({
+      kind: "def",
+      name: fn.name,
+      params: fn.params.map(p => ({ name: p.name, type: p.ty })),
+      returnType: fn.returnTy,
+      requires: [],
+      ensures: [],
+    });
+  }
+
   const base = mod.file.split("/").pop()?.replace(/\.ts$/, "") ?? "module";
 
   // Types file
@@ -954,7 +968,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
   // Def file: Velvet methods
   // Pure functions get a thin wrapper that calls Pure.fnName
   const pureDefNames = new Set(pureDefs.map(d => d.name));
-  const methods: FnMethod[] = mod.functions.map(fn => {
+  const methods: FnMethod[] = mod.functions.filter(fn => !fn.isAbstract).map(fn => {
     const ensures: Expr[] = [];
     for (const e of fn.ensures) {
       const m = ensuresToMatch(e, mod.typeDecls);
@@ -1021,7 +1035,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
       { key: "loom.semantics.termination", value: '"total"' },
       { key: "loom.semantics.choice", value: '"demonic"' },
     ],
-    decls: [...methods, ...classDecls],
+    decls: [...abstractDefs, ...methods, ...classDecls],
   };
 
   return { typesFile, defFile };

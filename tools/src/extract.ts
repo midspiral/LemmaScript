@@ -530,8 +530,22 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 // ── Function extraction ──────────────────────────────────────
 
 function extractFunction(fn: FunctionDeclaration): RawFunction {
+  const name = fn.getName()!;
   const body = fn.getBody();
-  if (!body || !Node.isBlock(body)) throw new Error(`${fn.getName()}: function body is not a block`);
+  // Abstract function (declare function + //@ abstract): no body, uninterpreted
+  if (!body || !Node.isBlock(body)) {
+    if (!fn.getFullText().includes('//@ abstract'))
+      throw new Error(`${name}: function has no body. Use //@ abstract if intentional.`);
+    return {
+      name,
+      params: fn.getParameters().map(p => ({ name: p.getName(), tsType: p.getTypeNode()?.getText() ?? "unknown" })),
+      returnType: fn.getReturnTypeNode()?.getText() ?? "unknown",
+      requires: [], ensures: [], typeAnnotations: [],
+      body: [],
+      line: fn.getStartLineNumber(),
+      isAbstract: true,
+    };
+  }
   const bodyStmts = body.getStatements();
   const annots = collectAnnotations(fn, bodyStmts);
 
@@ -544,7 +558,7 @@ function extractFunction(fn: FunctionDeclaration): RawFunction {
   }
 
   return {
-    name: fn.getName() ?? "<anonymous>",
+    name,
     params: fn.getParameters().map(p => ({ name: p.getName(), tsType: p.getTypeNode()?.getText() ?? "unknown" })),
     returnType: fn.getReturnTypeNode()?.getText() ?? "unknown",
     requires: annots.filter(a => a.kind === "requires").map(a => a.expr),
@@ -575,7 +589,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   const allFns = sourceFile.getFunctions();
   const hasVerifyDirective = allFns.some(fn => fn.getFullText().includes('//@ verify'));
   const fnsToExtract = hasVerifyDirective
-    ? allFns.filter(fn => fn.getFullText().includes('//@ verify'))
+    ? allFns.filter(fn => fn.getFullText().includes('//@ verify') || fn.getFullText().includes('//@ abstract'))
     : allFns;
 
   const functions = fnsToExtract.map(extractFunction);

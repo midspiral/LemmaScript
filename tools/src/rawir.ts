@@ -150,6 +150,7 @@ export interface RawFunction {
   typeAnnotations: { name: string; type: string }[];
   body: RawStmt[];
   line: number;
+  isAbstract?: boolean;   // //@ abstract — no body, uninterpreted
 }
 
 export interface RawClass {

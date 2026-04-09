@@ -342,18 +342,21 @@ function emitDecl(d: Decl): string {
     case "def": {
       const lines = [`function ${d.name}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
-      lines.push(`{`);
-      lines.push(emitPureExpr(d.body, 1));
-      lines.push(`}`);
-      // Companion lemma for ensures (proof target for LLM)
-      if (d.ensures.length > 0) {
-        lines.push("");
-        lines.push(`lemma ${d.name}_ensures(${paramList(d.params)})`);
-        for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
-        for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
+      if (d.body) {
         lines.push(`{`);
+        lines.push(emitPureExpr(d.body, 1));
         lines.push(`}`);
+        // Companion lemma for ensures (proof target for LLM)
+        if (d.ensures.length > 0) {
+          lines.push("");
+          lines.push(`lemma ${d.name}_ensures(${paramList(d.params)})`);
+          for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
+          for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
+          lines.push(`{`);
+          lines.push(`}`);
+        }
       }
+      // No body = abstract (uninterpreted). No braces, no companion lemma.
       return lines.join("\n");
     }
 

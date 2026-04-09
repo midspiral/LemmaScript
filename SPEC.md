@@ -28,6 +28,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | Keyword | Placement | Meaning |
 |---------|-----------|---------|
 | `backend` | Top of file | Restrict file to a specific backend (see §2.6) |
+| `abstract` | Before `declare function` | Uninterpreted function (see §2.8) |
 | `verify` | Before first statement of function/method body | Mark function for verification (see §2.5) |
 | `requires` | Before first statement of function body | Precondition |
 | `ensures` | Before first statement of function body | Postcondition (`\result` refers to return value) |
@@ -178,6 +179,33 @@ class Counter {
 **`old()` in ensures:** For mutating methods, `this.field` in `ensures` refers to the post-state. Use `old(this.field)` in the `.dfy` file to refer to the pre-state. (A `//@ old` spec expression is not yet supported.)
 
 **Lean:** Class support is Dafny-only. Use `//@ backend dafny` on files with classes.
+
+### 2.8 Abstract Functions: `//@ abstract`
+
+Functions outside the LemmaScript fragment (regex, JSON.parse, etc.) can be declared as abstract — uninterpreted functions with a type signature but no body:
+
+```typescript
+//@ abstract
+declare function parseNames(text: string): string[];
+
+//@ abstract
+declare function cleanText(text: string): string;
+```
+
+generates (Dafny):
+
+```dafny
+function parseNames(text: string): seq<string>
+function cleanText(text: string): string
+```
+
+These are legal Dafny function declarations with no body. The verifier treats them as uninterpreted — it makes no assumptions about their return values but can reason about the code that calls them.
+
+**Usage:** Use `//@ abstract` for functions that use regex, JSON.parse, crypto, or other constructs outside the LS fragment. The verified properties hold regardless of what the abstract functions return.
+
+**Axioms:** To add assumptions about abstract functions (e.g., length bounds), add `ensures` clauses in the `.dfy` file as additions.
+
+**Selective extraction:** Abstract functions are always extracted, even in brownfield mode (`//@ verify`). They serve as dependencies for verified functions.
 
 ---
 

@@ -624,7 +624,8 @@ function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Se
     requires: resolveSpecs(fn.requires, requiresCtx),
     ensures: resolveSpecs(fn.ensures, ensuresCtx),
     isPure: pureFns.has(fn.name),
-    body: resolveBlock(fn.body, baseCtx),
+    isAbstract: fn.isAbstract ?? false,
+    body: fn.isAbstract ? [] : resolveBlock(fn.body, baseCtx),
   };
 }
 
@@ -654,6 +655,7 @@ function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInf
       requires: resolveSpecs(fn.requires, requiresCtx),
       ensures: resolveSpecs(fn.ensures, ensuresCtx),
       isPure: false,  // class methods are never pure (they access this)
+      isAbstract: false,
       body: resolveBlock(fn.body, baseCtx),
     };
   });

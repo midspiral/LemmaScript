@@ -326,6 +326,7 @@ function emitDecl(d: Decl): string {
 
     case "def": {
       const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`).join(" ");
+      if (!d.body) return `-- abstract\naxiom ${d.name} ${params} : ${tyToLean(d.returnType)}`;
       return `def ${d.name} ${params} : ${tyToLean(d.returnType)} :=\n${emitPureExpr(d.body, 1)}`;
     }
 
