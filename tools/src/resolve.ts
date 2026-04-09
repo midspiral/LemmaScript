@@ -211,6 +211,9 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         else if (fn.field === "push") ty = fn.obj.ty;
       } else if (fn.kind === "field" && fn.obj.ty.kind === "string") {
         if (fn.field === "trim") ty = { kind: "string" };
+        else if (fn.field === "toLowerCase") ty = { kind: "string" };
+        else if (fn.field === "toUpperCase") ty = { kind: "string" };
+        else if (fn.field === "includes") ty = { kind: "bool" };
       }
       return { kind: "call", fn, args, ty, callKind: classifyCall(e.fn, ctx) };
     }

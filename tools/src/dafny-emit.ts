@@ -106,6 +106,9 @@ function emitExpr(e: Expr): string {
         if (e.method === "indexOf") { needsStringIndexOf = true; return `StringIndexOf(${obj}, ${args[0]})`; }
         if (e.method === "slice")   return `${obj}[${args[0]}..${args[1]}]`;
         if (e.method === "trim")    { needsStringTrim = true; return `StringTrim(${obj})`; }
+        if (e.method === "toLowerCase") { needsStringToLower = true; return `StringToLower(${obj})`; }
+        if (e.method === "toUpperCase") { needsStringToUpper = true; return `StringToUpper(${obj})`; }
+        if (e.method === "includes") { needsStringIndexOf = true; return `(StringIndexOf(${obj}, ${args[0]}) >= 0)`; }
       }
       // Map methods
       if (ty === "map") {
@@ -377,6 +380,8 @@ function emitDecl(d: Decl): string {
 
 let needsStringIndexOf = false;
 let needsStringTrim = false;
+let needsStringToLower = false;
+let needsStringToUpper = false;
 let needsJSFloorDiv = false;
 let needsStdCollections = false;
 let needsOptionType = false;
@@ -430,6 +435,28 @@ function StringTrim(s: string): string
   StringTrimRight(StringTrimLeft(s))
 }`;
 
+const STRING_TO_LOWER = `function StringToLower(s: string): string
+  ensures |StringToLower(s)| == |s|
+  decreases |s|
+{
+  if |s| == 0 then ""
+  else
+    var c := s[0];
+    var lower := if 'A' <= c <= 'Z' then (c - 'A' + 'a') as char else c;
+    [lower] + StringToLower(s[1..])
+}`;
+
+const STRING_TO_UPPER = `function StringToUpper(s: string): string
+  ensures |StringToUpper(s)| == |s|
+  decreases |s|
+{
+  if |s| == 0 then ""
+  else
+    var c := s[0];
+    var upper := if 'a' <= c <= 'z' then (c - 'a' + 'A') as char else c;
+    [upper] + StringToUpper(s[1..])
+}`;
+
 // ── Constructor and record helpers ───────────────────────────
 
 let _recordCtors = new Map<string, string>();
@@ -478,6 +505,8 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   buildRecordCtorMap(file.decls);
   needsStringIndexOf = false;
   needsStringTrim = false;
+  needsStringToLower = false;
+  needsStringToUpper = false;
   needsJSFloorDiv = false;
   needsStdCollections = false;
   needsOptionType = false;
@@ -540,6 +569,8 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   if (needsJSFloorDiv) { lines.push(""); lines.push(JS_FLOOR_DIV); }
   if (needsStringIndexOf) { lines.push(""); lines.push(PREAMBLES.StringIndexOf); }
   if (needsStringTrim) { lines.push(""); lines.push(STRING_TRIM); }
+  if (needsStringToLower) { lines.push(""); lines.push(STRING_TO_LOWER); }
+  if (needsStringToUpper) { lines.push(""); lines.push(STRING_TO_UPPER); }
   lines.push(...declLines);
   return lines.join("\n") + "\n";
 }

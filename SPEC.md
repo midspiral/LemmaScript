@@ -162,7 +162,10 @@ No normalization of operators. Both backends handle all comparison directions.
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
 | `s.slice(start, end)` | `JSString.slice s start end` | `s[start..end]` |
-| `s.trim()` | — (not yet implemented) | `StringTrim(s)` |
+| `s.trim()` | — (Lean library TODO) | `StringTrim(s)` |
+| `s.toLowerCase()` | — (Lean library TODO) | `StringToLower(s)` |
+| `s.toUpperCase()` | — (Lean library TODO) | `StringToUpper(s)` |
+| `s.includes(sub)` | — (Lean library TODO) | `StringIndexOf(s, sub) >= 0` |
 | `s.length` | `s.length` | `\|s\|` |
 | `arr.map((x) => e)` | `arr.map (fun x => e)` | `Seq.Map((x) => e, arr)` |
 | `arr.filter((x) => e)` | `arr.filter (fun x => e)` | `Seq.Filter((x) => e, arr)` |
