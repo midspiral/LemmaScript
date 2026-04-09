@@ -121,6 +121,7 @@ function emitExpr(e: Expr): string {
       if (ty === "set") {
         if (e.method === "has") return `(${args[0]} in ${obj})`;
         if (e.method === "add") return `(${obj} + {${args[0]}})`;
+        if (e.method === "delete") return `(${obj} - {${args[0]}})`;
       }
       throw new Error(`Unsupported Dafny method call: .${e.method}() on ${ty}`);
     }

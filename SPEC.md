@@ -190,6 +190,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `new Set<T>()` | `Std.HashSet.empty` | `{}` |
 | `s.has(x)` | `s.contains x` | `(x in s)` |
 | `s.add(x)` | `s := s.insert x` | `s := (s + {x})` |
+| `s.delete(x)` | `s := s.erase x` | `s := (s - {x})` |
 | `s.size` | `s.size` | `\|s\|` |
 | `for (const x of s)` | `.toArray` + for-in | `SetToSeq` + while |
 | `v !== undefined` | `if h : v.isSome then ... else ...` | `match v { case Some(...) => ... }` |
@@ -318,6 +319,7 @@ The transform uses two strategies for translating `receiver.method(args)`:
 | `m.set(k, v)` | `mapSet` | `m.insert k v` | `m[k := v]` |
 | `s.has(x)` | `setHas` | `s.contains x` | `(x in s)` |
 | `s.add(x)` | `setAdd` | `s.insert x` | `(s + {x})` |
+| `s.delete(x)` | `setDelete` | `s.erase x` | `(s - {x})` |
 
 The transform checks helper-function methods first, then dot-notation methods. If neither matches, it errors.
 
@@ -325,7 +327,7 @@ The transform checks helper-function methods first, then dot-notation methods. I
 
 **Map and Set** (`Map<K,V>`, `Set<T>`) are immutable types in both backends. `const` declarations of collection types are automatically promoted to mutable bindings, since TS mutates in place but the backends require reassignment.
 
-Mutating calls (`m.set(k, v)`, `s.add(x)`) are transformed into reassignments:
+Mutating calls (`m.set(k, v)`, `s.add(x)`, `s.delete(x)`) are transformed into reassignments:
 ```typescript
 inDegree.set(id, 0);    // → Lean: inDegree := inDegree.insert id 0
                           // → Dafny: inDegree := inDegree[id := 0];
