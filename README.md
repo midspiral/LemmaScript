@@ -6,7 +6,9 @@ See [SPEC.md](SPEC.md) and [DESIGN.md](DESIGN.md).
 
 This is a **Tech Preview**: the core idea is there, but support, semantics, and ergonomics are still evolving.
 
-## Case Studies
+## Examples and Case Studies
+
+See [examples/](examples/).
 
 Each case study is verified in both Lean 4 and Dafny from the same annotated TypeScript source.
 
@@ -89,17 +91,3 @@ lake build
 | `foo.def.lean` | Yes | Velvet method definitions |
 | `foo.proof.lean` | No | `prove_correct` with proof tactics |
 
-## Examples
-
-See [examples/](examples/):
-
-| Example | Pattern |
-|---------|---------|
-| `binarySearch` | Array search, break, Int arithmetic |
-| `linearSearch` | Loop with break, Nat index |
-| `arraySum` | Accumulator, recursive ghost function |
-| `transition` | State machine, enum ADT, inter-method call |
-| `packet` | Discriminated union with data, if-chain → match |
-| `isSorted` | Loop with break, existential in invariant |
-| `maxElement` | If-without-else in loop |
-| `arrayContains` | For-of loop, boolean flag |
