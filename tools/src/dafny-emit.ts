@@ -177,6 +177,7 @@ function emitExpr(e: Expr): string {
       if (e.fn === "SetToSeq") { needsSetToSeq = true; return `SetToSeq(${args.join(", ")})`; }
       if (e.fn === "JSFloorDiv") needsJSFloorDiv = true;
       if (e.fn === "CeilReal") needsCeilReal = true;
+      if (e.fn === "FloorReal") needsFloorReal = true;
       return `${e.fn}(${args.join(", ")})`;
     }
 
@@ -415,6 +416,7 @@ let needsStringToLower = false;
 let needsStringToUpper = false;
 let needsJSFloorDiv = false;
 let needsCeilReal = false;
+let needsFloorReal = false;
 let needsStdCollections = false;
 let needsOptionType = false;
 let needsSetToSeq = false;
@@ -428,6 +430,11 @@ const JS_FLOOR_DIV = `function JSFloorDiv(a: int, b: int): int
   else
     if a <= 0 then (-a) / (-b)
     else -((a - 1) / (-b)) - 1
+}`;
+
+const FLOOR_REAL = `function FloorReal(x: real): int
+{
+  x.Floor
 }`;
 
 const CEIL_REAL = `function CeilReal(x: real): int
@@ -547,6 +554,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   needsStringToUpper = false;
   needsJSFloorDiv = false;
   needsCeilReal = false;
+  needsFloorReal = false;
   needsStdCollections = false;
   needsOptionType = false;
   needsSetToSeq = false;
@@ -607,6 +615,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   }
   if (needsJSFloorDiv) { lines.push(""); lines.push(JS_FLOOR_DIV); }
   if (needsCeilReal) { lines.push(""); lines.push(CEIL_REAL); }
+  if (needsFloorReal) { lines.push(""); lines.push(FLOOR_REAL); }
   if (needsStringIndexOf) { lines.push(""); lines.push(PREAMBLES.StringIndexOf); }
   if (needsStringTrim) { lines.push(""); lines.push(STRING_TRIM); }
   if (needsStringToLower) { lines.push(""); lines.push(STRING_TO_LOWER); }
