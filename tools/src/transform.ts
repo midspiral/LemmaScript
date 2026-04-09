@@ -988,6 +988,30 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     };
   });
 
+  // Class declarations
+  const classDecls: Decl[] = (mod.classes ?? []).map(cls => {
+    const classMethods: FnMethod[] = cls.methods.map(fn => {
+      const ensures: Expr[] = fn.ensures.map(transformExpr);
+      _forofCounters.clear();
+      const body = transformStmts(fn.body, mod.typeDecls);
+      return {
+        kind: "method" as const,
+        name: fn.name,
+        params: fn.params.map(p => ({ name: p.name, type: p.ty })),
+        returnType: fn.returnTy,
+        requires: fn.requires.map(transformExpr),
+        ensures,
+        body,
+      };
+    });
+    return {
+      kind: "class" as const,
+      name: cls.name,
+      fields: cls.fields.map(f => ({ name: f.name, type: f.ty })),
+      methods: classMethods,
+    };
+  });
+
   const defImport = specImport ?? (typesFile ? `«${base}.types»` : null);
   const defBaseImports: string[] = defImport ? [defImport] : ["LemmaScript"];
   const defFile: Module = {
@@ -997,7 +1021,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
       { key: "loom.semantics.termination", value: '"total"' },
       { key: "loom.semantics.choice", value: '"demonic"' },
     ],
-    decls: methods,
+    decls: [...methods, ...classDecls],
   };
 
   return { typesFile, defFile };

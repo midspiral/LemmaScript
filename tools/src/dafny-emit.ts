@@ -33,7 +33,7 @@ const DAFNY_KEYWORDS = new Set([
   "match", "case", "return", "break", "continue",
   "requires", "ensures", "invariant", "decreases",
   "forall", "exists", "old", "fresh", "allocated",
-  "true", "false", "null", "this", "new",
+  "true", "false", "null", /*"this",*/ "new",
   "datatype", "type", "const", "ghost", "static",
   "reads", "modifies", "assert", "assume", "print",
   "by", "calc", "reveal",
@@ -363,6 +363,24 @@ function emitDecl(d: Decl): string {
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
       lines.push(`{`);
       lines.push(emitStmts(d.body, 1));
+      lines.push(`}`);
+      return lines.join("\n");
+    }
+
+    case "class": {
+      const lines = [`class ${d.name} {`];
+      for (const f of d.fields) {
+        lines.push(`  var ${escapeName(f.name)}: ${tyToDafny(f.type)}`);
+      }
+      if (d.fields.length > 0 && d.methods.length > 0) lines.push("");
+      for (const m of d.methods) {
+        lines.push(`  method ${m.name}(${paramList(m.params)}) returns (res: ${tyToDafny(m.returnType)})`);
+        for (const r of m.requires) lines.push(`    requires ${emitExpr(r)}`);
+        for (const e of m.ensures) lines.push(`    ensures ${emitExpr(e)}`);
+        lines.push(`  {`);
+        lines.push(emitStmts(m.body, 2));
+        lines.push(`  }`);
+      }
       lines.push(`}`);
       return lines.join("\n");
     }

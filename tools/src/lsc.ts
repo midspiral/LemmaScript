@@ -52,6 +52,13 @@ function main() {
   const project = new Project({ compilerOptions: { strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"] } });
   const sourceFile = project.addSourceFileAtPath(absPath);
 
+  // Check //@ backend directive — skip if backend doesn't match
+  const backendDirective = sourceFile.getFullText().match(/\/\/@ backend (\w+)/);
+  if (backendDirective && backendDirective[1] !== backend) {
+    console.log(`Skipped: ${path.basename(filePath)} (//@ backend ${backendDirective[1]}, current: ${backend})`);
+    return;
+  }
+
   // Extract: ts-morph → Raw IR
   const raw = extractModule(sourceFile);
 

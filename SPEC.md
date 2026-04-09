@@ -27,7 +27,8 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 
 | Keyword | Placement | Meaning |
 |---------|-----------|---------|
-| `verify` | Before first statement of function body | Mark function for verification (see §2.5) |
+| `backend` | Top of file | Restrict file to a specific backend (see §2.6) |
+| `verify` | Before first statement of function/method body | Mark function for verification (see §2.5) |
 | `requires` | Before first statement of function body | Precondition |
 | `ensures` | Before first statement of function body | Postcondition (`\result` refers to return value) |
 | `invariant` | Before first statement of loop body | Loop invariant |
@@ -123,6 +124,60 @@ function isEmptyResult(result: string): boolean {
 **Behavior:** If any function in the file has `//@ verify`, `lsc` switches to selective mode and only extracts functions marked with `//@ verify`. Functions without it are silently skipped. Type and interface declarations are always extracted (they may be needed by verified functions).
 
 If no function in the file has `//@ verify`, all functions are extracted as before. This keeps existing LemmaScript projects (where every function is in-fragment) working without changes.
+
+### 2.6 Backend Restriction: `//@ backend`
+
+A file-level directive that restricts the file to a specific backend:
+
+```typescript
+//@ backend dafny
+```
+
+When `lsc` runs with a different backend (e.g., `--backend=lean`), the file is silently skipped. This is used for features only supported in one backend, such as class methods (Dafny only).
+
+### 2.7 Classes
+
+Class methods can be verified with `//@ verify`. The class fields become Dafny class fields, and `this.field` references work directly.
+
+```typescript
+export class Counter {
+  private count: number;
+  private max: number;
+
+  increment(): number {
+    //@ verify
+    //@ requires this.count < this.max
+    //@ ensures this.count <= this.max
+    const old = this.count;
+    this.count = this.count + 1;
+    return old;
+  }
+}
+```
+
+generates (Dafny):
+
+```dafny
+class Counter {
+  var count: int
+  var max: int
+
+  method increment() returns (res: int)
+    requires (this.count < this.max)
+    ensures (this.count <= this.max)
+  {
+    var old_ := this.count;
+    this.count := (this.count + 1);
+    return old_;
+  }
+}
+```
+
+**`modifies this` / `reads this`:** Not generated automatically. Add as proof-level additions in the `.dfy` file. Dafny will report an error if they're missing.
+
+**`old()` in ensures:** For mutating methods, `this.field` in `ensures` refers to the post-state. Use `old(this.field)` in the `.dfy` file to refer to the pre-state. (A `//@ old` spec expression is not yet supported.)
+
+**Lean:** Class support is Dafny-only. Use `//@ backend dafny` on files with classes.
 
 ---
 

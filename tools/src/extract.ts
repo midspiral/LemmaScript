@@ -7,7 +7,7 @@
 
 import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget } from "ts-morph";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
-import type { RawExpr, RawStmt, RawFunction, RawModule, RawGhostLet, RawGhostAssign } from "./rawir.js";
+import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawGhostLet, RawGhostAssign } from "./rawir.js";
 
 // ── Expression extraction ────────────────────────────────────
 
@@ -29,6 +29,11 @@ function extractExpr(node: Expression): RawExpr {
   // Identifier
   if (Node.isIdentifier(node)) {
     return { kind: "var", name: node.getText() };
+  }
+
+  // this
+  if (node.getKind() === SyntaxKind.ThisKeyword) {
+    return { kind: "var", name: "this" };
   }
 
   // Property access: x.foo
@@ -593,10 +598,27 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     for (const p of fn.getParameters()) resolveType(p.getType(), p);
   }
 
+  // Extract classes with //@ verify methods
+  const classes: RawClass[] = [];
+  for (const cls of sourceFile.getClasses()) {
+    const methods: RawFunction[] = [];
+    for (const method of cls.getMethods()) {
+      if (!method.getFullText().includes('//@ verify')) continue;
+      methods.push(extractFunction(method as any));
+    }
+    if (methods.length === 0) continue;
+    const fields: { name: string; tsType: string }[] = [];
+    for (const prop of cls.getProperties()) {
+      fields.push({ name: prop.getName(), tsType: typeToString(prop.getType()) });
+    }
+    classes.push({ name: cls.getName() ?? "Anonymous", fields, methods });
+  }
+
   return {
     file: sourceFile.getFilePath(),
     typeDecls,
     functions,
+    classes,
   };
 }
 

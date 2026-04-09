@@ -628,11 +628,45 @@ function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Se
   };
 }
 
+function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInfo[], pureFns: Set<string>): import("./typedir.js").TClass {
+  const fields = cls.fields.map(f => ({ name: f.name, ty: parseTsType(f.tsType) }));
+  // Create a synthetic record type for 'this' so field access resolves
+  const thisType: Ty = { kind: "user", name: cls.name };
+  const thisDecl: TypeDeclInfo = { name: cls.name, kind: "record", fields: cls.fields.map(f => ({ name: f.name, tsType: f.tsType })) };
+  const allTypeDecls = [...typeDecls, thisDecl];
+
+  const methods = cls.methods.map(fn => {
+    // Add 'this' to the environment
+    const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
+    const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: resolveTsType(p.tsType, overrides, p.name) }));
+    const returnTy = resolveTsType(fn.returnType, overrides, "\\result");
+
+    let env: Env | null = null;
+    env = extend(env, "this", thisType);
+    for (const p of params) env = extend(env, p.name, p.ty);
+
+    const baseCtx: Ctx = { env, typeDecls: allTypeDecls, overrides, allowResult: false, returnTy, pureFns, inSpec: false, inLambda: false };
+    const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
+    const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
+
+    return {
+      name: fn.name, params, returnTy,
+      requires: resolveSpecs(fn.requires, requiresCtx),
+      ensures: resolveSpecs(fn.ensures, ensuresCtx),
+      isPure: false,  // class methods are never pure (they access this)
+      body: resolveBlock(fn.body, baseCtx),
+    };
+  });
+
+  return { name: cls.name, fields, methods };
+}
+
 export function resolveModule(raw: RawModule): TModule {
   const pureFns = computePureFns(raw.functions);
   return {
     file: raw.file,
     typeDecls: raw.typeDecls,
     functions: raw.functions.map(fn => resolveFunction(fn, raw.typeDecls, pureFns)),
+    classes: (raw.classes ?? []).map(cls => resolveClass(cls, raw.typeDecls, pureFns)),
   };
 }

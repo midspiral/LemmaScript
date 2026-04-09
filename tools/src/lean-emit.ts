@@ -345,6 +345,9 @@ function emitDecl(d: Decl): string {
       lines.push("", `end ${d.name}`);
       return lines.join("\n");
     }
+
+    case "class":
+      throw new Error(`Lean class support not yet implemented: ${d.name}`);
   }
 }
 

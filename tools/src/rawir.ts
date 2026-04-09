@@ -152,8 +152,15 @@ export interface RawFunction {
   line: number;
 }
 
+export interface RawClass {
+  name: string;
+  fields: { name: string; tsType: string }[];
+  methods: RawFunction[];
+}
+
 export interface RawModule {
   file: string;
   typeDecls: import("./types.js").TypeDeclInfo[];
   functions: RawFunction[];
+  classes: RawClass[];
 }
