@@ -8,10 +8,11 @@ This is a **Tech Preview**: the core idea is there, but support, semantics, and 
 
 ## Examples and Case Studies
 
-See the [examples](examples/).
+Each example and case study is verified in both Lean 4 and Dafny from the same annotated TypeScript source.
 
-See the case study below. Each case study is verified in both Lean 4 and Dafny from the same annotated TypeScript source.
+See the internal [examples](examples).
 
+See the external case studies:
 - **[colorwheel-lemmascript](https://github.com/midspiral/colorwheel-lemmascript/)** — verified color palette generator with mood + harmony constraints. 31 Lean proofs + 18 behavioral properties, 115 Dafny lemmas (invariant preservation, commutativity, NoOp completeness).
 - **[clear-split-lemmascript](https://github.com/midspiral/clear-split-lemmascript/)** — greenfield verified expense splitting web app. Conservation theorem, invariant preservation, delta laws — all proven in both Lean (no sorry) and Dafny (56 lemmas).
 - **[node-casbin-lemmascript](https://github.com/midspiral/node-casbin-lemmascript/blob/lemmascript/README_LemmaScript.md)** — brownfield verification of [node-casbin](https://github.com/casbin/node-casbin). 5 functions verified, 217 existing tests pass. End-to-end correctness and order independence for all 4 effect modes in both Lean and Dafny (39 lemmas).
