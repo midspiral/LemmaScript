@@ -712,6 +712,23 @@ function transformTypeDecl(d: TypeDeclInfo): Decl {
 
 // ── Helpers ──────────────────────────────────────────────────
 
+/** Find parameter names that are reassigned anywhere in the body. */
+function findReassignedNames(stmts: TStmt[], names: Set<string>): Set<string> {
+  const found = new Set<string>();
+  function scan(stmts: TStmt[]) {
+    for (const s of stmts) {
+      if (s.kind === "assign" && names.has(s.target)) found.add(s.target);
+      if (s.kind === "ghostAssign" && names.has(s.target)) found.add(s.target);
+      if (s.kind === "if") { scan(s.then); scan(s.else); }
+      if (s.kind === "while") scan(s.body);
+      if (s.kind === "forof") scan(s.body);
+      if (s.kind === "switch") { for (const c of s.cases) scan(c.body); scan(s.defaultBody); }
+    }
+  }
+  scan(stmts);
+  return found;
+}
+
 /** Replace all occurrences of a variable name with a new expression. */
 function replaceVar(e: Expr, name: string, replacement: Expr): Expr {
   const r = (x: Expr) => replaceVar(x, name, replacement);
@@ -803,9 +820,19 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     }
 
     _forofCounters.clear();
-    const body = pureDefNames.has(fn.name)
+    let body = pureDefNames.has(fn.name)
       ? [{ kind: "return" as const, value: { kind: "app" as const, fn: `Pure.${fn.name}`, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) } }]
       : transformStmts(fn.body, mod.typeDecls);
+
+    // Shadow reassigned parameters with mutable locals
+    const paramNames = new Set(fn.params.map(p => p.name));
+    const reassigned = findReassignedNames(fn.body, paramNames);
+    if (reassigned.size > 0) {
+      const shadows: Stmt[] = fn.params
+        .filter(p => reassigned.has(p.name))
+        .map(p => ({ kind: "let" as const, name: p.name, type: p.ty, mutable: true, value: { kind: "var" as const, name: p.name } }));
+      body = [...shadows, ...body];
+    }
 
     return {
       kind: "method" as const,
