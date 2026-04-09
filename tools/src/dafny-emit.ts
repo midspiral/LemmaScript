@@ -87,6 +87,7 @@ function emitExpr(e: Expr): string {
         if (e.method === "with")     return `${obj}[${args[0]} := ${args[1]}]`;
         if (e.method === "includes") return `(${args[0]} in ${obj})`;
         if (e.method === "push")     return `(${obj} + [${args[0]}])`;
+        if (e.method === "slice")    return `${obj}[${args[0]}..]`;
         if (e.method === "map")    { needsStdCollections = true; return `Seq.Map(${args[0]}, ${obj})`; }
         if (e.method === "filter") { needsStdCollections = true; return `Seq.Filter(${args[0]}, ${obj})`; }
         if (e.method === "every")  { needsStdCollections = true; return `Seq.All(${obj}, ${args[0]})`; }
@@ -166,6 +167,7 @@ function emitExpr(e: Expr): string {
     case "field": {
       const obj = emitExpr(e.obj);
       if (e.field === "size" || e.field === "length" || e.field === "collectionSize") return `|${obj}|`;
+      if (e.field === "keys") return `${obj}.Keys`;
       if (e.field === "toNat") return obj;
       return `${obj}.${escapeName(e.field)}`;
     }
@@ -523,6 +525,9 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   var remaining := s;
   res := [];
   while remaining != {}
+    invariant remaining <= s
+    invariant forall x :: x in res <==> (x in s && x !in remaining)
+    invariant |res| + |remaining| == |s|
     decreases remaining
   {
     var x :| x in remaining;

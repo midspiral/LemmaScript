@@ -210,6 +210,19 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           ],
         };
       }
+      // || on optional → match Some/None with default
+      if (e.op === "||" && e.left.ty.kind === "optional") {
+        const optExpr = lowerExpr(e.left, binds);
+        const defaultExpr = lowerExpr(e.right, binds);
+        const bound = matchBinder("value");
+        return {
+          kind: "match", scrutinee: optExpr,
+          arms: [
+            { pattern: `.some ${bound}`, body: { kind: "var", name: bound } },
+            { pattern: ".none", body: defaultExpr },
+          ],
+        };
+      }
       return {
         kind: "binop",
         op: OP_MAP[e.op] ?? e.op,
@@ -372,23 +385,55 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
     }
     // Transform for-of → for-in over range
     if (s.kind === "forof") {
+      const varName = s.names[0];
+      const varTy = s.nameTypes[0] ?? { kind: "unknown" as const };
       let iterExpr = transformExpr(s.iterable);
+
+      // Map iteration: for (const [k, v] of map) → iterate keys, look up values
+      if (s.names.length >= 2 && s.iterable.ty.kind === "map") {
+        const keyName = s.names[0], valueName = s.names[1];
+        const keyTy = s.nameTypes[0] ?? { kind: "unknown" as const };
+        const valueTy = s.nameTypes[1] ?? { kind: "unknown" as const };
+        const keysSeqName = `_${keyName}_keys`;
+        const convExpr: Expr = { kind: "app", fn: "SetToSeq", args: [{ kind: "field", obj: iterExpr, field: "keys" }] };
+        result.push({ kind: "let", name: keysSeqName, type: { kind: "array", elem: keyTy }, mutable: false, value: convExpr });
+        const keysVar: Expr = { kind: "var", name: keysSeqName };
+        const count = _forofCounters.get(keyName) ?? 0;
+        _forofCounters.set(keyName, count + 1);
+        const suffix = count === 0 ? "" : `${count + 1}`;
+        const idxName = `_${keyName}_idx${suffix}`;
+        const idx: Expr = { kind: "var", name: idxName };
+        const arrSize: Expr = { kind: "field", obj: keysVar, field: "size" };
+        const bodyStmts = transformStmts(s.body, typeDecls);
+        const letKey: Stmt = { kind: "let", name: keyName, type: keyTy, mutable: false, value: { kind: "index", arr: keysVar, idx } };
+        const letVal: Stmt = { kind: "let", name: valueName, type: valueTy, mutable: false,
+          value: { kind: "methodCall", obj: iterExpr, objTy: s.iterable.ty, method: "getDirect", args: [{ kind: "var", name: keyName }], monadic: false } };
+        const boundInv: Expr = { kind: "binop", op: "≤", left: idx, right: arrSize };
+        result.push({
+          kind: "forin", idx: idxName, bound: arrSize,
+          invariants: [boundInv, ...s.invariants.map(transformExpr)],
+          body: [letKey, letVal, ...bodyStmts],
+        });
+        i++;
+        continue;
+      }
+
       // Sets aren't indexable — bind SetToSeq to a variable for iteration
       if (s.iterable.ty.kind === "set") {
-        const seqName = `_${s.varName}_seq`;
+        const seqName = `_${varName}_seq`;
         const convExpr: Expr = { kind: "app", fn: "SetToSeq", args: [iterExpr] };
-        const elemTy: Ty = s.varTy.kind !== "unknown" ? s.varTy : { kind: "string" };
+        const elemTy: Ty = varTy.kind !== "unknown" ? varTy : { kind: "string" };
         result.push({ kind: "let", name: seqName, type: { kind: "array", elem: elemTy }, mutable: false, value: convExpr });
         iterExpr = { kind: "var", name: seqName };
       }
-      const count = _forofCounters.get(s.varName) ?? 0;
-      _forofCounters.set(s.varName, count + 1);
+      const count = _forofCounters.get(varName) ?? 0;
+      _forofCounters.set(varName, count + 1);
       const suffix = count === 0 ? "" : `${count + 1}`;
-      const idxName = `_${s.varName}_idx${suffix}`;
+      const idxName = `_${varName}_idx${suffix}`;
       const idx: Expr = { kind: "var", name: idxName };
       const arrSize: Expr = { kind: "field", obj: iterExpr, field: "size" };
       const bodyStmts = transformStmts(s.body, typeDecls);
-      const letElem: Stmt = { kind: "let", name: s.varName, type: s.varTy, mutable: false, value: { kind: "index", arr: iterExpr, idx } };
+      const letElem: Stmt = { kind: "let", name: varName, type: varTy, mutable: false, value: { kind: "index", arr: iterExpr, idx } };
       // Auto-add bound invariant: idx ≤ bound (always true for range loops)
       const boundInv: Expr = { kind: "binop", op: "≤", left: idx, right: arrSize };
       result.push({
@@ -419,6 +464,65 @@ function liftMethodCalls(e: TExpr): { binds: Stmt[]; expr: Expr } {
 function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
   switch (s.kind) {
     case "let": {
+      // arr.shift()! → let x = arr[0]; arr = arr[1..]
+      const init = s.init.kind === "call" ? s.init : undefined;
+      if (init && init.fn.kind === "field" && init.fn.field === "shift" && init.fn.obj.ty.kind === "array") {
+        const arrName = init.fn.obj.kind === "var" ? init.fn.obj.name : undefined;
+        if (arrName) {
+          const arrVar: Expr = { kind: "var", name: arrName };
+          const letHead: Stmt = { kind: "let", name: s.name, type: s.ty, mutable: s.mutable,
+            value: { kind: "index", arr: arrVar, idx: { kind: "num", value: 0 } } };
+          const sliceTail: Stmt = { kind: "assign", target: arrName,
+            value: { kind: "methodCall", obj: arrVar, objTy: init.fn.obj.ty, method: "slice", args: [{ kind: "num", value: 1 }], monadic: false } };
+          return [letHead, sliceTail];
+        }
+      }
+      // new Map(arr.map(n => [n.field, n])) → let m = map[]; for (n of arr) m[n.field] := n
+      if (init && init.fn.kind === "var" && init.fn.name === "__mapFromArray" &&
+          init.args.length === 1 && init.args[0].kind === "call" &&
+          init.args[0].fn.kind === "field" && init.args[0].fn.field === "map" &&
+          init.args[0].args.length === 1 && init.args[0].args[0].kind === "lambda") {
+        const arrExpr = init.args[0].fn.obj;
+        const lam = init.args[0].args[0];
+        const param = lam.params[0]?.name ?? "_";
+        const lamBody = Array.isArray(lam.body) ? lam.body : [{ kind: "return" as const, value: lam.body }];
+        const retStmt = lamBody.find(b => b.kind === "return") as { kind: "return"; value: TExpr } | undefined;
+        if (retStmt && retStmt.value.kind === "arrayLiteral" && retStmt.value.elems.length === 2) {
+          const keyExpr = retStmt.value.elems[0];
+          const valExpr = retStmt.value.elems[1];
+          const arrIR = transformExpr(arrExpr);
+          const arrTy = arrExpr.ty;
+          const elemTy = arrTy.kind === "array" ? arrTy.elem : { kind: "unknown" as const };
+          const idxName = `_${param}_idx`;
+          const idx: Expr = { kind: "var", name: idxName };
+          const arrSize: Expr = { kind: "field", obj: arrIR, field: "size" };
+          const elemVar: Expr = { kind: "var", name: param };
+          const keyIR = transformExpr(keyExpr);
+          const valIR = transformExpr(valExpr);
+          const mapSet: Expr = { kind: "methodCall", obj: { kind: "var", name: s.name }, objTy: s.ty, method: "set", args: [keyIR, valIR], monadic: false };
+          // Auto-invariant: all processed elements' keys are in the map
+          const kVar: Expr = { kind: "var", name: "ki" };
+          const mapHasKey: Expr = {
+            kind: "implies",
+            premises: [
+              { kind: "binop", op: "≥", left: kVar, right: { kind: "num", value: 0 } },
+              { kind: "binop", op: "<", left: kVar, right: idx },
+            ],
+            conclusion: { kind: "methodCall", obj: { kind: "var", name: s.name }, objTy: s.ty, method: "has", args: [keyIR.kind === "field" ? { kind: "field", obj: { kind: "index", arr: arrIR, idx: kVar }, field: (keyIR as any).field } : keyIR], monadic: false },
+          };
+          const autoInv: Expr = { kind: "forall", var: "ki", type: { kind: "int" }, body: mapHasKey };
+          const stmts: Stmt[] = [
+            { kind: "let", name: s.name, type: s.ty, mutable: true, value: { kind: "emptyMap" } },
+            { kind: "forin", idx: idxName, bound: arrSize,
+              invariants: [{ kind: "binop", op: "≤", left: idx, right: arrSize }, autoInv],
+              body: [
+                { kind: "let", name: param, type: elemTy, mutable: false, value: { kind: "index", arr: arrIR, idx } },
+                { kind: "assign", target: s.name, value: mapSet },
+              ] },
+          ];
+          return stmts;
+        }
+      }
       const { binds, expr } = liftMethodCalls(s.init);
       return [...binds, { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: expr }];
     }
@@ -439,14 +543,35 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     case "continue": return [{ kind: "continue" }];
     case "expr": {
       // Mutating collection call: m.set(k, v) → m := m.set(k, v)
-      // Same for s.add(x) on sets
+      // Same for s.add(x) on sets, arr.push(x)
       if (s.expr.kind === "call" && s.expr.fn.kind === "field" &&
           s.expr.fn.obj.kind === "var" &&
-          (s.expr.fn.obj.ty.kind === "map" || s.expr.fn.obj.ty.kind === "set") &&
-          (s.expr.fn.field === "set" || s.expr.fn.field === "add")) {
-        const receiver = s.expr.fn.obj.name;
+          ((s.expr.fn.obj.ty.kind === "map" || s.expr.fn.obj.ty.kind === "set") &&
+           (s.expr.fn.field === "set" || s.expr.fn.field === "add")) ||
+          (s.expr.kind === "call" && s.expr.fn.kind === "field" &&
+           s.expr.fn.obj.kind === "var" && s.expr.fn.obj.ty.kind === "array" &&
+           s.expr.fn.field === "push")) {
+        const receiver = (s.expr as any).fn.obj.name;
         const { binds, expr } = liftMethodCalls(s.expr);
         return [...binds, { kind: "assign", target: receiver, value: expr }];
+      }
+      // Optional chaining on map.get: m.get(k)?.push(v) → if k in m { m[k] := m[k] + [v] }
+      if (s.expr.kind === "call" && s.expr.fn.kind === "field" &&
+          s.expr.fn.obj.kind === "call" && s.expr.fn.obj.fn.kind === "field" &&
+          s.expr.fn.obj.fn.obj.ty.kind === "map" && s.expr.fn.obj.fn.field === "get" &&
+          s.expr.fn.field === "push") {
+        const mapExpr = s.expr.fn.obj.fn.obj;
+        const mapName = mapExpr.kind === "var" ? mapExpr.name : undefined;
+        const keyExpr = lowerExpr(s.expr.fn.obj.args[0], null);
+        const pushArg = lowerExpr(s.expr.args[0], null);
+        if (mapName) {
+          const mapVar: Expr = { kind: "var", name: mapName };
+          const directGet: Expr = { kind: "methodCall", obj: mapVar, objTy: mapExpr.ty, method: "getDirect", args: [keyExpr], monadic: false };
+          const pushed: Expr = { kind: "methodCall", obj: directGet, objTy: (mapExpr.ty as any).value, method: "push", args: [pushArg], monadic: false };
+          const updated: Expr = { kind: "methodCall", obj: mapVar, objTy: mapExpr.ty, method: "set", args: [keyExpr, pushed], monadic: false };
+          const hasCond: Expr = { kind: "methodCall", obj: mapVar, objTy: mapExpr.ty, method: "has", args: [keyExpr], monadic: false };
+          return [{ kind: "if", cond: hasCond, then: [{ kind: "assign", target: mapName, value: updated }], else: [] }];
+        }
       }
       const { binds, expr } = liftMethodCalls(s.expr);
       return [...binds, { kind: "assign", target: "_", value: expr }];
@@ -467,6 +592,9 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
         doneWith: s.doneWith ? transformExpr(s.doneWith) : null,
         body: transformStmts(s.body, typeDecls),
       }];
+
+    case "throw":
+      return [{ kind: "assert", expr: { kind: "bool", value: false } }];
 
     case "forof":
       throw new Error("forof should be transformed to forin (range loop) in transformStmts");

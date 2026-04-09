@@ -25,6 +25,7 @@ export type RawExpr =
   | { kind: "lambda"; params: { name: string; tsType?: string }[]; body: RawExpr | RawStmt[] }
   | { kind: "conditional"; cond: RawExpr; then: RawExpr; else: RawExpr }  // ternary ? :
   | { kind: "emptyCollection"; collectionType: "Map" | "Set"; tsType: string }  // new Map<K,V>() / new Set<T>()
+  | { kind: "nonNull"; expr: RawExpr }   // expr! (non-null assertion)
   // Spec-only (from //@ annotations, produced by specparser):
   | { kind: "result" }                                    // \result
   | { kind: "forall"; var: string; varType: "nat" | "int"; body: RawExpr }
@@ -98,10 +99,15 @@ export interface RawSwitch {
 
 export interface RawForOf {
   kind: "forof";
-  varName: string;
+  names: string[];        // single name or destructured: [k, v, ...]
   iterable: RawExpr;
   invariants: string[];  doneWith: string | null;
   body: RawStmt[];
+  line: number;
+}
+
+export interface RawThrow {
+  kind: "throw";
   line: number;
 }
 
@@ -126,7 +132,7 @@ export interface RawAssert {
   line: number;
 }
 
-export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawContinue | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf | RawGhostLet | RawGhostAssign | RawAssert;
+export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawContinue | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf | RawThrow | RawGhostLet | RawGhostAssign | RawAssert;
 
 // ── Top-level ────────────────────────────────────────────────
 

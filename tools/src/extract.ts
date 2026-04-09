@@ -128,7 +128,12 @@ function extractExpr(node: Expression): RawExpr {
     return { kind: "conditional", cond: extractExpr(node.getCondition()), then: extractExpr(node.getWhenTrue()), else: extractExpr(node.getWhenFalse()) };
   }
 
-  // new Map<K,V>() / new Set<T>()
+  // Non-null assertion: expr!
+  if (Node.isNonNullExpression(node)) {
+    return { kind: "nonNull", expr: extractExpr(node.getExpression()) };
+  }
+
+  // new Map<K,V>() / new Set<T>() — with or without initializer
   if (Node.isNewExpression(node)) {
     const name = node.getExpression().getText();
     if (name === "Map" || name === "Set") {
@@ -136,8 +141,18 @@ function extractExpr(node: Expression): RawExpr {
       const tsType = typeArgs && typeArgs.length > 0
         ? `${name}<${typeArgs.map(t => t.getText()).join(", ")}>`
         : name;
+      const args = node.getArguments();
+      // new Map(arr.map(fn)) — map-from-array constructor
+      if (name === "Map" && args && args.length === 1) {
+        return { kind: "call", fn: { kind: "var", name: "__mapFromArray" }, args: [extractExpr(args[0] as Expression)] };
+      }
       return { kind: "emptyCollection", collectionType: name as "Map" | "Set", tsType };
     }
+  }
+
+  // As-expression: expr as T — strip the type assertion
+  if (Node.isAsExpression(node)) {
+    return extractExpr(node.getExpression());
   }
 
   throw new Error(`Unsupported expression: ${node.getText()}`);
@@ -252,7 +267,12 @@ function typeToString(type: Type): string {
   if (type.isString()) return "string";
   if (type.isBoolean()) return "boolean";
   // Named type alias (e.g. Priority = "low" | "medium" | "high") — use the alias name
-  if (type.getAliasSymbol()) return type.getAliasSymbol()!.getName();
+  if (type.getAliasSymbol()) {
+    const name = type.getAliasSymbol()!.getName();
+    const args = type.getAliasTypeArguments();
+    if (args.length > 0) return `${name}<${args.map(t => typeToString(t)).join(", ")}>`;
+    return name;
+  }
   if (type.isUnion()) {
     return type.getUnionTypes().map(typeToString).join(" | ");
   }
@@ -349,13 +369,26 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     if (Node.isForOfStatement(s)) {
       const init = s.getInitializer();
-      const varName = Node.isVariableDeclarationList(init) ? init.getDeclarations()[0]?.getName() ?? "_" : "_";
+      const names: string[] = [];
+      if (Node.isVariableDeclarationList(init)) {
+        const decl = init.getDeclarations()[0];
+        const nameNode = decl?.getNameNode();
+        if (nameNode && Node.isArrayBindingPattern(nameNode)) {
+          for (const elem of nameNode.getElements()) {
+            if (Node.isBindingElement(elem)) names.push(elem.getNameNode().getText());
+          }
+        } else {
+          names.push(decl?.getName() ?? "_");
+        }
+      } else {
+        names.push("_");
+      }
       const bodyNode = s.getStatement();
       const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [bodyNode];
       const annots = collectAnnotations(s, bodyStmts);
       result.push({
         kind: "forof",
-        varName,
+        names,
         iterable: extractExpr(s.getExpression()),
         invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
         doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
@@ -453,6 +486,11 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       continue;
     }
 
+    if (Node.isThrowStatement(s)) {
+      result.push({ kind: "throw", line });
+      continue;
+    }
+
     throw new Error(`Unsupported statement at line ${line}: ${s.getText().slice(0, 80)}`);
   }
   // Ghost comments after the last statement (before closing brace) appear as sibling trivia nodes
@@ -535,10 +573,30 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     ? allFns.filter(fn => fn.getFullText().includes('//@ verify'))
     : allFns;
 
+  const functions = fnsToExtract.map(extractFunction);
+
+  // Resolve imported types: extract types referenced in function signatures but not in this file
+  const knownTypes = new Set(typeDecls.map(d => d.name));
+  const builtins = new Set(["Map", "Set", "Array", "String", "Number", "Boolean", "Promise", "Date", "RegExp", "Error"]);
+  function resolveType(t: Type, locationNode: Node) {
+    // Unwrap arrays and generics to find user-defined types
+    if (t.isArray()) { resolveType(t.getArrayElementTypeOrThrow(), locationNode); return; }
+    for (const arg of t.getTypeArguments()) resolveType(arg, locationNode);
+    const sym = t.getSymbol() ?? t.getAliasSymbol();
+    const name = sym?.getName();
+    if (name && !knownTypes.has(name) && !builtins.has(name) && t.isObject()) {
+      const info = extractRecord(name, t, locationNode);
+      if (info) { typeDecls.push(info); knownTypes.add(name); }
+    }
+  }
+  for (const fn of fnsToExtract) {
+    for (const p of fn.getParameters()) resolveType(p.getType(), p);
+  }
+
   return {
     file: sourceFile.getFilePath(),
     typeDecls,
-    functions: fnsToExtract.map(extractFunction),
+    functions,
   };
 }
 
