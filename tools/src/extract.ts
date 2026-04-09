@@ -527,10 +527,18 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     }
   }
 
+  // If any function has //@ verify, only extract those (brownfield mode).
+  // Otherwise extract all functions (backwards-compatible with existing examples).
+  const allFns = sourceFile.getFunctions();
+  const hasVerifyDirective = allFns.some(fn => fn.getFullText().includes('//@ verify'));
+  const fnsToExtract = hasVerifyDirective
+    ? allFns.filter(fn => fn.getFullText().includes('//@ verify'))
+    : allFns;
+
   return {
     file: sourceFile.getFilePath(),
     typeDecls,
-    functions: sourceFile.getFunctions().map(extractFunction),
+    functions: fnsToExtract.map(extractFunction),
   };
 }
 
