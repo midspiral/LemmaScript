@@ -204,6 +204,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       } else if (fn.kind === "field" && fn.obj.ty.kind === "set") {
         if (fn.field === "has") ty = { kind: "bool" };
         else if (fn.field === "add") ty = fn.obj.ty;
+        else if (fn.field === "delete") ty = fn.obj.ty;
       } else if (fn.kind === "field" && fn.obj.ty.kind === "array") {
         if (fn.field === "includes") ty = { kind: "bool" };
         else if (fn.field === "shift") ty = fn.obj.ty.elem;

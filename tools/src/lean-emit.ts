@@ -98,6 +98,7 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
   if (tyKind === "set") {
     if (method === "has") return `${obj}.contains ${args[0]}`;
     if (method === "add") return `${obj}.insert ${args[0]}`;
+    if (method === "delete") return `${obj}.erase ${args[0]}`;
   }
   throw new Error(`Unsupported Lean method call: .${method}() on ${tyKind}`);
 }

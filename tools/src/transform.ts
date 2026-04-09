@@ -547,7 +547,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       if (s.expr.kind === "call" && s.expr.fn.kind === "field" &&
           s.expr.fn.obj.kind === "var" &&
           ((s.expr.fn.obj.ty.kind === "map" || s.expr.fn.obj.ty.kind === "set") &&
-           (s.expr.fn.field === "set" || s.expr.fn.field === "add")) ||
+           (s.expr.fn.field === "set" || s.expr.fn.field === "add" || s.expr.fn.field === "delete")) ||
           (s.expr.kind === "call" && s.expr.fn.kind === "field" &&
            s.expr.fn.obj.kind === "var" && s.expr.fn.obj.ty.kind === "array" &&
            s.expr.fn.field === "push")) {
