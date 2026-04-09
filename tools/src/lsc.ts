@@ -30,6 +30,13 @@ function main() {
     args.splice(backendIdx, 1);
   }
 
+  const timeLimitIdx = args.findIndex(a => a.startsWith("--time-limit="));
+  let timeLimit: number | undefined;
+  if (timeLimitIdx >= 0) {
+    timeLimit = parseInt(args[timeLimitIdx].split("=")[1]);
+    args.splice(timeLimitIdx, 1);
+  }
+
   const [cmd, filePath] = args;
   if (!cmd || !filePath) {
     console.error("Usage: lsc <gen|check|regen|extract> [--backend=lean|dafny] <file.ts>");
@@ -70,10 +77,15 @@ function main() {
     const basePath = path.join(dir, `${base}.dfy.base`);
 
     if (cmd === "gen") { dafnyGen(genPath, dfyPath, text); return; }
+    if (cmd === "gen-check") {
+      dafnyGen(genPath, dfyPath, text);
+      if (!dafnyCheckDiff(genPath, dfyPath)) process.exit(1);
+      return;
+    }
     if (cmd === "check") {
       dafnyGen(genPath, dfyPath, text);
       if (!dafnyCheckDiff(genPath, dfyPath)) process.exit(1);
-      if (!dafnyVerify(dfyPath, dir)) process.exit(1);
+      if (!dafnyVerify(dfyPath, dir, timeLimit)) process.exit(1);
       return;
     }
     if (cmd === "regen") { dafnyRegen(genPath, dfyPath, basePath, text, dir); return; }
