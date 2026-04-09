@@ -162,6 +162,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     case "unop":
       if (e.op === "-" && e.expr.kind === "num")
         return { kind: "num", value: -e.expr.value };
+      // String truthiness: !str → str == ""
+      if (e.op === "!" && e.expr.ty.kind === "string")
+        return { kind: "binop", op: "=", left: lowerExpr(e.expr, binds), right: { kind: "str", value: "" } };
       return { kind: "unop", op: e.op === "!" ? "¬" : e.op, expr: lowerExpr(e.expr, binds) };
 
     case "binop": {

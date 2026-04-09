@@ -192,6 +192,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         else if (fn.field === "add") ty = fn.obj.ty;
       } else if (fn.kind === "field" && fn.obj.ty.kind === "array") {
         if (fn.field === "includes") ty = { kind: "bool" };
+      } else if (fn.kind === "field" && fn.obj.ty.kind === "string") {
+        if (fn.field === "trim") ty = { kind: "string" };
       }
       return { kind: "call", fn, args, ty, callKind: classifyCall(e.fn, ctx) };
     }

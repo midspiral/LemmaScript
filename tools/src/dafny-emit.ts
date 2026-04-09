@@ -67,7 +67,8 @@ function emitExpr(e: Expr): string {
     case "var": return escapeName(e.name);
     case "num": return `${e.value}`;
     case "bool": return e.value ? "true" : "false";
-    case "str": return `"${e.value}"`;
+    case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+
     case "constructor": return qualifyCtor(e.name, e.type);
 
     case "arrayLiteral":
@@ -103,6 +104,7 @@ function emitExpr(e: Expr): string {
       if (ty === "string") {
         if (e.method === "indexOf") { needsStringIndexOf = true; return `StringIndexOf(${obj}, ${args[0]})`; }
         if (e.method === "slice")   return `${obj}[${args[0]}..${args[1]}]`;
+        if (e.method === "trim")    { needsStringTrim = true; return `StringTrim(${obj})`; }
       }
       // Map methods
       if (ty === "map") {
@@ -371,6 +373,7 @@ function emitDecl(d: Decl): string {
 // ── Preamble helpers ────────────────────────────────────────
 
 let needsStringIndexOf = false;
+let needsStringTrim = false;
 let needsJSFloorDiv = false;
 let needsStdCollections = false;
 let needsOptionType = false;
@@ -398,6 +401,30 @@ function StringIndexOfFrom(s: string, sub: string, from: nat): int
   if from + |sub| > |s| then -1
   else if s[from..from + |sub|] == sub then from as int
   else StringIndexOfFrom(s, sub, from + 1)
+}`;
+
+const STRING_TRIM = `function StringTrimLeft(s: string): string
+  ensures |StringTrimLeft(s)| <= |s|
+  ensures StringTrimLeft(s) == "" || (|StringTrimLeft(s)| > 0 && StringTrimLeft(s)[0] != ' ')
+  decreases |s|
+{
+  if |s| == 0 then ""
+  else if s[0] == ' ' then StringTrimLeft(s[1..])
+  else s
+}
+
+function StringTrimRight(s: string): string
+  ensures |StringTrimRight(s)| <= |s|
+  decreases |s|
+{
+  if |s| == 0 then ""
+  else if s[|s|-1] == ' ' then StringTrimRight(s[..|s|-1])
+  else s
+}
+
+function StringTrim(s: string): string
+{
+  StringTrimRight(StringTrimLeft(s))
 }`;
 
 // ── Constructor and record helpers ───────────────────────────
@@ -447,6 +474,7 @@ const PREAMBLES: Record<string, string> = {
 export function emitDafnyFile(file: Module, tsFileName?: string): string {
   buildRecordCtorMap(file.decls);
   needsStringIndexOf = false;
+  needsStringTrim = false;
   needsJSFloorDiv = false;
   needsStdCollections = false;
   needsOptionType = false;
@@ -505,6 +533,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   }
   if (needsJSFloorDiv) { lines.push(""); lines.push(JS_FLOOR_DIV); }
   if (needsStringIndexOf) { lines.push(""); lines.push(PREAMBLES.StringIndexOf); }
+  if (needsStringTrim) { lines.push(""); lines.push(STRING_TRIM); }
   lines.push(...declLines);
   return lines.join("\n") + "\n";
 }
