@@ -10,6 +10,62 @@ import type { Expr, Stmt, Decl, Module, FnDef, FnMethod, MatchArm, StmtMatchArm 
 import type { TypeDeclInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 
+// ── Generic IR walkers ──────────────────────────────────────
+
+/**
+ * Map over all sub-expressions in an Expr. `f` is called on each node;
+ * if it returns non-null, that replaces the node (and recursion stops).
+ * If it returns null, the walker recurses into children.
+ */
+function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
+  const hit = f(e);
+  if (hit) return hit;
+  const r = (x: Expr) => mapExpr(x, f);
+  switch (e.kind) {
+    case "var": case "num": case "bool": case "str": case "constructor": case "emptyMap": case "emptySet": return e;
+    case "binop": return { ...e, left: r(e.left), right: r(e.right) };
+    case "unop": return { ...e, expr: r(e.expr) };
+    case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };
+    case "app": return { ...e, args: e.args.map(r) };
+    case "field": return { ...e, obj: r(e.obj) };
+    case "toNat": return { ...e, expr: r(e.expr) };
+    case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
+    case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
+    case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
+    case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
+    case "match": return { ...e, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
+    case "forall": return { ...e, body: r(e.body) };
+    case "exists": return { ...e, body: r(e.body) };
+    case "let": return { ...e, value: r(e.value), body: r(e.body) };
+    case "methodCall": return { ...e, obj: r(e.obj), args: e.args.map(r) };
+    case "lambda": return e;
+  }
+}
+
+/** Map over all expressions in a statement tree. */
+function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
+  const r = (e: Expr) => mapExpr(e, f);
+  switch (s.kind) {
+    case "let": return { ...s, value: r(s.value) };
+    case "assign": return { ...s, value: r(s.value) };
+    case "bind": return { ...s, value: r(s.value) };
+    case "let-bind": return { ...s, value: r(s.value) };
+    case "return": return { ...s, value: r(s.value) };
+    case "break": case "continue": return s;
+    case "if": return { ...s, cond: r(s.cond), then: s.then.map(t => mapStmt(t, f)), else: s.else.map(t => mapStmt(t, f)) };
+    case "match": return { ...s, arms: s.arms.map(a => ({ ...a, body: a.body.map(t => mapStmt(t, f)) })) };
+    case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r), body: s.body.map(t => mapStmt(t, f)) };
+    case "forin": return { ...s, bound: r(s.bound), invariants: s.invariants.map(r), body: s.body.map(t => mapStmt(t, f)) };
+    case "ghostLet": return { ...s, value: r(s.value) };
+    case "ghostAssign": return { ...s, value: r(s.value) };
+    case "assert": return { ...s, expr: r(s.expr) };
+  }
+}
+
+function mapStmts(stmts: Stmt[], f: (e: Expr) => Expr | null): Stmt[] {
+  return stmts.map(s => mapStmt(s, f));
+}
+
 // ── Backend configuration ───────────────────────────────────
 
 export type Backend = "lean" | "dafny";
@@ -277,29 +333,15 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): Expr | null {
 }
 
 function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; tsType: string }[]): Expr {
-  if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === varName) {
-    const f = fields.find(f => f.name === e.field);
-    if (f) return { kind: "var", name: matchBinder(f.name) };
-  }
-  const r = (x: Expr) => replaceFieldAccess(x, varName, fields);
-  switch (e.kind) {
-    case "binop": return { ...e, left: r(e.left), right: r(e.right) };
-    case "unop": return { ...e, expr: r(e.expr) };
-    case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };
-    case "forall": return { ...e, body: r(e.body) };
-    case "exists": return { ...e, body: r(e.body) };
-    case "app": return { ...e, args: e.args.map(r) };
-    case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(f => ({ ...f, value: r(f.value) })) };
-    case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
-    case "let":
-      // If this let shadows the matched variable, stop replacing in the body
-      if (e.name === varName) return { ...e, value: r(e.value) };
-      return { ...e, value: r(e.value), body: r(e.body) };
-    case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
-    case "field": return { ...e, obj: r(e.obj) };
-    case "match": return { ...e, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
-    default: return e;
-  }
+  return mapExpr(e, x => {
+    if (x.kind === "field" && x.obj.kind === "var" && x.obj.name === varName) {
+      const f = fields.find(f => f.name === x.field);
+      if (f) return { kind: "var", name: matchBinder(f.name) };
+    }
+    // If this let shadows the matched variable, stop replacing in the body
+    if (x.kind === "let" && x.name === varName) return { ...x, value: replaceFieldAccess(x.value, varName, fields) };
+    return null;
+  });
 }
 
 // ── Transform statements ─────────────────────────────────────
@@ -508,23 +550,9 @@ function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind:
   return { kind: "match", scrutinee: varName, arms };
 }
 
-/** Apply an expression transform to all expressions in a statement. */
+/** Apply an expression transform to all expressions in a statement (convenience wrapper). */
 function mapStmtExprs(s: Stmt, r: (e: Expr) => Expr): Stmt {
-  switch (s.kind) {
-    case "let": return { ...s, value: r(s.value) };
-    case "assign": return { ...s, value: r(s.value) };
-    case "bind": return { ...s, value: r(s.value) };
-    case "let-bind": return { ...s, value: r(s.value) };
-    case "return": return { ...s, value: r(s.value) };
-    case "break": case "continue": return s;
-    case "if": return { ...s, cond: r(s.cond), then: s.then.map(t => mapStmtExprs(t, r)), else: s.else.map(t => mapStmtExprs(t, r)) };
-    case "match": return { ...s, arms: s.arms.map(a => ({ ...a, body: a.body.map(t => mapStmtExprs(t, r)) })) };
-    case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r), body: s.body.map(t => mapStmtExprs(t, r)) };
-    case "forin": return { ...s, bound: r(s.bound), invariants: s.invariants.map(r), body: s.body.map(t => mapStmtExprs(t, r)) };
-    case "ghostLet": return { ...s, value: r(s.value) };
-    case "ghostAssign": return { ...s, value: r(s.value) };
-    case "assert": return { ...s, expr: r(s.expr) };
-  }
+  return mapStmt(s, e => r(e));
 }
 
 /** Detect `v !== undefined` or `undefined !== v` where v has optional type. */
@@ -569,38 +597,24 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
 
 function replaceFieldAccessInStmts(stmts: Stmt[], varName: string, fields: { name: string; tsType: string }[]): Stmt[] {
   if (fields.length === 0) return stmts;
+  const f = (e: Expr): Expr | null => {
+    if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === varName) {
+      const fi = fields.find(fi => fi.name === e.field);
+      if (fi) return { kind: "var", name: matchBinder(fi.name) };
+    }
+    return null;
+  };
   const result: Stmt[] = [];
   for (const s of stmts) {
     // If a let shadows the matched variable, stop replacing from here on
     if (s.kind === "let" && s.name === varName) {
-      const r = (e: Expr) => replaceFieldAccess(e, varName, fields);
-      result.push({ ...s, value: r(s.value) });
-      // Remaining statements see the shadowed name — no more replacement
+      result.push({ ...s, value: mapExpr(s.value, f) });
       result.push(...stmts.slice(result.length));
       break;
     }
-    result.push(replaceFieldAccessInStmt(s, varName, fields));
+    result.push(mapStmt(s, f));
   }
   return result;
-}
-
-function replaceFieldAccessInStmt(s: Stmt, varName: string, fields: { name: string; tsType: string }[]): Stmt {
-  const r = (e: Expr) => replaceFieldAccess(e, varName, fields);
-  switch (s.kind) {
-    case "let": return { ...s, value: r(s.value) };
-    case "assign": return { ...s, value: r(s.value) };
-    case "bind": return { ...s, value: r(s.value) };
-    case "let-bind": return { ...s, value: r(s.value) };
-    case "return": return { ...s, value: r(s.value) };
-    case "break": case "continue": return s;
-    case "if": return { ...s, cond: r(s.cond), then: replaceFieldAccessInStmts(s.then, varName, fields), else: replaceFieldAccessInStmts(s.else, varName, fields) };
-    case "match": return { ...s, arms: s.arms.map(a => ({ ...a, body: replaceFieldAccessInStmts(a.body, varName, fields) })) };
-    case "while": return { ...s, cond: r(s.cond), body: replaceFieldAccessInStmts(s.body, varName, fields) };
-    case "forin": return { ...s, invariants: s.invariants.map(r), body: replaceFieldAccessInStmts(s.body, varName, fields) };
-    case "ghostLet": return { ...s, value: r(s.value) };
-    case "ghostAssign": return { ...s, value: r(s.value) };
-    case "assert": return { ...s, expr: r(s.expr) };
-  }
 }
 
 // ── Pure function generation ─────────────────────────────────
@@ -731,27 +745,14 @@ function findReassignedNames(stmts: TStmt[], names: Set<string>): Set<string> {
 
 /** Replace all occurrences of a variable name with a new expression. */
 function replaceVar(e: Expr, name: string, replacement: Expr): Expr {
-  const r = (x: Expr) => replaceVar(x, name, replacement);
-  switch (e.kind) {
-    case "var": return e.name === name ? replacement : e;
-    case "num": case "bool": case "str": case "constructor": case "emptyMap": case "emptySet": return e;
-    case "binop": return { ...e, left: r(e.left), right: r(e.right) };
-    case "unop": return { ...e, expr: r(e.expr) };
-    case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };
-    case "app": return { ...e, args: e.args.map(r) };
-    case "field": return { ...e, obj: r(e.obj) };
-    case "toNat": return { ...e, expr: r(e.expr) };
-    case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
-    case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(f => ({ ...f, value: r(f.value) })) };
-    case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
-    case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
-    case "match": return { ...e, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
-    case "forall": return e.var === name ? e : { ...e, body: r(e.body) };
-    case "exists": return e.var === name ? e : { ...e, body: r(e.body) };
-    case "let": return { ...e, value: r(e.value), body: e.name === name ? e.body : r(e.body) };
-    case "methodCall": return { ...e, obj: r(e.obj), args: e.args.map(r) };
-    case "lambda": return e; // don't descend into lambdas
-  }
+  return mapExpr(e, x => {
+    if (x.kind === "var" && x.name === name) return replacement;
+    // Don't descend past bindings that shadow the name
+    if (x.kind === "forall" && x.var === name) return x;
+    if (x.kind === "exists" && x.var === name) return x;
+    if (x.kind === "let" && x.name === name) return { ...x, value: replaceVar(x.value, name, replacement) };
+    return null;
+  });
 }
 
 // ── Top-level transform ──────────────────────────────────────
