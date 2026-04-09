@@ -147,6 +147,8 @@ The translation is purely syntactic. `lsc` does not infer types beyond what `//@
 
 No normalization of operators. Both backends handle all comparison directions.
 
+**String truthiness:** `!stringVar` where the operand has type `string` is translated as `stringVar == ""` (Dafny) / `stringVar = ""` (Lean), matching JavaScript's truthy semantics for strings.
+
 ### 3.2 Special Forms
 
 | Spec / TS | Lean | Dafny |
@@ -160,6 +162,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
 | `s.slice(start, end)` | `JSString.slice s start end` | `s[start..end]` |
+| `s.trim()` | `JSString.trim s` | `StringTrim(s)` |
 | `s.length` | `s.length` | `\|s\|` |
 | `arr.map((x) => e)` | `arr.map (fun x => e)` | `Seq.Map((x) => e, arr)` |
 | `arr.filter((x) => e)` | `arr.filter (fun x => e)` | `Seq.Filter((x) => e, arr)` |
