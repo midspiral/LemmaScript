@@ -199,6 +199,28 @@ class Parser {
     if (t.type === "ident") {
       if (t.value === "true") { this.advance(); return { kind: "bool", value: true }; }
       if (t.value === "false") { this.advance(); return { kind: "bool", value: false }; }
+      // new Set<T>() / new Map<K,V>()
+      if (t.value === "new") {
+        this.advance();
+        const name = this.expect("ident").value as string;
+        if (name !== "Set" && name !== "Map") throw new Error(`Unsupported constructor: new ${name}`);
+        // Skip <T> or <K,V> type arguments
+        let tsType = name;
+        if (this.match("op", "<")) {
+          let depth = 1;
+          let typeArgs = "";
+          while (depth > 0) {
+            const next = this.advance();
+            if (next.value === "<") depth++;
+            else if (next.value === ">") { depth--; if (depth === 0) break; }
+            typeArgs += next.value;
+          }
+          tsType = `${name}<${typeArgs}>`;
+        }
+        this.expect("punc", "(");
+        this.expect("punc", ")");
+        return { kind: "emptyCollection", collectionType: name as "Set" | "Map", tsType };
+      }
       if (t.value === "forall" || t.value === "exists") {
         const q = t.value as "forall" | "exists";
         this.advance();
