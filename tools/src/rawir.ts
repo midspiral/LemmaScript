@@ -38,8 +38,9 @@ export interface RawLet {
   name: string;
   mutable: boolean;
   tsType: string;      // raw TS type string, resolved later
-  init: RawExpr;
+  init?: RawExpr;      // absent when //@ havoc
   line: number;
+  havoc?: boolean;     // //@ havoc — nondeterministic value
 }
 
 export interface RawAssign {

@@ -251,7 +251,8 @@ function emitStmt(s: Stmt, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (s.kind) {
     case "let":
-      return `${pad}var ${escapeName(s.name)} := ${emitExpr(s.value)};`;
+      if (s.havoc) return `${pad}var ${escapeName(s.name)}: ${tyToDafny(s.type)} := *;`;
+      return `${pad}var ${escapeName(s.name)} := ${emitExpr(s.value!)};`;
     case "assign":
       return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)};`;
     case "ghostLet":

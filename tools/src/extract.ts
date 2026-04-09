@@ -341,6 +341,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
     result.push(...parseSpecComments(s.getLeadingCommentRanges(), line));
 
     if (Node.isVariableStatement(s)) {
+      const isHavoc = s.getLeadingCommentRanges().some(r => r.getText().trim() === '//@ havoc');
       for (const d of s.getDeclarations()) {
         const declType = d.getType();
         const init = d.getInitializer();
@@ -349,7 +350,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
           name: d.getName(),
           mutable: s.getDeclarationKind() === "let",
           tsType: typeToString(declType),
-          init: init ? extractExpr(init) : { kind: "var", name: "default" },
+          ...(isHavoc ? { havoc: true } : { init: init ? extractExpr(init) : { kind: "var" as const, name: "default" } }),
           line,
         });
       }

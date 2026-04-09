@@ -46,7 +46,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
 function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
   const r = (e: Expr) => mapExpr(e, f);
   switch (s.kind) {
-    case "let": return { ...s, value: r(s.value) };
+    case "let": return s.value ? { ...s, value: r(s.value) } : s;
     case "assign": return { ...s, value: r(s.value) };
     case "bind": return { ...s, value: r(s.value) };
     case "let-bind": return { ...s, value: r(s.value) };
@@ -475,6 +475,10 @@ function liftMethodCalls(e: TExpr): { binds: Stmt[]; expr: Expr } {
 function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
   switch (s.kind) {
     case "let": {
+      // //@ havoc — nondeterministic value
+      if (s.havoc) {
+        return [{ kind: "let", name: s.name, type: s.ty, mutable: s.mutable, havoc: true }];
+      }
       // arr.shift()! → let x = arr[0]; arr = arr[1..]
       const init = s.init.kind === "call" ? s.init : undefined;
       if (init && init.fn.kind === "field" && init.fn.field === "shift" && init.fn.obj.ty.kind === "array") {
@@ -750,7 +754,7 @@ function replaceFieldAccessInStmts(stmts: Stmt[], varName: string, fields: { nam
   for (const s of stmts) {
     // If a let shadows the matched variable, stop replacing from here on
     if (s.kind === "let" && s.name === varName) {
-      result.push({ ...s, value: mapExpr(s.value, f) });
+      result.push(s.value ? { ...s, value: mapExpr(s.value, f) } : s);
       result.push(...stmts.slice(result.length));
       break;
     }
