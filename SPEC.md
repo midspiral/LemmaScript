@@ -170,6 +170,13 @@ No normalization of operators. Both backends handle all comparison directions.
 | `arr.some((x) => e)` | `arr.any (fun x => e)` | `exists x :: x in arr && e` |
 | `arr.includes(x)` | `arr.contains x` | `(x in arr)` |
 | `arr.find((x) => e)` | `arr.find? (fun x => e)` | — |
+| `arr.shift()` | — (not yet implemented) | `arr[0]` + `arr := arr[1..]` |
+| `arr.slice(start)` | — (not yet implemented) | `arr[start..]` |
+| `expr!` (non-null) | unwrap Option | unwrap Option / direct map access |
+| `expr \|\| default` (on optional) | match Some/None | `match { Some(v) => v, None => default }` |
+| `expr?.method(args)` | — (not yet implemented) | `if key in map { ... }` |
+| `expr as T` | stripped | stripped |
+| `new Map(arr.map(fn))` | — (not yet implemented) | loop building `map[]` |
 | `[a, b, c]` | `#[a, b, c]` | `[a, b, c]` |
 | `[...arr, e]` | `Array.push arr e` | `(arr + [e])` |
 | `{ ...obj, f: v }` | `{ obj with f := v }` | `obj.(f := v)` |
@@ -334,6 +341,8 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 **Set iteration:** `for (const x of s)` where `s` is a `Set<T>` converts the set to an array first (Lean: `.toArray`, Dafny: `SetToSeq` helper), then iterates with a standard indexed loop.
 
+**Map destructuring iteration:** `for (const [k, v] of map)` where the iterable has type `Map<K,V>` desugars to iterating over `map.Keys` (via `SetToSeq`), with `k` bound to each key and `v` bound to `map[k]`. General destructuring in for-of (e.g., `for (const [a, b, c] of tuples)`) binds each name to `elem[0]`, `elem[1]`, etc.
+
 ---
 
 ## 4. Statement Translation
@@ -353,6 +362,7 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 | `while (c) { ... }` | `while c' invariant ... do ...` | `while c' invariant ... { ... }` |
 | `x = f(a, b)` (method call) | `x ← f a b` | `x := f(a, b);` |
 | `break` | `break` | `break;` |
+| `throw new Error(...)` | — (not yet implemented) | `assert false;` |
 | `switch` / discriminant if-chain | `match` | `match` |
 
 All expressions `e` above are translated using the spec expression rules (§3).
@@ -499,9 +509,13 @@ Pure functions are handled differently by each backend:
 | `Map<K, V>` | `Std.HashMap K' V'` | `map<K', V'>` |
 | `Set<T>` | `Std.HashSet T'` | `set<T'>` |
 | `T \| undefined` | `Option T'` | `Option<T'>` |
+| `Record<K, V>` | `Std.HashMap K' V'` | `map<K', V'>` |
+| `unknown` | `Int` | `int` |
 | Anything else | Pass through | Pass through |
 
 `lsc` reads parameter and variable types from ts-morph. Primitive types are mapped per the table. User-defined types (like `State`, `Event`) are passed through by name — the corresponding backend type is generated from the TS type declaration.
+
+**Cross-file types:** When a verified function references a type imported from another file (e.g., `WorkflowNode` from `types/index.ts`), `lsc` automatically resolves the type via ts-morph and generates the corresponding backend type declaration. This works for record/interface types used in function parameters. Built-in types (`Map`, `Set`, `Array`, etc.) are excluded from cross-file resolution.
 
 ### 6.2 String Literals as Constructors
 

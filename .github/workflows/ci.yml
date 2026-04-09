@@ -38,15 +38,7 @@ jobs:
             exit 1
           fi
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - name: Setup Dafny
-        uses: dafny-lang/setup-dafny-action@v1
-        with:
-          dafny-version: '4.11.0'
+      - uses: ./.github/actions/setup-dafny
 
       - name: Regenerate Dafny and verify
         run: ./regen-dafny.sh
@@ -73,15 +65,72 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Clone Loom fork
-        run: git clone https://github.com/namin/loom.git -b lemma ../loom
-
-      - name: Clone Velvet fork
-        run: git clone https://github.com/namin/velvet.git -b lemma ../velvet
-
-      - uses: leanprover/lean-action@v1
-        with:
-          use-github-cache: false
+      - uses: ./.github/actions/setup-lean
 
       - name: Build
         run: lake build
+
+  case-studies-dafny:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - repo: midspiral/colorwheel-lemmascript
+            branch: main
+          - repo: midspiral/node-casbin-lemmascript
+            branch: lemmascript
+          - repo: midspiral/clear-split-lemmascript
+            branch: main
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone case study
+        run: git clone --branch ${{ matrix.branch }} https://github.com/${{ matrix.repo }}.git ../case-study
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: cd tools && npm ci
+
+      - uses: ./.github/actions/setup-dafny
+
+      - name: Regenerate and verify Dafny
+        working-directory: ../case-study
+        run: ../LemmaScript/tools/check.sh dafny
+
+      - name: Verify extra Dafny files
+        working-directory: ../case-study
+        run: ./check-extra.sh
+
+  case-studies-lean:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - repo: midspiral/colorwheel-lemmascript
+            branch: main
+          - repo: midspiral/node-casbin-lemmascript
+            branch: lemmascript
+          - repo: midspiral/clear-split-lemmascript
+            branch: main
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone case study
+        run: git clone --branch ${{ matrix.branch }} https://github.com/${{ matrix.repo }}.git ../case-study
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: cd tools && npm ci
+
+      - uses: ./.github/actions/setup-lean
+        with:
+          lake-package-directory: ../case-study
+          use-github-cache: 'true'
+
+      - name: Regenerate and build Lean
+        working-directory: ../case-study
+        run: ../LemmaScript/tools/check.sh lean

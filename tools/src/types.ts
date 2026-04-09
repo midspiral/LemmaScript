@@ -66,6 +66,13 @@ export function parseTsType(tsType: string): Ty {
   if (t === "boolean") return { kind: "bool" };
   if (t === "string") return { kind: "string" };
   if (t === "void" || t === "undefined") return { kind: "void" };
+  if (t === "unknown") return { kind: "unknown" };
+  // Record<K, V> → map
+  const recordMatch = t.match(/^Record<(.+)>$/);
+  if (recordMatch) {
+    const args = splitTypeArgs(recordMatch[1]);
+    if (args.length === 2) return { kind: "map", key: parseTsType(args[0]), value: parseTsType(args[1]) };
+  }
   // Array<T> or T[]
   const m = t.match(/^(?:Array<(.+)>|(.+)\[\])$/);
   if (m) return { kind: "array", elem: parseTsType(m[1] || m[2]) };

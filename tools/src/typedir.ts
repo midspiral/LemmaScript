@@ -62,8 +62,9 @@ export type TStmt =
   | { kind: "switch"; expr: TExpr; discriminant: string;
       cases: { label: string; body: TStmt[] }[];
       defaultBody: TStmt[] }
-  | { kind: "forof"; varName: string; varTy: Ty; iterable: TExpr;
+  | { kind: "forof"; names: string[]; nameTypes: Ty[]; iterable: TExpr;
       invariants: TExpr[]; doneWith: TExpr | null; body: TStmt[] }
+  | { kind: "throw" }
   | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
   | { kind: "ghostAssign"; target: string; value: TExpr }
   | { kind: "assert"; expr: TExpr }

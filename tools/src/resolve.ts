@@ -160,6 +160,17 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     case "bool":
       return { kind: "bool", value: e.value, ty: { kind: "bool" } };
 
+    case "nonNull": {
+      const expr = resolveExpr(e.expr, ctx);
+      // Unwrap optional type; for map.get()!, force to direct access type
+      if (expr.kind === "call" && expr.fn.kind === "field" &&
+          expr.fn.obj.ty.kind === "map" && expr.fn.field === "get") {
+        return { ...expr, ty: expr.fn.obj.ty.value };
+      }
+      const ty = expr.ty.kind === "optional" ? expr.ty.inner : expr.ty;
+      return { ...expr, ty };
+    }
+
     case "binop": {
       let left = resolveExpr(e.left, ctx);
       let right = resolveExpr(e.right, ctx);
@@ -168,7 +179,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         right = coerceStr(right, left.ty);
       }
       let ty: Ty = { kind: "unknown" };
-      if (["===", "!==", ">=", "<=", ">", "<", "&&", "||"].includes(e.op)) ty = { kind: "bool" };
+      if (["===", "!==", ">=", "<=", ">", "<"].includes(e.op)) ty = { kind: "bool" };
+      else if (e.op === "&&") ty = right.ty;
+      else if (e.op === "||" && left.ty.kind === "optional") ty = left.ty.inner;
+      else if (e.op === "||") ty = right.ty;
       else if (["+", "-", "*", "/", "%"].includes(e.op)) ty = left.ty;
       return { kind: "binop", op: e.op, left, right, ty };
     }
@@ -192,6 +206,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         else if (fn.field === "add") ty = fn.obj.ty;
       } else if (fn.kind === "field" && fn.obj.ty.kind === "array") {
         if (fn.field === "includes") ty = { kind: "bool" };
+        else if (fn.field === "shift") ty = fn.obj.ty.elem;
+        else if (fn.field === "push") ty = fn.obj.ty;
       } else if (fn.kind === "field" && fn.obj.ty.kind === "string") {
         if (fn.field === "trim") ty = { kind: "string" };
       }
@@ -383,20 +399,38 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
 
     case "forof": {
       const iterable = resolveExpr(s.iterable, ctx);
-      const elemTy: Ty = iterable.ty.kind === "array" ? iterable.ty.elem
-        : iterable.ty.kind === "set" ? iterable.ty.elem
-        : { kind: "unknown" };
-      const idxName = `_${s.varName}_idx`;
-      const withIdx = extend(ctx.env, idxName, { kind: "nat" });
-      const withElem = extend(withIdx, s.varName, elemTy);
-      const bodyCtx = withEnv(ctx, withElem);
+      // Determine element types for each destructured name
+      const nameTypes: Ty[] = [];
+      let env = ctx.env;
+      if (s.names.length === 1) {
+        // Single name: element type from array/set
+        const elemTy: Ty = iterable.ty.kind === "array" ? iterable.ty.elem
+          : iterable.ty.kind === "set" ? iterable.ty.elem
+          : { kind: "unknown" };
+        nameTypes.push(elemTy);
+      } else if (s.names.length >= 2 && iterable.ty.kind === "map") {
+        // Map destructuring: [key, value]
+        nameTypes.push(iterable.ty.key, iterable.ty.value);
+      } else {
+        // General tuple destructuring: all unknown
+        for (const _ of s.names) nameTypes.push({ kind: "unknown" });
+      }
+      const idxName = `_${s.names[0]}_idx`;
+      env = extend(env, idxName, { kind: "nat" });
+      for (let j = 0; j < s.names.length; j++) {
+        env = extend(env, s.names[j], nameTypes[j] ?? { kind: "unknown" });
+      }
+      const bodyCtx = withEnv(ctx, env);
       return [{
-        kind: "forof", varName: s.varName, varTy: elemTy, iterable,
+        kind: "forof", names: s.names, nameTypes, iterable,
         invariants: resolveSpecs(s.invariants, { ...bodyCtx, inSpec: true }),
         doneWith: s.doneWith ? resolveSpec(s.doneWith, { ...bodyCtx, inSpec: true }) : null,
         body: resolveBlock(s.body, bodyCtx),
       }, ctx.env];
     }
+
+    case "throw":
+      return [{ kind: "throw" }, ctx.env];
 
     case "switch":
       return [{
