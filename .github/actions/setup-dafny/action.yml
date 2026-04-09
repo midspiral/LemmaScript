@@ -1,0 +1,13 @@
+name: Setup Dafny
+description: Set up .NET and Dafny
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - uses: dafny-lang/setup-dafny-action@v1
+      with:
+        dafny-version: '4.11.0'

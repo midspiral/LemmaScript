@@ -1,0 +1,33 @@
+name: Setup Lean
+description: Clone Loom/Velvet forks and set up Lean toolchain
+
+inputs:
+  lake-package-directory:
+    description: Directory containing the lakefile
+    default: '.'
+  use-github-cache:
+    description: Whether to use GitHub cache for Lake packages
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Clone Loom fork
+      shell: bash
+      run: |
+        if [ ! -d ../loom ]; then
+          git clone https://github.com/namin/loom.git -b lemma ../loom
+        fi
+
+    - name: Clone Velvet fork
+      shell: bash
+      run: |
+        if [ ! -d ../velvet ]; then
+          git clone https://github.com/namin/velvet.git -b lemma ../velvet
+        fi
+
+    - uses: leanprover/lean-action@v1
+      with:
+        use-github-cache: ${{ inputs.use-github-cache }}
+        build-args: ''
+        lake-package-directory: ${{ inputs.lake-package-directory }}
