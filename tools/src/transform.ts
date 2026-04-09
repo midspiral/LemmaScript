@@ -258,6 +258,13 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     }
 
     case "call": {
+      // Math.ceil(x): CeilReal on real args, identity on int
+      if (e.fn.kind === "field" && e.fn.field === "ceil" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1) {
+        const arg = e.args[0];
+        if (arg.ty.kind === "real")
+          return { kind: "app", fn: "CeilReal", args: [lowerExpr(arg, binds)] };
+        return lowerExpr(arg, binds);
+      }
       // Math.floor(a / b): Lean int div floors (erase), Dafny truncates (emit JSFloorDiv)
       if (e.fn.kind === "field" && e.fn.field === "floor" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1) {
         const arg = e.args[0];

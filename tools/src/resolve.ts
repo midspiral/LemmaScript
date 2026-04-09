@@ -152,6 +152,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       return { kind: "var", name: e.name, ty: lookup(ctx.env, e.name) ?? { kind: "unknown" } };
 
     case "num":
+      if (!Number.isInteger(e.value)) return { kind: "num", value: e.value, ty: { kind: "real" } };
       return { kind: "num", value: e.value, ty: e.value >= 0 ? { kind: "nat" } : { kind: "int" } };
 
     case "str":
@@ -183,7 +184,9 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       else if (e.op === "&&") ty = right.ty;
       else if (e.op === "||" && left.ty.kind === "optional") ty = left.ty.inner;
       else if (e.op === "||") ty = right.ty;
-      else if (["+", "-", "*", "/", "%"].includes(e.op)) ty = left.ty;
+      else if (["+", "-", "*", "/", "%"].includes(e.op)) {
+        ty = (left.ty.kind === "real" || right.ty.kind === "real") ? { kind: "real" } : left.ty;
+      }
       return { kind: "binop", op: e.op, left, right, ty };
     }
 
