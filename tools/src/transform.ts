@@ -258,9 +258,18 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     }
 
     case "call": {
-      // Math.floor(a / b): Lean int div floors (erase), Dafny truncates (emit JSFloorDiv)
+      // Math.ceil(x): CeilReal on real args, identity on int
+      if (e.fn.kind === "field" && e.fn.field === "ceil" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1) {
+        const arg = e.args[0];
+        if (arg.ty.kind === "real")
+          return { kind: "app", fn: "CeilReal", args: [lowerExpr(arg, binds)] };
+        return lowerExpr(arg, binds);
+      }
+      // Math.floor(x): FloorReal on real args, JSFloorDiv for int division, identity on int
       if (e.fn.kind === "field" && e.fn.field === "floor" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1) {
         const arg = e.args[0];
+        if (arg.ty.kind === "real")
+          return { kind: "app", fn: "FloorReal", args: [lowerExpr(arg, binds)] };
         if (_opts.backend === "dafny" && arg.kind === "binop" && arg.op === "/")
           return { kind: "app", fn: "JSFloorDiv", args: [lowerExpr(arg.left, binds), lowerExpr(arg.right, binds)] };
         return lowerExpr(arg, binds);

@@ -12,6 +12,7 @@ function tyToLean(ty: Ty): string {
   switch (ty.kind) {
     case "nat": return "Nat";
     case "int": return "Int";
+    case "real": return "Float";  // Lean doesn't have exact reals; Float is approximate
     case "bool": return "Bool";
     case "string": return "String";
     case "void": return "Unit";

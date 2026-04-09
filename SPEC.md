@@ -248,6 +248,10 @@ No normalization of operators. Both backends handle all comparison directions.
 | `f(a, b)` | `f a b` | `f(a, b)` |
 | `x = f(a, b)` (method call) | `x ← f a b` | `x := f(a, b);` |
 | `Math.floor(a / b)` | `a / b` (Lean int div floors) | `JSFloorDiv(a, b)` |
+| `Math.floor(x)` (real arg) | — | `FloorReal(x)` → `x.Floor` |
+| `Math.ceil(x)` (real arg) | — | `CeilReal(x)` → `x.Floor + 1` if non-integer |
+| `Math.floor(n)` (int arg) | identity | identity |
+| `Math.ceil(n)` (int arg) | identity | identity |
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
 | `s.slice(start, end)` | `JSString.slice s start end` | `s[start..end]` |
@@ -608,6 +612,42 @@ Pure functions are handled differently by each backend:
 | Anything else | Pass through | Pass through |
 
 `lsc` reads parameter and variable types from ts-morph. Primitive types are mapped per the table. User-defined types (like `State`, `Event`) are passed through by name — the corresponding backend type is generated from the TS type declaration.
+
+### 6.1.1 Real Numbers
+
+JavaScript has one numeric type (`number`, IEEE 754 doubles). LemmaScript maps `number` to `int` by default, but **non-integer numeric literals** (e.g., `0.8`, `3.14`) are typed as `real`:
+
+| TypeScript | Dafny | Lean |
+|-----------|-------|------|
+| `42` | `42` (int) | `42` (Int) |
+| `0.8` | `0.8` (real) | `0.8` (Float) |
+
+**Mixed arithmetic:** When `int` and `real` operands appear in the same arithmetic expression, the `int` operand is coerced to `real` with `as real`:
+
+```typescript
+tokens.length * 0.8    // nat * real
+```
+
+→ Dafny: `(|tokens| as real * 0.8)`
+
+**`Math.ceil` and `Math.floor`:** These convert `real` → `int`:
+
+| TypeScript | Dafny | When |
+|-----------|-------|------|
+| `Math.ceil(x)` | `CeilReal(x)` | `x` is `real` |
+| `Math.ceil(n)` | `n` (identity) | `n` is `int` |
+| `Math.floor(x)` | `FloorReal(x)` | `x` is `real` |
+| `Math.floor(a / b)` | `JSFloorDiv(a, b)` | `a`, `b` are `int` (legacy) |
+| `Math.floor(n)` | `n` (identity) | `n` is `int` |
+
+`CeilReal` and `FloorReal` are preamble helpers using Dafny's built-in `.Floor` on `real`:
+
+```dafny
+function FloorReal(x: real): int { x.Floor }
+function CeilReal(x: real): int {
+  if x == (x.Floor as real) then x.Floor else x.Floor + 1
+}
+```
 
 **Cross-file types:** When a verified function references a type imported from another file (e.g., `WorkflowNode` from `types/index.ts`), `lsc` automatically resolves the type via ts-morph and generates the corresponding backend type declaration. This works for record/interface types used in function parameters. Built-in types (`Map`, `Set`, `Array`, etc.) are excluded from cross-file resolution.
 

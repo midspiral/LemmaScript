@@ -11,6 +11,7 @@ function tyToDafny(ty: Ty): string {
   switch (ty.kind) {
     case "nat": return "nat";
     case "int": return "int";
+    case "real": return "real";
     case "bool": return "bool";
     case "string": return "string";
     case "void": return "()";
@@ -153,6 +154,16 @@ function emitExpr(e: Expr): string {
         const pred = `${emitExpr(e.left)}.${ctorName}?`;
         return op === "!=" ? `(!${pred})` : pred;
       }
+      // int * real coercion: wrap int side with "as real"
+      if (["+", "-", "*", "/"].includes(op)) {
+        const leftIsReal = e.left.kind === "num" && !Number.isInteger(e.left.value);
+        const rightIsReal = e.right.kind === "num" && !Number.isInteger(e.right.value);
+        if (leftIsReal !== rightIsReal) {
+          const left = leftIsReal ? emitExpr(e.left) : `(${emitExpr(e.left)} as real)`;
+          const right = rightIsReal ? emitExpr(e.right) : `(${emitExpr(e.right)} as real)`;
+          return `(${left} ${op} ${right})`;
+        }
+      }
       return `(${emitExpr(e.left)} ${op} ${emitExpr(e.right)})`;
     }
 
@@ -165,6 +176,8 @@ function emitExpr(e: Expr): string {
       const args = e.args.map(emitExpr);
       if (e.fn === "SetToSeq") { needsSetToSeq = true; return `SetToSeq(${args.join(", ")})`; }
       if (e.fn === "JSFloorDiv") needsJSFloorDiv = true;
+      if (e.fn === "CeilReal") needsCeilReal = true;
+      if (e.fn === "FloorReal") needsFloorReal = true;
       return `${e.fn}(${args.join(", ")})`;
     }
 
@@ -402,6 +415,8 @@ let needsStringTrim = false;
 let needsStringToLower = false;
 let needsStringToUpper = false;
 let needsJSFloorDiv = false;
+let needsCeilReal = false;
+let needsFloorReal = false;
 let needsStdCollections = false;
 let needsOptionType = false;
 let needsSetToSeq = false;
@@ -415,6 +430,17 @@ const JS_FLOOR_DIV = `function JSFloorDiv(a: int, b: int): int
   else
     if a <= 0 then (-a) / (-b)
     else -((a - 1) / (-b)) - 1
+}`;
+
+const FLOOR_REAL = `function FloorReal(x: real): int
+{
+  x.Floor
+}`;
+
+const CEIL_REAL = `function CeilReal(x: real): int
+{
+  if x == (x.Floor as real) then x.Floor
+  else x.Floor + 1
 }`;
 
 const STRING_INDEX_OF = `function StringIndexOf(s: string, sub: string): int
@@ -527,6 +553,8 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   needsStringToLower = false;
   needsStringToUpper = false;
   needsJSFloorDiv = false;
+  needsCeilReal = false;
+  needsFloorReal = false;
   needsStdCollections = false;
   needsOptionType = false;
   needsSetToSeq = false;
@@ -586,6 +614,8 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
 }`);
   }
   if (needsJSFloorDiv) { lines.push(""); lines.push(JS_FLOOR_DIV); }
+  if (needsCeilReal) { lines.push(""); lines.push(CEIL_REAL); }
+  if (needsFloorReal) { lines.push(""); lines.push(FLOOR_REAL); }
   if (needsStringIndexOf) { lines.push(""); lines.push(PREAMBLES.StringIndexOf); }
   if (needsStringTrim) { lines.push(""); lines.push(STRING_TRIM); }
   if (needsStringToLower) { lines.push(""); lines.push(STRING_TO_LOWER); }

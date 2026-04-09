@@ -11,6 +11,7 @@ export type Ty =
   | { kind: "bool" }
   | { kind: "nat" }
   | { kind: "int" }
+  | { kind: "real" }
   | { kind: "string" }
   | { kind: "void" }
   | { kind: "array"; elem: Ty }
