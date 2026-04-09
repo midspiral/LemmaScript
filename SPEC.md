@@ -38,6 +38,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `ghost let x = e` | Before any statement | Ghost variable (proof-only, not runtime). See §2.3. |
 | `ghost x = e` | Before any statement | Ghost variable reassignment. |
 | `assert e` | Before any statement | Assertion (`assertGadget` in Lean, `assert` in Dafny). |
+| `havoc` | Before a variable declaration | Nondeterministic value — skip init expression (see §2.9). |
 
 ### 2.2 Spec Expression Grammar
 
@@ -178,6 +179,34 @@ class Counter {
 **`old()` in ensures:** For mutating methods, `this.field` in `ensures` refers to the post-state. Use `old(this.field)` in the `.dfy` file to refer to the pre-state. (A `//@ old` spec expression is not yet supported.)
 
 **Lean:** Class support is Dafny-only. Use `//@ backend dafny` on files with classes.
+
+### 2.9 Havoc: `//@ havoc`
+
+Marks a variable declaration as nondeterministic — the init expression is
+discarded and the variable receives an arbitrary value of its declared type:
+
+```typescript
+//@ havoc
+const cleaned = text.replace(/[^a-z]/g, '');
+```
+
+generates (Dafny):
+
+```dafny
+var cleaned: string := *;
+```
+
+The verifier makes no assumptions about `cleaned`'s value. Code after the
+havoc is verified for ALL possible values of the havoced variable.
+
+**Use case:** When a variable is initialized by an expression outside the
+LS fragment (regex, JSON.parse, crypto, etc.), `//@ havoc` lets you skip
+the unsupported expression while still verifying the logic that uses the
+result. Properties that hold regardless of the havoced value are proved
+sound.
+
+**Axioms:** To constrain a havoced variable (e.g., `|cleaned| <= |text|`),
+add an `assume` in the `.dfy` file as a proof addition.
 
 ---
 

@@ -211,9 +211,10 @@ function emitStmt(s: Stmt, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (s.kind) {
     case "let":
+      if (s.havoc) return `${pad}let mut ${escapeName(s.name)} : ${tyToLean(s.type)} := sorry -- havoc`;
       return s.mutable
-        ? `${pad}let mut ${escapeName(s.name)} : ${tyToLean(s.type)} := ${emitExpr(s.value)}`
-        : `${pad}let ${escapeName(s.name)} := ${emitExpr(s.value)}`;
+        ? `${pad}let mut ${escapeName(s.name)} : ${tyToLean(s.type)} := ${emitExpr(s.value!)}`
+        : `${pad}let ${escapeName(s.name)} := ${emitExpr(s.value!)}`;
     case "assign": return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)}`;
     case "ghostLet":
       return `${pad}let mut ${escapeName(s.name)} : ${tyToLean(s.type)} := ${emitExpr(s.value)}`;
