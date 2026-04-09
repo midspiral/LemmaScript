@@ -9,7 +9,8 @@ method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
   var remaining := s;
   res := [];
   while remaining != {}
-    invariant forall x :: x in res <==> x in s && x !in remaining
+    invariant remaining <= s
+    invariant forall x :: x in res <==> (x in s && x !in remaining)
     invariant |res| + |remaining| == |s|
     decreases remaining
   {
