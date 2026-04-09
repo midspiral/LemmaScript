@@ -86,8 +86,15 @@ export interface TFunction {
   body: TStmt[];
 }
 
+export interface TClass {
+  name: string;
+  fields: { name: string; ty: Ty }[];
+  methods: TFunction[];
+}
+
 export interface TModule {
   file: string;
   typeDecls: import("./types.js").TypeDeclInfo[];
   functions: TFunction[];
+  classes: TClass[];
 }

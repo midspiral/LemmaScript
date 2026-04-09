@@ -105,7 +105,14 @@ export interface Namespace {
   decls: Decl[];
 }
 
-export type Decl = Inductive | Structure | FnDef | FnMethod | Namespace;
+export interface ClassDecl {
+  kind: "class";
+  name: string;
+  fields: { name: string; type: Ty }[];
+  methods: FnMethod[];
+}
+
+export type Decl = Inductive | Structure | FnDef | FnMethod | Namespace | ClassDecl;
 
 export interface Module {
   comment: string;
