@@ -162,10 +162,10 @@ No normalization of operators. Both backends handle all comparison directions.
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
 | `s.slice(start, end)` | `JSString.slice s start end` | `s[start..end]` |
-| `s.trim()` | — (Lean library TODO) | `StringTrim(s)` |
-| `s.toLowerCase()` | — (Lean library TODO) | `StringToLower(s)` |
-| `s.toUpperCase()` | — (Lean library TODO) | `StringToUpper(s)` |
-| `s.includes(sub)` | — (Lean library TODO) | `StringIndexOf(s, sub) >= 0` |
+| `s.trim()` | — | `StringTrim(s)` |
+| `s.toLowerCase()` | — | `StringToLower(s)` |
+| `s.toUpperCase()` | — | `StringToUpper(s)` |
+| `s.includes(sub)` | — | `StringIndexOf(s, sub) >= 0` |
 | `s.length` | `s.length` | `\|s\|` |
 | `arr.map((x) => e)` | `arr.map (fun x => e)` | `Seq.Map((x) => e, arr)` |
 | `arr.filter((x) => e)` | `arr.filter (fun x => e)` | `Seq.Filter((x) => e, arr)` |
@@ -173,13 +173,13 @@ No normalization of operators. Both backends handle all comparison directions.
 | `arr.some((x) => e)` | `arr.any (fun x => e)` | `exists x :: x in arr && e` |
 | `arr.includes(x)` | `arr.contains x` | `(x in arr)` |
 | `arr.find((x) => e)` | `arr.find? (fun x => e)` | — |
-| `arr.shift()` | — (not yet implemented) | `arr[0]` + `arr := arr[1..]` |
-| `arr.slice(start)` | — (not yet implemented) | `arr[start..]` |
+| `arr.shift()` | — | `arr[0]` + `arr := arr[1..]` |
+| `arr.slice(start)` | — | `arr[start..]` |
 | `expr!` (non-null) | unwrap Option | unwrap Option / direct map access |
 | `expr \|\| default` (on optional) | match Some/None | `match { Some(v) => v, None => default }` |
-| `expr?.method(args)` | — (not yet implemented) | `if key in map { ... }` |
+| `expr?.method(args)` | — | `if key in map { ... }` |
 | `expr as T` | stripped | stripped |
-| `new Map(arr.map(fn))` | — (not yet implemented) | loop building `map[]` |
+| `new Map(arr.map(fn))` | — | loop building `map[]` |
 | `[a, b, c]` | `#[a, b, c]` | `[a, b, c]` |
 | `[...arr, e]` | `Array.push arr e` | `(arr + [e])` |
 | `{ ...obj, f: v }` | `{ obj with f := v }` | `obj.(f := v)` |
@@ -367,7 +367,7 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 | `while (c) { ... }` | `while c' invariant ... do ...` | `while c' invariant ... { ... }` |
 | `x = f(a, b)` (method call) | `x ← f a b` | `x := f(a, b);` |
 | `break` | `break` | `break;` |
-| `throw new Error(...)` | — (not yet implemented) | `assert false;` |
+| `throw new Error(...)` | — | `assert false;` |
 | `switch` / discriminant if-chain | `match` | `match` |
 
 All expressions `e` above are translated using the spec expression rules (§3).
