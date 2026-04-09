@@ -165,6 +165,17 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // String truthiness: !str → str == ""
       if (e.op === "!" && e.expr.ty.kind === "string")
         return { kind: "binop", op: "=", left: lowerExpr(e.expr, binds), right: { kind: "str", value: "" } };
+      // Optional truthiness: !opt → opt is None
+      if (e.op === "!" && e.expr.ty.kind === "optional") {
+        const bound = matchBinder("value");
+        return {
+          kind: "match", scrutinee: lowerExpr(e.expr, binds),
+          arms: [
+            { pattern: `.some ${bound}`, body: { kind: "bool", value: false } },
+            { pattern: ".none", body: { kind: "bool", value: true } },
+          ],
+        };
+      }
       return { kind: "unop", op: e.op === "!" ? "¬" : e.op, expr: lowerExpr(e.expr, binds) };
 
     case "binop": {

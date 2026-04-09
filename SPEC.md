@@ -147,7 +147,12 @@ The translation is purely syntactic. `lsc` does not infer types beyond what `//@
 
 No normalization of operators. Both backends handle all comparison directions.
 
-**String truthiness:** `!stringVar` where the operand has type `string` is translated as `stringVar == ""` (Dafny) / `stringVar = ""` (Lean), matching JavaScript's truthy semantics for strings.
+**Truthiness coercion:** `!expr` is translated based on the operand's type:
+- `string`: `!s` → `s == ""` (empty string is falsy)
+- `optional`: `!opt` → match on None (undefined is falsy)
+- `bool`: `!b` → `¬b` (standard negation)
+
+`!!expr` works naturally: the inner `!` coerces to bool, the outer `!` negates.
 
 ### 3.2 Special Forms
 
