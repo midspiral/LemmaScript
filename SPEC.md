@@ -27,6 +27,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 
 | Keyword | Placement | Meaning |
 |---------|-----------|---------|
+| `verify` | Before first statement of function body | Mark function for verification (see §2.5) |
 | `requires` | Before first statement of function body | Precondition |
 | `ensures` | Before first statement of function body | Postcondition (`\result` refers to return value) |
 | `invariant` | Before first statement of loop body | Loop invariant |
@@ -104,6 +105,24 @@ export interface Model {
   expenses: Expense[];
 }
 ```
+
+### 2.5 Selective Verification: `//@ verify`
+
+By default, `lsc` extracts and verifies every function in the file. In brownfield codebases where most functions are outside the supported fragment, add `//@ verify` to opt in individual functions:
+
+```typescript
+function isEmptyResult(result: string): boolean {
+  //@ verify
+  //@ ensures result.trim() === '' ==> \result === true
+  if (!result) return true;
+  const trimmed = result.trim();
+  // ...
+}
+```
+
+**Behavior:** If any function in the file has `//@ verify`, `lsc` switches to selective mode and only extracts functions marked with `//@ verify`. Functions without it are silently skipped. Type and interface declarations are always extracted (they may be needed by verified functions).
+
+If no function in the file has `//@ verify`, all functions are extracted as before. This keeps existing LemmaScript projects (where every function is in-fragment) working without changes.
 
 ---
 
