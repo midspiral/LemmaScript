@@ -95,9 +95,16 @@ export interface TClass {
   methods: TFunction[];
 }
 
+export interface TConst {
+  name: string;
+  ty: Ty;
+  value: TExpr;
+}
+
 export interface TModule {
   file: string;
   typeDecls: import("./types.js").TypeDeclInfo[];
+  constants: TConst[];
   functions: TFunction[];
   classes: TClass[];
 }

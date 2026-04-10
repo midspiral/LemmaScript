@@ -6,7 +6,7 @@
  */
 
 import type { TExpr, TStmt, TFunction, TModule, Ty } from "./typedir.js";
-import type { Expr, Stmt, Decl, Module, FnDef, FnMethod, MatchArm, StmtMatchArm } from "./ir.js";
+import type { Expr, Stmt, Decl, Module, FnDef, FnMethod, MatchArm, StmtMatchArm, ConstDecl } from "./ir.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 
@@ -936,6 +936,14 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
   _forofCounters.clear();
   const typeDecls = mod.typeDecls.map(transformTypeDecl);
 
+  // Module-level constants
+  const constDecls: ConstDecl[] = (mod.constants ?? []).map(c => ({
+    kind: "const" as const,
+    name: c.name,
+    type: c.ty,
+    value: transformExpr(c.value),
+  }));
+
   // Pure function mirrors
   const pureDefs: FnDef[] = [];
   for (const fn of mod.functions) {
@@ -1043,7 +1051,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
       { key: "loom.semantics.termination", value: '"total"' },
       { key: "loom.semantics.choice", value: '"demonic"' },
     ],
-    decls: [...methods, ...classDecls],
+    decls: [...constDecls, ...methods, ...classDecls],
   };
 
   return { typesFile, defFile };

@@ -421,6 +421,10 @@ function emitDecl(d: Decl): string {
       return lines.join("\n");
     }
 
+    case "const": {
+      return `const ${escapeName(d.name)}: ${tyToDafny(d.type)} := ${emitExpr(d.value)}`;
+    }
+
     case "namespace": {
       // Dafny doesn't need namespaces — flatten declarations
       return d.decls.map(emitDecl).join("\n\n");

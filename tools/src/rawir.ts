@@ -160,9 +160,16 @@ export interface RawClass {
   methods: RawFunction[];
 }
 
+export interface RawConst {
+  name: string;
+  tsType: string;
+  value: RawExpr;
+}
+
 export interface RawModule {
   file: string;
   typeDecls: import("./types.js").TypeDeclInfo[];
+  constants: RawConst[];
   functions: RawFunction[];
   classes: RawClass[];
 }
