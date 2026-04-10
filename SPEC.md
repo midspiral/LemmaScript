@@ -56,7 +56,7 @@ add      := mul (('+' | '-') mul)*
 mul      := unary (('*' | '/' | '%') unary)*
 unary    := '!' unary | '-' unary | postfix
 postfix  := atom ('.' ident | '[' expr ']' | '(' args ')')*
-atom     := NUMBER | IDENT | 'true' | 'false' | '\result'
+atom     := NUMBER | HEX_NUMBER | IDENT | 'true' | 'false' | '\result'
           | 'forall' '(' IDENT (':' TYPE)? ',' expr ')'
           | 'exists' '(' IDENT (':' TYPE)? ',' expr ')'
           | '(' expr ')'
@@ -641,7 +641,7 @@ Pure functions are handled differently by each backend:
 
 ### 6.1.1 BigInt
 
-TypeScript's `bigint` type maps to `Int`/`int` (same as `number`). BigInt literals like `32n`, `0xffffn` are treated as integer literals with the `n` suffix stripped:
+TypeScript's `bigint` type maps to `Int`/`int` (same as `number`). BigInt literals like `32n`, `0xffffn` are treated as integer literals with the `n` suffix stripped. Hex literals (`0x...`) and the `n` suffix are supported in both function bodies and `//@ ` annotations:
 
 | TypeScript | Dafny | Lean |
 |-----------|-------|------|
