@@ -31,6 +31,12 @@ function extractExpr(node: Expression): RawExpr {
     return { kind: "num", value: Number(node.getLiteralValue()) };
   }
 
+  // BigInt literal (e.g. 32n, 0xffffn) — treat as integer
+  if (Node.isBigIntLiteral(node)) {
+    const text = node.getText().replace(/n$/, '');
+    return { kind: "num", value: Number(text) };
+  }
+
   // String literal
   if (Node.isStringLiteral(node)) {
     return { kind: "str", value: node.getLiteralValue() };
@@ -283,6 +289,7 @@ function findDiscriminant(members: Type[]): string | null {
 function typeToString(type: Type): string {
   if (type.isUndefined()) return "undefined";
   if (type.isNumber()) return "number";
+  if (type.isBigInt()) return "bigint";
   if (type.isString()) return "string";
   if (type.isBoolean()) return "boolean";
   // Named type alias (e.g. Priority = "low" | "medium" | "high") — use the alias name
