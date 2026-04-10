@@ -22,7 +22,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
   if (hit) return hit;
   const r = (x: Expr) => mapExpr(x, f);
   switch (e.kind) {
-    case "var": case "num": case "bool": case "str": case "constructor": case "emptyMap": case "emptySet": return e;
+    case "var": case "num": case "bool": case "str": case "constructor": case "emptyMap": case "emptySet": case "havoc": return e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
     case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };
@@ -47,7 +47,6 @@ function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
   const r = (e: Expr) => mapExpr(e, f);
   switch (s.kind) {
     case "let": return { ...s, value: r(s.value) };
-    case "havoc": return s;
     case "assign": return { ...s, value: r(s.value) };
     case "bind": return { ...s, value: r(s.value) };
     case "let-bind": return { ...s, value: r(s.value) };
@@ -326,6 +325,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
 
     case "conditional":
       return { kind: "if", cond: lowerExpr(e.cond, binds), then: lowerExpr(e.then, binds), else: lowerExpr(e.else, binds) };
+
+    case "havoc":
+      return { kind: "havoc", type: e.ty };
   }
 }
 
@@ -484,9 +486,6 @@ function liftMethodCalls(e: TExpr): { binds: Stmt[]; expr: Expr } {
 
 function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
   switch (s.kind) {
-    case "havoc":
-      return [{ kind: "havoc", name: s.name, type: s.ty, mutable: s.mutable }];
-
     case "let": {
       // arr.shift()! → let x = arr[0]; arr = arr[1..]
       const init = s.init.kind === "call" ? s.init : undefined;

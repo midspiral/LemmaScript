@@ -33,6 +33,7 @@ export type Expr =
   | { kind: "exists"; var: string; type: Ty; body: Expr }
   | { kind: "implies"; premises: Expr[]; conclusion: Expr }
   | { kind: "let"; name: string; value: Expr; body: Expr }
+  | { kind: "havoc"; type: Ty }
 
 export interface MatchArm {
   pattern: string;    // ".syn seq", ".idle", "_"
@@ -43,7 +44,6 @@ export interface MatchArm {
 
 export type Stmt =
   | { kind: "let"; name: string; type: Ty; mutable: boolean; value: Expr }
-  | { kind: "havoc"; name: string; type: Ty; mutable: boolean }
   | { kind: "assign"; target: string; value: Expr }
   | { kind: "bind"; target: string; value: Expr }         // x ← f a b (mutation)
   | { kind: "let-bind"; name: string; value: Expr }       // let x ← f a b (new binding)

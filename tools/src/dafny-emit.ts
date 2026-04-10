@@ -228,6 +228,7 @@ function emitExpr(e: Expr): string {
     }
 
     case "let": return `var ${escapeName(e.name)} := ${emitExpr(e.value)}; ${emitExpr(e.body)}`;
+    case "havoc": return "*";
   }
 }
 
@@ -263,9 +264,9 @@ function emitStmts(stmts: Stmt[], indent: number): string {
 function emitStmt(s: Stmt, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (s.kind) {
-    case "havoc":
-      return `${pad}var ${escapeName(s.name)}: ${tyToDafny(s.type)} := *;`;
     case "let":
+      if (s.value.kind === "havoc")
+        return `${pad}var ${escapeName(s.name)}: ${tyToDafny(s.type)} := ${emitExpr(s.value)};`;
       return `${pad}var ${escapeName(s.name)} := ${emitExpr(s.value)};`;
     case "assign":
       return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)};`;
