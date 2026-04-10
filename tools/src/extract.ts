@@ -140,6 +140,9 @@ function extractExpr(node: Expression): RawExpr {
     for (const prop of node.getProperties()) {
       if (Node.isSpreadAssignment(prop)) {
         spread = extractExpr(prop.getExpression());
+      } else if (Node.isShorthandPropertyAssignment(prop)) {
+        const name = prop.getName();
+        fields.push({ name, value: { kind: "var", name } });
       } else if (Node.isPropertyAssignment(prop)) {
         const init = prop.getInitializer();
         if (init) fields.push({ name: prop.getName(), value: extractExpr(init) });
