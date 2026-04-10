@@ -42,7 +42,8 @@ export interface MatchArm {
 // ── Statements ──────────────────────────────────────────────
 
 export type Stmt =
-  | { kind: "let"; name: string; type: Ty; mutable: boolean; value?: Expr; havoc?: boolean }
+  | { kind: "let"; name: string; type: Ty; mutable: boolean; value: Expr }
+  | { kind: "havoc"; name: string; type: Ty; mutable: boolean }
   | { kind: "assign"; target: string; value: Expr }
   | { kind: "bind"; target: string; value: Expr }         // x ← f a b (mutation)
   | { kind: "let-bind"; name: string; value: Expr }       // let x ← f a b (new binding)

@@ -344,15 +344,25 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       const isHavoc = s.getLeadingCommentRanges().some(r => r.getText().trim() === '//@ havoc');
       for (const d of s.getDeclarations()) {
         const declType = d.getType();
-        const init = d.getInitializer();
-        result.push({
-          kind: "let",
-          name: d.getName(),
-          mutable: s.getDeclarationKind() === "let",
-          tsType: typeToString(declType),
-          ...(isHavoc ? { havoc: true } : { init: init ? extractExpr(init) : { kind: "var" as const, name: "default" } }),
-          line,
-        });
+        if (isHavoc) {
+          result.push({
+            kind: "havoc",
+            name: d.getName(),
+            mutable: s.getDeclarationKind() === "let",
+            tsType: typeToString(declType),
+            line,
+          });
+        } else {
+          const init = d.getInitializer();
+          result.push({
+            kind: "let",
+            name: d.getName(),
+            mutable: s.getDeclarationKind() === "let",
+            tsType: typeToString(declType),
+            init: init ? extractExpr(init) : { kind: "var" as const, name: "default" },
+            line,
+          });
+        }
       }
       continue;
     }

@@ -263,9 +263,10 @@ function emitStmts(stmts: Stmt[], indent: number): string {
 function emitStmt(s: Stmt, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (s.kind) {
+    case "havoc":
+      return `${pad}var ${escapeName(s.name)}: ${tyToDafny(s.type)} := *;`;
     case "let":
-      if (s.havoc) return `${pad}var ${escapeName(s.name)}: ${tyToDafny(s.type)} := *;`;
-      return `${pad}var ${escapeName(s.name)} := ${emitExpr(s.value!)};`;
+      return `${pad}var ${escapeName(s.name)} := ${emitExpr(s.value)};`;
     case "assign":
       return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)};`;
     case "ghostLet":

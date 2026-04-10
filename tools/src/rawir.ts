@@ -38,9 +38,16 @@ export interface RawLet {
   name: string;
   mutable: boolean;
   tsType: string;      // raw TS type string, resolved later
-  init?: RawExpr;      // absent when //@ havoc
+  init: RawExpr;
   line: number;
-  havoc?: boolean;     // //@ havoc — nondeterministic value
+}
+
+export interface RawHavoc {
+  kind: "havoc";
+  name: string;
+  mutable: boolean;
+  tsType: string;
+  line: number;
 }
 
 export interface RawAssign {
@@ -133,7 +140,7 @@ export interface RawAssert {
   line: number;
 }
 
-export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawContinue | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf | RawThrow | RawGhostLet | RawGhostAssign | RawAssert;
+export type RawStmt = RawLet | RawHavoc | RawAssign | RawReturn | RawBreak | RawContinue | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf | RawThrow | RawGhostLet | RawGhostAssign | RawAssert;
 
 // ── Top-level ────────────────────────────────────────────────
 

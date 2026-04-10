@@ -357,14 +357,16 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
   switch (s.kind) {
     case "let": {
       const ty = resolveTsType(s.tsType, ctx.overrides, s.name);
-      if (s.havoc) {
-        const mutable = s.mutable || isRefMutableInTS(ty);
-        return [{ kind: "let", name: s.name, ty, mutable, init: { kind: "var", name: "__havoc", ty } as TExpr, havoc: true }, extend(ctx.env, s.name, ty)];
-      }
-      const init = coerceStr(resolveExpr(s.init!, ctx), ty);
+      const init = coerceStr(resolveExpr(s.init, ctx), ty);
       // const collections are mutable in value-semantics world (TS mutates in place, Dafny/Lean reassign)
       const mutable = s.mutable || isRefMutableInTS(ty);
       return [{ kind: "let", name: s.name, ty, mutable, init }, extend(ctx.env, s.name, ty)];
+    }
+
+    case "havoc": {
+      const ty = resolveTsType(s.tsType, ctx.overrides, s.name);
+      const mutable = s.mutable || isRefMutableInTS(ty);
+      return [{ kind: "havoc", name: s.name, ty, mutable }, extend(ctx.env, s.name, ty)];
     }
 
     case "assign": {
@@ -525,7 +527,8 @@ function collectCallsExpr(e: RawExpr, fns: Set<string>, out: Set<string>): void 
 function collectCallsStmts(stmts: RawStmt[], fns: Set<string>, out: Set<string>): void {
   for (const s of stmts) {
     switch (s.kind) {
-      case "let": if (s.init) collectCallsExpr(s.init, fns, out); break;
+      case "let": collectCallsExpr(s.init, fns, out); break;
+      case "havoc": break;
       case "assign": collectCallsExpr(s.value, fns, out); break;
       case "return": collectCallsExpr(s.value, fns, out); break;
       case "expr": collectCallsExpr(s.expr, fns, out); break;

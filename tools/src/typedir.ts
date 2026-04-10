@@ -48,7 +48,8 @@ export type TExpr =
 // ── Statements ───────────────────────────────────────────────
 
 export type TStmt =
-  | { kind: "let"; name: string; ty: Ty; mutable: boolean; init: TExpr; havoc?: boolean }
+  | { kind: "let"; name: string; ty: Ty; mutable: boolean; init: TExpr }
+  | { kind: "havoc"; name: string; ty: Ty; mutable: boolean }
   | { kind: "assign"; target: string; value: TExpr }
   | { kind: "return"; value: TExpr }
   | { kind: "break" }
