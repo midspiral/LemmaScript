@@ -81,6 +81,8 @@ jobs:
             branch: lemmascript
           - repo: midspiral/clear-split-lemmascript
             branch: main
+          - repo: midspiral/hono-lemmascript
+            branch: lemmascript
           - repo: CHARM-BDF/charmchat
             branch: lemma
     steps:
