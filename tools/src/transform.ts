@@ -897,6 +897,12 @@ function findReassignedNames(stmts: TStmt[], names: Set<string>): Set<string> {
     for (const s of stmts) {
       if (s.kind === "assign" && names.has(s.target)) found.add(s.target);
       if (s.kind === "ghostAssign" && names.has(s.target)) found.add(s.target);
+      // Mutating collection calls: s.add(x), m.set(k,v), s.delete(x), arr.push(x)
+      if (s.kind === "expr" && s.expr.kind === "call" && s.expr.fn.kind === "field" &&
+          s.expr.fn.obj.kind === "var" && names.has(s.expr.fn.obj.name) &&
+          ["add", "set", "delete", "push"].includes(s.expr.fn.field)) {
+        found.add(s.expr.fn.obj.name);
+      }
       if (s.kind === "if") { scan(s.then); scan(s.else); }
       if (s.kind === "while") scan(s.body);
       if (s.kind === "forof") scan(s.body);
