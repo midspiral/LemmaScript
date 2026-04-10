@@ -625,6 +625,7 @@ Pure functions are handled differently by each backend:
 | TypeScript type | Lean type | Dafny type |
 |----------------|-----------|-----------|
 | `number` | `Int` | `int` |
+| `bigint` | `Int` | `int` |
 | `number` (with `//@ type nat`) | `Nat` | `nat` |
 | `boolean` | `Bool` | `bool` |
 | `string` | `String` | `string` |
@@ -638,7 +639,16 @@ Pure functions are handled differently by each backend:
 
 `lsc` reads parameter and variable types from ts-morph. Primitive types are mapped per the table. User-defined types (like `State`, `Event`) are passed through by name — the corresponding backend type is generated from the TS type declaration.
 
-### 6.1.1 Real Numbers
+### 6.1.1 BigInt
+
+TypeScript's `bigint` type maps to `Int`/`int` (same as `number`). BigInt literals like `32n`, `0xffffn` are treated as integer literals with the `n` suffix stripped:
+
+| TypeScript | Dafny | Lean |
+|-----------|-------|------|
+| `32n` | `32` (int) | `32` (Int) |
+| `0xffffn` | `65535` (int) | `65535` (Int) |
+
+### 6.1.2 Real Numbers
 
 JavaScript has one numeric type (`number`, IEEE 754 doubles). LemmaScript maps `number` to `int` by default, but **non-integer numeric literals** (e.g., `0.8`, `3.14`) are typed as `real`:
 
