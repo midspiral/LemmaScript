@@ -68,7 +68,7 @@ function emitExpr(e: Expr): string {
     case "var": return escapeName(e.name);
     case "num": return `${e.value}`;
     case "bool": return e.value ? "true" : "false";
-    case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 
     case "constructor": return qualifyCtor(e.name, e.type);
 

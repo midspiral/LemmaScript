@@ -111,7 +111,8 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "var": return escapeName(e.name);
     case "num": return `${e.value}`;
     case "bool": return e.value ? "true" : "false";
-    case "str": return `"${e.value}"`;
+    case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+
     case "constructor": return `.${e.name}`;
     case "arrayLiteral":
       if (e.elems.length === 0) return `#[]`;

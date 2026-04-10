@@ -311,7 +311,7 @@ function typeToString(type: Type): string {
   if (type.isUndefined()) return "undefined";
   if (type.isNumber() || type.isNumberLiteral()) return "number";
   if (type.isBigInt() || type.isBigIntLiteral()) return "bigint";
-  if (type.isString()) return "string";
+  if (type.isString() || type.isStringLiteral()) return "string";
   if (type.isBoolean()) return "boolean";
   // Named type alias (e.g. Priority = "low" | "medium" | "high") — use the alias name
   if (type.getAliasSymbol()) {
