@@ -113,7 +113,14 @@ export interface ClassDecl {
   methods: FnMethod[];
 }
 
-export type Decl = Inductive | Structure | FnDef | FnMethod | Namespace | ClassDecl;
+export interface ConstDecl {
+  kind: "const";
+  name: string;
+  type: Ty;
+  value: Expr;
+}
+
+export type Decl = Inductive | Structure | FnDef | FnMethod | Namespace | ClassDecl | ConstDecl;
 
 export interface Module {
   comment: string;

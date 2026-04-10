@@ -7,7 +7,7 @@
 
 import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget } from "ts-morph";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
-import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawGhostLet, RawGhostAssign } from "./rawir.js";
+import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
 
 // ── Expression extraction ────────────────────────────────────
 
@@ -288,8 +288,8 @@ function findDiscriminant(members: Type[]): string | null {
 
 function typeToString(type: Type): string {
   if (type.isUndefined()) return "undefined";
-  if (type.isNumber()) return "number";
-  if (type.isBigInt()) return "bigint";
+  if (type.isNumber() || type.isNumberLiteral()) return "number";
+  if (type.isBigInt() || type.isBigIntLiteral()) return "bigint";
   if (type.isString()) return "string";
   if (type.isBoolean()) return "boolean";
   // Named type alias (e.g. Priority = "low" | "medium" | "high") — use the alias name
@@ -604,6 +604,29 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     }
   }
 
+  // Extract module-level const declarations
+  const constants: RawConst[] = [];
+  for (const stmt of sourceFile.getStatements()) {
+    if (Node.isVariableStatement(stmt)) {
+      for (const decl of stmt.getDeclarationList().getDeclarations()) {
+        if (stmt.getDeclarationList().getFlags() & 2 /* const */) {
+          const init = decl.getInitializer();
+          if (init) {
+            try {
+              constants.push({
+                name: decl.getName(),
+                tsType: typeToString(decl.getType()),
+                value: extractExpr(init as Expression),
+              });
+            } catch (e) {
+              console.error(`WARNING: skipping const '${decl.getName()}': ${(e as Error).message}`);
+            }
+          }
+        }
+      }
+    }
+  }
+
   // If any function has //@ verify, only extract those (brownfield mode).
   // Otherwise extract all functions (backwards-compatible with existing examples).
   const allFns = sourceFile.getFunctions();
@@ -651,6 +674,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   return {
     file: sourceFile.getFilePath(),
     typeDecls,
+    constants,
     functions,
     classes,
   };

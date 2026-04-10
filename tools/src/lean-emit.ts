@@ -350,6 +350,9 @@ function emitDecl(d: Decl): string {
 
     case "class":
       throw new Error(`Lean class support not yet implemented: ${d.name}`);
+
+    case "const":
+      return `def ${escapeName(d.name)} : ${tyToLean(d.type)} := ${emitExpr(d.value)}`;
   }
 }
 

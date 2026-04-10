@@ -669,9 +669,17 @@ function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInf
 
 export function resolveModule(raw: RawModule): TModule {
   const pureFns = computePureFns(raw.functions);
+  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, inSpec: false, inLambda: false };
+  const constants = (raw.constants ?? []).map(c => ({
+    name: c.name,
+    ty: parseTsType(c.tsType),
+    value: resolveExpr(c.value, emptyCtx),
+  }));
+
   return {
     file: raw.file,
     typeDecls: raw.typeDecls,
+    constants,
     functions: raw.functions.map(fn => resolveFunction(fn, raw.typeDecls, pureFns)),
     classes: (raw.classes ?? []).map(cls => resolveClass(cls, raw.typeDecls, pureFns)),
   };
