@@ -209,6 +209,17 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           (e.left.ty.kind === "optional") !== (e.right.ty.kind === "optional")) {
         const [optSide, valSide] = e.left.ty.kind === "optional" ? [e.left, e.right] : [e.right, e.left];
         const optExpr = lowerExpr(optSide, binds);
+        // x === undefined → None?, x !== undefined → Some?
+        if (valSide.kind === "var" && valSide.name === "undefined") {
+          const isNone = e.op === "===";
+          return {
+            kind: "match", scrutinee: optExpr,
+            arms: [
+              { pattern: ".some _", body: { kind: "bool", value: !isNone } },
+              { pattern: ".none", body: { kind: "bool", value: isNone } },
+            ],
+          };
+        }
         const valExpr = lowerExpr(valSide, binds);
         const cmpOp = BOOL_OP_MAP[e.op] ?? e.op;
         const noneVal = e.op === "!==" ? true : false;
@@ -323,8 +334,25 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     case "exists":
       return { kind: "exists", var: e.var, type: e.varTy, body: transformExpr(e.body) };
 
-    case "conditional":
-      return { kind: "if", cond: lowerExpr(e.cond, binds), then: lowerExpr(e.then, binds), else: lowerExpr(e.else, binds) };
+    case "conditional": {
+      const cond = lowerExpr(e.cond, binds);
+      let thenExpr = lowerExpr(e.then, binds);
+      let elseExpr = lowerExpr(e.else, binds);
+      // Optional ternary: wrap non-undefined branch in Some, undefined branch in None
+      if (e.ty.kind === "optional") {
+        if (e.then.kind === "var" && e.then.name === "undefined") {
+          thenExpr = { kind: "constructor", name: ".none" };
+        } else {
+          thenExpr = { kind: "app", fn: "Some", args: [thenExpr] };
+        }
+        if (e.else.kind === "var" && e.else.name === "undefined") {
+          elseExpr = { kind: "constructor", name: ".none" };
+        } else {
+          elseExpr = { kind: "app", fn: "Some", args: [elseExpr] };
+        }
+      }
+      return { kind: "if", cond, then: thenExpr, else: elseExpr };
+    }
 
     case "havoc":
       // Dafny's * only works in var/assign positions — lift to own declaration
@@ -407,7 +435,13 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
       // Detect optional check → match on Some/None
       const opt = parseOptionalCheck(s.cond);
       if (opt) {
-        result.push(emitOptionalMatch(opt.varName, opt.negated, s, typeDecls));
+        const rest = stmts.slice(i + 1);
+        result.push(emitOptionalMatch(opt.varName, opt.negated, s, typeDecls, rest));
+        // If rest was consumed into the Some branch, skip remaining
+        const someBranch = opt.negated ? s.else : s.then;
+        if (someBranch.length === 0 && rest.length > 0) {
+          return result;
+        }
         i++;
         continue;
       }
@@ -700,9 +734,14 @@ function parseDiscriminantCond(cond: TExpr): { varName: string; typeName: string
   return { varName: cond.left.obj.name, typeName: cond.left.obj.ty.name, variant: cond.right.value };
 }
 
-function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind: "if" }, typeDecls: TypeDeclInfo[]): Stmt {
-  const someBranch = negated ? s.else : s.then;
+function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind: "if" }, typeDecls: TypeDeclInfo[], restStmts?: TStmt[]): Stmt {
+  let someBranch = negated ? s.else : s.then;
   const noneBranch = negated ? s.then : s.else;
+  // Early-return pattern: if (x === undefined) { return ... } — Some branch is empty,
+  // so include remaining statements as the Some body
+  if (someBranch.length === 0 && restStmts && restStmts.length > 0) {
+    someBranch = restStmts;
+  }
   const bound = matchBinder(`${varName}_val`);
   const someBody = transformStmts(someBranch, typeDecls);
   const r = (e: Expr): Expr => replaceVar(e, varName, { kind: "var", name: bound });
@@ -801,6 +840,25 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
         return { kind: "let", name: s.name, value: transformExpr(s.init), body: restExpr };
       }
       case "if": {
+        // Optional narrowing: if (x === undefined) → match x { None => ..., Some(x_val) => ... }
+        const optCheck = parseOptionalCheck(s.cond);
+        if (optCheck) {
+          const someBranch = optCheck.negated ? s.else : s.then;
+          const noneBranch = optCheck.negated ? s.then : (s.else.length > 0 ? s.else : rest);
+          const bound = matchBinder(`${optCheck.varName}_val`);
+          const someExpr = transformPureBody(someBranch, typeDecls);
+          if (!someExpr) return null;
+          const noneExpr = transformPureBody(noneBranch, typeDecls);
+          if (!noneExpr) return null;
+          const someReplaced = replaceVar(someExpr, optCheck.varName, { kind: "var", name: bound });
+          return {
+            kind: "match", scrutinee: optCheck.varName,
+            arms: [
+              { pattern: `.some ${bound}`, body: someReplaced },
+              { pattern: ".none", body: noneExpr },
+            ],
+          };
+        }
         const thenExpr = transformPureBody(s.then, typeDecls);
         if (!thenExpr) return null;
         const elseBranch = s.else.length > 0 ? s.else : rest;
