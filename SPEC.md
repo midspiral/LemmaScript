@@ -123,7 +123,7 @@ function isEmptyResult(result: string): boolean {
 }
 ```
 
-**Behavior:** If any function in the file has `//@ verify`, `lsc` switches to selective mode and only extracts functions marked with `//@ verify`. Functions without it are silently skipped. Type and interface declarations are always extracted (they may be needed by verified functions).
+**Behavior:** If any function in the file has `//@ verify`, `lsc` switches to selective mode and only extracts functions marked with `//@ verify`. Functions without it are silently skipped. Type declarations, interface declarations, and module-level `const` declarations are always extracted (they may be needed by verified functions).
 
 If no function in the file has `//@ verify`, all functions are extracted as before. This keeps existing LemmaScript projects (where every function is in-fragment) working without changes.
 
@@ -658,7 +658,19 @@ TypeScript's `bigint` type maps to `Int`/`int` (same as `number`). BigInt litera
 
 Lean backend does not yet support bitwise operators.
 
-### 6.1.2 Real Numbers
+### 6.1.2 Constants
+
+Module-level `const` declarations are extracted and emitted as constants in the backend:
+
+```typescript
+const MAPPED_PREFIX = 281470681743360
+```
+
+→ Dafny (only): `const MAPPED_PREFIX: int := 281470681743360`
+
+Constants are always extracted (even in `//@ verify` selective mode) so verified functions can reference them. The type is inferred from the initializer. Literal types (e.g., TypeScript inferring `281470681743360` instead of `number`) are widened to their base type.
+
+### 6.1.3 Real Numbers
 
 JavaScript has one numeric type (`number`, IEEE 754 doubles). LemmaScript maps `number` to `int` by default, but **non-integer numeric literals** (e.g., `0.8`, `3.14`) are typed as `real`:
 
