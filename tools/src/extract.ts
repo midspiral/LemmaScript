@@ -37,6 +37,24 @@ function extractExpr(node: Expression): RawExpr {
     return { kind: "num", value: Number(text) };
   }
 
+  // Template literal: `foo${x}bar` → "foo" + x + "bar"
+  if (Node.isTemplateExpression(node)) {
+    const parts: RawExpr[] = [];
+    const head = node.getHead().getLiteralText();
+    if (head) parts.push({ kind: "str", value: head });
+    for (const span of node.getTemplateSpans()) {
+      parts.push(extractExpr(span.getExpression()));
+      const text = span.getLiteral().getLiteralText();
+      if (text) parts.push({ kind: "str", value: text });
+    }
+    return parts.reduce((left, right) => ({ kind: "binop", op: "+", left, right }));
+  }
+
+  // No-substitution template literal: `hello` → "hello"
+  if (Node.isNoSubstitutionTemplateLiteral(node)) {
+    return { kind: "str", value: node.getLiteralText() };
+  }
+
   // String literal
   if (Node.isStringLiteral(node)) {
     return { kind: "str", value: node.getLiteralValue() };
