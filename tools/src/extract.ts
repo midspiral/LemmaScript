@@ -632,7 +632,10 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       for (const decl of stmt.getDeclarationList().getDeclarations()) {
         if (stmt.getDeclarationList().getFlags() & 2 /* const */) {
           const init = decl.getInitializer();
-          if (init) {
+          // Skip huge string constants — they crash the verifier and have no verification value
+          const initType = decl.getType();
+          const isHugeString = (initType.isString() || initType.isStringLiteral()) && (init as Expression).getText().length > 200;
+          if (init && !isHugeString) {
             try {
               constants.push({
                 name: decl.getName(),
