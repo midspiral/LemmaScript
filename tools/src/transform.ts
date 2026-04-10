@@ -327,6 +327,12 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "if", cond: lowerExpr(e.cond, binds), then: lowerExpr(e.then, binds), else: lowerExpr(e.else, binds) };
 
     case "havoc":
+      // Dafny's * only works in var/assign positions — lift to own declaration
+      if (binds) {
+        const name = `_t${_liftCounter++}`;
+        binds.push({ kind: "let", name, type: e.ty, mutable: false, value: { kind: "havoc", type: e.ty } });
+        return { kind: "var", name };
+      }
       return { kind: "havoc", type: e.ty };
   }
 }
@@ -487,6 +493,10 @@ function liftMethodCalls(e: TExpr): { binds: Stmt[]; expr: Expr } {
 function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
   switch (s.kind) {
     case "let": {
+      // Whole-init havoc: emit directly, no lifting
+      if (s.init.kind === "havoc") {
+        return [{ kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: { kind: "havoc", type: s.init.ty } }];
+      }
       // arr.shift()! → let x = arr[0]; arr = arr[1..]
       const init = s.init.kind === "call" ? s.init : undefined;
       if (init && init.fn.kind === "field" && init.fn.field === "shift" && init.fn.obj.ty.kind === "array") {

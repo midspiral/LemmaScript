@@ -11,7 +11,21 @@ import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawGhostLet, R
 
 // ── Expression extraction ────────────────────────────────────
 
+/** When set, calls whose function/method name matches this key are replaced with havoc. */
+let _havocKey: string | null = null;
+
 function extractExpr(node: Expression): RawExpr {
+  // Havoc key matching: replace matching calls with havoc expression
+  if (_havocKey && Node.isCallExpression(node)) {
+    const fnExpr = node.getExpression();
+    const name = Node.isPropertyAccessExpression(fnExpr) ? fnExpr.getName()
+      : Node.isIdentifier(fnExpr) ? fnExpr.getText()
+      : null;
+    if (name === _havocKey) {
+      return { kind: "havoc", tsType: typeToString(node.getType()) };
+    }
+  }
+
   // Numeric literal
   if (Node.isNumericLiteral(node)) {
     return { kind: "num", value: Number(node.getLiteralValue()) };
@@ -341,12 +355,22 @@ function extractStmts(stmts: Node[]): RawStmt[] {
     result.push(...parseSpecComments(s.getLeadingCommentRanges(), line));
 
     if (Node.isVariableStatement(s)) {
-      const isHavoc = s.getLeadingCommentRanges().some(r => r.getText().trim() === '//@ havoc');
+      const havocMatch = s.getLeadingCommentRanges()
+        .map(r => r.getText().trim().match(/^\/\/@ havoc(?:\s+(\S+))?$/))
+        .find(m => m !== null);
+      const havocKey = havocMatch?.[1] ?? null;
+      const isHavoc = !!havocMatch;
       for (const d of s.getDeclarations()) {
         const declType = d.getType();
-        const init = isHavoc
-          ? { kind: "havoc" as const }
-          : (d.getInitializer() ? extractExpr(d.getInitializer()!) : { kind: "var" as const, name: "default" });
+        let init: RawExpr;
+        if (isHavoc && !havocKey) {
+          init = { kind: "havoc", tsType: typeToString(declType) };
+        } else {
+          const initializer = d.getInitializer();
+          _havocKey = havocKey;
+          init = initializer ? extractExpr(initializer) : { kind: "var" as const, name: "default" };
+          _havocKey = null;
+        }
         result.push({
           kind: "let",
           name: d.getName(),

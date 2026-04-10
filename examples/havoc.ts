@@ -21,3 +21,21 @@ export function countMatches(
   }
   return count;
 }
+
+export function countMatchesKey(
+  items: string[],
+  validKeys: Set<string>
+): number {
+  //@ verify
+  //@ ensures \result >= 0
+  let count = 0;
+  for (const item of items) {
+    //@ invariant count >= 0
+    //@ havoc replace
+    const cleaned = item.replace(/[^a-z]/g, '');
+    if (validKeys.has(cleaned)) {
+      count = count + 1;
+    }
+  }
+  return count;
+}

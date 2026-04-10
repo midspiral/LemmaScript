@@ -31,7 +31,7 @@ export type RawExpr =
   | { kind: "forall"; var: string; varType: "nat" | "int"; body: RawExpr }
   | { kind: "exists"; var: string; varType: "nat" | "int"; body: RawExpr }
   // Havoc — nondeterministic value (from //@ havoc annotation):
-  | { kind: "havoc" }
+  | { kind: "havoc"; tsType: string }
 
 // ── Statements ───────────────────────────────────────────────
 

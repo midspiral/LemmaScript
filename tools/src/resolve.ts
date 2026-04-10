@@ -318,7 +318,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "havoc":
-      return { kind: "havoc", ty: { kind: "unknown" } };
+      return { kind: "havoc", ty: resolveTsType(e.tsType, ctx.overrides) };
   }
 }
 
@@ -360,9 +360,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
   switch (s.kind) {
     case "let": {
       const ty = resolveTsType(s.tsType, ctx.overrides, s.name);
-      const init = s.init.kind === "havoc"
-        ? { kind: "havoc" as const, ty }
-        : coerceStr(resolveExpr(s.init, ctx), ty);
+      const init = coerceStr(resolveExpr(s.init, ctx), ty);
       // const collections are mutable in value-semantics world (TS mutates in place, Dafny/Lean reassign)
       const mutable = s.mutable || isRefMutableInTS(ty);
       return [{ kind: "let", name: s.name, ty, mutable, init }, extend(ctx.env, s.name, ty)];
