@@ -157,13 +157,19 @@ function emitExpr(e: Expr): string {
       // Bitwise operators on int: translate to arithmetic
       // x >> n → x / 2^n (right shift)
       // x << n → x * 2^n (left shift)
-      if (e.op === ">>" && e.right.kind === "num") {
-        const divisor = Math.pow(2, e.right.value);
-        return `(${emitExpr(e.left)} / ${divisor})`;
+      if (e.op === ">>") {
+        if (e.right.kind === "num") {
+          return `(${emitExpr(e.left)} / ${Math.pow(2, e.right.value)})`;
+        }
+        needsPow2 = true;
+        return `(${emitExpr(e.left)} / Pow2(${emitExpr(e.right)}))`;
       }
-      if (e.op === "<<" && e.right.kind === "num") {
-        const multiplier = Math.pow(2, e.right.value);
-        return `(${emitExpr(e.left)} * ${multiplier})`;
+      if (e.op === "<<") {
+        if (e.right.kind === "num") {
+          return `(${emitExpr(e.left)} * ${Math.pow(2, e.right.value)})`;
+        }
+        needsPow2 = true;
+        return `(${emitExpr(e.left)} * Pow2(${emitExpr(e.right)}))`;
       }
       // x & mask → x % (mask + 1) for literal masks of form 2^n - 1, else BitAnd
       if (e.op === "&") {
@@ -198,6 +204,7 @@ function emitExpr(e: Expr): string {
     case "app": {
       const args = e.args.map(emitExpr);
       if (e.fn === "SetToSeq") { needsSetToSeq = true; return `SetToSeq(${args.join(", ")})`; }
+      if (e.fn === "BigInt" || e.fn === "Number") return args[0]; // identity: both map to int
       if (e.fn === "JSFloorDiv") needsJSFloorDiv = true;
       if (e.fn === "CeilReal") needsCeilReal = true;
       if (e.fn === "FloorReal") needsFloorReal = true;
@@ -450,6 +457,14 @@ let needsStdCollections = false;
 let needsOptionType = false;
 let needsSetToSeq = false;
 let needsBitAnd = false;
+let needsPow2 = false;
+
+const POW2 = `function Pow2(n: int): int
+  requires n >= 0
+  decreases n
+{
+  if n == 0 then 1 else 2 * Pow2(n - 1)
+}`;
 
 const BIT_AND = `function BitAnd(x: int, y: int): int
   requires x >= 0 && y >= 0
@@ -597,6 +612,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   needsOptionType = false;
   needsSetToSeq = false;
   needsBitAnd = false;
+  needsPow2 = false;
 
   // Collect pure def names so we can skip their method wrappers
   const pureDefs = new Set<string>();
@@ -652,6 +668,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   }
 }`);
   }
+  if (needsPow2) { lines.push(""); lines.push(POW2); }
   if (needsBitAnd) { lines.push(""); lines.push(BIT_AND); }
   if (needsJSFloorDiv) { lines.push(""); lines.push(JS_FLOOR_DIV); }
   if (needsCeilReal) { lines.push(""); lines.push(CEIL_REAL); }
