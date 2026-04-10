@@ -666,7 +666,8 @@ Module-level `const` declarations are extracted and emitted as constants in the 
 const MAPPED_PREFIX = 281470681743360
 ```
 
-→ Dafny (only): `const MAPPED_PREFIX: int := 281470681743360`
+→ Dafny: `const MAPPED_PREFIX: int := 281470681743360`
+→ Lean: `def MAPPED_PREFIX : Int := 281470681743360`
 
 Constants are always extracted (even in `//@ verify` selective mode) so verified functions can reference them. The type is inferred from the initializer. Literal types (e.g., TypeScript inferring `281470681743360` instead of `number`) are widened to their base type.
 
