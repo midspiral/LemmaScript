@@ -165,14 +165,17 @@ function emitExpr(e: Expr): string {
         const multiplier = Math.pow(2, e.right.value);
         return `(${emitExpr(e.left)} * ${multiplier})`;
       }
-      // x & mask → x % (mask + 1) for masks of form 2^n - 1
-      if (e.op === "&" && e.right.kind === "num") {
-        const mask = e.right.value;
-        const modulus = mask + 1;
-        if ((modulus & (modulus - 1)) === 0) {
-          // mask + 1 is a power of 2, so mask is 2^n - 1
-          return `(${emitExpr(e.left)} % ${modulus})`;
+      // x & mask → x % (mask + 1) for literal masks of form 2^n - 1, else BitAnd
+      if (e.op === "&") {
+        if (e.right.kind === "num") {
+          const mask = e.right.value;
+          const modulus = mask + 1;
+          if ((modulus & (modulus - 1)) === 0) {
+            return `(${emitExpr(e.left)} % ${modulus})`;
+          }
         }
+        needsBitAnd = true;
+        return `BitAnd(${emitExpr(e.left)}, ${emitExpr(e.right)})`;
       }
       // int * real coercion: wrap int side with "as real"
       if (["+", "-", "*", "/"].includes(op)) {
@@ -446,6 +449,15 @@ let needsFloorReal = false;
 let needsStdCollections = false;
 let needsOptionType = false;
 let needsSetToSeq = false;
+let needsBitAnd = false;
+
+const BIT_AND = `function BitAnd(x: int, y: int): int
+  requires x >= 0 && y >= 0
+  decreases x
+{
+  if x == 0 || y == 0 then 0
+  else 2 * BitAnd(x / 2, y / 2) + (if x % 2 == 1 && y % 2 == 1 then 1 else 0)
+}`;
 
 const JS_FLOOR_DIV = `function JSFloorDiv(a: int, b: int): int
   requires b != 0
@@ -584,6 +596,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   needsStdCollections = false;
   needsOptionType = false;
   needsSetToSeq = false;
+  needsBitAnd = false;
 
   // Collect pure def names so we can skip their method wrappers
   const pureDefs = new Set<string>();
@@ -639,6 +652,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   }
 }`);
   }
+  if (needsBitAnd) { lines.push(""); lines.push(BIT_AND); }
   if (needsJSFloorDiv) { lines.push(""); lines.push(JS_FLOOR_DIV); }
   if (needsCeilReal) { lines.push(""); lines.push(CEIL_REAL); }
   if (needsFloorReal) { lines.push(""); lines.push(FLOOR_REAL); }
