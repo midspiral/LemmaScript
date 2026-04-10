@@ -648,6 +648,16 @@ TypeScript's `bigint` type maps to `Int`/`int` (same as `number`). BigInt litera
 | `32n` | `32` (int) | `32` (Int) |
 | `0xffffn` | `65535` (int) | `65535` (Int) |
 
+**Bitwise operators (Dafny only):** Since Dafny's `int` has no native bitwise ops, they are translated to arithmetic when the right operand is a literal:
+
+| TypeScript | Dafny |
+|-----------|-------|
+| `x >> 32n` | `x / 4294967296` |
+| `x << 8n` | `x * 256` |
+| `x & 0xffffffffn` | `x % 4294967296` (only when mask+1 is a power of 2) |
+
+Lean backend does not yet support bitwise operators.
+
 ### 6.1.2 Real Numbers
 
 JavaScript has one numeric type (`number`, IEEE 754 doubles). LemmaScript maps `number` to `int` by default, but **non-integer numeric literals** (e.g., `0.8`, `3.14`) are typed as `real`:

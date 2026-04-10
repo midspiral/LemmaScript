@@ -154,6 +154,26 @@ function emitExpr(e: Expr): string {
         const pred = `${emitExpr(e.left)}.${ctorName}?`;
         return op === "!=" ? `(!${pred})` : pred;
       }
+      // Bitwise operators on int: translate to arithmetic
+      // x >> n → x / 2^n (right shift)
+      // x << n → x * 2^n (left shift)
+      if (e.op === ">>" && e.right.kind === "num") {
+        const divisor = Math.pow(2, e.right.value);
+        return `(${emitExpr(e.left)} / ${divisor})`;
+      }
+      if (e.op === "<<" && e.right.kind === "num") {
+        const multiplier = Math.pow(2, e.right.value);
+        return `(${emitExpr(e.left)} * ${multiplier})`;
+      }
+      // x & mask → x % (mask + 1) for masks of form 2^n - 1
+      if (e.op === "&" && e.right.kind === "num") {
+        const mask = e.right.value;
+        const modulus = mask + 1;
+        if ((modulus & (modulus - 1)) === 0) {
+          // mask + 1 is a power of 2, so mask is 2^n - 1
+          return `(${emitExpr(e.left)} % ${modulus})`;
+        }
+      }
       // int * real coercion: wrap int side with "as real"
       if (["+", "-", "*", "/"].includes(op)) {
         const leftIsReal = e.left.kind === "num" && !Number.isInteger(e.left.value);
