@@ -42,9 +42,19 @@ function tokenize(input: string): Token[] {
     }
 
     if (/[0-9]/.test(input[i])) {
-      let n = "";
-      while (i < input.length && /[0-9]/.test(input[i])) n += input[i++];
-      tokens.push({ type: "num", value: parseInt(n) });
+      let value: number;
+      if (input[i] === "0" && i + 1 < input.length && input[i + 1] === "x") {
+        i += 2;
+        let hex = "";
+        while (i < input.length && /[0-9a-fA-F]/.test(input[i])) hex += input[i++];
+        value = parseInt(hex, 16);
+      } else {
+        let dec = "";
+        while (i < input.length && /[0-9]/.test(input[i])) dec += input[i++];
+        value = parseInt(dec, 10);
+      }
+      if (i < input.length && input[i] === "n") i++;
+      tokens.push({ type: "num", value });
       continue;
     }
 
