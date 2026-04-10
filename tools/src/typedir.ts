@@ -44,12 +44,13 @@ export type TExpr =
   | { kind: "result"; ty: Ty }
   | { kind: "forall"; var: string; varTy: Ty; body: TExpr; ty: Ty }
   | { kind: "exists"; var: string; varTy: Ty; body: TExpr; ty: Ty }
+  // Havoc — nondeterministic value:
+  | { kind: "havoc"; ty: Ty }
 
 // ── Statements ───────────────────────────────────────────────
 
 export type TStmt =
   | { kind: "let"; name: string; ty: Ty; mutable: boolean; init: TExpr }
-  | { kind: "havoc"; name: string; ty: Ty; mutable: boolean }
   | { kind: "assign"; target: string; value: TExpr }
   | { kind: "return"; value: TExpr }
   | { kind: "break" }

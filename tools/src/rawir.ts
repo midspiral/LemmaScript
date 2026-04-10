@@ -30,6 +30,8 @@ export type RawExpr =
   | { kind: "result" }                                    // \result
   | { kind: "forall"; var: string; varType: "nat" | "int"; body: RawExpr }
   | { kind: "exists"; var: string; varType: "nat" | "int"; body: RawExpr }
+  // Havoc — nondeterministic value (from //@ havoc annotation):
+  | { kind: "havoc"; tsType: string }
 
 // ── Statements ───────────────────────────────────────────────
 
@@ -39,14 +41,6 @@ export interface RawLet {
   mutable: boolean;
   tsType: string;      // raw TS type string, resolved later
   init: RawExpr;
-  line: number;
-}
-
-export interface RawHavoc {
-  kind: "havoc";
-  name: string;
-  mutable: boolean;
-  tsType: string;
   line: number;
 }
 
@@ -140,7 +134,7 @@ export interface RawAssert {
   line: number;
 }
 
-export type RawStmt = RawLet | RawHavoc | RawAssign | RawReturn | RawBreak | RawContinue | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf | RawThrow | RawGhostLet | RawGhostAssign | RawAssert;
+export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawContinue | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf | RawThrow | RawGhostLet | RawGhostAssign | RawAssert;
 
 // ── Top-level ────────────────────────────────────────────────
 

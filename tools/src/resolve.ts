@@ -316,6 +316,9 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       const ty = parseTsType(e.tsType);
       return { kind: "arrayLiteral", elems: [], ty };
     }
+
+    case "havoc":
+      return { kind: "havoc", ty: resolveTsType(e.tsType, ctx.overrides) };
   }
 }
 
@@ -361,12 +364,6 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // const collections are mutable in value-semantics world (TS mutates in place, Dafny/Lean reassign)
       const mutable = s.mutable || isRefMutableInTS(ty);
       return [{ kind: "let", name: s.name, ty, mutable, init }, extend(ctx.env, s.name, ty)];
-    }
-
-    case "havoc": {
-      const ty = resolveTsType(s.tsType, ctx.overrides, s.name);
-      const mutable = s.mutable || isRefMutableInTS(ty);
-      return [{ kind: "havoc", name: s.name, ty, mutable }, extend(ctx.env, s.name, ty)];
     }
 
     case "assign": {
@@ -528,7 +525,6 @@ function collectCallsStmts(stmts: RawStmt[], fns: Set<string>, out: Set<string>)
   for (const s of stmts) {
     switch (s.kind) {
       case "let": collectCallsExpr(s.init, fns, out); break;
-      case "havoc": break;
       case "assign": collectCallsExpr(s.value, fns, out); break;
       case "return": collectCallsExpr(s.value, fns, out); break;
       case "expr": collectCallsExpr(s.expr, fns, out); break;

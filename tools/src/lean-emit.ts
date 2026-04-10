@@ -198,6 +198,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "exists": return `∃ ${e.var} : ${tyToLean(e.type)}, ${emitExpr(e.body)}`;
 
     case "let": return `let ${e.name} := ${emitExpr(e.value)}\n${emitExpr(e.body)}`;
+    default: throw new Error(`Unsupported Lean expression: ${(e as Expr).kind}`);
   }
 }
 
@@ -211,8 +212,6 @@ function emitStmts(stmts: Stmt[], indent: number): string {
 function emitStmt(s: Stmt, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (s.kind) {
-    case "havoc":
-      return `${pad}let mut ${escapeName(s.name)} : ${tyToLean(s.type)} := sorry -- havoc`;
     case "let":
       return s.mutable
         ? `${pad}let mut ${escapeName(s.name)} : ${tyToLean(s.type)} := ${emitExpr(s.value)}`

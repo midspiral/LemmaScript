@@ -39,6 +39,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `ghost x = e` | Before any statement | Ghost variable reassignment. |
 | `assert e` | Before any statement | Assertion (`assertGadget` in Lean, `assert` in Dafny). |
 | `havoc` | Before a variable declaration | Nondeterministic value — skip init expression (see §2.9). |
+| `havoc <key>` | Before a variable declaration | Nondeterministic subexpression — replace calls matching `<key>` (see §2.9). |
 
 ### 2.2 Spec Expression Grammar
 
@@ -199,11 +200,35 @@ var cleaned: string := *;
 The verifier makes no assumptions about `cleaned`'s value. Code after the
 havoc is verified for ALL possible values of the havoced variable.
 
+#### Subexpression havoc: `//@ havoc <key>`
+
+When a key is given, only calls whose function or method name matches the
+key are replaced with a nondeterministic value. The rest of the expression
+is preserved:
+
+```typescript
+//@ havoc encrypt
+const msg = sign(encrypt(data, key), cert);
+```
+
+generates (Dafny):
+
+```dafny
+var _t0: EncryptedData := *;
+var msg := sign(_t0, cert);
+```
+
+The `encrypt(...)` call is replaced with `*` (lifted to its own variable
+since Dafny's `*` only appears in declaration/assignment positions), while
+`sign(...)` is preserved and verified normally.
+
 **Use case:** When a variable is initialized by an expression outside the
 LS fragment (regex, JSON.parse, crypto, etc.), `//@ havoc` lets you skip
 the unsupported expression while still verifying the logic that uses the
 result. Properties that hold regardless of the havoced value are proved
 sound.
+
+**Backend support:** Havoc is supported in the Dafny backend only.
 
 **Axioms:** To constrain a havoced variable (e.g., `|cleaned| <= |text|`),
 add an `assume` in the `.dfy` file as a proof addition.
