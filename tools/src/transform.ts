@@ -843,8 +843,9 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
         // Optional narrowing: if (x === undefined) → match x { None => ..., Some(x_val) => ... }
         const optCheck = parseOptionalCheck(s.cond);
         if (optCheck) {
-          const someBranch = optCheck.negated ? s.else : s.then;
+          let someBranch = optCheck.negated ? s.else : s.then;
           const noneBranch = optCheck.negated ? s.then : (s.else.length > 0 ? s.else : rest);
+          if (someBranch.length === 0) someBranch = rest;
           const bound = matchBinder(`${optCheck.varName}_val`);
           const someExpr = transformPureBody(someBranch, typeDecls);
           if (!someExpr) return null;
