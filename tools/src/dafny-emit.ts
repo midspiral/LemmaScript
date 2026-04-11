@@ -248,14 +248,28 @@ function emitExpr(e: Expr): string {
     }
 
     case "forall": {
-      const dty = tyToDafny(e.type);
-      const ann = dty === "string" ? "" : `: ${dty}`;
-      return `forall ${e.var}${ann} :: ${emitExpr(e.body)}`;
+      // Collapse nested foralls: forall x :: forall y :: P → forall x, y :: P
+      const vars: string[] = [];
+      let body: Expr = e;
+      while (body.kind === "forall") {
+        const dty = tyToDafny(body.type);
+        const ann = dty === "string" ? "" : `: ${dty}`;
+        vars.push(`${body.var}${ann}`);
+        body = body.body;
+      }
+      return `forall ${vars.join(", ")} :: ${emitExpr(body)}`;
     }
     case "exists": {
-      const dty = tyToDafny(e.type);
-      const ann = dty === "string" ? "" : `: ${dty}`;
-      return `exists ${e.var}${ann} :: ${emitExpr(e.body)}`;
+      // Collapse nested exists: exists x :: exists y :: P → exists x, y :: P
+      const vars: string[] = [];
+      let body: Expr = e;
+      while (body.kind === "exists") {
+        const dty = tyToDafny(body.type);
+        const ann = dty === "string" ? "" : `: ${dty}`;
+        vars.push(`${body.var}${ann}`);
+        body = body.body;
+      }
+      return `exists ${vars.join(", ")} :: ${emitExpr(body)}`;
     }
 
     case "let": return `var ${escapeName(e.name)} := ${emitExpr(e.value)}; ${emitExpr(e.body)}`;
