@@ -209,6 +209,7 @@ function emitExpr(e: Expr): string {
       if (e.fn === "JSFloorDiv") needsJSFloorDiv = true;
       if (e.fn === "CeilReal") needsCeilReal = true;
       if (e.fn === "FloorReal") needsFloorReal = true;
+      if (e.fn === "NatToString") needsNatToString = true;
       return `${e.fn}(${args.join(", ")})`;
     }
 
@@ -489,6 +490,7 @@ let needsOptionType = false;
 let needsSetToSeq = false;
 let needsBitAnd = false;
 let needsPow2 = false;
+let needsNatToString = false;
 
 const POW2 = `function Pow2(n: int): int
   requires n >= 0
@@ -586,6 +588,14 @@ const STRING_TO_UPPER = `function StringToUpper(s: string): string
     [upper] + StringToUpper(s[1..])
 }`;
 
+const NAT_TO_STRING = `function NatToString(n: nat): string
+  decreases n
+{
+  var digit := ('0' as int + n % 10) as char;
+  if n < 10 then [digit]
+  else NatToString(n / 10) + [digit]
+}`;
+
 // ── Constructor and record helpers ───────────────────────────
 
 let _recordCtors = new Map<string, string>();
@@ -651,6 +661,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   needsSetToSeq = false;
   needsBitAnd = false;
   needsPow2 = false;
+  needsNatToString = false;
 
   // Collect pure def names so we can skip their method wrappers
   const pureDefs = new Set<string>();
@@ -715,6 +726,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   if (needsStringTrim) { lines.push(""); lines.push(STRING_TRIM); }
   if (needsStringToLower) { lines.push(""); lines.push(STRING_TO_LOWER); }
   if (needsStringToUpper) { lines.push(""); lines.push(STRING_TO_UPPER); }
+  if (needsNatToString) { lines.push(""); lines.push(NAT_TO_STRING); }
   lines.push(...declLines);
   return lines.join("\n") + "\n";
 }

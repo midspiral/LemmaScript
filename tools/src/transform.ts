@@ -263,6 +263,21 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           then: left, else: right,
         };
       }
+      // int + string → NatToString(int) + string (string concatenation)
+      if (e.op === "+" && _opts.backend === "dafny") {
+        const isIntL = e.left.ty.kind === "int" || e.left.ty.kind === "nat";
+        const isIntR = e.right.ty.kind === "int" || e.right.ty.kind === "nat";
+        if (isIntL && e.right.ty.kind === "string") {
+          return { kind: "binop", op: "+",
+            left: { kind: "app", fn: "NatToString", args: [lowerExpr(e.left, binds)] },
+            right: lowerExpr(e.right, binds) };
+        }
+        if (e.left.ty.kind === "string" && isIntR) {
+          return { kind: "binop", op: "+",
+            left: lowerExpr(e.left, binds),
+            right: { kind: "app", fn: "NatToString", args: [lowerExpr(e.right, binds)] } };
+        }
+      }
       return {
         kind: "binop",
         op: OP_MAP[e.op] ?? e.op,
