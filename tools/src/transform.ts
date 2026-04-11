@@ -253,6 +253,17 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           ],
         };
       }
+      // || on map index → if key in map then map[key] else default
+      if (e.op === "||" && e.left.kind === "index" && e.left.obj.ty.kind === "map") {
+        const map = lowerExpr(e.left.obj, binds);
+        const key = lowerExpr(e.left.idx, binds);
+        const right = lowerExpr(e.right, binds);
+        return {
+          kind: "if",
+          cond: { kind: "binop", op: "in", left: key, right: map },
+          then: { kind: "index", arr: map, idx: key }, else: right,
+        };
+      }
       // || on non-optional string/array/user → if non-empty then x else default
       if (e.op === "||" && (e.left.ty.kind === "string" || e.left.ty.kind === "array" ||
           (e.left.ty.kind === "user" && e.right.ty.kind === "string"))) {
