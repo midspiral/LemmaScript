@@ -110,6 +110,7 @@ function emitExpr(e: Expr): string {
         if (e.method === "toLowerCase") { needsStringToLower = true; return `StringToLower(${obj})`; }
         if (e.method === "toUpperCase") { needsStringToUpper = true; return `StringToUpper(${obj})`; }
         if (e.method === "includes") { needsStringIndexOf = true; return `(StringIndexOf(${obj}, ${args[0]}) >= 0)`; }
+        if (e.method === "charCodeAt") return `(${obj}[${args[0]}] as int)`;
       }
       // Map methods
       if (ty === "map") {
