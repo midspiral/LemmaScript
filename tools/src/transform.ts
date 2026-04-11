@@ -232,6 +232,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           ],
         };
       }
+      // || undefined on optional → identity (no-op: x || undefined = x)
+      if (e.op === "||" && e.left.ty.kind === "optional" &&
+          e.right.kind === "var" && e.right.name === "undefined") {
+        return lowerExpr(e.left, binds);
+      }
       // || on optional → match Some/None with default
       if (e.op === "||" && e.left.ty.kind === "optional") {
         const optExpr = lowerExpr(e.left, binds);
@@ -243,6 +248,16 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             { pattern: `.some ${bound}`, body: { kind: "var", name: bound } },
             { pattern: ".none", body: defaultExpr },
           ],
+        };
+      }
+      // || on non-optional string/array → if non-empty then x else default
+      if (e.op === "||" && (e.left.ty.kind === "string" || e.left.ty.kind === "array")) {
+        const left = lowerExpr(e.left, binds);
+        const right = lowerExpr(e.right, binds);
+        return {
+          kind: "if",
+          cond: { kind: "binop", op: ">", left: { kind: "field", obj: left, field: "size" }, right: { kind: "num", value: 0 } },
+          then: left, else: right,
         };
       }
       return {

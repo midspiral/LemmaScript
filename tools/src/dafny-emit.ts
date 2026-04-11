@@ -65,7 +65,7 @@ function mapOp(op: string): string { return OP_MAP[op] ?? op; }
 
 function emitExpr(e: Expr): string {
   switch (e.kind) {
-    case "var": return escapeName(e.name);
+    case "var": return e.name === "undefined" ? "None" : escapeName(e.name);
     case "num": return `${e.value}`;
     case "bool": return e.value ? "true" : "false";
     case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
@@ -310,7 +310,8 @@ function emitStmt(s: Stmt, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (s.kind) {
     case "let":
-      if (s.value.kind === "havoc")
+      if (s.value.kind === "havoc" || s.value.kind === "emptyMap" || s.value.kind === "emptySet" ||
+          (s.value.kind === "arrayLiteral" && s.value.elems.length === 0))
         return `${pad}var ${escapeName(s.name)}: ${tyToDafny(s.type)} := ${emitExpr(s.value)};`;
       return `${pad}var ${escapeName(s.name)} := ${emitExpr(s.value)};`;
     case "assign":

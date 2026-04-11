@@ -198,7 +198,24 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "call": {
       const fn = resolveExpr(e.fn, ctx);
-      let args = e.args.map(a => resolveExpr(a, ctx));
+      // Infer lambda param types from array method context (map, filter, etc.)
+      let rawArgs = e.args;
+      if (fn.kind === "field" && fn.obj.ty.kind === "array" &&
+          ["map", "filter", "every", "some", "find"].includes(fn.field) &&
+          rawArgs.length >= 1 && rawArgs[0].kind === "lambda" &&
+          rawArgs[0].params.length >= 1 && !rawArgs[0].params[0].tsType) {
+        const elemTy = fn.obj.ty.elem;
+        const tsType = elemTy.kind === "user" ? elemTy.name
+          : elemTy.kind === "string" ? "string"
+          : elemTy.kind === "int" || elemTy.kind === "nat" ? "number"
+          : elemTy.kind === "bool" ? "boolean" : undefined;
+        if (tsType) {
+          const lam = rawArgs[0];
+          const updatedParams = [{ ...lam.params[0], tsType }, ...lam.params.slice(1)];
+          rawArgs = [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
+        }
+      }
+      let args = rawArgs.map(a => resolveExpr(a, ctx));
       // Coerce non-optional args to Option when callee expects optional param: wrap in Some
       if (fn.kind === "var" && ctx.fnParams.has(fn.name)) {
         const paramTys = ctx.fnParams.get(fn.name)!;
@@ -229,6 +246,13 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         if (fn.field === "includes") ty = { kind: "bool" };
         else if (fn.field === "shift") ty = fn.obj.ty.elem;
         else if (fn.field === "push") ty = fn.obj.ty;
+        else if (fn.field === "map" && args.length >= 1 && args[0].kind === "lambda") {
+          const retTy = args[0].body.length > 0 && args[0].body[0].kind === "return"
+            ? args[0].body[0].value.ty : { kind: "unknown" as const };
+          ty = { kind: "array", elem: retTy };
+        }
+        else if (fn.field === "filter") ty = fn.obj.ty;
+        else if (fn.field === "every" || fn.field === "some") ty = { kind: "bool" };
       } else if (fn.kind === "field" && fn.obj.ty.kind === "string") {
         if (fn.field === "trim") ty = { kind: "string" };
         else if (fn.field === "toLowerCase") ty = { kind: "string" };
