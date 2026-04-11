@@ -1,6 +1,6 @@
 {
   "name": "lemmascript",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A verification toolchain for TypeScript — generates Lean 4 or Dafny from annotated TS",
   "type": "module",
   "bin": {
