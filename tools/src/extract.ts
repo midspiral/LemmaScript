@@ -586,7 +586,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
 function extractFunction(fn: FunctionDeclaration): RawFunction {
   const body = fn.getBody();
-  if (!body || !Node.isBlock(body)) throw new Error(`${fn.getName()}: function body is not a block`);
+  if (!body || !Node.isBlock(body)) throw new Error(`${(fn as any).getName?.() ?? "arrow"}: function body is not a block`);
   const bodyStmts = body.getStatements();
   const annots = collectAnnotations(fn, bodyStmts);
 
@@ -599,7 +599,7 @@ function extractFunction(fn: FunctionDeclaration): RawFunction {
   }
 
   return {
-    name: fn.getName() ?? "<anonymous>",
+    name: (fn as any).getName?.() ?? "<anonymous>",
     params: fn.getParameters().map(p => ({ name: p.getName(), tsType: p.getTypeNode()?.getText() ?? "unknown" })),
     returnType: fn.getReturnTypeNode()?.getText() ?? "unknown",
     requires: annots.filter(a => a.kind === "requires").map(a => a.expr),
@@ -635,7 +635,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
           // Skip huge string constants — they crash the verifier and have no verification value
           const initType = decl.getType();
           const isHugeString = (initType.isString() || initType.isStringLiteral()) && (init as Expression).getText().length > 200;
-          if (init && !isHugeString) {
+          if (init && !isHugeString && !Node.isArrowFunction(init)) {
             try {
               constants.push({
                 name: decl.getName(),
@@ -651,15 +651,35 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     }
   }
 
+  // Collect all function-like declarations: function declarations + const arrow functions
+  const allFns: { name: string; node: FunctionDeclaration }[] = [];
+  for (const fn of sourceFile.getFunctions()) {
+    allFns.push({ name: fn.getName() ?? "<anonymous>", node: fn });
+  }
+  // const f = (...) => { ... } — treat as named function
+  for (const stmt of sourceFile.getStatements()) {
+    if (Node.isVariableStatement(stmt)) {
+      for (const decl of stmt.getDeclarationList().getDeclarations()) {
+        const init = decl.getInitializer();
+        if (init && Node.isArrowFunction(init)) {
+          allFns.push({ name: decl.getName(), node: init as unknown as FunctionDeclaration });
+        }
+      }
+    }
+  }
+
   // If any function has //@ verify, only extract those (brownfield mode).
   // Otherwise extract all functions (backwards-compatible with existing examples).
-  const allFns = sourceFile.getFunctions();
-  const hasVerifyDirective = allFns.some(fn => fn.getFullText().includes('//@ verify'));
+  const hasVerifyDirective = allFns.some(f => f.node.getFullText().includes('//@ verify'));
   const fnsToExtract = hasVerifyDirective
-    ? allFns.filter(fn => fn.getFullText().includes('//@ verify'))
+    ? allFns.filter(f => f.node.getFullText().includes('//@ verify'))
     : allFns;
 
-  const functions = fnsToExtract.map(extractFunction);
+  const functions = fnsToExtract.map(f => {
+    const raw = extractFunction(f.node);
+    raw.name = f.name;  // use the const name, not "<anonymous>"
+    return raw;
+  });
 
   // Resolve imported types: extract types referenced in function signatures but not in this file
   const knownTypes = new Set(typeDecls.map(d => d.name));
@@ -675,8 +695,8 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       if (info) { typeDecls.push(info); knownTypes.add(name); }
     }
   }
-  for (const fn of fnsToExtract) {
-    for (const p of fn.getParameters()) resolveType(p.getType(), p);
+  for (const f of fnsToExtract) {
+    for (const p of f.node.getParameters()) resolveType(p.getType(), p);
   }
 
   // Extract classes with //@ verify methods
