@@ -278,6 +278,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `Math.floor(n)` (int arg) | identity | identity |
 | `Math.ceil(n)` (int arg) | identity | identity |
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
+| `opt ? f(opt) : undefined` | match on Some/None | `match opt { case Some(v) => Some(f(v)) case None => None }` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
 | `s.slice(start, end)` | `JSString.slice s start end` | `s[start..end]` |
 | `s.trim()` | — | `StringTrim(s)` |
@@ -295,6 +296,8 @@ No normalization of operators. Both backends handle all comparison directions.
 | `arr.slice(start)` | — | `arr[start..]` |
 | `expr!` (non-null) | unwrap Option | unwrap Option / direct map access |
 | `expr \|\| default` (on optional) | match Some/None | `match { Some(v) => v, None => default }` |
+| `expr \|\| undefined` (on optional) | identity | identity (no-op) |
+| `expr \|\| default` (on string/array) | if non-empty | `if \|expr\| > 0 then expr else default` |
 | `expr?.method(args)` | — | `if key in map { ... }` |
 | `expr as T` | stripped | stripped |
 | `new Map(arr.map(fn))` | — | loop building `map[]` |
@@ -459,6 +462,8 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 **`Map.get` returns `Option`** in code context (since the key may not exist). In spec context (annotations), `map.get(k)` emits direct access without an Option wrapper, matching how specs reason about map contents.
 
 **Optional narrowing:** `v !== undefined` where `v : T | undefined` emits a pattern match on Some/None, binding the unwrapped value in the then-branch. Optional comparisons like `opt === 0` emit a match on `Some`/`None`.
+
+**Optional truthiness in conditionals:** `opt ? f(opt) : undefined` where `opt` has optional type generates a match expression. The resolve phase introduces a synthetic variable for the unwrapped value, substitutes it in the then-branch, and narrows its type to the inner type. The transform generates `match opt { case Some(v) => Some(f(v)) case None => None }`. For field-access conditions like `entry.decision ? ... : undefined`, the synthetic variable replaces the entire field-access chain in the then-branch.
 
 **Quantifier type inference:** When a quantifier variable is used as a collection key or element (e.g., `forall(k, map.has(k) ==> ...)`, `forall(v, arr.includes(v) ==> ...)`), the variable type is inferred from the collection's key/element type instead of defaulting to `Int`.
 
@@ -633,6 +638,7 @@ Pure functions are handled differently by each backend:
 | `Map<K, V>` | `Std.HashMap K' V'` | `map<K', V'>` |
 | `Set<T>` | `Std.HashSet T'` | `set<T'>` |
 | `T \| undefined` | `Option T'` | `Option<T'>` |
+| `true \| false \| undefined` | `Option Bool` | `Option<bool>` |
 | `Record<K, V>` | `Std.HashMap K' V'` | `map<K', V'>` |
 | `unknown` | `Int` | `int` |
 | Anything else | Pass through | Pass through |
@@ -707,7 +713,7 @@ function CeilReal(x: real): int {
 }
 ```
 
-**Cross-file types:** When a verified function references a type imported from another file (e.g., `WorkflowNode` from `types/index.ts`), `lsc` automatically resolves the type via ts-morph and generates the corresponding backend type declaration. This works for record/interface types used in function parameters. Built-in types (`Map`, `Set`, `Array`, etc.) are excluded from cross-file resolution.
+**Cross-file types:** When a verified function references a type imported from another file (e.g., `Module` from `../types`), `lsc` automatically resolves the type via ts-morph and generates the corresponding backend type declaration. Resolution is recursive — types referenced by resolved types are also extracted (e.g., resolving `Claim` also extracts `ClaimStatus`, `EmbeddedDecision`). Both record types and type aliases (string unions, discriminated unions) are resolved. `lsc` discovers the nearest `tsconfig.json` for module resolution. Built-in types (`Map`, `Set`, `Array`, etc.) are excluded.
 
 ### 6.2 String Literals as Constructors
 
@@ -817,6 +823,14 @@ return { res: true, done: true, rec: true };
 
 **Spread update** (`{ ...obj, f: v }`) maps to functional record update in both backends.
 
+**Inline object types:** Anonymous object types in interface fields (e.g., `decision?: { decision: string; rationale: string }`) are extracted as named datatypes with synthetic names (e.g., `SpecEntryDecision`). The parent field references the generated name.
+
+**Anonymous return types:** Functions returning inline object types (e.g., `(): { modules: Module[]; claims: Claim[] }`) get a synthetic return type (e.g., `ParseSpecYamlResult`). Named type aliases (e.g., `type Foo = { ... }`) are resolved by their alias name instead.
+
+**Record constructor padding (Dafny):** When an object literal has fewer fields than the target datatype (e.g., TS code omits optional fields), missing optional fields are filled with `None`. The emitter matches provided fields by name against the datatype declaration.
+
+**Optional field coercion:** When a non-optional value is assigned to an optional field in a record constructor (e.g., `createdAt: now` where `now: int` and the field type is `Option<int>`), the resolve phase wraps the value in `Some`. The coercion only fires when the value has a concrete non-optional type — `unknown` and `void` values are left as-is.
+
 ### 6.5 Type Mapping Implementation
 
 Type mapping logic lives in `types.ts`: `parseTsType(tsType: string): Ty`. Each emitter has its own `Ty → string` function (`tyToLean` in `lean-emit.ts`, `tyToDafny` in `dafny-emit.ts`).
@@ -920,10 +934,10 @@ Four-phase pipeline:
 extract (ts-morph → Raw IR) → resolve (→ Typed IR) → transform (→ IR) → emit (→ text)
 ```
 
-- **Extract** (`extract.ts`): ts-morph → structured AST. Body expressions are nodes, not strings. Annotations remain as strings.
-- **Resolve** (`resolve.ts`): attaches types, classifies calls (pure/method/spec-pure/unknown), identifies discriminants, rejects unsupported patterns. Uses linked environments for lexical scoping. Computes purity via call-graph analysis: a function is pure if it is syntactically pure (no `while`/`for-of`/mutable `let`) AND does not transitively call any non-pure function.
-- **Transform** (`transform.ts`): Typed IR → backend-neutral IR. Desugars `for-of` to indexed loops. Detects discriminant if-chains → `match`. Lifts embedded method calls to statement-level bindings (selective ANF, §3.6). Configured with `TransformOptions` for backend-specific behavior (monadic lifting, method name selection).
-- **Emit** (`lean-emit.ts` / `dafny-emit.ts`): IR → backend text.
+- **Extract** (`extract.ts`): ts-morph → structured AST. Body expressions are nodes, not strings. Annotations remain as strings. Discovers `tsconfig.json` for import resolution. Extracts inline anonymous object types as named `TypeDeclInfo` records, generates synthetic return types for functions with anonymous return types, and recursively resolves imported types (records, aliases, discriminated unions).
+- **Resolve** (`resolve.ts`): attaches types, classifies calls (pure/method/spec-pure/unknown), identifies discriminants, rejects unsupported patterns. Uses linked environments for lexical scoping. Computes purity via call-graph analysis: a function is pure if it is syntactically pure (no `while`/`for-of`/mutable `let`) AND does not transitively call any non-pure function. Narrows optional types in conditional expressions via synthetic variable substitution. Coerces non-optional values to Optional (wraps in Some) when the target record field is optional. Infers lambda parameter types from array method context (`.map`, `.filter`, etc.). Propagates element type to `.push()` arguments for record type inference.
+- **Transform** (`transform.ts`): Typed IR → backend-neutral IR. Desugars `for-of` to indexed loops. Detects discriminant if-chains → `match`. Lifts embedded method calls to statement-level bindings (selective ANF, §3.6). Generates match expressions for optional conditionals (from resolve-phase `narrowedVar` annotations). Handles `||` on optional, string, and array types. Configured with `TransformOptions` for backend-specific behavior (monadic lifting, method name selection).
+- **Emit** (`lean-emit.ts` / `dafny-emit.ts`): IR → backend text. Dafny emitter pads record constructors with `None` for missing optional fields and adds type annotations for empty collections.
 
 ---
 
@@ -933,7 +947,8 @@ The following TS features are not yet handled by the toolchain:
 
 - Array index assignment (`arr[i] = v`)
 - Compound pattern matching (nested match on multiple discriminated unions)
-- Cross-file type imports
+- `Record<K,V>` object literals as map literals (emitted as tuples, not `map[k := v]`)
+- `int + string` concatenation (no `NatToString` helper yet)
 - async/await
 - Error reporting (mapping prover errors to TS source locations)
 - VS Code extension
