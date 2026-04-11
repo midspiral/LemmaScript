@@ -316,6 +316,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `m.size` | `m.size` | `\|m\|` |
 | `new Set<T>()` | `Std.HashSet.empty` | `{}` |
 | `s.has(x)` | `s.contains x` | `(x in s)` |
+| `x in S` | `x ∈ S` | `(x in S)` |
 | `s.add(x)` | `s := s.insert x` | `s := (s + {x})` |
 | `s.delete(x)` | `s := s.erase x` | `s := (s - {x})` |
 | `s.size` | `s.size` | `\|s\|` |
