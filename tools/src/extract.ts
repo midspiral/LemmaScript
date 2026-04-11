@@ -798,7 +798,16 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     const f = fnsToExtract[i];
     const fn = functions[i];
     const retType = f.node.getReturnType();
-    const sym = retType.getSymbol() ?? retType.getAliasSymbol();
+    // Prefer alias symbol (named type aliases) over underlying object symbol (__type)
+    const aliasSym = retType.getAliasSymbol();
+    if (aliasSym && !aliasSym.getName().startsWith("__")) {
+      // Named type alias — resolve it instead of generating a synthetic name
+      resolveType(retType, f.node);
+      const aliasName = aliasSym.getName();
+      if (knownTypes.has(aliasName)) fn.returnType = aliasName;
+      continue;
+    }
+    const sym = retType.getSymbol();
     if (sym?.getName() === "__type" && retType.isObject() && !retType.isArray()) {
       const synName = fn.name.charAt(0).toUpperCase() + fn.name.slice(1) + "Result";
       if (!knownTypes.has(synName)) {
