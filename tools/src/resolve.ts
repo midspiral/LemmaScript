@@ -11,6 +11,61 @@ import { parseTsType } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 
+// ── Raw expression substitution ─────────────────────────────
+
+let _synVarCounter = 0;
+
+/**
+ * Structural equality for raw field-access chains (var and field nodes only).
+ * Exact within a single expression scope — raw IR has no bindings that could
+ * cause name collisions (those are introduced by resolve, which runs after).
+ */
+function rawExprEquals(a: RawExpr, b: RawExpr): boolean {
+  if (a.kind === "var" && b.kind === "var") return a.name === b.name;
+  if (a.kind === "field" && b.kind === "field") return a.field === b.field && rawExprEquals(a.obj, b.obj);
+  return false;
+}
+
+/** Return the root variable name of a field-access chain, or null. */
+function rawChainRoot(e: RawExpr): string | null {
+  if (e.kind === "var") return e.name;
+  if (e.kind === "field") return rawChainRoot(e.obj);
+  return null;
+}
+
+/**
+ * Replace all occurrences of `target` in `expr` with `replacement`.
+ * Only matches field-access chains (see rawExprEquals). Stops at lambda
+ * boundaries that shadow the chain's root variable.
+ */
+function substituteRawExpr(expr: RawExpr, target: RawExpr, replacement: RawExpr): RawExpr {
+  if (rawExprEquals(expr, target)) return replacement;
+  const root = rawChainRoot(target);
+  const sub = (e: RawExpr) => substituteRawExpr(e, target, replacement);
+  switch (expr.kind) {
+    case "var": case "num": case "str": case "bool": case "result":
+    case "havoc": case "emptyCollection":
+      return expr;
+    case "binop":  return { ...expr, left: sub(expr.left), right: sub(expr.right) };
+    case "unop":   return { ...expr, expr: sub(expr.expr) };
+    case "call":   return { ...expr, fn: sub(expr.fn), args: expr.args.map(sub) };
+    case "field":  return { ...expr, obj: sub(expr.obj) };
+    case "index":  return { ...expr, obj: sub(expr.obj), idx: sub(expr.idx) };
+    case "record":
+      return { ...expr, spread: expr.spread ? sub(expr.spread) : null,
+        fields: expr.fields.map(f => ({ ...f, value: sub(f.value) })) };
+    case "arrayLiteral": return { ...expr, elems: expr.elems.map(sub) };
+    case "conditional":  return { ...expr, cond: sub(expr.cond), then: sub(expr.then), else: sub(expr.else) };
+    case "nonNull":      return { ...expr, expr: sub(expr.expr) };
+    case "forall": case "exists":
+      return { ...expr, body: sub(expr.body) };
+    case "lambda":
+      // Don't cross lambda boundaries that shadow the chain's root variable
+      if (root && expr.params.some(p => p.name === root)) return expr;
+      return { ...expr, body: Array.isArray(expr.body) ? expr.body : sub(expr.body) };
+  }
+}
+
 // ── Environment ──────────────────────────────────────────────
 
 interface Env {
@@ -345,12 +400,34 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "conditional": {
       const cond = resolveExpr(e.cond, ctx);
-      let then_ = resolveExpr(e.then, ctx);
+
+      // Optional truthiness: opt ? X : Y
+      // Narrow the optional to its inner type in the then-branch so that
+      // field accesses resolve correctly (e.g. entry.decision.field).
+      let narrowedVar: string | undefined;
+      let thenCtx = ctx;
+      let rawThen = e.then;
+      if (cond.ty.kind === "optional") {
+        const innerTy = cond.ty.inner;
+        if (e.cond.kind === "var") {
+          // Simple variable: narrow it directly in the env
+          narrowedVar = e.cond.name;
+          thenCtx = withEnv(ctx, extend(ctx.env, e.cond.name, innerTy));
+        } else {
+          // Complex expression (field access chain): introduce a synthetic
+          // variable, substitute it into the raw then-expr, and narrow it
+          narrowedVar = `_opt${_synVarCounter++}`;
+          rawThen = substituteRawExpr(e.then, e.cond, { kind: "var", name: narrowedVar });
+          thenCtx = withEnv(ctx, extend(ctx.env, narrowedVar, innerTy));
+        }
+      }
+
+      let then_ = resolveExpr(rawThen, thenCtx);
       let else_ = resolveExpr(e.else, ctx);
       then_ = coerceStr(then_, else_.ty);
       else_ = coerceStr(else_, then_.ty);
       const ty = then_.ty.kind !== "unknown" ? then_.ty : else_.ty;
-      return { kind: "conditional", cond, then: then_, else: else_, ty };
+      return { kind: "conditional", cond, then: then_, else: else_, ty, narrowedVar };
     }
 
     case "emptyCollection": {

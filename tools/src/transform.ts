@@ -33,7 +33,10 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
     case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
-    case "match": return { ...e, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
+    case "match": {
+      const scr = typeof e.scrutinee === "string" ? e.scrutinee : r(e.scrutinee);
+      return { ...e, scrutinee: scr, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
+    }
     case "forall": return { ...e, body: r(e.body) };
     case "exists": return { ...e, body: r(e.body) };
     case "let": return { ...e, value: r(e.value), body: r(e.body) };
@@ -353,7 +356,32 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       const cond = lowerExpr(e.cond, binds);
       let thenExpr = lowerExpr(e.then, binds);
       let elseExpr = lowerExpr(e.else, binds);
-      // Optional ternary: wrap non-undefined branch in Some, undefined branch in None
+
+      // Optional cond with narrowedVar → match Some/None
+      if (e.narrowedVar && e.cond.ty.kind === "optional") {
+        const bound = matchBinder(e.narrowedVar);
+        // Replace the synthetic/narrowed var with the match-bound name
+        if (bound !== e.narrowedVar) {
+          thenExpr = replaceVar(thenExpr, e.narrowedVar, { kind: "var", name: bound });
+        }
+        // The match produces an Optional: wrap branches in Some/None.
+        // Either branch being undefined signals None; otherwise wrap in Some.
+        const wrapSomeNone = (expr: Expr, raw: TExpr): Expr =>
+          (raw.kind === "var" && raw.name === "undefined")
+            ? { kind: "constructor", name: ".none" }
+            : { kind: "app", fn: "Some", args: [expr] };
+        thenExpr = wrapSomeNone(thenExpr, e.then);
+        elseExpr = wrapSomeNone(elseExpr, e.else);
+        return {
+          kind: "match", scrutinee: cond,
+          arms: [
+            { pattern: `.some ${bound}`, body: thenExpr },
+            { pattern: ".none", body: elseExpr },
+          ],
+        };
+      }
+
+      // Non-optional: regular if with optional wrapping
       if (e.ty.kind === "optional") {
         if (e.then.kind === "var" && e.then.name === "undefined") {
           thenExpr = { kind: "constructor", name: ".none" };

@@ -610,8 +610,9 @@ function buildRecordCtorMap(decls: Decl[]) {
 
 function qualifyCtor(name: string, type?: string): string {
   const rawName = name.replace(/^\./, "");
-  if (type) return `${type}.${escapeName(rawName)}`;
-  return escapeName(rawName);
+  const mapped = CTOR_MAP[rawName] ?? escapeName(rawName);
+  if (type) return `${type}.${mapped}`;
+  return mapped;
 }
 
 /** Translate a Lean match pattern to Dafny syntax.
