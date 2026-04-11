@@ -352,6 +352,9 @@ function typeToString(type: Type): string {
     const parts = [...new Set(type.getUnionTypes().map(typeToString))];
     return parts.join(" | ");
   }
+  if (type.isTuple()) {
+    return `[${type.getTupleElements().map(t => typeToString(t)).join(", ")}]`;
+  }
   if (type.isArray()) {
     const elem = type.getArrayElementTypeOrThrow();
     return `${typeToString(elem)}[]`;
@@ -629,7 +632,19 @@ function extractFunction(fn: FunctionDeclaration): RawFunction {
 
   return {
     name: (fn as any).getName?.() ?? "<anonymous>",
-    params: fn.getParameters().map(p => ({ name: p.getName(), tsType: p.getTypeNode()?.getText() ?? "unknown" })),
+    params: fn.getParameters().flatMap(p => {
+      // Flatten destructured object params into individual params
+      const nameNode = p.getNameNode();
+      if (Node.isObjectBindingPattern(nameNode)) {
+        const type = p.getType();
+        return nameNode.getElements().map(el => {
+          const name = el.getName();
+          const propType = type.getProperty(name)?.getTypeAtLocation(p);
+          return { name, tsType: propType ? typeToString(propType) : "unknown" };
+        });
+      }
+      return [{ name: p.getName(), tsType: p.getTypeNode()?.getText() ?? "unknown" }];
+    }),
     returnType: fn.getReturnTypeNode()?.getText() ?? "unknown",
     requires: annots.filter(a => a.kind === "requires").map(a => a.expr),
     ensures: annots.filter(a => a.kind === "ensures").map(a => a.expr),

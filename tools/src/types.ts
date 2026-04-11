@@ -93,6 +93,12 @@ export function parseTsType(tsType: string): Ty {
   // Set<T>
   const setMatch = t.match(/^Set<(.+)>$/);
   if (setMatch) return { kind: "set", elem: parseTsType(setMatch[1]) };
+  // Tuple [T1, T2, ...] → array of the common element type
+  const tupleMatch = t.match(/^\[(.+)\]$/);
+  if (tupleMatch) {
+    const elems = splitTypeArgs(tupleMatch[1]);
+    return { kind: "array", elem: parseTsType(elems[0]) };
+  }
   return { kind: "user", name: t };
 }
 
