@@ -646,6 +646,7 @@ Pure functions are handled differently by each backend:
 | `true \| false \| undefined` | `Option Bool` | `Option<bool>` |
 | `Record<K, V>` | `Std.HashMap K' V'` | `map<K', V'>` |
 | `unknown` | `Int` | `int` |
+| `[T, T, ...]` (tuple) | `Array T'` | `seq<T'>` |
 | Anything else | Pass through | Pass through |
 
 `lsc` reads parameter and variable types from ts-morph. Primitive types are mapped per the table. User-defined types (like `State`, `Event`) are passed through by name — the corresponding backend type is generated from the TS type declaration.
