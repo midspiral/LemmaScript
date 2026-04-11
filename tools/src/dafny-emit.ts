@@ -233,8 +233,23 @@ function emitExpr(e: Expr): string {
         return `${emitExpr(e.spread)}.(${updates.join(", ")})`;
       }
       const ctorName = e.fields.length > 0 ? _recordCtors.get(e.fields[0].name) : undefined;
+      if (ctorName) {
+        const structFields = _structureDecls.get(ctorName);
+        if (structFields && e.fields.length < structFields.length) {
+          // Pad missing fields: match by name, fill None for optional
+          const provided = new Map(e.fields.map(f => [f.name, f]));
+          const vals = structFields.map(sf => {
+            const f = provided.get(sf.name);
+            if (f) return emitExpr(f.value);
+            if (sf.type.kind === "optional") { needsOptionType = true; return "None"; }
+            return `/* missing: ${sf.name} */`;
+          });
+          return `${ctorName}(${vals.join(", ")})`;
+        }
+        const vals = e.fields.map(f => emitExpr(f.value));
+        return `${ctorName}(${vals.join(", ")})`;
+      }
       const vals = e.fields.map(f => emitExpr(f.value));
-      if (ctorName) return `${ctorName}(${vals.join(", ")})`;
       return `(${vals.join(", ")})`;
     }
 
@@ -574,15 +589,21 @@ const STRING_TO_UPPER = `function StringToUpper(s: string): string
 // ── Constructor and record helpers ───────────────────────────
 
 let _recordCtors = new Map<string, string>();
+let _structureDecls = new Map<string, { name: string; type: Ty }[]>();
 
 function buildRecordCtorMap(decls: Decl[]) {
   _recordCtors = new Map();
+  _structureDecls = new Map();
   for (const d of decls) {
-    if (d.kind === "structure" && d.fields.length > 0)
+    if (d.kind === "structure" && d.fields.length > 0) {
       _recordCtors.set(d.fields[0].name, d.name);
+      _structureDecls.set(d.name, d.fields);
+    }
     if (d.kind === "namespace") for (const inner of d.decls) {
-      if (inner.kind === "structure" && inner.fields.length > 0)
+      if (inner.kind === "structure" && inner.fields.length > 0) {
         _recordCtors.set(inner.fields[0].name, inner.name);
+        _structureDecls.set(inner.name, inner.fields);
+      }
     }
   }
 }
