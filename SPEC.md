@@ -56,6 +56,7 @@ add      := mul (('+' | '-') mul)*
 mul      := unary (('*' | '/' | '%') unary)*
 unary    := '!' unary | '-' unary | postfix
 postfix  := atom ('.' ident | '[' expr ']' | '(' args ')')*
+cmpOp    := ... | 'in'                        // set/seq/map membership
 atom     := NUMBER | HEX_NUMBER | IDENT | 'true' | 'false' | '\result'
           | 'forall' '(' IDENT (':' TYPE)? ',' expr ')'
           | 'exists' '(' IDENT (':' TYPE)? ',' expr ')'
