@@ -305,6 +305,8 @@ No normalization of operators. Both backends handle all comparison directions.
 | `[...arr, e]` | `Array.push arr e` | `(arr + [e])` |
 | `{ ...obj, f: v }` | `{ obj with f := v }` | `obj.(f := v)` |
 | `arr.with(i, v)` | `arr.set! i v` | `arr[i := v]` |
+| `` `${n} items` `` (int+string) | — | `NatToString(n) + " items"` |
+| `{ k1: v1, ... }: Record<K,V>` | — | `map["k1" := v1, ...]` |
 | `new Map<K,V>()` | `Std.HashMap.empty` | `map[]` |
 | `m.get(k)` (in code) | `m.get? k` | `if k in m then Some(m[k]) else None` |
 | `m.get(k)` (in spec) | `m.get! k` | `m[k]` |
@@ -947,8 +949,6 @@ The following TS features are not yet handled by the toolchain:
 
 - Array index assignment (`arr[i] = v`)
 - Compound pattern matching (nested match on multiple discriminated unions)
-- `Record<K,V>` object literals as map literals (emitted as tuples, not `map[k := v]`)
-- `int + string` concatenation (no `NatToString` helper yet)
 - async/await
 - Error reporting (mapping prover errors to TS source locations)
 - VS Code extension
