@@ -11,6 +11,61 @@ import { parseTsType } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 
+// ── Raw expression substitution ─────────────────────────────
+
+let _synVarCounter = 0;
+
+/**
+ * Structural equality for raw field-access chains (var and field nodes only).
+ * Exact within a single expression scope — raw IR has no bindings that could
+ * cause name collisions (those are introduced by resolve, which runs after).
+ */
+function rawExprEquals(a: RawExpr, b: RawExpr): boolean {
+  if (a.kind === "var" && b.kind === "var") return a.name === b.name;
+  if (a.kind === "field" && b.kind === "field") return a.field === b.field && rawExprEquals(a.obj, b.obj);
+  return false;
+}
+
+/** Return the root variable name of a field-access chain, or null. */
+function rawChainRoot(e: RawExpr): string | null {
+  if (e.kind === "var") return e.name;
+  if (e.kind === "field") return rawChainRoot(e.obj);
+  return null;
+}
+
+/**
+ * Replace all occurrences of `target` in `expr` with `replacement`.
+ * Only matches field-access chains (see rawExprEquals). Stops at lambda
+ * boundaries that shadow the chain's root variable.
+ */
+function substituteRawExpr(expr: RawExpr, target: RawExpr, replacement: RawExpr): RawExpr {
+  if (rawExprEquals(expr, target)) return replacement;
+  const root = rawChainRoot(target);
+  const sub = (e: RawExpr) => substituteRawExpr(e, target, replacement);
+  switch (expr.kind) {
+    case "var": case "num": case "str": case "bool": case "result":
+    case "havoc": case "emptyCollection":
+      return expr;
+    case "binop":  return { ...expr, left: sub(expr.left), right: sub(expr.right) };
+    case "unop":   return { ...expr, expr: sub(expr.expr) };
+    case "call":   return { ...expr, fn: sub(expr.fn), args: expr.args.map(sub) };
+    case "field":  return { ...expr, obj: sub(expr.obj) };
+    case "index":  return { ...expr, obj: sub(expr.obj), idx: sub(expr.idx) };
+    case "record":
+      return { ...expr, spread: expr.spread ? sub(expr.spread) : null,
+        fields: expr.fields.map(f => ({ ...f, value: sub(f.value) })) };
+    case "arrayLiteral": return { ...expr, elems: expr.elems.map(sub) };
+    case "conditional":  return { ...expr, cond: sub(expr.cond), then: sub(expr.then), else: sub(expr.else) };
+    case "nonNull":      return { ...expr, expr: sub(expr.expr) };
+    case "forall": case "exists":
+      return { ...expr, body: sub(expr.body) };
+    case "lambda":
+      // Don't cross lambda boundaries that shadow the chain's root variable
+      if (root && expr.params.some(p => p.name === root)) return expr;
+      return { ...expr, body: Array.isArray(expr.body) ? expr.body : sub(expr.body) };
+  }
+}
+
 // ── Environment ──────────────────────────────────────────────
 
 interface Env {
@@ -183,7 +238,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let ty: Ty = { kind: "unknown" };
       if (["===", "!==", ">=", "<=", ">", "<"].includes(e.op)) ty = { kind: "bool" };
       else if (e.op === "&&") ty = right.ty;
-      else if (e.op === "||" && left.ty.kind === "optional") ty = left.ty.inner;
+      else if (e.op === "||" && left.ty.kind === "optional") {
+        // || undefined is identity for optionals — keep the optional type
+        ty = (e.right.kind === "var" && e.right.name === "undefined") ? left.ty : left.ty.inner;
+      }
       else if (e.op === "||") ty = right.ty;
       else if (["+", "-", "*", "/", "%"].includes(e.op)) {
         ty = (left.ty.kind === "real" || right.ty.kind === "real") ? { kind: "real" } : left.ty;
@@ -198,7 +256,31 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "call": {
       const fn = resolveExpr(e.fn, ctx);
-      let args = e.args.map(a => resolveExpr(a, ctx));
+      // Infer lambda param types from array method context (map, filter, etc.)
+      let rawArgs = e.args;
+      if (fn.kind === "field" && fn.obj.ty.kind === "array" &&
+          ["map", "filter", "every", "some", "find"].includes(fn.field) &&
+          rawArgs.length >= 1 && rawArgs[0].kind === "lambda" &&
+          rawArgs[0].params.length >= 1 && !rawArgs[0].params[0].tsType) {
+        const elemTy = fn.obj.ty.elem;
+        const tsType = elemTy.kind === "user" ? elemTy.name
+          : elemTy.kind === "string" ? "string"
+          : elemTy.kind === "int" || elemTy.kind === "nat" ? "number"
+          : elemTy.kind === "bool" ? "boolean" : undefined;
+        if (tsType) {
+          const lam = rawArgs[0];
+          const updatedParams = [{ ...lam.params[0], tsType }, ...lam.params.slice(1)];
+          rawArgs = [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
+        }
+      }
+      // For .push() on a typed array, resolve the argument with element type context
+      // so record expressions can match fields and coerce types
+      let argCtx = ctx;
+      if (fn.kind === "field" && fn.obj.ty.kind === "array" && fn.field === "push" &&
+          fn.obj.ty.elem.kind === "user") {
+        argCtx = { ...ctx, returnTy: fn.obj.ty.elem };
+      }
+      let args = rawArgs.map(a => resolveExpr(a, argCtx));
       // Coerce non-optional args to Option when callee expects optional param: wrap in Some
       if (fn.kind === "var" && ctx.fnParams.has(fn.name)) {
         const paramTys = ctx.fnParams.get(fn.name)!;
@@ -229,6 +311,13 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         if (fn.field === "includes") ty = { kind: "bool" };
         else if (fn.field === "shift") ty = fn.obj.ty.elem;
         else if (fn.field === "push") ty = fn.obj.ty;
+        else if (fn.field === "map" && args.length >= 1 && args[0].kind === "lambda") {
+          const retTy = args[0].body.length > 0 && args[0].body[0].kind === "return"
+            ? args[0].body[0].value.ty : { kind: "unknown" as const };
+          ty = { kind: "array", elem: retTy };
+        }
+        else if (fn.field === "filter") ty = fn.obj.ty;
+        else if (fn.field === "every" || fn.field === "some") ty = { kind: "bool" };
       } else if (fn.kind === "field" && fn.obj.ty.kind === "string") {
         if (fn.field === "trim") ty = { kind: "string" };
         else if (fn.field === "toLowerCase") ty = { kind: "string" };
@@ -241,7 +330,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     case "index": {
       const obj = resolveExpr(e.obj, ctx);
       const idx = resolveExpr(e.idx, ctx);
-      return { kind: "index", obj, idx, ty: obj.ty.kind === "array" ? obj.ty.elem : { kind: "unknown" } };
+      const idxTy = obj.ty.kind === "array" ? obj.ty.elem
+        : obj.ty.kind === "map" ? obj.ty.value
+        : { kind: "unknown" as const };
+      return { kind: "index", obj, idx, ty: idxTy };
     }
 
     case "field": {
@@ -271,10 +363,23 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // Infer record type: from spread, or from return type context
       const recordTy = ty.kind === "user" ? ty : ctx.returnTy.kind === "user" ? ctx.returnTy : null;
       const decl = recordTy ? ctx.typeDecls.find(d => d.name === recordTy.name && d.kind === "record") : undefined;
+      // Clear returnTy for field values — it applies to THIS record, not nested ones
+      const fieldCtx = recordTy ? { ...ctx, returnTy: { kind: "unknown" as const } as Ty } : ctx;
       const fields = e.fields.map(f => {
-        let value = resolveExpr(f.value, ctx);
+        let value = resolveExpr(f.value, fieldCtx);
         const fieldDecl = decl?.fields?.find(df => df.name === f.name);
-        if (fieldDecl) value = coerceStr(value, parseTsType(fieldDecl.tsType));
+        if (fieldDecl) {
+          const declTy = parseTsType(fieldDecl.tsType);
+          value = coerceStr(value, declTy);
+          // Coerce non-optional to optional: wrap in Some (only when value type is concrete)
+          if (declTy.kind === "optional" && value.ty.kind !== "optional" && value.ty.kind !== "void" && value.ty.kind !== "unknown") {
+            value = {
+              kind: "call" as const,
+              fn: { kind: "var" as const, name: "Some", ty: declTy },
+              args: [value], ty: declTy, callKind: "pure" as const,
+            };
+          }
+        }
         return { name: f.name, value };
       });
       return { kind: "record", spread, fields, ty: recordTy ?? ty };
@@ -321,12 +426,34 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "conditional": {
       const cond = resolveExpr(e.cond, ctx);
-      let then_ = resolveExpr(e.then, ctx);
+
+      // Optional truthiness: opt ? X : Y
+      // Narrow the optional to its inner type in the then-branch so that
+      // field accesses resolve correctly (e.g. entry.decision.field).
+      let narrowedVar: string | undefined;
+      let thenCtx = ctx;
+      let rawThen = e.then;
+      if (cond.ty.kind === "optional") {
+        const innerTy = cond.ty.inner;
+        if (e.cond.kind === "var") {
+          // Simple variable: narrow it directly in the env
+          narrowedVar = e.cond.name;
+          thenCtx = withEnv(ctx, extend(ctx.env, e.cond.name, innerTy));
+        } else {
+          // Complex expression (field access chain): introduce a synthetic
+          // variable, substitute it into the raw then-expr, and narrow it
+          narrowedVar = `_opt${_synVarCounter++}`;
+          rawThen = substituteRawExpr(e.then, e.cond, { kind: "var", name: narrowedVar });
+          thenCtx = withEnv(ctx, extend(ctx.env, narrowedVar, innerTy));
+        }
+      }
+
+      let then_ = resolveExpr(rawThen, thenCtx);
       let else_ = resolveExpr(e.else, ctx);
       then_ = coerceStr(then_, else_.ty);
       else_ = coerceStr(else_, then_.ty);
       const ty = then_.ty.kind !== "unknown" ? then_.ty : else_.ty;
-      return { kind: "conditional", cond, then: then_, else: else_, ty };
+      return { kind: "conditional", cond, then: then_, else: else_, ty, narrowedVar };
     }
 
     case "emptyCollection": {

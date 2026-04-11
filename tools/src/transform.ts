@@ -33,7 +33,10 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
     case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
-    case "match": return { ...e, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
+    case "match": {
+      const scr = typeof e.scrutinee === "string" ? e.scrutinee : r(e.scrutinee);
+      return { ...e, scrutinee: scr, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
+    }
     case "forall": return { ...e, body: r(e.body) };
     case "exists": return { ...e, body: r(e.body) };
     case "let": return { ...e, value: r(e.value), body: r(e.body) };
@@ -232,6 +235,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           ],
         };
       }
+      // || undefined on optional → identity (no-op: x || undefined = x)
+      if (e.op === "||" && e.left.ty.kind === "optional" &&
+          e.right.kind === "var" && e.right.name === "undefined") {
+        return lowerExpr(e.left, binds);
+      }
       // || on optional → match Some/None with default
       if (e.op === "||" && e.left.ty.kind === "optional") {
         const optExpr = lowerExpr(e.left, binds);
@@ -244,6 +252,43 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             { pattern: ".none", body: defaultExpr },
           ],
         };
+      }
+      // || on map index → if key in map then map[key] else default
+      if (e.op === "||" && e.left.kind === "index" && e.left.obj.ty.kind === "map") {
+        const map = lowerExpr(e.left.obj, binds);
+        const key = lowerExpr(e.left.idx, binds);
+        const right = lowerExpr(e.right, binds);
+        return {
+          kind: "if",
+          cond: { kind: "binop", op: "in", left: key, right: map },
+          then: { kind: "index", arr: map, idx: key }, else: right,
+        };
+      }
+      // || on non-optional string/array/user → if non-empty then x else default
+      if (e.op === "||" && (e.left.ty.kind === "string" || e.left.ty.kind === "array" ||
+          (e.left.ty.kind === "user" && e.right.ty.kind === "string"))) {
+        const left = lowerExpr(e.left, binds);
+        const right = lowerExpr(e.right, binds);
+        return {
+          kind: "if",
+          cond: { kind: "binop", op: ">", left: { kind: "field", obj: left, field: "size" }, right: { kind: "num", value: 0 } },
+          then: left, else: right,
+        };
+      }
+      // int + string → NatToString(int) + string (string concatenation)
+      if (e.op === "+" && _opts.backend === "dafny") {
+        const isIntL = e.left.ty.kind === "int" || e.left.ty.kind === "nat";
+        const isIntR = e.right.ty.kind === "int" || e.right.ty.kind === "nat";
+        if (isIntL && e.right.ty.kind === "string") {
+          return { kind: "binop", op: "+",
+            left: { kind: "app", fn: "NatToString", args: [lowerExpr(e.left, binds)] },
+            right: lowerExpr(e.right, binds) };
+        }
+        if (e.left.ty.kind === "string" && isIntR) {
+          return { kind: "binop", op: "+",
+            left: lowerExpr(e.left, binds),
+            right: { kind: "app", fn: "NatToString", args: [lowerExpr(e.right, binds)] } };
+        }
       }
       return {
         kind: "binop",
@@ -338,7 +383,32 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       const cond = lowerExpr(e.cond, binds);
       let thenExpr = lowerExpr(e.then, binds);
       let elseExpr = lowerExpr(e.else, binds);
-      // Optional ternary: wrap non-undefined branch in Some, undefined branch in None
+
+      // Optional cond with narrowedVar → match Some/None
+      if (e.narrowedVar && e.cond.ty.kind === "optional") {
+        const bound = matchBinder(e.narrowedVar);
+        // Replace the synthetic/narrowed var with the match-bound name
+        if (bound !== e.narrowedVar) {
+          thenExpr = replaceVar(thenExpr, e.narrowedVar, { kind: "var", name: bound });
+        }
+        // The match produces an Optional: wrap branches in Some/None.
+        // Either branch being undefined signals None; otherwise wrap in Some.
+        const wrapSomeNone = (expr: Expr, raw: TExpr): Expr =>
+          (raw.kind === "var" && raw.name === "undefined")
+            ? { kind: "constructor", name: ".none" }
+            : { kind: "app", fn: "Some", args: [expr] };
+        thenExpr = wrapSomeNone(thenExpr, e.then);
+        elseExpr = wrapSomeNone(elseExpr, e.else);
+        return {
+          kind: "match", scrutinee: cond,
+          arms: [
+            { pattern: `.some ${bound}`, body: thenExpr },
+            { pattern: ".none", body: elseExpr },
+          ],
+        };
+      }
+
+      // Non-optional: regular if with optional wrapping
       if (e.ty.kind === "optional") {
         if (e.then.kind === "var" && e.then.name === "undefined") {
           thenExpr = { kind: "constructor", name: ".none" };

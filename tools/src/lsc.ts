@@ -49,7 +49,21 @@ function main() {
     process.exit(1);
   }
 
-  const project = new Project({ compilerOptions: { strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"] } });
+  // Find nearest tsconfig.json for import resolution; fall back to bare options
+  function findTsConfig(from: string): string | undefined {
+    let dir = path.dirname(from);
+    while (true) {
+      const candidate = path.join(dir, "tsconfig.json");
+      if (existsSync(candidate)) return candidate;
+      const parent = path.dirname(dir);
+      if (parent === dir) return undefined;
+      dir = parent;
+    }
+  }
+  const tsConfigFilePath = findTsConfig(absPath);
+  const project = tsConfigFilePath
+    ? new Project({ tsConfigFilePath, skipAddingFilesFromTsConfig: true })
+    : new Project({ compilerOptions: { strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"] } });
   const sourceFile = project.addSourceFileAtPath(absPath);
 
   // Check //@ backend directive — skip if backend doesn't match

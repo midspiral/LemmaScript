@@ -55,7 +55,14 @@ export function parseTsType(tsType: string): Ty {
   const t = tsType.trim();
   // Union: T | undefined → optional<T>
   if (t.includes(" | ")) {
-    const arms = t.split(" | ").map(a => a.trim());
+    let arms = t.split(" | ").map(a => a.trim());
+    // Normalize expanded boolean literals: true | false → boolean
+    const boolLits = new Set(["true", "false"]);
+    const hasBoth = arms.includes("true") && arms.includes("false");
+    if (hasBoth) {
+      arms = arms.filter(a => !boolLits.has(a));
+      arms.unshift("boolean");
+    }
     const nonUndef = arms.filter(a => a !== "undefined");
     if (nonUndef.length === 1 && arms.length === 2) {
       return { kind: "optional", inner: parseTsType(nonUndef[0]) };

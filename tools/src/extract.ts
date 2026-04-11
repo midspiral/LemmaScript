@@ -234,7 +234,7 @@ function collectAnnotations(node: Node, body?: Node[]): Annotation[] {
 
 // ── Type declaration extraction ──────────────────────────────
 
-function extractTypeDecl(decl: TypeAliasDeclaration): TypeDeclInfo | null {
+function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
   const name = decl.getName();
   const type = decl.getType();
 
@@ -262,11 +262,11 @@ function extractTypeDecl(decl: TypeAliasDeclaration): TypeDeclInfo | null {
     }
   }
 
-  if (type.isObject()) return extractRecord(name, type, decl);
+  if (type.isObject()) return extractRecord(name, type, decl, undefined, extraDecls);
   return null;
 }
 
-function extractInterface(decl: InterfaceDeclaration): TypeDeclInfo | null {
+function extractInterface(decl: InterfaceDeclaration, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
   // Collect field type overrides from trailing //@ type annotations
   const overrides = new Map<string, string>();
   for (const member of decl.getMembers()) {
@@ -276,16 +276,44 @@ function extractInterface(decl: InterfaceDeclaration): TypeDeclInfo | null {
       if (match) overrides.set(member.getName(), match[1]);
     }
   }
-  return extractRecord(decl.getName(), decl.getType(), decl, overrides);
+  return extractRecord(decl.getName(), decl.getType(), decl, overrides, extraDecls);
 }
 
-function extractRecord(name: string, type: Type, locationNode: Node, overrides?: Map<string, string>): TypeDeclInfo | null {
+function extractRecord(name: string, type: Type, locationNode: Node, overrides?: Map<string, string>, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
   const props = type.getProperties();
   if (props.length === 0) return null;
   const fields: { name: string; tsType: string }[] = [];
   for (const prop of props) {
     const override = overrides?.get(prop.getName());
-    const tsType = override ?? typeToString(prop.getTypeAtLocation(locationNode));
+    if (override) { fields.push({ name: prop.getName(), tsType: override }); continue; }
+
+    const propType = prop.getTypeAtLocation(locationNode);
+    let tsType = typeToString(propType);
+
+    // Inline anonymous object types: ts-morph names them __type.
+    // Generate a synthetic named record and reference it by name instead.
+    if (extraDecls && tsType.includes("__type")) {
+      let innerType = propType;
+      let isOptional = false;
+      if (propType.isUnion()) {
+        const uTypes = propType.getUnionTypes();
+        const nonUndef = uTypes.filter(t => !t.isUndefined());
+        if (uTypes.some(t => t.isUndefined()) && nonUndef.length === 1) {
+          innerType = nonUndef[0];
+          isOptional = true;
+        }
+      }
+      if (innerType.isObject() && !innerType.isArray()) {
+        const fName = prop.getName();
+        const synName = name + fName.charAt(0).toUpperCase() + fName.slice(1);
+        const extracted = extractRecord(synName, innerType, locationNode, undefined, extraDecls);
+        if (extracted) {
+          extraDecls.push(extracted);
+          tsType = isOptional ? `${synName} | undefined` : synName;
+        }
+      }
+    }
+
     fields.push({ name: prop.getName(), tsType });
   }
   return { name, kind: "record", fields };
@@ -321,7 +349,8 @@ function typeToString(type: Type): string {
     return name;
   }
   if (type.isUnion()) {
-    return type.getUnionTypes().map(typeToString).join(" | ");
+    const parts = [...new Set(type.getUnionTypes().map(typeToString))];
+    return parts.join(" | ");
   }
   if (type.isArray()) {
     const elem = type.getArrayElementTypeOrThrow();
@@ -617,10 +646,15 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // Extract type declarations in source order to respect dependencies
   for (const stmt of sourceFile.getStatements()) {
     if (Node.isTypeAliasDeclaration(stmt)) {
-      const info = extractTypeDecl(stmt);
+      const extra: TypeDeclInfo[] = [];
+      const info = extractTypeDecl(stmt, extra);
+      typeDecls.push(...extra);
       if (info) typeDecls.push(info);
     } else if (Node.isInterfaceDeclaration(stmt)) {
-      const info = extractInterface(stmt);
+      const extra: TypeDeclInfo[] = [];
+      const info = extractInterface(stmt, extra);
+      // Synthetic types from inline objects must precede the parent type
+      typeDecls.push(...extra);
       if (info) typeDecls.push(info);
     }
   }
@@ -727,16 +761,66 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   function resolveType(t: Type, locationNode: Node) {
     // Unwrap arrays and generics to find user-defined types
     if (t.isArray()) { resolveType(t.getArrayElementTypeOrThrow(), locationNode); return; }
+    // Resolve type aliases (e.g. string unions imported from other files)
+    const alias = t.getAliasSymbol();
+    if (alias) {
+      const aliasName = alias.getName();
+      if (!knownTypes.has(aliasName) && !builtins.has(aliasName) && !aliasName.startsWith("__")) {
+        const decls = alias.getDeclarations();
+        if (decls.length > 0 && Node.isTypeAliasDeclaration(decls[0])) {
+          const extra: TypeDeclInfo[] = [];
+          const info = extractTypeDecl(decls[0], extra);
+          if (info) { typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(aliasName); }
+        }
+      }
+    }
+    if (t.isUnion()) { for (const u of t.getUnionTypes()) resolveType(u, locationNode); return; }
     for (const arg of t.getTypeArguments()) resolveType(arg, locationNode);
     const sym = t.getSymbol() ?? t.getAliasSymbol();
     const name = sym?.getName();
-    if (name && !knownTypes.has(name) && !builtins.has(name) && t.isObject()) {
-      const info = extractRecord(name, t, locationNode);
-      if (info) { typeDecls.push(info); knownTypes.add(name); }
+    if (name && !name.startsWith("__") && !knownTypes.has(name) && !builtins.has(name) && t.isObject()) {
+      const extra: TypeDeclInfo[] = [];
+      const info = extractRecord(name, t, locationNode, undefined, extra);
+      if (info) {
+        typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(name);
+        // Recursively resolve types referenced in this type's fields
+        for (const prop of t.getProperties()) {
+          resolveType(prop.getTypeAtLocation(locationNode), locationNode);
+        }
+      }
     }
   }
   for (const f of fnsToExtract) {
     for (const p of f.node.getParameters()) resolveType(p.getType(), p);
+  }
+  // Resolve anonymous object return types into synthetic named types
+  for (let i = 0; i < fnsToExtract.length; i++) {
+    const f = fnsToExtract[i];
+    const fn = functions[i];
+    const retType = f.node.getReturnType();
+    // Prefer alias symbol (named type aliases) over underlying object symbol (__type)
+    const aliasSym = retType.getAliasSymbol();
+    if (aliasSym && !aliasSym.getName().startsWith("__")) {
+      // Named type alias — resolve it instead of generating a synthetic name
+      resolveType(retType, f.node);
+      const aliasName = aliasSym.getName();
+      if (knownTypes.has(aliasName)) fn.returnType = aliasName;
+      continue;
+    }
+    const sym = retType.getSymbol();
+    if (sym?.getName() === "__type" && retType.isObject() && !retType.isArray()) {
+      const synName = fn.name.charAt(0).toUpperCase() + fn.name.slice(1) + "Result";
+      if (!knownTypes.has(synName)) {
+        const extra: TypeDeclInfo[] = [];
+        const info = extractRecord(synName, retType, f.node, undefined, extra);
+        if (info) { typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(synName); }
+      }
+      fn.returnType = synName;
+      // Also resolve imported types referenced in the return type's fields
+      for (const prop of retType.getProperties()) {
+        resolveType(prop.getTypeAtLocation(f.node), f.node);
+      }
+    }
   }
 
   // Extract classes with //@ verify methods

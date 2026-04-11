@@ -65,7 +65,7 @@ function mapOp(op: string): string { return OP_MAP[op] ?? op; }
 
 function emitExpr(e: Expr): string {
   switch (e.kind) {
-    case "var": return escapeName(e.name);
+    case "var": return e.name === "undefined" ? "None" : escapeName(e.name);
     case "num": return `${e.value}`;
     case "bool": return e.value ? "true" : "false";
     case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
@@ -209,6 +209,7 @@ function emitExpr(e: Expr): string {
       if (e.fn === "JSFloorDiv") needsJSFloorDiv = true;
       if (e.fn === "CeilReal") needsCeilReal = true;
       if (e.fn === "FloorReal") needsFloorReal = true;
+      if (e.fn === "NatToString") needsNatToString = true;
       return `${e.fn}(${args.join(", ")})`;
     }
 
@@ -233,8 +234,23 @@ function emitExpr(e: Expr): string {
         return `${emitExpr(e.spread)}.(${updates.join(", ")})`;
       }
       const ctorName = e.fields.length > 0 ? _recordCtors.get(e.fields[0].name) : undefined;
+      if (ctorName) {
+        const structFields = _structureDecls.get(ctorName);
+        if (structFields && e.fields.length < structFields.length) {
+          // Pad missing fields: match by name, fill None for optional
+          const provided = new Map(e.fields.map(f => [f.name, f]));
+          const vals = structFields.map(sf => {
+            const f = provided.get(sf.name);
+            if (f) return emitExpr(f.value);
+            if (sf.type.kind === "optional") { needsOptionType = true; return "None"; }
+            return `/* missing: ${sf.name} */`;
+          });
+          return `${ctorName}(${vals.join(", ")})`;
+        }
+        const vals = e.fields.map(f => emitExpr(f.value));
+        return `${ctorName}(${vals.join(", ")})`;
+      }
       const vals = e.fields.map(f => emitExpr(f.value));
-      if (ctorName) return `${ctorName}(${vals.join(", ")})`;
       return `(${vals.join(", ")})`;
     }
 
@@ -310,7 +326,13 @@ function emitStmt(s: Stmt, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (s.kind) {
     case "let":
-      if (s.value.kind === "havoc")
+      // Record literal assigned to map type → emit as map[k := v, ...]
+      if (s.type.kind === "map" && s.value.kind === "record" && !s.value.spread) {
+        const entries = s.value.fields.map(f => `${emitExpr({ kind: "str", value: f.name })} := ${emitExpr(f.value)}`);
+        return `${pad}var ${escapeName(s.name)}: ${tyToDafny(resolveTy(s.type))} := map[${entries.join(", ")}];`;
+      }
+      if (s.value.kind === "havoc" || s.value.kind === "emptyMap" || s.value.kind === "emptySet" ||
+          (s.value.kind === "arrayLiteral" && s.value.elems.length === 0))
         return `${pad}var ${escapeName(s.name)}: ${tyToDafny(s.type)} := ${emitExpr(s.value)};`;
       return `${pad}var ${escapeName(s.name)} := ${emitExpr(s.value)};`;
     case "assign":
@@ -473,6 +495,7 @@ let needsOptionType = false;
 let needsSetToSeq = false;
 let needsBitAnd = false;
 let needsPow2 = false;
+let needsNatToString = false;
 
 const POW2 = `function Pow2(n: int): int
   requires n >= 0
@@ -570,26 +593,52 @@ const STRING_TO_UPPER = `function StringToUpper(s: string): string
     [upper] + StringToUpper(s[1..])
 }`;
 
+const NAT_TO_STRING = `function NatToString(n: nat): string
+  decreases n
+{
+  var digit := ('0' as int + n % 10) as char;
+  if n < 10 then [digit]
+  else NatToString(n / 10) + [digit]
+}`;
+
 // ── Constructor and record helpers ───────────────────────────
 
 let _recordCtors = new Map<string, string>();
+let _structureDecls = new Map<string, { name: string; type: Ty }[]>();
+let _declaredTypes = new Set<string>();
 
 function buildRecordCtorMap(decls: Decl[]) {
   _recordCtors = new Map();
-  for (const d of decls) {
-    if (d.kind === "structure" && d.fields.length > 0)
-      _recordCtors.set(d.fields[0].name, d.name);
-    if (d.kind === "namespace") for (const inner of d.decls) {
-      if (inner.kind === "structure" && inner.fields.length > 0)
-        _recordCtors.set(inner.fields[0].name, inner.name);
+  _structureDecls = new Map();
+  _declaredTypes = new Set();
+  function collectDecl(d: Decl) {
+    if (d.kind === "structure") {
+      _declaredTypes.add(d.name);
+      _structureDecls.set(d.name, d.fields);
+      if (d.fields.length > 0) _recordCtors.set(d.fields[0].name, d.name);
     }
+    if (d.kind === "inductive") _declaredTypes.add(d.name);
+    if (d.kind === "def") _declaredTypes.add(d.name);
+    if (d.kind === "namespace") for (const inner of d.decls) collectDecl(inner);
   }
+  for (const d of decls) collectDecl(d);
+}
+
+/** Resolve a Ty to a Dafny-safe type, falling back to string for undeclared user types. */
+function resolveTy(ty: Ty): Ty {
+  if (ty.kind === "user" && !_declaredTypes.has(ty.name)) return { kind: "string" };
+  if (ty.kind === "optional") return { kind: "optional", inner: resolveTy(ty.inner) };
+  if (ty.kind === "array") return { kind: "array", elem: resolveTy(ty.elem) };
+  if (ty.kind === "map") return { kind: "map", key: resolveTy(ty.key), value: resolveTy(ty.value) };
+  if (ty.kind === "set") return { kind: "set", elem: resolveTy(ty.elem) };
+  return ty;
 }
 
 function qualifyCtor(name: string, type?: string): string {
   const rawName = name.replace(/^\./, "");
-  if (type) return `${type}.${escapeName(rawName)}`;
-  return escapeName(rawName);
+  const mapped = CTOR_MAP[rawName] ?? escapeName(rawName);
+  if (type) return `${type}.${mapped}`;
+  return mapped;
 }
 
 /** Translate a Lean match pattern to Dafny syntax.
@@ -628,6 +677,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   needsSetToSeq = false;
   needsBitAnd = false;
   needsPow2 = false;
+  needsNatToString = false;
 
   // Collect pure def names so we can skip their method wrappers
   const pureDefs = new Set<string>();
@@ -692,6 +742,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   if (needsStringTrim) { lines.push(""); lines.push(STRING_TRIM); }
   if (needsStringToLower) { lines.push(""); lines.push(STRING_TO_LOWER); }
   if (needsStringToUpper) { lines.push(""); lines.push(STRING_TO_UPPER); }
+  if (needsNatToString) { lines.push(""); lines.push(NAT_TO_STRING); }
   lines.push(...declLines);
   return lines.join("\n") + "\n";
 }

@@ -86,8 +86,8 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
 {
   allDistinct_means_no_dups(nodeIds, |nodeIds|);
 
-  var inDegree := map[];
-  var adjacency := map[];
+  var inDegree: map<string, int> := map[];
+  var adjacency: map<string, seq<string>> := map[];
   ghost var nodeIdSet: set<string> := {};
   var i_id_idx := 0;
   while i_id_idx < |nodeIds|
@@ -138,7 +138,7 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
     i_id_idx2 := i_id_idx2 + 1;
   }
   ghost var enqueued: set<string> := {};
-  var queue := [];
+  var queue: seq<string> := [];
   var i_id_idx3 := 0;
   while i_id_idx3 < |nodeIds|
     invariant (i_id_idx3 <= |nodeIds|)
@@ -168,7 +168,7 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
   allDistinct_means_no_dups(nodeIds, |nodeIds|);
   seq_to_set_size(nodeIds);
   subset_size(enqueued, universe);
-  var sorted := [];
+  var sorted: seq<string> := [];
   var qHead := 0;
   while (qHead < |queue|)
     invariant (qHead <= |queue|)
