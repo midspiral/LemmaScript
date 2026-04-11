@@ -278,6 +278,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `Math.ceil(x)` (real arg) | — | `CeilReal(x)` → `x.Floor + 1` if non-integer |
 | `Math.floor(n)` (int arg) | identity | identity |
 | `Math.ceil(n)` (int arg) | identity | identity |
+| `Math.abs(x)` | `MathAbs(x)` | `MathAbs(x)` (preamble: `if x >= 0 then x else -x`) |
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `opt ? f(opt) : undefined` | match on Some/None | `match opt { case Some(v) => Some(f(v)) case None => None }` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
@@ -645,6 +646,7 @@ Pure functions are handled differently by each backend:
 | `true \| false \| undefined` | `Option Bool` | `Option<bool>` |
 | `Record<K, V>` | `Std.HashMap K' V'` | `map<K', V'>` |
 | `unknown` | `Int` | `int` |
+| `[T, T, ...]` (tuple) | `Array T'` | `seq<T'>` |
 | Anything else | Pass through | Pass through |
 
 `lsc` reads parameter and variable types from ts-morph. Primitive types are mapped per the table. User-defined types (like `State`, `Event`) are passed through by name — the corresponding backend type is generated from the TS type declaration.
@@ -938,7 +940,7 @@ Four-phase pipeline:
 extract (ts-morph → Raw IR) → resolve (→ Typed IR) → transform (→ IR) → emit (→ text)
 ```
 
-- **Extract** (`extract.ts`): ts-morph → structured AST. Body expressions are nodes, not strings. Annotations remain as strings. Discovers `tsconfig.json` for import resolution. Extracts inline anonymous object types as named `TypeDeclInfo` records, generates synthetic return types for functions with anonymous return types, and recursively resolves imported types (records, aliases, discriminated unions).
+- **Extract** (`extract.ts`): ts-morph → structured AST. Body expressions are nodes, not strings. Annotations remain as strings. Discovers `tsconfig.json` for import resolution. Extracts inline anonymous object types as named `TypeDeclInfo` records, generates synthetic return types for functions with anonymous return types, and recursively resolves imported types (records, aliases, discriminated unions). Flattens destructured object parameters into individual params. In `//@ verify` brownfield mode, filters type declarations to only those transitively referenced by verified functions.
 - **Resolve** (`resolve.ts`): attaches types, classifies calls (pure/method/spec-pure/unknown), identifies discriminants, rejects unsupported patterns. Uses linked environments for lexical scoping. Computes purity via call-graph analysis: a function is pure if it is syntactically pure (no `while`/`for-of`/mutable `let`) AND does not transitively call any non-pure function. Narrows optional types in conditional expressions via synthetic variable substitution. Coerces non-optional values to Optional (wraps in Some) when the target record field is optional. Infers lambda parameter types from array method context (`.map`, `.filter`, etc.). Propagates element type to `.push()` arguments for record type inference.
 - **Transform** (`transform.ts`): Typed IR → backend-neutral IR. Desugars `for-of` to indexed loops. Detects discriminant if-chains → `match`. Lifts embedded method calls to statement-level bindings (selective ANF, §3.6). Generates match expressions for optional conditionals (from resolve-phase `narrowedVar` annotations). Handles `||` on optional, string, and array types. Configured with `TransformOptions` for backend-specific behavior (monadic lifting, method name selection).
 - **Emit** (`lean-emit.ts` / `dafny-emit.ts`): IR → backend text. Dafny emitter pads record constructors with `None` for missing optional fields and adds type annotations for empty collections.
