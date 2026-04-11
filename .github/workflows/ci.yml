@@ -73,6 +73,7 @@ jobs:
   case-studies-dafny:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - repo: midspiral/colorwheel-lemmascript
@@ -110,6 +111,7 @@ jobs:
   case-studies-lean:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - repo: midspiral/colorwheel-lemmascript
