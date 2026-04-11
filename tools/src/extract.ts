@@ -768,6 +768,21 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       }
     }
     constants.splice(0, constants.length, ...constants.filter(c => referencedNames.has(c.name)));
+    // Filter types to only those referenced by verified functions (transitive)
+    const neededTypes = new Set<string>();
+    function markType(name: string) {
+      if (neededTypes.has(name)) return;
+      const d = typeDecls.find(t => t.name === name);
+      if (!d) return;
+      neededTypes.add(name);
+      for (const f of d.fields ?? [])
+        for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) markType(m[1]);
+      for (const v of d.variants ?? [])
+        for (const f of v.fields)
+          for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) markType(m[1]);
+    }
+    for (const name of referencedNames) markType(name);
+    typeDecls.splice(0, typeDecls.length, ...typeDecls.filter(d => neededTypes.has(d.name)));
   }
 
   // Resolve imported types: extract types referenced in function signatures but not in this file
