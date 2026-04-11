@@ -238,7 +238,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let ty: Ty = { kind: "unknown" };
       if (["===", "!==", ">=", "<=", ">", "<"].includes(e.op)) ty = { kind: "bool" };
       else if (e.op === "&&") ty = right.ty;
-      else if (e.op === "||" && left.ty.kind === "optional") ty = left.ty.inner;
+      else if (e.op === "||" && left.ty.kind === "optional") {
+        // || undefined is identity for optionals — keep the optional type
+        ty = (e.right.kind === "var" && e.right.name === "undefined") ? left.ty : left.ty.inner;
+      }
       else if (e.op === "||") ty = right.ty;
       else if (["+", "-", "*", "/", "%"].includes(e.op)) {
         ty = (left.ty.kind === "real" || right.ty.kind === "real") ? { kind: "real" } : left.ty;
@@ -270,7 +273,14 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           rawArgs = [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
         }
       }
-      let args = rawArgs.map(a => resolveExpr(a, ctx));
+      // For .push() on a typed array, resolve the argument with element type context
+      // so record expressions can match fields and coerce types
+      let argCtx = ctx;
+      if (fn.kind === "field" && fn.obj.ty.kind === "array" && fn.field === "push" &&
+          fn.obj.ty.elem.kind === "user") {
+        argCtx = { ...ctx, returnTy: fn.obj.ty.elem };
+      }
+      let args = rawArgs.map(a => resolveExpr(a, argCtx));
       // Coerce non-optional args to Option when callee expects optional param: wrap in Some
       if (fn.kind === "var" && ctx.fnParams.has(fn.name)) {
         const paramTys = ctx.fnParams.get(fn.name)!;
@@ -350,10 +360,23 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // Infer record type: from spread, or from return type context
       const recordTy = ty.kind === "user" ? ty : ctx.returnTy.kind === "user" ? ctx.returnTy : null;
       const decl = recordTy ? ctx.typeDecls.find(d => d.name === recordTy.name && d.kind === "record") : undefined;
+      // Clear returnTy for field values — it applies to THIS record, not nested ones
+      const fieldCtx = recordTy ? { ...ctx, returnTy: { kind: "unknown" as const } as Ty } : ctx;
       const fields = e.fields.map(f => {
-        let value = resolveExpr(f.value, ctx);
+        let value = resolveExpr(f.value, fieldCtx);
         const fieldDecl = decl?.fields?.find(df => df.name === f.name);
-        if (fieldDecl) value = coerceStr(value, parseTsType(fieldDecl.tsType));
+        if (fieldDecl) {
+          const declTy = parseTsType(fieldDecl.tsType);
+          value = coerceStr(value, declTy);
+          // Coerce non-optional to optional: wrap in Some (only when value type is concrete)
+          if (declTy.kind === "optional" && value.ty.kind !== "optional" && value.ty.kind !== "void" && value.ty.kind !== "unknown") {
+            value = {
+              kind: "call" as const,
+              fn: { kind: "var" as const, name: "Some", ty: declTy },
+              args: [value], ty: declTy, callKind: "pure" as const,
+            };
+          }
+        }
         return { name: f.name, value };
       });
       return { kind: "record", spread, fields, ty: recordTy ?? ty };
