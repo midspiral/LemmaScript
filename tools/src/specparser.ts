@@ -139,6 +139,11 @@ class Parser {
   parseCmp(): Expr {
     const left = this.parseAdd();
     const t = this.peek();
+    // 'in' as infix membership operator (set/seq/map): x in S
+    if (t?.type === "ident" && t.value === "in") {
+      this.advance();
+      return { kind: "binop", op: "in", left, right: this.parseAdd() };
+    }
     if (t?.type === "op" && ["===", "!==", "==", "!=", ">=", "<=", ">", "<"].includes(t.value)) {
       this.advance();
       // Normalize == to ===, != to !== so downstream sees one spelling

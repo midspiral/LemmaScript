@@ -236,7 +236,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         right = coerceStr(right, left.ty);
       }
       let ty: Ty = { kind: "unknown" };
-      if (["===", "!==", ">=", "<=", ">", "<"].includes(e.op)) ty = { kind: "bool" };
+      if (["===", "!==", ">=", "<=", ">", "<", "in"].includes(e.op)) ty = { kind: "bool" };
       else if (e.op === "&&") ty = right.ty;
       else if (e.op === "||" && left.ty.kind === "optional") {
         // || undefined is identity for optionals — keep the optional type
