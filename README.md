@@ -17,7 +17,7 @@ See the external case studies:
 - **[clear-split-lemmascript](https://github.com/midspiral/clear-split-lemmascript/)** — greenfield verified expense splitting web app. Conservation theorem, invariant preservation, delta laws — all proven in both Lean (no sorry) and Dafny (56 lemmas).
 - **[node-casbin-lemmascript](https://github.com/midspiral/node-casbin-lemmascript/blob/lemmascript/README_LemmaScript.md)** — brownfield verification of [node-casbin](https://github.com/casbin/node-casbin). 5 functions verified, 217 existing tests pass. End-to-end correctness and order independence for all 4 effect modes in both Lean and Dafny (39 lemmas).
 - **[hono-lemmascript](https://github.com/midspiral/hono-lemmascript/blob/lemmascript/README_LemmaScript.md)** — brownfield verification of [hono](https://github.com/honojs/hono)'s security middleware. Two CVEs verified: IP restriction bypass ([CVE-2026-39409](https://github.com/honojs/hono/security/advisories/GHSA-3mpf-rcc7-5347)) and cookie name bypass ([CVE-2026-39410](https://github.com/honojs/hono/security/advisories/GHSA-r5rp-j6wh-rvv4)) — 51 Dafny lemmas. [Cookie verification done **in-place**](https://github.com/midspiral/hono-lemmascript/blob/lemmascript/src/utils/cookie.ts#L79). Dafny only.
-- **[charmchat](https://github.com/CHARM-BDF/charmchat/tree/lemma)** — in-progress verification of some sub-components, in Dafny.
+- **[charmchat](https://github.com/CHARM-BDF/charmchat/tree/lemma)** — brownfield verification of an AI agent orchestration backend. `isEmptyResult` (string emptiness predicate, 8 postconditions, <1s) and `topologicalSort` (Kahn's algorithm — memory safety, output bounds, completeness via acyclicity ranking witness, termination; 5 helper lemmas, 28 loop invariants). Dafny only.
 
 ## Setup
 
