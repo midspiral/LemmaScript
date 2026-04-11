@@ -681,6 +681,46 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     return raw;
   });
 
+  // In brownfield mode, filter consts to only those referenced by verified functions.
+  // Types are NOT filtered — they may be needed transitively (e.g. Option from T | undefined).
+  if (hasVerifyDirective) {
+    const referencedNames = new Set<string>();
+    function collectNames(stmts: RawStmt[]) {
+      for (const s of stmts) {
+        if (s.kind === "let") { collectNamesExpr(s.init); }
+        if (s.kind === "assign") { collectNamesExpr(s.value); }
+        if (s.kind === "return") { collectNamesExpr(s.value); }
+        if (s.kind === "if") { collectNamesExpr(s.cond); collectNames(s.then); collectNames(s.else); }
+        if (s.kind === "while") { collectNamesExpr(s.cond); collectNames(s.body); }
+        if (s.kind === "forof") { collectNamesExpr(s.iterable); collectNames(s.body); }
+        if (s.kind === "expr") { collectNamesExpr(s.expr); }
+      }
+    }
+    function collectNamesExpr(e: RawExpr) {
+      if (e.kind === "var") referencedNames.add(e.name);
+      if (e.kind === "binop") { collectNamesExpr(e.left); collectNamesExpr(e.right); }
+      if (e.kind === "unop") { collectNamesExpr(e.expr); }
+      if (e.kind === "call") { collectNamesExpr(e.fn); e.args.forEach(collectNamesExpr); }
+      if (e.kind === "field") { collectNamesExpr(e.obj); }
+      if (e.kind === "index") { collectNamesExpr(e.obj); collectNamesExpr(e.idx); }
+      if (e.kind === "record") { if (e.spread) collectNamesExpr(e.spread); e.fields.forEach(f => collectNamesExpr(f.value)); }
+      if (e.kind === "arrayLiteral") { e.elems.forEach(collectNamesExpr); }
+      if (e.kind === "conditional") { collectNamesExpr(e.cond); collectNamesExpr(e.then); collectNamesExpr(e.else); }
+    }
+    for (const fn of functions) {
+      for (const p of fn.params) referencedNames.add(p.tsType);
+      referencedNames.add(fn.returnType);
+      collectNames(fn.body);
+      // Also scan spec annotations for identifier references
+      for (const spec of [...fn.requires, ...fn.ensures]) {
+        for (const m of spec.matchAll(/\b([a-zA-Z_]\w*)\b/g)) {
+          referencedNames.add(m[1]);
+        }
+      }
+    }
+    constants.splice(0, constants.length, ...constants.filter(c => referencedNames.has(c.name)));
+  }
+
   // Resolve imported types: extract types referenced in function signatures but not in this file
   const knownTypes = new Set(typeDecls.map(d => d.name));
   const builtins = new Set(["Map", "Set", "Array", "String", "Number", "Boolean", "Promise", "Date", "RegExp", "Error"]);
