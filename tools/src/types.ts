@@ -64,7 +64,7 @@ export function parseTsType(tsType: string): Ty {
   if (t === "number") return { kind: "int" };
   if (t === "bigint") return { kind: "int" };
   if (t === "nat") return { kind: "nat" };
-  if (t === "boolean") return { kind: "bool" };
+  if (t === "boolean" || t === "true" || t === "false") return { kind: "bool" };
   if (t === "string") return { kind: "string" };
   if (t === "void" || t === "undefined") return { kind: "void" };
   if (t === "unknown") return { kind: "unknown" };
