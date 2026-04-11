@@ -326,6 +326,11 @@ function emitStmt(s: Stmt, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (s.kind) {
     case "let":
+      // Record literal assigned to map type → emit as map[k := v, ...]
+      if (s.type.kind === "map" && s.value.kind === "record" && !s.value.spread) {
+        const entries = s.value.fields.map(f => `${emitExpr({ kind: "str", value: f.name })} := ${emitExpr(f.value)}`);
+        return `${pad}var ${escapeName(s.name)}: ${tyToDafny(resolveTy(s.type))} := map[${entries.join(", ")}];`;
+      }
       if (s.value.kind === "havoc" || s.value.kind === "emptyMap" || s.value.kind === "emptySet" ||
           (s.value.kind === "arrayLiteral" && s.value.elems.length === 0))
         return `${pad}var ${escapeName(s.name)}: ${tyToDafny(s.type)} := ${emitExpr(s.value)};`;
@@ -600,22 +605,33 @@ const NAT_TO_STRING = `function NatToString(n: nat): string
 
 let _recordCtors = new Map<string, string>();
 let _structureDecls = new Map<string, { name: string; type: Ty }[]>();
+let _declaredTypes = new Set<string>();
 
 function buildRecordCtorMap(decls: Decl[]) {
   _recordCtors = new Map();
   _structureDecls = new Map();
-  for (const d of decls) {
-    if (d.kind === "structure" && d.fields.length > 0) {
-      _recordCtors.set(d.fields[0].name, d.name);
+  _declaredTypes = new Set();
+  function collectDecl(d: Decl) {
+    if (d.kind === "structure") {
+      _declaredTypes.add(d.name);
       _structureDecls.set(d.name, d.fields);
+      if (d.fields.length > 0) _recordCtors.set(d.fields[0].name, d.name);
     }
-    if (d.kind === "namespace") for (const inner of d.decls) {
-      if (inner.kind === "structure" && inner.fields.length > 0) {
-        _recordCtors.set(inner.fields[0].name, inner.name);
-        _structureDecls.set(inner.name, inner.fields);
-      }
-    }
+    if (d.kind === "inductive") _declaredTypes.add(d.name);
+    if (d.kind === "def") _declaredTypes.add(d.name);
+    if (d.kind === "namespace") for (const inner of d.decls) collectDecl(inner);
   }
+  for (const d of decls) collectDecl(d);
+}
+
+/** Resolve a Ty to a Dafny-safe type, falling back to string for undeclared user types. */
+function resolveTy(ty: Ty): Ty {
+  if (ty.kind === "user" && !_declaredTypes.has(ty.name)) return { kind: "string" };
+  if (ty.kind === "optional") return { kind: "optional", inner: resolveTy(ty.inner) };
+  if (ty.kind === "array") return { kind: "array", elem: resolveTy(ty.elem) };
+  if (ty.kind === "map") return { kind: "map", key: resolveTy(ty.key), value: resolveTy(ty.value) };
+  if (ty.kind === "set") return { kind: "set", elem: resolveTy(ty.elem) };
+  return ty;
 }
 
 function qualifyCtor(name: string, type?: string): string {

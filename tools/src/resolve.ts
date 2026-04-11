@@ -330,7 +330,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     case "index": {
       const obj = resolveExpr(e.obj, ctx);
       const idx = resolveExpr(e.idx, ctx);
-      return { kind: "index", obj, idx, ty: obj.ty.kind === "array" ? obj.ty.elem : { kind: "unknown" } };
+      const idxTy = obj.ty.kind === "array" ? obj.ty.elem
+        : obj.ty.kind === "map" ? obj.ty.value
+        : { kind: "unknown" as const };
+      return { kind: "index", obj, idx, ty: idxTy };
     }
 
     case "field": {

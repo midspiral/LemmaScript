@@ -253,8 +253,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           ],
         };
       }
-      // || on non-optional string/array → if non-empty then x else default
-      if (e.op === "||" && (e.left.ty.kind === "string" || e.left.ty.kind === "array")) {
+      // || on non-optional string/array/user → if non-empty then x else default
+      if (e.op === "||" && (e.left.ty.kind === "string" || e.left.ty.kind === "array" ||
+          (e.left.ty.kind === "user" && e.right.ty.kind === "string"))) {
         const left = lowerExpr(e.left, binds);
         const right = lowerExpr(e.right, binds);
         return {
