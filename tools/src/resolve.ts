@@ -755,9 +755,6 @@ function containsReturn(stmts: RawStmt[]): boolean {
 // ── Resolve function / module ────────────────────────────────
 
 function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map()): TFunction {
-  if (hasReturnInLoop(fn.body)) {
-    throw new Error(`${fn.name}: return inside a loop is not supported.`);
-  }
 
   const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
   const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: resolveTsType(p.tsType, overrides, p.name) }));
