@@ -314,9 +314,14 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     }
 
     case "call": {
-      // Math.abs(x): MathAbs preamble function (avoids if-else precedence in larger expressions)
-      if (e.fn.kind === "field" && e.fn.field === "abs" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1) {
-        return { kind: "app", fn: "MathAbs", args: [lowerExpr(e.args[0], binds)] };
+      // Math.abs/min/max → preamble functions
+      if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math") {
+        if (e.fn.field === "abs" && e.args.length === 1)
+          return { kind: "app", fn: "MathAbs", args: [lowerExpr(e.args[0], binds)] };
+        if (e.fn.field === "min" && e.args.length === 2)
+          return { kind: "app", fn: "MathMin", args: e.args.map(a => lowerExpr(a, binds)) };
+        if (e.fn.field === "max" && e.args.length === 2)
+          return { kind: "app", fn: "MathMax", args: e.args.map(a => lowerExpr(a, binds)) };
       }
       // Math.ceil(x): CeilReal on real args, identity on int
       if (e.fn.kind === "field" && e.fn.field === "ceil" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1) {

@@ -211,6 +211,8 @@ function emitExpr(e: Expr): string {
       if (e.fn === "FloorReal") needsFloorReal = true;
       if (e.fn === "NatToString") needsNatToString = true;
       if (e.fn === "MathAbs") needsMathAbs = true;
+      if (e.fn === "MathMin") needsMathMin = true;
+      if (e.fn === "MathMax") needsMathMax = true;
       return `${e.fn}(${args.join(", ")})`;
     }
 
@@ -508,6 +510,8 @@ let needsBitAnd = false;
 let needsPow2 = false;
 let needsNatToString = false;
 let needsMathAbs = false;
+let needsMathMin = false;
+let needsMathMax = false;
 
 const POW2 = `function Pow2(n: int): int
   requires n >= 0
@@ -605,6 +609,9 @@ const STRING_TO_UPPER = `function StringToUpper(s: string): string
     [upper] + StringToUpper(s[1..])
 }`;
 
+const MATH_MIN = `function MathMin(a: int, b: int): int { if a <= b then a else b }`;
+const MATH_MAX = `function MathMax(a: int, b: int): int { if a >= b then a else b }`;
+
 const NAT_TO_STRING = `function NatToString(n: nat): string
   decreases n
 {
@@ -693,6 +700,8 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   needsPow2 = false;
   needsNatToString = false;
   needsMathAbs = false;
+  needsMathMin = false;
+  needsMathMax = false;
 
   // Collect pure def names so we can skip their method wrappers
   const pureDefs = new Set<string>();
@@ -759,6 +768,8 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   if (needsStringToUpper) { lines.push(""); lines.push(STRING_TO_UPPER); }
   if (needsNatToString) { lines.push(""); lines.push(NAT_TO_STRING); }
   if (needsMathAbs) { lines.push(""); lines.push(MATH_ABS); }
+  if (needsMathMin) { lines.push(""); lines.push(MATH_MIN); }
+  if (needsMathMax) { lines.push(""); lines.push(MATH_MAX); }
   lines.push(...declLines);
   return lines.join("\n") + "\n";
 }
