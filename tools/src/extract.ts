@@ -653,6 +653,12 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       continue;
     }
 
+    // Block statement: { ... } — flatten into parent
+    if (Node.isBlock(s)) {
+      result.push(...extractStmts(s.getStatements()));
+      continue;
+    }
+
     throw new Error(`Unsupported statement at line ${line}: ${s.getText().slice(0, 80)}`);
   }
   // Ghost comments after the last statement (before closing brace) appear as sibling trivia nodes
