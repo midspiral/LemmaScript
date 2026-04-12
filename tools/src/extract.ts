@@ -14,6 +14,19 @@ import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawG
 /** When set, calls whose function/method name matches this key are replaced with havoc. */
 let _havocKey: string | null = null;
 
+/** Generic bounds erasure map — set during extractFunction, applied in extractStmts. */
+let _typeParamMap: Map<string, string> = new Map();
+function _eraseGenerics(tsType: string): string {
+  if (_typeParamMap.size === 0) return tsType;
+  if (tsType.includes(" | ")) {
+    const arms = [...new Set(tsType.split(" | ").map(a => _eraseGenerics(a.trim())))];
+    return arms.length === 1 ? arms[0] : arms.join(" | ");
+  }
+  if (tsType.endsWith("[]")) return _eraseGenerics(tsType.slice(0, -2)) + "[]";
+  if (_typeParamMap.has(tsType)) return _typeParamMap.get(tsType)!;
+  return tsType;
+}
+
 function extractExpr(node: Expression): RawExpr {
   // Havoc key matching: replace matching calls with havoc expression
   if (_havocKey && Node.isCallExpression(node)) {
@@ -446,7 +459,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
           kind: "let",
           name: d.getName(),
           mutable: s.getDeclarationKind() === "let",
-          tsType: typeToString(declType),
+          tsType: _eraseGenerics(typeToString(declType)),
           init,
           line,
         });
@@ -628,6 +641,13 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 // ── Function extraction ──────────────────────────────────────
 
 function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
+  // Generic bounds erasure: <T extends Base> → substitute T with Base everywhere
+  _typeParamMap = new Map();
+  for (const tp of fn.getTypeParameters?.() ?? []) {
+    const constraint = tp.getConstraint();
+    if (constraint) _typeParamMap.set(tp.getName(), constraint.getText());
+  }
+
   const body = fn.getBody();
 
   // Expression-body arrow: wrap in implicit return
@@ -666,14 +686,14 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
           return { name, tsType: propType ? typeToString(propType) : "unknown" };
         });
       }
-      return [{ name: p.getName(), tsType: p.getTypeNode()?.getText() ?? "unknown" }];
+      return [{ name: p.getName(), tsType: _eraseGenerics(p.getTypeNode()?.getText() ?? "unknown") }];
     }),
     returnType: (() => {
       const node = fn.getReturnTypeNode();
-      if (node) return node.getText();
+      if (node) return _eraseGenerics(node.getText());
       const inferred = fn.getReturnType();
       if (inferred.isAny()) return "unknown";
-      return typeToString(inferred);
+      return _eraseGenerics(typeToString(inferred));
     })(),
     requires: annots.filter(a => a.kind === "requires").map(a => a.expr),
     ensures: annots.filter(a => a.kind === "ensures").map(a => a.expr),
@@ -721,13 +741,15 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   }
 
   // Extract type declarations in source order to respect dependencies
+  // Skip types already declared via //@ declare-type
+  const declaredNames = new Set(typeDecls.map(d => d.name));
   for (const stmt of sourceFile.getStatements()) {
-    if (Node.isTypeAliasDeclaration(stmt)) {
+    if (Node.isTypeAliasDeclaration(stmt) && !declaredNames.has(stmt.getName())) {
       const extra: TypeDeclInfo[] = [];
       const info = extractTypeDecl(stmt, extra);
       typeDecls.push(...extra);
       if (info) typeDecls.push(info);
-    } else if (Node.isInterfaceDeclaration(stmt)) {
+    } else if (Node.isInterfaceDeclaration(stmt) && !declaredNames.has(stmt.getName())) {
       const extra: TypeDeclInfo[] = [];
       const info = extractInterface(stmt, extra);
       // Synthetic types from inline objects must precede the parent type
@@ -801,13 +823,43 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     return raw;
   });
 
+  // Resolve union param types: A | B → intersection of fields
+  const typeDeclMap = new Map(typeDecls.map(d => [d.name, d]));
+  for (const fn of functions) {
+    for (const p of fn.params) {
+      if (!p.tsType.includes(" | ")) continue;
+      const arms = p.tsType.split(" | ").map(a => a.trim());
+      const armDecls = arms.map(a => typeDeclMap.get(a)).filter((d): d is TypeDeclInfo => !!d && d.kind === "record");
+      if (armDecls.length < 2 || armDecls.length !== arms.length) continue;
+      // Compute field name intersection
+      const fieldSets = armDecls.map(d => new Set(d.fields!.map(f => f.name)));
+      const common = [...fieldSets[0]].filter(name => fieldSets.every(s => s.has(name)));
+      // Find an existing type that matches, or use the first arm's fields
+      const match = armDecls.find(d => d.fields!.length === common.length && d.fields!.every(f => common.includes(f.name)));
+      if (match) {
+        p.tsType = match.name;
+      } else {
+        // Generate synthetic union type with intersected fields
+        const synName = arms.join("Or");
+        if (!typeDeclMap.has(synName)) {
+          const fields = common.map(name => {
+            const f = armDecls[0].fields!.find(f => f.name === name)!;
+            return { name: f.name, tsType: f.tsType };
+          });
+          typeDecls.push({ name: synName, kind: "record", fields });
+          typeDeclMap.set(synName, typeDecls[typeDecls.length - 1]);
+        }
+        p.tsType = synName;
+      }
+    }
+  }
+
   // In brownfield mode, filter consts to only those referenced by verified functions.
-  // Types are NOT filtered — they may be needed transitively (e.g. Option from T | undefined).
   if (hasVerifyDirective) {
     const referencedNames = new Set<string>();
     function collectNames(stmts: RawStmt[]) {
       for (const s of stmts) {
-        if (s.kind === "let") { collectNamesExpr(s.init); }
+        if (s.kind === "let") { referencedNames.add(s.tsType); collectNamesExpr(s.init); }
         if (s.kind === "assign") { collectNamesExpr(s.value); }
         if (s.kind === "return") { collectNamesExpr(s.value); }
         if (s.kind === "if") { collectNamesExpr(s.cond); collectNames(s.then); collectNames(s.else); }
@@ -853,7 +905,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
           for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) markType(m[1]);
     }
     for (const name of referencedNames) markType(name);
-    typeDecls.splice(0, typeDecls.length, ...typeDecls.filter(d => neededTypes.has(d.name)));
+    typeDecls.splice(0, typeDecls.length, ...typeDecls.filter(d => neededTypes.has(d.name) || declaredNames.has(d.name)));
   }
 
   // Resolve imported types: extract types referenced in function signatures but not in this file
