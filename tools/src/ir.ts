@@ -83,6 +83,7 @@ export interface Structure {
 export interface FnDef {
   kind: "def";
   name: string;
+  typeParams: string[];
   params: { name: string; type: Ty }[];
   returnType: Ty;
   requires: Expr[];  // used by Dafny backend; Lean backend ignores
@@ -93,6 +94,7 @@ export interface FnDef {
 export interface FnMethod {
   kind: "method";
   name: string;
+  typeParams: string[];
   params: { name: string; type: Ty }[];
   returnType: Ty;
   requires: Expr[];

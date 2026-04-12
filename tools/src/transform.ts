@@ -1111,6 +1111,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     pureDefs.push({
       kind: "def",
       name: fn.name,
+      typeParams: fn.typeParams,
       params: fn.params.map(p => ({ name: p.name, type: p.ty })),
       returnType: fn.returnTy,
       requires: fn.requires.map(transformExpr),
@@ -1165,6 +1166,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     return {
       kind: "method" as const,
       name: fn.name,
+      typeParams: fn.typeParams,
       params: fn.params.map(p => ({ name: p.name, type: p.ty })),
       returnType: fn.returnTy,
       requires: fn.requires.map(transformExpr),
@@ -1182,6 +1184,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
       return {
         kind: "method" as const,
         name: fn.name,
+        typeParams: fn.typeParams,
         params: fn.params.map(p => ({ name: p.name, type: p.ty })),
         returnType: fn.returnTy,
         requires: fn.requires.map(transformExpr),

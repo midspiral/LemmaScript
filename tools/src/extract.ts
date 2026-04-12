@@ -685,10 +685,13 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
 function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
   // Generic bounds erasure: <T extends Base> → substitute T with Base everywhere
+  // Unbounded type params are preserved as Dafny type parameters
   _typeParamMap = new Map();
+  const unboundedTypeParams: string[] = [];
   for (const tp of fn.getTypeParameters?.() ?? []) {
     const constraint = tp.getConstraint();
     if (constraint) _typeParamMap.set(tp.getName(), constraint.getText());
+    else unboundedTypeParams.push(tp.getName());
   }
 
   const body = fn.getBody();
@@ -718,6 +721,7 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
 
   return {
     name: (fn as any).getName?.() ?? "<anonymous>",
+    typeParams: unboundedTypeParams,
     params: fn.getParameters().flatMap(p => {
       // Flatten destructured object params into individual params
       const nameNode = p.getNameNode();

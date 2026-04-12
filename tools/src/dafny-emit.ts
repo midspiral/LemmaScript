@@ -438,7 +438,8 @@ function emitDecl(d: Decl): string {
     }
 
     case "def": {
-      const lines = [`function ${d.name}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
+      const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
+      const lines = [`function ${d.name}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       lines.push(`{`);
       lines.push(emitPureExpr(d.body, 1));
@@ -446,7 +447,7 @@ function emitDecl(d: Decl): string {
       // Companion lemma for ensures (proof target for LLM)
       if (d.ensures.length > 0) {
         lines.push("");
-        lines.push(`lemma ${d.name}_ensures(${paramList(d.params)})`);
+        lines.push(`lemma ${d.name}_ensures${tp}(${paramList(d.params)})`);
         for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
         for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
         lines.push(`{`);
@@ -456,7 +457,8 @@ function emitDecl(d: Decl): string {
     }
 
     case "method": {
-      const lines = [`method ${d.name}(${paramList(d.params)}) returns (res: ${tyToDafny(d.returnType)})`];
+      const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
+      const lines = [`method ${d.name}${tp}(${paramList(d.params)}) returns (res: ${tyToDafny(d.returnType)})`];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
       lines.push(`{`);

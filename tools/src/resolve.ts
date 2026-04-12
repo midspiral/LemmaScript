@@ -768,7 +768,7 @@ function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Se
   const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
 
   return {
-    name: fn.name, params, returnTy,
+    name: fn.name, typeParams: fn.typeParams, params, returnTy,
     requires: resolveSpecs(fn.requires, requiresCtx),
     ensures: resolveSpecs(fn.ensures, ensuresCtx),
     isPure: pureFns.has(fn.name),
@@ -798,7 +798,7 @@ function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInf
     const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
 
     return {
-      name: fn.name, params, returnTy,
+      name: fn.name, typeParams: fn.typeParams, params, returnTy,
       requires: resolveSpecs(fn.requires, requiresCtx),
       ensures: resolveSpecs(fn.ensures, ensuresCtx),
       isPure: false,  // class methods are never pure (they access this)
