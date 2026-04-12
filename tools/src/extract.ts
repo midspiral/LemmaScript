@@ -417,7 +417,13 @@ function extractStmts(stmts: Node[]): RawStmt[] {
     const line = s.getStartLineNumber();
 
     // Ghost annotations from leading comments → inject before this statement
-    result.push(...parseSpecComments(s.getLeadingCommentRanges(), line));
+    const leadingComments = s.getLeadingCommentRanges();
+    result.push(...parseSpecComments(leadingComments, line));
+
+    // //@ skip — omit this statement from the verification model
+    if (leadingComments.some(r => r.getText().trim() === "//@ skip")) {
+      continue;
+    }
 
     if (Node.isVariableStatement(s)) {
       const havocMatch = s.getLeadingCommentRanges()

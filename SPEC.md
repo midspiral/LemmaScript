@@ -41,6 +41,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `havoc` | Before a variable declaration | Nondeterministic value — skip init expression (see §2.9). |
 | `havoc <key>` | Before a variable declaration | Nondeterministic subexpression — replace calls matching `<key>` (see §2.10). |
 | `declare-type N { f: T, ... }` | Before any statement | Declare a record type for cross-file types (see §2.5). |
+| `skip` | Before any statement | Omit statement from verification model (for side-effect-only code). |
 
 ### 2.2 Spec Expression Grammar
 
@@ -319,6 +320,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `expr?.method(args)` | — | `if key in map { ... }` |
 | `expr as T` | stripped | stripped |
 | `null` | `none` | `None` (same as `undefined`) |
+| `//@ skip` (before statement) | — | statement omitted from model |
 | `new Map(arr.map(fn))` | — | loop building `map[]` |
 | `[a, b, c]` | `#[a, b, c]` | `[a, b, c]` |
 | `[...arr, e]` | `Array.push arr e` | `(arr + [e])` |
