@@ -123,7 +123,7 @@ When imported types can't be resolved by ts-morph (e.g., in monorepos with bundl
 
 Each `declare-type` generates a Dafny `datatype` (or Lean `structure`) with the given fields. Field types use TS syntax (`number`, `string`, `boolean`, `T[]`, etc.) and are mapped through the standard type rules (§6.1).
 
-Place `declare-type` annotations before the first function that uses the type. They can appear as leading comments on any statement.
+Place `declare-type` annotations before the first function that uses the type. They can appear as leading comments on any statement. `declare-type` takes precedence over any type/interface of the same name in the source file, and is never filtered out by brownfield mode.
 
 ### 2.6 Selective Verification: `//@ verify`
 
@@ -668,6 +668,7 @@ Pure functions are handled differently by each backend:
 | `unknown` | `Int` | `int` |
 | `[T, T, ...]` (tuple) | `Array T'` | `seq<T'>` |
 | `<T extends Base>` (generic) | `T` erased to `Base` | `T` erased to `Base` |
+| `A \| B` (union param) | field intersection type | field intersection type |
 | Anything else | Pass through | Pass through |
 
 `lsc` reads parameter and variable types from ts-morph. Primitive types are mapped per the table. User-defined types (like `State`, `Event`) are passed through by name — the corresponding backend type is generated from the TS type declaration.
@@ -961,7 +962,7 @@ Four-phase pipeline:
 extract (ts-morph → Raw IR) → resolve (→ Typed IR) → transform (→ IR) → emit (→ text)
 ```
 
-- **Extract** (`extract.ts`): ts-morph → structured AST. Body expressions are nodes, not strings. Annotations remain as strings. Discovers `tsconfig.json` for import resolution. Extracts inline anonymous object types as named `TypeDeclInfo` records, generates synthetic return types for functions with anonymous return types, and recursively resolves imported types (records, aliases, discriminated unions). Flattens destructured object parameters into individual params. Erases generic type parameters to their constraint bounds (`<T extends Base>` → all occurrences of `T` become `Base` in params, return type, and local variable types). In `//@ verify` brownfield mode, filters type declarations to only those transitively referenced by verified functions.
+- **Extract** (`extract.ts`): ts-morph → structured AST. Body expressions are nodes, not strings. Annotations remain as strings. Discovers `tsconfig.json` for import resolution. Extracts inline anonymous object types as named `TypeDeclInfo` records, generates synthetic return types for functions with anonymous return types, and recursively resolves imported types (records, aliases, discriminated unions). Flattens destructured object parameters into individual params. Erases generic type parameters to their constraint bounds (`<T extends Base>` → all occurrences of `T` become `Base` in params, return type, and local variable types). Resolves union parameter types (`A | B`) to the field intersection — if an existing declared type matches, uses it; otherwise generates a synthetic type. In `//@ verify` brownfield mode, filters type declarations to only those transitively referenced by verified functions (including types from body variable declarations); `declare-type` entries are never filtered.
 - **Resolve** (`resolve.ts`): attaches types, classifies calls (pure/method/spec-pure/unknown), identifies discriminants, rejects unsupported patterns. Uses linked environments for lexical scoping. Computes purity via call-graph analysis: a function is pure if it is syntactically pure (no `while`/`for-of`/mutable `let`) AND does not transitively call any non-pure function. Narrows optional types in conditional expressions via synthetic variable substitution. Coerces non-optional values to Optional (wraps in Some) when the target record field is optional. Infers lambda parameter types from array method context (`.map`, `.filter`, etc.). Propagates element type to `.push()` arguments for record type inference.
 - **Transform** (`transform.ts`): Typed IR → backend-neutral IR. Desugars `for-of` to indexed loops. Detects discriminant if-chains → `match`. Lifts embedded method calls to statement-level bindings (selective ANF, §3.6). Generates match expressions for optional conditionals (from resolve-phase `narrowedVar` annotations). Handles `||` on optional, string, and array types. Configured with `TransformOptions` for backend-specific behavior (monadic lifting, method name selection).
 - **Emit** (`lean-emit.ts` / `dafny-emit.ts`): IR → backend text. Dafny emitter pads record constructors with `None` for missing optional fields and adds type annotations for empty collections.
