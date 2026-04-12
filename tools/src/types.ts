@@ -20,6 +20,7 @@ export interface UnionTypeInfo {
 
 export interface TypeDeclInfo {
   name: string;
+  typeParams?: string[];
   kind: "string-union" | "discriminated-union" | "record" | "alias";
   /** For string unions: the literal values */
   values?: string[];

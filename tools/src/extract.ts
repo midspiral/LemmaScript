@@ -277,11 +277,13 @@ function collectAnnotations(node: Node, body?: Node[]): Annotation[] {
 function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
   const name = decl.getName();
   const type = decl.getType();
+  const typeParams = decl.getTypeParameters().map(tp => tp.getName());
+  const tpField = typeParams.length > 0 ? typeParams : undefined;
 
   if (type.isUnion()) {
     const members = type.getUnionTypes();
     if (members.every(m => m.isStringLiteral())) {
-      return { name, kind: "string-union", values: members.map(m => m.getLiteralValue() as string) };
+      return { name, typeParams: tpField, kind: "string-union", values: members.map(m => m.getLiteralValue() as string) };
     }
     if (members.every(m => m.isObject())) {
       const discriminant = findDiscriminant(members);
@@ -289,7 +291,8 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
         const variants: VariantInfo[] = members.map(m => {
           const tagProp = m.getProperty(discriminant);
           const tagType = tagProp?.getTypeAtLocation(decl);
-          const tag = tagType?.getLiteralValue() as string;
+          const tag = tagType?.isStringLiteral() ? String(tagType.getLiteralValue())
+            : tagType?.getText() ?? "unknown";
           const fields: { name: string; tsType: string }[] = [];
           for (const prop of m.getProperties()) {
             if (prop.getName() === discriminant) continue;
@@ -297,7 +300,7 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
           }
           return { name: tag, fields };
         });
-        return { name, kind: "discriminated-union", discriminant, variants };
+        return { name, typeParams: tpField, kind: "discriminated-union", discriminant, variants };
       }
     }
   }
@@ -371,7 +374,7 @@ function findDiscriminant(members: Type[]): string | null {
       const p = m.getProperty(name);
       if (!p) return false;
       const t = p.getDeclarations()[0] ? p.getTypeAtLocation(p.getDeclarations()[0]) : null;
-      return t?.isStringLiteral() ?? false;
+      return (t?.isStringLiteral() || t?.isBooleanLiteral()) ?? false;
     });
     if (allHave) return name;
   }

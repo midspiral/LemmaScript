@@ -1011,6 +1011,7 @@ function transformTypeDecl(d: TypeDeclInfo): Decl {
   } else if (d.kind === "discriminated-union") {
     return {
       kind: "inductive", name: d.name,
+      typeParams: d.typeParams,
       constructors: d.variants!.map(v => ({
         name: v.name,
         fields: v.fields.map(f => ({ name: f.name, type: parseTsType(f.tsType) })),

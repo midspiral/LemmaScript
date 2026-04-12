@@ -69,6 +69,7 @@ export interface StmtMatchArm {
 export interface Inductive {
   kind: "inductive";
   name: string;
+  typeParams?: string[];
   constructors: { name: string; fields: { name: string; type: Ty }[] }[];
   deriving: string[];
 }
@@ -76,6 +77,7 @@ export interface Inductive {
 export interface Structure {
   kind: "structure";
   name: string;
+  typeParams?: string[];
   fields: { name: string; type: Ty }[];
   deriving: string[];
 }

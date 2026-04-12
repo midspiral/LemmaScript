@@ -428,11 +428,12 @@ function emitStmt(s: Stmt, indent: number): string {
 function emitDecl(d: Decl): string {
   switch (d.kind) {
     case "inductive": {
+      const tp = d.typeParams?.length ? `<${d.typeParams.join(", ")}>` : "";
       const ctors = d.constructors.map(c => {
         if (c.fields.length === 0) return escapeName(c.name);
         return `${escapeName(c.name)}(${paramList(c.fields)})`;
       });
-      return `datatype ${d.name} = ${ctors.join(" | ")}`;
+      return `datatype ${d.name}${tp} = ${ctors.join(" | ")}`;
     }
 
     case "structure": {
