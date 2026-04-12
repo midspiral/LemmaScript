@@ -334,6 +334,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `arr.find((x) => e)` | `arr.find? (fun x => e)` | — |
 | `arr.shift()` | — | `arr[0]` + `arr := arr[1..]` |
 | `arr.slice(start)` | — | `arr[start..]` |
+| `arr.slice(start, end)` | — | `arr[start..end]` |
 | `expr!` (non-null) | unwrap Option | unwrap Option / direct map access |
 | `expr \|\| default` (on optional) | match Some/None | `match { Some(v) => v, None => default }` |
 | `expr \|\| undefined` (on optional) | identity | identity (no-op) |
@@ -345,6 +346,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `new Map(arr.map(fn))` | — | loop building `map[]` |
 | `[a, b, c]` | `#[a, b, c]` | `[a, b, c]` |
 | `[...arr, e]` | `Array.push arr e` | `(arr + [e])` |
+| `[a, ...b, c]` | `[a] + b + [c]` | `([a] + b + [c])` (general spread) |
 | `arr.concat(e)` | — | `(arr + [e])` |
 | `{ ...obj, f: v }` | `{ obj with f := v }` | `obj.(f := v)` |
 | `arr.with(i, v)` | `arr.set! i v` | `arr[i := v]` |
