@@ -65,7 +65,7 @@ atom     := NUMBER | HEX_NUMBER | IDENT | 'true' | 'false' | '\result'
           | '(' expr ')'
           | '[' (expr ',')* expr? ']'
           | '{' (IDENT ':' expr ',')* IDENT ':' expr '}'
-TYPE     := 'nat' | 'int'
+TYPE     := IDENT                             // 'nat', 'int', 'string', user types
 ```
 
 **`\result`** refers to the function's return value (following Frama-C/ACSL convention). It is only valid in `ensures` annotations. The `\` prefix distinguishes it from any TS variable named `result`.
@@ -564,18 +564,11 @@ while condition'
 
 ### 4.3 Return Inside Loops
 
-`return` inside a `while` loop is **not supported**. Lean's Velvet does not support `return` inside loops, and for consistency both backends reject it. If `lsc` encounters `return` inside a loop, it emits an error.
+**Dafny:** `return` inside loops is supported. Dafny handles early return paths natively.
 
-The user must restructure to use `break` with an explicit result variable:
+**Lean:** `return` inside a `while` loop is **not supported** — Velvet does not support it. The user must restructure to use `break` with an explicit result variable:
 
 ```typescript
-// Unsupported:
-while (...) {
-  if (...) return mid;
-}
-return -1;
-
-// Supported:
 let result = -1;
 while (...) {
   //@ invariant ...
@@ -584,8 +577,6 @@ while (...) {
 }
 return result;
 ```
-
-The TypeScript is still valid and runs identically.
 
 ### 4.4 Discriminant Dispatch → Match
 

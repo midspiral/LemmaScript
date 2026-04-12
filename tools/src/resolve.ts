@@ -391,13 +391,13 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       return { kind: "result", ty: ctx.returnTy };
 
     case "forall": {
-      const varTy: Ty = e.varType === "nat" ? { kind: "nat" }
+      const varTy: Ty = e.varType !== "int" ? parseTsType(e.varType)
         : inferQuantVarType(e.var, e.body, ctx) ?? { kind: "int" };
       return { kind: "forall", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
     }
 
     case "exists": {
-      const varTy: Ty = e.varType === "nat" ? { kind: "nat" }
+      const varTy: Ty = e.varType !== "int" ? parseTsType(e.varType)
         : inferQuantVarType(e.var, e.body, ctx) ?? { kind: "int" };
       return { kind: "exists", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
     }
@@ -755,9 +755,6 @@ function containsReturn(stmts: RawStmt[]): boolean {
 // ── Resolve function / module ────────────────────────────────
 
 function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map()): TFunction {
-  if (hasReturnInLoop(fn.body)) {
-    throw new Error(`${fn.name}: return inside a loop is not supported.`);
-  }
 
   const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
   const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: resolveTsType(p.tsType, overrides, p.name) }));

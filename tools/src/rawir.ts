@@ -28,8 +28,8 @@ export type RawExpr =
   | { kind: "nonNull"; expr: RawExpr }   // expr! (non-null assertion)
   // Spec-only (from //@ annotations, produced by specparser):
   | { kind: "result" }                                    // \result
-  | { kind: "forall"; var: string; varType: "nat" | "int"; body: RawExpr }
-  | { kind: "exists"; var: string; varType: "nat" | "int"; body: RawExpr }
+  | { kind: "forall"; var: string; varType: string; body: RawExpr }
+  | { kind: "exists"; var: string; varType: string; body: RawExpr }
   // Havoc — nondeterministic value (from //@ havoc annotation):
   | { kind: "havoc"; tsType: string }
 
