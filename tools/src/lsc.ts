@@ -62,7 +62,7 @@ function main() {
   }
   const tsConfigFilePath = findTsConfig(absPath);
   const project = tsConfigFilePath
-    ? new Project({ tsConfigFilePath, skipAddingFilesFromTsConfig: true })
+    ? new Project({ tsConfigFilePath })
     : new Project({ compilerOptions: { strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"] } });
   const sourceFile = project.addSourceFileAtPath(absPath);
   project.resolveSourceFileDependencies();
