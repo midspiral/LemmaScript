@@ -657,7 +657,13 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
       }
       return [{ name: p.getName(), tsType: p.getTypeNode()?.getText() ?? "unknown" }];
     }),
-    returnType: fn.getReturnTypeNode()?.getText() ?? "unknown",
+    returnType: (() => {
+      const node = fn.getReturnTypeNode();
+      if (node) return node.getText();
+      const inferred = fn.getReturnType();
+      if (inferred.isAny()) return "unknown";
+      return typeToString(inferred);
+    })(),
     requires: annots.filter(a => a.kind === "requires").map(a => a.expr),
     ensures: annots.filter(a => a.kind === "ensures").map(a => a.expr),
     typeAnnotations,
