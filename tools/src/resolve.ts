@@ -303,6 +303,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         if (fn.field === "get") ty = ctx.inSpec ? fn.obj.ty.value : { kind: "optional", inner: fn.obj.ty.value };
         else if (fn.field === "has") ty = { kind: "bool" };
         else if (fn.field === "set") ty = fn.obj.ty;
+        else if (fn.field === "delete") ty = fn.obj.ty;
       } else if (fn.kind === "field" && fn.obj.ty.kind === "set") {
         if (fn.field === "has") ty = { kind: "bool" };
         else if (fn.field === "add") ty = fn.obj.ty;
