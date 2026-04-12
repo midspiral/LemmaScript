@@ -873,34 +873,48 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     return raw;
   });
 
-  // Resolve imported type names referenced in function params/return types
+  // Resolve imported type names referenced in function signatures and type fields
   const knownTypeNames = new Set(typeDecls.map(d => d.name));
   const primitives = new Set(["number", "string", "boolean", "void", "unknown", "undefined"]);
+  const builtinTypes = new Set(["Map", "Set", "Array", "Record", "Promise", "Date", "RegExp", "Error"]);
+  function resolveTypeName(name: string) {
+    if (knownTypeNames.has(name) || primitives.has(name) || builtinTypes.has(name)) return;
+    for (const sf2 of sourceFile.getProject().getSourceFiles()) {
+      for (const stmt of sf2.getStatements()) {
+        if (Node.isTypeAliasDeclaration(stmt) && stmt.getName() === name) {
+          const extra: TypeDeclInfo[] = [];
+          const info = extractTypeDecl(stmt, extra);
+          typeDecls.push(...extra);
+          if (info) { typeDecls.push(info); knownTypeNames.add(name); }
+        }
+        if (Node.isInterfaceDeclaration(stmt) && stmt.getName() === name && !knownTypeNames.has(name)) {
+          const extra: TypeDeclInfo[] = [];
+          const info = extractInterface(stmt, extra);
+          typeDecls.push(...extra);
+          if (info) { typeDecls.push(info); knownTypeNames.add(name); }
+        }
+      }
+      if (knownTypeNames.has(name)) break;
+    }
+    // Recursively resolve types referenced by the newly added type's fields
+    const decl = typeDecls.find(d => d.name === name);
+    if (decl?.fields) {
+      for (const f of decl.fields) {
+        for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) resolveTypeName(m[1]);
+      }
+    }
+    if (decl?.variants) {
+      for (const v of decl.variants) {
+        for (const f of v.fields) {
+          for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) resolveTypeName(m[1]);
+        }
+      }
+    }
+  }
   for (const fn of functions) {
     const refs = [fn.returnType, ...fn.params.map(p => p.tsType)];
     for (const ref of refs) {
-      for (const m of ref.matchAll(/\b([A-Z]\w*)\b/g)) {
-        const name = m[1];
-        if (knownTypeNames.has(name) || primitives.has(name)) continue;
-        // Search project source files for this type declaration
-        for (const sf2 of sourceFile.getProject().getSourceFiles()) {
-          for (const stmt of sf2.getStatements()) {
-            if (Node.isTypeAliasDeclaration(stmt) && stmt.getName() === name) {
-              const extra: TypeDeclInfo[] = [];
-              const info = extractTypeDecl(stmt, extra);
-              typeDecls.push(...extra);
-              if (info) { typeDecls.push(info); knownTypeNames.add(name); }
-            }
-            if (Node.isInterfaceDeclaration(stmt) && stmt.getName() === name && !knownTypeNames.has(name)) {
-              const extra: TypeDeclInfo[] = [];
-              const info = extractInterface(stmt, extra);
-              typeDecls.push(...extra);
-              if (info) { typeDecls.push(info); knownTypeNames.add(name); }
-            }
-          }
-          if (knownTypeNames.has(name)) break;
-        }
-      }
+      for (const m of ref.matchAll(/\b([A-Z]\w*)\b/g)) resolveTypeName(m[1]);
     }
   }
 
