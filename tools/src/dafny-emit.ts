@@ -88,6 +88,7 @@ function emitExpr(e: Expr): string {
         if (e.method === "with")     return `${obj}[${args[0]} := ${args[1]}]`;
         if (e.method === "includes") return `(${args[0]} in ${obj})`;
         if (e.method === "push")     return `(${obj} + [${args[0]}])`;
+        if (e.method === "concat")   return `(${obj} + [${args[0]}])`;
         if (e.method === "slice")    return `${obj}[${args[0]}..]`;
         if (e.method === "map")    { needsStdCollections = true; return `Seq.Map(${args[0]}, ${obj})`; }
         if (e.method === "filter") { needsStdCollections = true; return `Seq.Filter(${args[0]}, ${obj})`; }

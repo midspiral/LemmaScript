@@ -311,6 +311,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         if (fn.field === "includes") ty = { kind: "bool" };
         else if (fn.field === "shift") ty = fn.obj.ty.elem;
         else if (fn.field === "push") ty = fn.obj.ty;
+        else if (fn.field === "concat") ty = fn.obj.ty;
         else if (fn.field === "map" && args.length >= 1 && args[0].kind === "lambda") {
           const retTy = args[0].body.length > 0 && args[0].body[0].kind === "return"
             ? args[0].body[0].value.ty : { kind: "unknown" as const };
