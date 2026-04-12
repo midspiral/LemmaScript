@@ -153,15 +153,37 @@ function extractExpr(node: Expression): RawExpr {
     throw new Error(`Unsupported arrow function body: ${node.getText().slice(0, 80)}`);
   }
 
-  // Array literal: [a, b, c] → arrayLiteral, [...arr, elem] → push(arr, elem)
+  // Array literal: [a, b, c] → arrayLiteral, with spreads → concatenation
   if (Node.isArrayLiteralExpression(node)) {
     const elems = node.getElements();
-    // [...arr, elem] → push(arr, elem)
-    if (elems.length === 2 && Node.isSpreadElement(elems[0])) {
-      return { kind: "call", fn: { kind: "field", obj: extractExpr(elems[0].getExpression()), field: "push" }, args: [extractExpr(elems[1])] };
+    const hasSpread = elems.some(e => Node.isSpreadElement(e));
+    if (!hasSpread) {
+      return { kind: "arrayLiteral", elems: elems.map(e => extractExpr(e as Expression)) };
     }
-    // [a, b, c] or [] → arrayLiteral
-    return { kind: "arrayLiteral", elems: elems.map(e => extractExpr(e as Expression)) };
+    // Build concatenation: [a, ...b, c] → [a] + b + [c]
+    // Group consecutive non-spread elements into array literals, spreads are bare
+    const segments: RawExpr[] = [];
+    let currentLiterals: RawExpr[] = [];
+    for (const e of elems) {
+      if (Node.isSpreadElement(e)) {
+        if (currentLiterals.length > 0) {
+          segments.push({ kind: "arrayLiteral", elems: currentLiterals });
+          currentLiterals = [];
+        }
+        segments.push(extractExpr(e.getExpression()));
+      } else {
+        currentLiterals.push(extractExpr(e as Expression));
+      }
+    }
+    if (currentLiterals.length > 0) {
+      segments.push({ kind: "arrayLiteral", elems: currentLiterals });
+    }
+    // Fold segments with + (concat)
+    let result = segments[0];
+    for (let i = 1; i < segments.length; i++) {
+      result = { kind: "binop", op: "+", left: result, right: segments[i] };
+    }
+    return result;
   }
 
   // Object literal: { res: true, done: false } or { ...obj, res: true }
