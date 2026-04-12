@@ -324,6 +324,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `new Map(arr.map(fn))` | — | loop building `map[]` |
 | `[a, b, c]` | `#[a, b, c]` | `[a, b, c]` |
 | `[...arr, e]` | `Array.push arr e` | `(arr + [e])` |
+| `arr.concat(e)` | — | `(arr + [e])` |
 | `{ ...obj, f: v }` | `{ obj with f := v }` | `obj.(f := v)` |
 | `arr.with(i, v)` | `arr.set! i v` | `arr[i := v]` |
 | `` `${n} items` `` (int+string) | — | `NatToString(n) + " items"` |
