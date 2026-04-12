@@ -821,8 +821,38 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     return raw;
   });
 
+  // Resolve union param types: A | B → intersection of fields
+  const typeDeclMap = new Map(typeDecls.map(d => [d.name, d]));
+  for (const fn of functions) {
+    for (const p of fn.params) {
+      if (!p.tsType.includes(" | ")) continue;
+      const arms = p.tsType.split(" | ").map(a => a.trim());
+      const armDecls = arms.map(a => typeDeclMap.get(a)).filter((d): d is TypeDeclInfo => !!d && d.kind === "record");
+      if (armDecls.length < 2 || armDecls.length !== arms.length) continue;
+      // Compute field name intersection
+      const fieldSets = armDecls.map(d => new Set(d.fields!.map(f => f.name)));
+      const common = [...fieldSets[0]].filter(name => fieldSets.every(s => s.has(name)));
+      // Find an existing type that matches, or use the first arm's fields
+      const match = armDecls.find(d => d.fields!.length === common.length && d.fields!.every(f => common.includes(f.name)));
+      if (match) {
+        p.tsType = match.name;
+      } else {
+        // Generate synthetic union type with intersected fields
+        const synName = arms.join("Or");
+        if (!typeDeclMap.has(synName)) {
+          const fields = common.map(name => {
+            const f = armDecls[0].fields!.find(f => f.name === name)!;
+            return { name: f.name, tsType: f.tsType };
+          });
+          typeDecls.push({ name: synName, kind: "record", fields });
+          typeDeclMap.set(synName, typeDecls[typeDecls.length - 1]);
+        }
+        p.tsType = synName;
+      }
+    }
+  }
+
   // In brownfield mode, filter consts to only those referenced by verified functions.
-  // Types are NOT filtered — they may be needed transitively (e.g. Option from T | undefined).
   if (hasVerifyDirective) {
     const referencedNames = new Set<string>();
     function collectNames(stmts: RawStmt[]) {
