@@ -873,6 +873,37 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     return raw;
   });
 
+  // Resolve imported type names referenced in function params/return types
+  const knownTypeNames = new Set(typeDecls.map(d => d.name));
+  const primitives = new Set(["number", "string", "boolean", "void", "unknown", "undefined"]);
+  for (const fn of functions) {
+    const refs = [fn.returnType, ...fn.params.map(p => p.tsType)];
+    for (const ref of refs) {
+      for (const m of ref.matchAll(/\b([A-Z]\w*)\b/g)) {
+        const name = m[1];
+        if (knownTypeNames.has(name) || primitives.has(name)) continue;
+        // Search project source files for this type declaration
+        for (const sf2 of sourceFile.getProject().getSourceFiles()) {
+          for (const stmt of sf2.getStatements()) {
+            if (Node.isTypeAliasDeclaration(stmt) && stmt.getName() === name) {
+              const extra: TypeDeclInfo[] = [];
+              const info = extractTypeDecl(stmt, extra);
+              typeDecls.push(...extra);
+              if (info) { typeDecls.push(info); knownTypeNames.add(name); }
+            }
+            if (Node.isInterfaceDeclaration(stmt) && stmt.getName() === name && !knownTypeNames.has(name)) {
+              const extra: TypeDeclInfo[] = [];
+              const info = extractInterface(stmt, extra);
+              typeDecls.push(...extra);
+              if (info) { typeDecls.push(info); knownTypeNames.add(name); }
+            }
+          }
+          if (knownTypeNames.has(name)) break;
+        }
+      }
+    }
+  }
+
   // Resolve union param types: A | B → intersection of fields
   const typeDeclMap = new Map(typeDecls.map(d => [d.name, d]));
   for (const fn of functions) {
