@@ -65,6 +65,7 @@ function main() {
     ? new Project({ tsConfigFilePath, skipAddingFilesFromTsConfig: true })
     : new Project({ compilerOptions: { strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"] } });
   const sourceFile = project.addSourceFileAtPath(absPath);
+  project.resolveSourceFileDependencies();
 
   // Check //@ backend directive — skip if backend doesn't match
   const backendDirective = sourceFile.getFullText().match(/\/\/@ backend (\w+)/);
