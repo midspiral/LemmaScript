@@ -248,13 +248,23 @@ sound.
 
 **Purity:** Functions containing havoced variables are classified as impure and emitted as Dafny `method`s (not `function`s), since Dafny's `*` is only valid in methods.
 
-**Destructuring:** `//@ havoc` on a destructured declaration emits each named binding as a separate havoced variable:
+**Destructuring:** `//@ havoc` on a destructured declaration emits each named binding as a separate havoced variable. Types are inferred from the RHS when possible.
+
+**Typed havoc:** `//@ havoc : Type` overrides the inferred type. For destructuring with multiple bindings, provide comma-separated types:
 
 ```typescript
-//@ havoc
+//@ havoc : string, unknown
 const { id: oldEdgeId, ...rest } = oldEdge;
 // → var oldEdgeId: string := *;
-// → var rest: ... := *;
+// → var rest: int := *;
+```
+
+For single variables, `//@ havoc : EdgeBase | undefined` produces `Option<EdgeBase>`:
+
+```typescript
+//@ havoc : EdgeBase | undefined
+const foundEdge = edges.find((e) => e.id === oldEdge.id) as EdgeType;
+// → var foundEdge: Option<EdgeBase> := *;
 ```
 
 **Axioms:** To constrain a havoced variable (e.g., `|cleaned| <= |text|`),
