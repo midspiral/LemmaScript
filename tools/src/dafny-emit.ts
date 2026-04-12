@@ -234,7 +234,17 @@ function emitExpr(e: Expr): string {
         const updates = e.fields.map(f => `${escapeName(f.name)} := ${emitExpr(f.value)}`);
         return `${emitExpr(e.spread)}.(${updates.join(", ")})`;
       }
-      const ctorName = e.fields.length > 0 ? _recordCtors.get(e.fields[0].name) : undefined;
+      // Match constructor by field names — prefer exact match over first-field heuristic
+      let ctorName: string | undefined;
+      if (e.fields.length > 0) {
+        const fieldNames = new Set(e.fields.map(f => f.name));
+        for (const [name, fields] of _structureDecls) {
+          if (fields.length >= e.fields.length && fields.every(f => fieldNames.has(f.name) || f.type.kind === "optional")) {
+            ctorName = name; break;
+          }
+        }
+        if (!ctorName) ctorName = _recordCtors.get(e.fields[0].name);
+      }
       if (ctorName) {
         const structFields = _structureDecls.get(ctorName);
         if (structFields && e.fields.length < structFields.length) {

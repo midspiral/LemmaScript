@@ -670,6 +670,39 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
 
 export function extractModule(sourceFile: SourceFile): RawModule {
   const typeDecls: TypeDeclInfo[] = [];
+
+  // Parse //@ declare-type directives from file comments
+  for (const range of sourceFile.getLeadingCommentRanges()) {
+    const text = range.getText().trim();
+    if (!text.startsWith("//@ declare-type ")) continue;
+    const body = text.slice("//@ declare-type ".length);
+    const match = body.match(/^(\w+)\s*\{(.+)\}$/);
+    if (!match) continue;
+    const name = match[1];
+    const fieldsStr = match[2];
+    const fields = fieldsStr.split(",").map(f => f.trim()).filter(Boolean).map(f => {
+      const [fname, ftype] = f.split(":").map(s => s.trim());
+      return { name: fname, tsType: ftype };
+    });
+    typeDecls.push({ name, kind: "record", fields });
+  }
+  // Also scan statement-level comments for declare-type
+  for (const stmt of sourceFile.getStatements()) {
+    for (const range of stmt.getLeadingCommentRanges()) {
+      const text = range.getText().trim();
+      if (!text.startsWith("//@ declare-type ")) continue;
+      const body = text.slice("//@ declare-type ".length);
+      const match = body.match(/^(\w+)\s*\{(.+)\}$/);
+      if (!match) continue;
+      const name = match[1];
+      const fields = match[2].split(",").map(f => f.trim()).filter(Boolean).map(f => {
+        const [fname, ftype] = f.split(":").map(s => s.trim());
+        return { name: fname, tsType: ftype };
+      });
+      typeDecls.push({ name, kind: "record", fields });
+    }
+  }
+
   // Extract type declarations in source order to respect dependencies
   for (const stmt of sourceFile.getStatements()) {
     if (Node.isTypeAliasDeclaration(stmt)) {

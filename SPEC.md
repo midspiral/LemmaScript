@@ -39,7 +39,8 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `ghost x = e` | Before any statement | Ghost variable reassignment. |
 | `assert e` | Before any statement | Assertion (`assertGadget` in Lean, `assert` in Dafny). |
 | `havoc` | Before a variable declaration | Nondeterministic value — skip init expression (see §2.9). |
-| `havoc <key>` | Before a variable declaration | Nondeterministic subexpression — replace calls matching `<key>` (see §2.9). |
+| `havoc <key>` | Before a variable declaration | Nondeterministic subexpression — replace calls matching `<key>` (see §2.10). |
+| `declare-type N { f: T, ... }` | Before any statement | Declare a record type for cross-file types (see §2.5). |
 
 ### 2.2 Spec Expression Grammar
 
@@ -110,7 +111,20 @@ export interface Model {
 }
 ```
 
-### 2.5 Selective Verification: `//@ verify`
+### 2.5 Type Declarations: `//@ declare-type`
+
+When imported types can't be resolved by ts-morph (e.g., in monorepos with bundler module resolution), declare them manually:
+
+```typescript
+//@ declare-type Box { x: number, y: number, x2: number, y2: number }
+//@ declare-type Rect { x: number, y: number, width: number, height: number }
+```
+
+Each `declare-type` generates a Dafny `datatype` (or Lean `structure`) with the given fields. Field types use TS syntax (`number`, `string`, `boolean`, `T[]`, etc.) and are mapped through the standard type rules (§6.1).
+
+Place `declare-type` annotations before the first function that uses the type. They can appear as leading comments on any statement.
+
+### 2.6 Selective Verification: `//@ verify`
 
 By default, `lsc` extracts and verifies every function in the file. In brownfield codebases where most functions are outside the supported fragment, add `//@ verify` to opt in individual functions:
 
@@ -128,7 +142,7 @@ function isEmptyResult(result: string): boolean {
 
 If no function in the file has `//@ verify`, all functions are extracted as before. This keeps existing LemmaScript projects (where every function is in-fragment) working without changes.
 
-### 2.6 Backend Restriction: `//@ backend`
+### 2.7 Backend Restriction: `//@ backend`
 
 A file-level directive that restricts the file to a specific backend:
 
@@ -138,7 +152,7 @@ A file-level directive that restricts the file to a specific backend:
 
 When `lsc` runs with a different backend (e.g., `--backend=lean`), the file is silently skipped. This is used for features only supported in one backend, such as class methods (Dafny only).
 
-### 2.7 Classes
+### 2.8 Classes
 
 Class methods can be verified with `//@ verify`. The class fields become Dafny class fields, and `this.field` references work directly.
 
@@ -182,7 +196,7 @@ class Counter {
 
 **Lean:** Class support is Dafny-only. Use `//@ backend dafny` on files with classes.
 
-### 2.9 Havoc: `//@ havoc`
+### 2.10 Havoc: `//@ havoc`
 
 Marks a variable declaration as nondeterministic — the init expression is
 discarded and the variable receives an arbitrary value of its declared type:
