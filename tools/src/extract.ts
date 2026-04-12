@@ -741,13 +741,15 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   }
 
   // Extract type declarations in source order to respect dependencies
+  // Skip types already declared via //@ declare-type
+  const declaredNames = new Set(typeDecls.map(d => d.name));
   for (const stmt of sourceFile.getStatements()) {
-    if (Node.isTypeAliasDeclaration(stmt)) {
+    if (Node.isTypeAliasDeclaration(stmt) && !declaredNames.has(stmt.getName())) {
       const extra: TypeDeclInfo[] = [];
       const info = extractTypeDecl(stmt, extra);
       typeDecls.push(...extra);
       if (info) typeDecls.push(info);
-    } else if (Node.isInterfaceDeclaration(stmt)) {
+    } else if (Node.isInterfaceDeclaration(stmt) && !declaredNames.has(stmt.getName())) {
       const extra: TypeDeclInfo[] = [];
       const info = extractInterface(stmt, extra);
       // Synthetic types from inline objects must precede the parent type
