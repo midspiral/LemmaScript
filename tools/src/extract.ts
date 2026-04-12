@@ -859,7 +859,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     const referencedNames = new Set<string>();
     function collectNames(stmts: RawStmt[]) {
       for (const s of stmts) {
-        if (s.kind === "let") { collectNamesExpr(s.init); }
+        if (s.kind === "let") { referencedNames.add(s.tsType); collectNamesExpr(s.init); }
         if (s.kind === "assign") { collectNamesExpr(s.value); }
         if (s.kind === "return") { collectNamesExpr(s.value); }
         if (s.kind === "if") { collectNamesExpr(s.cond); collectNames(s.then); collectNames(s.else); }
@@ -905,7 +905,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
           for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) markType(m[1]);
     }
     for (const name of referencedNames) markType(name);
-    typeDecls.splice(0, typeDecls.length, ...typeDecls.filter(d => neededTypes.has(d.name)));
+    typeDecls.splice(0, typeDecls.length, ...typeDecls.filter(d => neededTypes.has(d.name) || declaredNames.has(d.name)));
   }
 
   // Resolve imported types: extract types referenced in function signatures but not in this file
