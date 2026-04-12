@@ -201,6 +201,11 @@ function extractExpr(node: Expression): RawExpr {
     return extractExpr(node.getExpression());
   }
 
+  // null → undefined (both map to None in backends)
+  if (Node.isNullLiteral(node)) {
+    return { kind: "var", name: "undefined" };
+  }
+
   throw new Error(`Unsupported expression: ${node.getText()}`);
 }
 

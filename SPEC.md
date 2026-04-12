@@ -318,6 +318,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `expr \|\| default` (on string/array) | if non-empty | `if \|expr\| > 0 then expr else default` |
 | `expr?.method(args)` | — | `if key in map { ... }` |
 | `expr as T` | stripped | stripped |
+| `null` | `none` | `None` (same as `undefined`) |
 | `new Map(arr.map(fn))` | — | loop building `map[]` |
 | `[a, b, c]` | `#[a, b, c]` | `[a, b, c]` |
 | `[...arr, e]` | `Array.push arr e` | `(arr + [e])` |
