@@ -14,6 +14,19 @@ import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawG
 /** When set, calls whose function/method name matches this key are replaced with havoc. */
 let _havocKey: string | null = null;
 
+/** Generic bounds erasure map — set during extractFunction, applied in extractStmts. */
+let _typeParamMap: Map<string, string> = new Map();
+function _eraseGenerics(tsType: string): string {
+  if (_typeParamMap.size === 0) return tsType;
+  if (tsType.includes(" | ")) {
+    const arms = [...new Set(tsType.split(" | ").map(a => _eraseGenerics(a.trim())))];
+    return arms.length === 1 ? arms[0] : arms.join(" | ");
+  }
+  if (tsType.endsWith("[]")) return _eraseGenerics(tsType.slice(0, -2)) + "[]";
+  if (_typeParamMap.has(tsType)) return _typeParamMap.get(tsType)!;
+  return tsType;
+}
+
 function extractExpr(node: Expression): RawExpr {
   // Havoc key matching: replace matching calls with havoc expression
   if (_havocKey && Node.isCallExpression(node)) {
@@ -446,7 +459,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
           kind: "let",
           name: d.getName(),
           mutable: s.getDeclarationKind() === "let",
-          tsType: typeToString(declType),
+          tsType: _eraseGenerics(typeToString(declType)),
           init,
           line,
         });
@@ -628,6 +641,13 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 // ── Function extraction ──────────────────────────────────────
 
 function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
+  // Generic bounds erasure: <T extends Base> → substitute T with Base everywhere
+  _typeParamMap = new Map();
+  for (const tp of fn.getTypeParameters?.() ?? []) {
+    const constraint = tp.getConstraint();
+    if (constraint) _typeParamMap.set(tp.getName(), constraint.getText());
+  }
+
   const body = fn.getBody();
 
   // Expression-body arrow: wrap in implicit return
@@ -666,14 +686,14 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
           return { name, tsType: propType ? typeToString(propType) : "unknown" };
         });
       }
-      return [{ name: p.getName(), tsType: p.getTypeNode()?.getText() ?? "unknown" }];
+      return [{ name: p.getName(), tsType: _eraseGenerics(p.getTypeNode()?.getText() ?? "unknown") }];
     }),
     returnType: (() => {
       const node = fn.getReturnTypeNode();
-      if (node) return node.getText();
+      if (node) return _eraseGenerics(node.getText());
       const inferred = fn.getReturnType();
       if (inferred.isAny()) return "unknown";
-      return typeToString(inferred);
+      return _eraseGenerics(typeToString(inferred));
     })(),
     requires: annots.filter(a => a.kind === "requires").map(a => a.expr),
     ensures: annots.filter(a => a.kind === "ensures").map(a => a.expr),
