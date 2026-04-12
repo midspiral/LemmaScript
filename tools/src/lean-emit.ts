@@ -61,7 +61,7 @@ function escapeName(name: string): string {
 const PREC: Record<string, number> = {
   "→": 1, "∨": 2, "∧": 3,
   "=": 4, "≠": 4, "≥": 4, "≤": 4, ">": 4, "<": 4,
-  "+": 5, "-": 5, "*": 6, "/": 6, "%": 6,
+  "+": 5, "-": 5, "++": 5, "arrayConcat": 5, "*": 6, "/": 6, "%": 6,
 };
 
 function prec(op: string): number { return PREC[op] ?? 10; }
@@ -146,7 +146,8 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       return `(-${emitExpr(e.expr)})`;
 
     case "binop": {
-      const s = `${emitExpr(e.left, prec(e.op))} ${e.op} ${emitExpr(e.right, prec(e.op))}`;
+      const op = e.op === "arrayConcat" ? "++" : e.op;
+      const s = `${emitExpr(e.left, prec(e.op))} ${op} ${emitExpr(e.right, prec(e.op))}`;
       return (parentPrec !== undefined && prec(e.op) < parentPrec) ? `(${s})` : s;
     }
 
@@ -325,6 +326,10 @@ function emitDecl(d: Decl): string {
       for (const f of d.fields) lines.push(`  ${escapeName(f.name)} : ${tyToLean(f.type)}`);
       if (d.deriving.length > 0) lines.push(`deriving ${d.deriving.join(", ")}`);
       return lines.join("\n");
+    }
+
+    case "type-alias": {
+      return `abbrev ${d.name} := ${tyToLean(d.target)}`;
     }
 
     case "def": {

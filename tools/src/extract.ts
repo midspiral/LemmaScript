@@ -153,15 +153,37 @@ function extractExpr(node: Expression): RawExpr {
     throw new Error(`Unsupported arrow function body: ${node.getText().slice(0, 80)}`);
   }
 
-  // Array literal: [a, b, c] → arrayLiteral, [...arr, elem] → push(arr, elem)
+  // Array literal: [a, b, c] → arrayLiteral, with spreads → concatenation
   if (Node.isArrayLiteralExpression(node)) {
     const elems = node.getElements();
-    // [...arr, elem] → push(arr, elem)
-    if (elems.length === 2 && Node.isSpreadElement(elems[0])) {
-      return { kind: "call", fn: { kind: "field", obj: extractExpr(elems[0].getExpression()), field: "push" }, args: [extractExpr(elems[1])] };
+    const hasSpread = elems.some(e => Node.isSpreadElement(e));
+    if (!hasSpread) {
+      return { kind: "arrayLiteral", elems: elems.map(e => extractExpr(e as Expression)) };
     }
-    // [a, b, c] or [] → arrayLiteral
-    return { kind: "arrayLiteral", elems: elems.map(e => extractExpr(e as Expression)) };
+    // Build concatenation: [a, ...b, c] → [a] + b + [c]
+    // Group consecutive non-spread elements into array literals, spreads are bare
+    const segments: RawExpr[] = [];
+    let currentLiterals: RawExpr[] = [];
+    for (const e of elems) {
+      if (Node.isSpreadElement(e)) {
+        if (currentLiterals.length > 0) {
+          segments.push({ kind: "arrayLiteral", elems: currentLiterals });
+          currentLiterals = [];
+        }
+        segments.push(extractExpr(e.getExpression()));
+      } else {
+        currentLiterals.push(extractExpr(e as Expression));
+      }
+    }
+    if (currentLiterals.length > 0) {
+      segments.push({ kind: "arrayLiteral", elems: currentLiterals });
+    }
+    // Fold segments with arrayConcat
+    let result = segments[0];
+    for (let i = 1; i < segments.length; i++) {
+      result = { kind: "binop", op: "arrayConcat", left: result, right: segments[i] };
+    }
+    return result;
   }
 
   // Object literal: { res: true, done: false } or { ...obj, res: true }
@@ -255,11 +277,13 @@ function collectAnnotations(node: Node, body?: Node[]): Annotation[] {
 function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
   const name = decl.getName();
   const type = decl.getType();
+  const typeParams = decl.getTypeParameters().map(tp => tp.getName());
+  const tpField = typeParams.length > 0 ? typeParams : undefined;
 
   if (type.isUnion()) {
     const members = type.getUnionTypes();
     if (members.every(m => m.isStringLiteral())) {
-      return { name, kind: "string-union", values: members.map(m => m.getLiteralValue() as string) };
+      return { name, typeParams: tpField, kind: "string-union", values: members.map(m => m.getLiteralValue() as string) };
     }
     if (members.every(m => m.isObject())) {
       const discriminant = findDiscriminant(members);
@@ -267,7 +291,8 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
         const variants: VariantInfo[] = members.map(m => {
           const tagProp = m.getProperty(discriminant);
           const tagType = tagProp?.getTypeAtLocation(decl);
-          const tag = tagType?.getLiteralValue() as string;
+          const tag = tagType?.isStringLiteral() ? String(tagType.getLiteralValue())
+            : tagType?.getText() ?? "unknown";
           const fields: { name: string; tsType: string }[] = [];
           for (const prop of m.getProperties()) {
             if (prop.getName() === discriminant) continue;
@@ -275,12 +300,15 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
           }
           return { name: tag, fields };
         });
-        return { name, kind: "discriminated-union", discriminant, variants };
+        return { name, typeParams: tpField, kind: "discriminated-union", discriminant, variants };
       }
     }
   }
 
   if (type.isObject() || type.isIntersection()) return extractRecord(name, type, decl, undefined, extraDecls);
+  // Primitive type alias: type TaskId = number → alias
+  const tsType = typeToString(type);
+  if (tsType !== name) return { name, kind: "alias", aliasOf: tsType };
   return null;
 }
 
@@ -346,7 +374,7 @@ function findDiscriminant(members: Type[]): string | null {
       const p = m.getProperty(name);
       if (!p) return false;
       const t = p.getDeclarations()[0] ? p.getTypeAtLocation(p.getDeclarations()[0]) : null;
-      return t?.isStringLiteral() ?? false;
+      return (t?.isStringLiteral() || t?.isBooleanLiteral()) ?? false;
     });
     if (allHave) return name;
   }
@@ -628,6 +656,12 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       continue;
     }
 
+    // Block statement: { ... } — flatten into parent
+    if (Node.isBlock(s)) {
+      result.push(...extractStmts(s.getStatements()));
+      continue;
+    }
+
     throw new Error(`Unsupported statement at line ${line}: ${s.getText().slice(0, 80)}`);
   }
   // Ghost comments after the last statement (before closing brace) appear as sibling trivia nodes
@@ -663,10 +697,13 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
 function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
   // Generic bounds erasure: <T extends Base> → substitute T with Base everywhere
+  // Unbounded type params are preserved as Dafny type parameters
   _typeParamMap = new Map();
+  const unboundedTypeParams: string[] = [];
   for (const tp of fn.getTypeParameters?.() ?? []) {
     const constraint = tp.getConstraint();
     if (constraint) _typeParamMap.set(tp.getName(), constraint.getText());
+    else unboundedTypeParams.push(tp.getName());
   }
 
   const body = fn.getBody();
@@ -696,6 +733,7 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
 
   return {
     name: (fn as any).getName?.() ?? "<anonymous>",
+    typeParams: unboundedTypeParams,
     params: fn.getParameters().flatMap(p => {
       // Flatten destructured object params into individual params
       const nameNode = p.getNameNode();
@@ -843,6 +881,51 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     raw.name = f.name;  // use the const name, not "<anonymous>"
     return raw;
   });
+
+  // Resolve imported type names referenced in function signatures and type fields
+  const knownTypeNames = new Set(typeDecls.map(d => d.name));
+  const primitives = new Set(["number", "string", "boolean", "void", "unknown", "undefined"]);
+  const builtinTypes = new Set(["Map", "Set", "Array", "Record", "Promise", "Date", "RegExp", "Error"]);
+  function resolveTypeName(name: string) {
+    if (knownTypeNames.has(name) || primitives.has(name) || builtinTypes.has(name)) return;
+    for (const sf2 of sourceFile.getProject().getSourceFiles()) {
+      for (const stmt of sf2.getStatements()) {
+        if (Node.isTypeAliasDeclaration(stmt) && stmt.getName() === name) {
+          const extra: TypeDeclInfo[] = [];
+          const info = extractTypeDecl(stmt, extra);
+          typeDecls.push(...extra);
+          if (info) { typeDecls.push(info); knownTypeNames.add(name); }
+        }
+        if (Node.isInterfaceDeclaration(stmt) && stmt.getName() === name && !knownTypeNames.has(name)) {
+          const extra: TypeDeclInfo[] = [];
+          const info = extractInterface(stmt, extra);
+          typeDecls.push(...extra);
+          if (info) { typeDecls.push(info); knownTypeNames.add(name); }
+        }
+      }
+      if (knownTypeNames.has(name)) break;
+    }
+    // Recursively resolve types referenced by the newly added type's fields
+    const decl = typeDecls.find(d => d.name === name);
+    if (decl?.fields) {
+      for (const f of decl.fields) {
+        for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) resolveTypeName(m[1]);
+      }
+    }
+    if (decl?.variants) {
+      for (const v of decl.variants) {
+        for (const f of v.fields) {
+          for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) resolveTypeName(m[1]);
+        }
+      }
+    }
+  }
+  for (const fn of functions) {
+    const refs = [fn.returnType, ...fn.params.map(p => p.tsType)];
+    for (const ref of refs) {
+      for (const m of ref.matchAll(/\b([A-Z]\w*)\b/g)) resolveTypeName(m[1]);
+    }
+  }
 
   // Resolve union param types: A | B → intersection of fields
   const typeDeclMap = new Map(typeDecls.map(d => [d.name, d]));

@@ -82,6 +82,7 @@ export interface TParam {
 
 export interface TFunction {
   name: string;
+  typeParams: string[];
   params: TParam[];
   returnTy: Ty;
   requires: TExpr[];

@@ -69,6 +69,7 @@ export interface StmtMatchArm {
 export interface Inductive {
   kind: "inductive";
   name: string;
+  typeParams?: string[];
   constructors: { name: string; fields: { name: string; type: Ty }[] }[];
   deriving: string[];
 }
@@ -76,6 +77,7 @@ export interface Inductive {
 export interface Structure {
   kind: "structure";
   name: string;
+  typeParams?: string[];
   fields: { name: string; type: Ty }[];
   deriving: string[];
 }
@@ -83,6 +85,7 @@ export interface Structure {
 export interface FnDef {
   kind: "def";
   name: string;
+  typeParams: string[];
   params: { name: string; type: Ty }[];
   returnType: Ty;
   requires: Expr[];  // used by Dafny backend; Lean backend ignores
@@ -93,6 +96,7 @@ export interface FnDef {
 export interface FnMethod {
   kind: "method";
   name: string;
+  typeParams: string[];
   params: { name: string; type: Ty }[];
   returnType: Ty;
   requires: Expr[];
@@ -120,7 +124,13 @@ export interface ConstDecl {
   value: Expr;
 }
 
-export type Decl = Inductive | Structure | FnDef | FnMethod | Namespace | ClassDecl | ConstDecl;
+export interface TypeAlias {
+  kind: "type-alias";
+  name: string;
+  target: Ty;
+}
+
+export type Decl = Inductive | Structure | FnDef | FnMethod | Namespace | ClassDecl | ConstDecl | TypeAlias;
 
 export interface Module {
   comment: string;

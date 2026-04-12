@@ -20,7 +20,8 @@ export interface UnionTypeInfo {
 
 export interface TypeDeclInfo {
   name: string;
-  kind: "string-union" | "discriminated-union" | "record";
+  typeParams?: string[];
+  kind: "string-union" | "discriminated-union" | "record" | "alias";
   /** For string unions: the literal values */
   values?: string[];
   /** For discriminated unions: the discriminant field and variants */
@@ -28,6 +29,8 @@ export interface TypeDeclInfo {
   variants?: VariantInfo[];
   /** For records: the fields */
   fields?: { name: string; tsType: string }[];
+  /** For alias: the underlying type string */
+  aliasOf?: string;
 }
 
 // ── TS type string → Ty (single source of truth) ───────────

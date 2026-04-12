@@ -303,6 +303,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         if (fn.field === "get") ty = ctx.inSpec ? fn.obj.ty.value : { kind: "optional", inner: fn.obj.ty.value };
         else if (fn.field === "has") ty = { kind: "bool" };
         else if (fn.field === "set") ty = fn.obj.ty;
+        else if (fn.field === "delete") ty = fn.obj.ty;
       } else if (fn.kind === "field" && fn.obj.ty.kind === "set") {
         if (fn.field === "has") ty = { kind: "bool" };
         else if (fn.field === "add") ty = fn.obj.ty;
@@ -768,7 +769,7 @@ function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Se
   const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
 
   return {
-    name: fn.name, params, returnTy,
+    name: fn.name, typeParams: fn.typeParams, params, returnTy,
     requires: resolveSpecs(fn.requires, requiresCtx),
     ensures: resolveSpecs(fn.ensures, ensuresCtx),
     isPure: pureFns.has(fn.name),
@@ -798,7 +799,7 @@ function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInf
     const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
 
     return {
-      name: fn.name, params, returnTy,
+      name: fn.name, typeParams: fn.typeParams, params, returnTy,
       requires: resolveSpecs(fn.requires, requiresCtx),
       ensures: resolveSpecs(fn.ensures, ensuresCtx),
       isPure: false,  // class methods are never pure (they access this)

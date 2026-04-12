@@ -1011,11 +1011,17 @@ function transformTypeDecl(d: TypeDeclInfo): Decl {
   } else if (d.kind === "discriminated-union") {
     return {
       kind: "inductive", name: d.name,
+      typeParams: d.typeParams,
       constructors: d.variants!.map(v => ({
         name: v.name,
         fields: v.fields.map(f => ({ name: f.name, type: parseTsType(f.tsType) })),
       })),
       deriving: ["Repr", "Inhabited"],
+    };
+  } else if (d.kind === "alias") {
+    return {
+      kind: "type-alias", name: d.name,
+      target: parseTsType(d.aliasOf!),
     };
   } else {
     return {
@@ -1111,6 +1117,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     pureDefs.push({
       kind: "def",
       name: fn.name,
+      typeParams: fn.typeParams,
       params: fn.params.map(p => ({ name: p.name, type: p.ty })),
       returnType: fn.returnTy,
       requires: fn.requires.map(transformExpr),
@@ -1165,6 +1172,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     return {
       kind: "method" as const,
       name: fn.name,
+      typeParams: fn.typeParams,
       params: fn.params.map(p => ({ name: p.name, type: p.ty })),
       returnType: fn.returnTy,
       requires: fn.requires.map(transformExpr),
@@ -1182,6 +1190,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
       return {
         kind: "method" as const,
         name: fn.name,
+        typeParams: fn.typeParams,
         params: fn.params.map(p => ({ name: p.name, type: p.ty })),
         returnType: fn.returnTy,
         requires: fn.requires.map(transformExpr),

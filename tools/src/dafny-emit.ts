@@ -57,6 +57,7 @@ function paramList(params: { name: string; type: Ty }[]): string {
 const OP_MAP: Record<string, string> = {
   "=": "==", "≠": "!=", "≥": ">=", "≤": "<=",
   "∧": "&&", "∨": "||", "¬": "!",
+  "arrayConcat": "+",
 };
 
 function mapOp(op: string): string { return OP_MAP[op] ?? op; }
@@ -89,7 +90,8 @@ function emitExpr(e: Expr): string {
         if (e.method === "includes") return `(${args[0]} in ${obj})`;
         if (e.method === "push")     return `(${obj} + [${args[0]}])`;
         if (e.method === "concat")   return `(${obj} + [${args[0]}])`;
-        if (e.method === "slice")    return `${obj}[${args[0]}..]`;
+        if (e.method === "slice" && args.length === 1) return `${obj}[${args[0]}..]`;
+        if (e.method === "slice" && args.length === 2) return `${obj}[${args[0]}..${args[1]}]`;
         if (e.method === "map")    { needsStdCollections = true; return `Seq.Map(${args[0]}, ${obj})`; }
         if (e.method === "filter") { needsStdCollections = true; return `Seq.Filter(${args[0]}, ${obj})`; }
         if (e.method === "every")  { needsStdCollections = true; return `Seq.All(${obj}, ${args[0]})`; }
@@ -122,6 +124,7 @@ function emitExpr(e: Expr): string {
         }
         if (e.method === "set") return `${obj}[${args[0]} := ${args[1]}]`;
         if (e.method === "has") return `(${args[0]} in ${obj})`;
+        if (e.method === "delete") return `(map k | k in ${obj} && k != ${args[0]} :: ${obj}[k])`;
       }
       // Set methods
       if (ty === "set") {
@@ -425,19 +428,25 @@ function emitStmt(s: Stmt, indent: number): string {
 function emitDecl(d: Decl): string {
   switch (d.kind) {
     case "inductive": {
+      const tp = d.typeParams?.length ? `<${d.typeParams.join(", ")}>` : "";
       const ctors = d.constructors.map(c => {
         if (c.fields.length === 0) return escapeName(c.name);
         return `${escapeName(c.name)}(${paramList(c.fields)})`;
       });
-      return `datatype ${d.name} = ${ctors.join(" | ")}`;
+      return `datatype ${d.name}${tp} = ${ctors.join(" | ")}`;
     }
 
     case "structure": {
       return `datatype ${d.name} = ${d.name}(${paramList(d.fields)})`;
     }
 
+    case "type-alias": {
+      return `type ${d.name} = ${tyToDafny(d.target)}`;
+    }
+
     case "def": {
-      const lines = [`function ${d.name}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
+      const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
+      const lines = [`function ${d.name}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       lines.push(`{`);
       lines.push(emitPureExpr(d.body, 1));
@@ -445,7 +454,7 @@ function emitDecl(d: Decl): string {
       // Companion lemma for ensures (proof target for LLM)
       if (d.ensures.length > 0) {
         lines.push("");
-        lines.push(`lemma ${d.name}_ensures(${paramList(d.params)})`);
+        lines.push(`lemma ${d.name}_ensures${tp}(${paramList(d.params)})`);
         for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
         for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
         lines.push(`{`);
@@ -455,7 +464,8 @@ function emitDecl(d: Decl): string {
     }
 
     case "method": {
-      const lines = [`method ${d.name}(${paramList(d.params)}) returns (res: ${tyToDafny(d.returnType)})`];
+      const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
+      const lines = [`method ${d.name}${tp}(${paramList(d.params)}) returns (res: ${tyToDafny(d.returnType)})`];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
       lines.push(`{`);
@@ -640,6 +650,7 @@ function buildRecordCtorMap(decls: Decl[]) {
       if (d.fields.length > 0) _recordCtors.set(d.fields[0].name, d.name);
     }
     if (d.kind === "inductive") _declaredTypes.add(d.name);
+    if (d.kind === "type-alias") _declaredTypes.add(d.name);
     if (d.kind === "def") _declaredTypes.add(d.name);
     if (d.kind === "namespace") for (const inner of d.decls) collectDecl(inner);
   }

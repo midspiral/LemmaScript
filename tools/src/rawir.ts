@@ -145,6 +145,7 @@ export interface RawParam {
 
 export interface RawFunction {
   name: string;
+  typeParams: string[];   // unbounded generic type parameters (e.g. ["T"])
   params: RawParam[];
   returnType: string;
   requires: string[];     // //@ annotation strings
