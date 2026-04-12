@@ -357,6 +357,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `m.get(k)` (in spec) | `m.get! k` | `m[k]` |
 | `m.set(k, v)` | `m := m.insert k v` | `m := m[k := v]` |
 | `m.has(k)` | `m.contains k` | `(k in m)` |
+| `m.delete(k)` | `m := m.erase k` | `m := (map k' \| k' in m && k' != k :: m[k'])` |
 | `m.size` | `m.size` | `\|m\|` |
 | `new Set<T>()` | `Std.HashSet.empty` | `{}` |
 | `s.has(x)` | `s.contains x` | `(x in s)` |
