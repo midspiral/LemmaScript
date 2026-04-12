@@ -10,7 +10,7 @@ import { existsSync } from "fs";
 import path from "path";
 import { extractModule } from "./extract.js";
 import { resolveModule } from "./resolve.js";
-import { transformModule, transformModuleDafny } from "./transform.js";
+import { transformModuleLean, transformModuleDafny } from "./transform.js";
 import { emitLeanFile } from "./lean-emit.js";
 import { emitDafnyFile } from "./dafny-emit.js";
 import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-commands.js";
@@ -19,7 +19,7 @@ import { leanGen, leanCheck } from "./lean-commands.js";
 function main() {
   const args = process.argv.slice(2);
   const backendIdx = args.findIndex(a => a.startsWith("--backend="));
-  let backend: "lean" | "dafny" = "lean";
+  let backend: "lean" | "dafny" = "dafny";
   if (backendIdx >= 0) {
     const val = args[backendIdx].split("=")[1];
     if (val !== "lean" && val !== "dafny") {
@@ -118,7 +118,7 @@ function main() {
   // ── Lean backend ──────────────────────────────────────────
   const specPath = path.join(dir, `${base}.spec.lean`);
   const specImport = existsSync(specPath) ? `«${base}.spec»` : undefined;
-  const { typesFile, defFile } = transformModule(typed, specImport);
+  const { typesFile, defFile } = transformModuleLean(typed, specImport);
 
   const typesPath = typesFile ? path.join(dir, `${base}.types.lean`) : null;
   const typesText = typesFile ? emitLeanFile(typesFile) : null;

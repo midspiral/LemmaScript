@@ -89,7 +89,7 @@ export const DAFNY_OPTIONS: TransformOptions = {
 };
 
 /** Active options — set before each transform call. */
-let _opts: TransformOptions = LEAN_OPTIONS;
+let _opts: TransformOptions = DAFNY_OPTIONS;
 
 /** Prefix match-bound field names to avoid capturing user variables. */
 function matchBinder(fieldName: string): string {
@@ -1064,6 +1064,17 @@ function replaceVar(e: Expr, name: string, replacement: Expr): Expr {
 }
 
 // ── Top-level transform ──────────────────────────────────────
+
+/** Transform for Lean backend — same logic, Lean options. */
+export function transformModuleLean(mod: TModule, specImport?: string): { typesFile: Module | null; defFile: Module } {
+  const prev = _opts;
+  _opts = LEAN_OPTIONS;
+  try {
+    return transformModule(mod, specImport);
+  } finally {
+    _opts = prev;
+  }
+}
 
 /** Transform for Dafny backend — same logic, Dafny options. */
 export function transformModuleDafny(mod: TModule): { typesFile: Module | null; defFile: Module } {
