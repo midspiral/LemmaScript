@@ -246,6 +246,17 @@ sound.
 
 **Backend support:** Havoc is supported in the Dafny backend only.
 
+**Purity:** Functions containing havoced variables are classified as impure and emitted as Dafny `method`s (not `function`s), since Dafny's `*` is only valid in methods.
+
+**Destructuring:** `//@ havoc` on a destructured declaration emits each named binding as a separate havoced variable:
+
+```typescript
+//@ havoc
+const { id: oldEdgeId, ...rest } = oldEdge;
+// → var oldEdgeId: string := *;
+// → var rest: ... := *;
+```
+
 **Axioms:** To constrain a havoced variable (e.g., `|cleaned| <= |text|`),
 add an `assume` in the `.dfy` file as a proof addition.
 
