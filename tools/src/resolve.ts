@@ -391,13 +391,13 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       return { kind: "result", ty: ctx.returnTy };
 
     case "forall": {
-      const varTy: Ty = e.varType === "nat" ? { kind: "nat" }
+      const varTy: Ty = e.varType !== "int" ? parseTsType(e.varType)
         : inferQuantVarType(e.var, e.body, ctx) ?? { kind: "int" };
       return { kind: "forall", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
     }
 
     case "exists": {
-      const varTy: Ty = e.varType === "nat" ? { kind: "nat" }
+      const varTy: Ty = e.varType !== "int" ? parseTsType(e.varType)
         : inferQuantVarType(e.var, e.body, ctx) ?? { kind: "int" };
       return { kind: "exists", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
     }

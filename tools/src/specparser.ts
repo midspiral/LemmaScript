@@ -241,10 +241,9 @@ class Parser {
         this.advance();
         this.expect("punc", "(");
         const v = this.expect("ident").value as string;
-        let varType: "nat" | "int" = "int";
+        let varType: string = "int";
         if (this.match("punc", ":")) {
           const ty = this.expect("ident").value as string;
-          if (ty !== "nat" && ty !== "int") throw new Error(`Unknown type '${ty}'`);
           varType = ty;
         }
         this.expect("punc", ",");
