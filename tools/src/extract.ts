@@ -440,19 +440,23 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     if (Node.isVariableStatement(s)) {
       const havocMatch = s.getLeadingCommentRanges()
-        .map(r => r.getText().trim().match(/^\/\/@ havoc(?:\s+(\S+))?$/))
+        .map(r => r.getText().trim().match(/^\/\/@ havoc(?:\s*:\s*(.+)|(?:\s+(\S+)))?$/))
         .find(m => m !== null);
-      const havocKey = havocMatch?.[1] ?? null;
+      const havocType = havocMatch?.[1]?.trim() ?? null;  // //@ havoc : Type
+      const havocKey = havocMatch?.[2] ?? null;            // //@ havoc key
       const isHavoc = !!havocMatch;
       for (const d of s.getDeclarations()) {
         // Havoc on destructuring: emit each named binding as a separate havoced variable
         const nameNode = d.getNameNode();
         if (isHavoc && !havocKey && Node.isObjectBindingPattern(nameNode)) {
           const rhsType = d.getType();
-          for (const el of nameNode.getElements()) {
+          const havocTypes = havocType?.split(",").map(t => t.trim()) ?? [];
+          const elements = nameNode.getElements();
+          for (let ei = 0; ei < elements.length; ei++) {
+            const el = elements[ei];
             const name = el.getName();
             const propType = rhsType.getProperty(name)?.getTypeAtLocation(d);
-            const tsType = propType ? _eraseGenerics(typeToString(propType)) : "unknown";
+            const tsType = havocTypes[ei] ?? (propType ? _eraseGenerics(typeToString(propType)) : "unknown");
             result.push({
               kind: "let", name, mutable: s.getDeclarationKind() === "let",
               tsType, init: { kind: "havoc", tsType }, line,
@@ -463,9 +467,9 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         const declType = d.getType();
         let init: RawExpr;
         if (isHavoc && !havocKey) {
-          // Use initializer type (pre-cast) when available — avoids losing optionality from `as` casts
+          // Use explicit type from //@ havoc : Type, or initializer type (pre-cast), or declared type
           const initType = d.getInitializer()?.getType();
-          init = { kind: "havoc", tsType: typeToString(initType ?? declType) };
+          init = { kind: "havoc", tsType: havocType ?? typeToString(initType ?? declType) };
         } else {
           const initializer = d.getInitializer();
           _havocKey = havocKey;
@@ -476,7 +480,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
           kind: "let",
           name: d.getName(),
           mutable: s.getDeclarationKind() === "let",
-          tsType: _eraseGenerics(typeToString(declType)),
+          tsType: havocType ?? _eraseGenerics(typeToString(declType)),
           init,
           line,
         });
