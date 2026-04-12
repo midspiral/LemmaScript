@@ -1017,6 +1017,11 @@ function transformTypeDecl(d: TypeDeclInfo): Decl {
       })),
       deriving: ["Repr", "Inhabited"],
     };
+  } else if (d.kind === "alias") {
+    return {
+      kind: "type-alias", name: d.name,
+      target: parseTsType(d.aliasOf!),
+    };
   } else {
     return {
       kind: "structure", name: d.name,

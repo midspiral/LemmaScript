@@ -44,7 +44,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
           let adj := adjacency.get? dep
           if h_adj : (adj).isSome = true then
             let _adj_val := (adj).get h_adj
-            adjacency := adjacency.insert dep (Array.push _adj_val id)
+            adjacency := adjacency.insert dep (_adj_val ++ #[id])
           else
             pure ()
       else
@@ -65,7 +65,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
       let id := nodeIds[_id_idx3]!
       if match inDegree.get? id with | .some _value => _value == 0 | .none => false then
         assertGadget (¬(enqueued.contains id))
-        queue := Array.push queue id
+        queue := queue ++ #[id]
         enqueued := enqueued.insert id
     let mut sorted : Array String := #[]
     let mut qHead : Int := 0
@@ -83,7 +83,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
       decreasing nodeIds.size - sorted.size
     do
       let id := queue[qHead.toNat]!
-      sorted := Array.push sorted id
+      sorted := sorted ++ #[id]
       qHead := qHead + 1
       let neighbors := adjacency.get? id
       if h_neighbors : (neighbors).isSome = true then
@@ -108,7 +108,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
             inDegree := inDegree.insert neighbor newDeg
             if newDeg = 0 then
               assertGadget (¬(enqueued.contains neighbor))
-              queue := Array.push queue neighbor
+              queue := queue ++ #[neighbor]
               enqueued := enqueued.insert neighbor
           else
             pure ()

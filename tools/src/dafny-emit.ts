@@ -57,6 +57,7 @@ function paramList(params: { name: string; type: Ty }[]): string {
 const OP_MAP: Record<string, string> = {
   "=": "==", "≠": "!=", "≥": ">=", "≤": "<=",
   "∧": "&&", "∨": "||", "¬": "!",
+  "arrayConcat": "+",
 };
 
 function mapOp(op: string): string { return OP_MAP[op] ?? op; }
@@ -437,6 +438,10 @@ function emitDecl(d: Decl): string {
       return `datatype ${d.name} = ${d.name}(${paramList(d.fields)})`;
     }
 
+    case "type-alias": {
+      return `type ${d.name} = ${tyToDafny(d.target)}`;
+    }
+
     case "def": {
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
       const lines = [`function ${d.name}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
@@ -643,6 +648,7 @@ function buildRecordCtorMap(decls: Decl[]) {
       if (d.fields.length > 0) _recordCtors.set(d.fields[0].name, d.name);
     }
     if (d.kind === "inductive") _declaredTypes.add(d.name);
+    if (d.kind === "type-alias") _declaredTypes.add(d.name);
     if (d.kind === "def") _declaredTypes.add(d.name);
     if (d.kind === "namespace") for (const inner of d.decls) collectDecl(inner);
   }

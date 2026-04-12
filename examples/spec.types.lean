@@ -87,7 +87,7 @@ def threeElems (a : Int) (b : Int) (c : Int) : Array Int :=
   #[a, b, c]
 
 def append (arr : Array Int) (x : Int) : Array Int :=
-  Array.push arr x
+  arr ++ #[x]
 
 def doubleAll (arr : Array Int) : Array Int :=
   arr.map (fun x => x * 2)

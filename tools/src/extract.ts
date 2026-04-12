@@ -178,10 +178,10 @@ function extractExpr(node: Expression): RawExpr {
     if (currentLiterals.length > 0) {
       segments.push({ kind: "arrayLiteral", elems: currentLiterals });
     }
-    // Fold segments with + (concat)
+    // Fold segments with arrayConcat
     let result = segments[0];
     for (let i = 1; i < segments.length; i++) {
-      result = { kind: "binop", op: "+", left: result, right: segments[i] };
+      result = { kind: "binop", op: "arrayConcat", left: result, right: segments[i] };
     }
     return result;
   }
@@ -303,6 +303,9 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   }
 
   if (type.isObject() || type.isIntersection()) return extractRecord(name, type, decl, undefined, extraDecls);
+  // Primitive type alias: type TaskId = number → alias
+  const tsType = typeToString(type);
+  if (tsType !== name) return { name, kind: "alias", aliasOf: tsType };
   return null;
 }
 

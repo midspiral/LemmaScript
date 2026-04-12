@@ -122,7 +122,13 @@ export interface ConstDecl {
   value: Expr;
 }
 
-export type Decl = Inductive | Structure | FnDef | FnMethod | Namespace | ClassDecl | ConstDecl;
+export interface TypeAlias {
+  kind: "type-alias";
+  name: string;
+  target: Ty;
+}
+
+export type Decl = Inductive | Structure | FnDef | FnMethod | Namespace | ClassDecl | ConstDecl | TypeAlias;
 
 export interface Module {
   comment: string;
