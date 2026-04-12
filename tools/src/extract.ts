@@ -201,6 +201,11 @@ function extractExpr(node: Expression): RawExpr {
     return extractExpr(node.getExpression());
   }
 
+  // null → undefined (both map to None in backends)
+  if (Node.isNullLiteral(node)) {
+    return { kind: "var", name: "undefined" };
+  }
+
   throw new Error(`Unsupported expression: ${node.getText()}`);
 }
 
@@ -262,7 +267,7 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
     }
   }
 
-  if (type.isObject()) return extractRecord(name, type, decl, undefined, extraDecls);
+  if (type.isObject() || type.isIntersection()) return extractRecord(name, type, decl, undefined, extraDecls);
   return null;
 }
 
@@ -412,7 +417,13 @@ function extractStmts(stmts: Node[]): RawStmt[] {
     const line = s.getStartLineNumber();
 
     // Ghost annotations from leading comments → inject before this statement
-    result.push(...parseSpecComments(s.getLeadingCommentRanges(), line));
+    const leadingComments = s.getLeadingCommentRanges();
+    result.push(...parseSpecComments(leadingComments, line));
+
+    // //@ skip — omit this statement from the verification model
+    if (leadingComments.some(r => r.getText().trim() === "//@ skip")) {
+      continue;
+    }
 
     if (Node.isVariableStatement(s)) {
       const havocMatch = s.getLeadingCommentRanges()
@@ -616,11 +627,23 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
 // ── Function extraction ──────────────────────────────────────
 
-function extractFunction(fn: FunctionDeclaration): RawFunction {
+function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
   const body = fn.getBody();
-  if (!body || !Node.isBlock(body)) throw new Error(`${(fn as any).getName?.() ?? "arrow"}: function body is not a block`);
-  const bodyStmts = body.getStatements();
-  const annots = collectAnnotations(fn, bodyStmts);
+
+  // Expression-body arrow: wrap in implicit return
+  let extractedBody: RawStmt[];
+  let annots: Annotation[];
+  if (body && !Node.isBlock(body)) {
+    const expr = extractExpr(body as Expression);
+    extractedBody = [{ kind: "return", value: expr, line: body.getStartLineNumber() }];
+    annots = parentAnnotations ?? collectAnnotations(fn);
+  } else if (body && Node.isBlock(body)) {
+    const bodyStmts = body.getStatements();
+    extractedBody = extractStmts(bodyStmts);
+    annots = collectAnnotations(fn, bodyStmts);
+  } else {
+    throw new Error(`${(fn as any).getName?.() ?? "arrow"}: function has no body`);
+  }
 
   const typeAnnotations: { name: string; type: string }[] = [];
   for (const a of annots) {
@@ -645,11 +668,17 @@ function extractFunction(fn: FunctionDeclaration): RawFunction {
       }
       return [{ name: p.getName(), tsType: p.getTypeNode()?.getText() ?? "unknown" }];
     }),
-    returnType: fn.getReturnTypeNode()?.getText() ?? "unknown",
+    returnType: (() => {
+      const node = fn.getReturnTypeNode();
+      if (node) return node.getText();
+      const inferred = fn.getReturnType();
+      if (inferred.isAny()) return "unknown";
+      return typeToString(inferred);
+    })(),
     requires: annots.filter(a => a.kind === "requires").map(a => a.expr),
     ensures: annots.filter(a => a.kind === "ensures").map(a => a.expr),
     typeAnnotations,
-    body: extractStmts(bodyStmts),
+    body: extractedBody,
     line: fn.getStartLineNumber(),
   };
 }
@@ -658,6 +687,39 @@ function extractFunction(fn: FunctionDeclaration): RawFunction {
 
 export function extractModule(sourceFile: SourceFile): RawModule {
   const typeDecls: TypeDeclInfo[] = [];
+
+  // Parse //@ declare-type directives from file comments
+  for (const range of sourceFile.getLeadingCommentRanges()) {
+    const text = range.getText().trim();
+    if (!text.startsWith("//@ declare-type ")) continue;
+    const body = text.slice("//@ declare-type ".length);
+    const match = body.match(/^(\w+)\s*\{(.+)\}$/);
+    if (!match) continue;
+    const name = match[1];
+    const fieldsStr = match[2];
+    const fields = fieldsStr.split(",").map(f => f.trim()).filter(Boolean).map(f => {
+      const [fname, ftype] = f.split(":").map(s => s.trim());
+      return { name: fname, tsType: ftype };
+    });
+    typeDecls.push({ name, kind: "record", fields });
+  }
+  // Also scan statement-level comments for declare-type
+  for (const stmt of sourceFile.getStatements()) {
+    for (const range of stmt.getLeadingCommentRanges()) {
+      const text = range.getText().trim();
+      if (!text.startsWith("//@ declare-type ")) continue;
+      const body = text.slice("//@ declare-type ".length);
+      const match = body.match(/^(\w+)\s*\{(.+)\}$/);
+      if (!match) continue;
+      const name = match[1];
+      const fields = match[2].split(",").map(f => f.trim()).filter(Boolean).map(f => {
+        const [fname, ftype] = f.split(":").map(s => s.trim());
+        return { name: fname, tsType: ftype };
+      });
+      typeDecls.push({ name, kind: "record", fields });
+    }
+  }
+
   // Extract type declarations in source order to respect dependencies
   for (const stmt of sourceFile.getStatements()) {
     if (Node.isTypeAliasDeclaration(stmt)) {
@@ -701,31 +763,40 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   }
 
   // Collect all function-like declarations: function declarations + const arrow functions
-  const allFns: { name: string; node: FunctionDeclaration }[] = [];
+  const allFns: { name: string; node: FunctionDeclaration; parentStmt?: Node }[] = [];
   for (const fn of sourceFile.getFunctions()) {
     allFns.push({ name: fn.getName() ?? "<anonymous>", node: fn });
   }
-  // const f = (...) => { ... } — treat as named function
+  // const f = (...) => expr  OR  const f = (...) => { ... }
   for (const stmt of sourceFile.getStatements()) {
     if (Node.isVariableStatement(stmt)) {
       for (const decl of stmt.getDeclarationList().getDeclarations()) {
         const init = decl.getInitializer();
         if (init && Node.isArrowFunction(init)) {
-          allFns.push({ name: decl.getName(), node: init as unknown as FunctionDeclaration });
+          allFns.push({ name: decl.getName(), node: init as unknown as FunctionDeclaration, parentStmt: stmt });
         }
       }
     }
   }
 
   // If any function has //@ verify, only extract those (brownfield mode).
-  // Otherwise extract all functions (backwards-compatible with existing examples).
-  const hasVerifyDirective = allFns.some(f => f.node.getFullText().includes('//@ verify'));
-  const fnsToExtract = hasVerifyDirective
-    ? allFns.filter(f => f.node.getFullText().includes('//@ verify'))
-    : allFns;
+  // For expression-body arrows, //@ verify may be on the parent variable statement.
+  function hasVerify(f: { node: FunctionDeclaration; parentStmt?: Node }) {
+    if (f.node.getFullText().includes('//@ verify')) return true;
+    if (f.parentStmt) {
+      for (const r of f.parentStmt.getLeadingCommentRanges()) {
+        if (r.getText().includes('//@ verify')) return true;
+      }
+    }
+    return false;
+  }
+  const hasVerifyDirective = allFns.some(hasVerify);
+  const fnsToExtract = hasVerifyDirective ? allFns.filter(hasVerify) : allFns;
 
   const functions = fnsToExtract.map(f => {
-    const raw = extractFunction(f.node);
+    // For expression-body arrows, annotations come from the parent variable statement
+    const parentAnnots = f.parentStmt ? parseAnnotations(f.parentStmt) : undefined;
+    const raw = extractFunction(f.node, parentAnnots);
     raw.name = f.name;  // use the const name, not "<anonymous>"
     return raw;
   });
@@ -801,6 +872,11 @@ export function extractModule(sourceFile: SourceFile): RawModule {
           const extra: TypeDeclInfo[] = [];
           const info = extractTypeDecl(decls[0], extra);
           if (info) { typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(aliasName); }
+        } else if (t.getProperties().length > 0) {
+          // Alias declaration not available (e.g. intersection type) — extract from properties
+          const extra: TypeDeclInfo[] = [];
+          const info = extractRecord(aliasName, t, locationNode, undefined, extra);
+          if (info) { typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(aliasName); }
         }
       }
     }
@@ -808,7 +884,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     for (const arg of t.getTypeArguments()) resolveType(arg, locationNode);
     const sym = t.getSymbol() ?? t.getAliasSymbol();
     const name = sym?.getName();
-    if (name && !name.startsWith("__") && !knownTypes.has(name) && !builtins.has(name) && t.isObject()) {
+    if (name && !name.startsWith("__") && !knownTypes.has(name) && !builtins.has(name) && (t.isObject() || t.isIntersection())) {
       const extra: TypeDeclInfo[] = [];
       const info = extractRecord(name, t, locationNode, undefined, extra);
       if (info) {

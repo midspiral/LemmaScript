@@ -39,7 +39,9 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `ghost x = e` | Before any statement | Ghost variable reassignment. |
 | `assert e` | Before any statement | Assertion (`assertGadget` in Lean, `assert` in Dafny). |
 | `havoc` | Before a variable declaration | Nondeterministic value — skip init expression (see §2.9). |
-| `havoc <key>` | Before a variable declaration | Nondeterministic subexpression — replace calls matching `<key>` (see §2.9). |
+| `havoc <key>` | Before a variable declaration | Nondeterministic subexpression — replace calls matching `<key>` (see §2.10). |
+| `declare-type N { f: T, ... }` | Before any statement | Declare a record type for cross-file types (see §2.5). |
+| `skip` | Before any statement | Omit statement from verification model (for side-effect-only code). |
 
 ### 2.2 Spec Expression Grammar
 
@@ -110,7 +112,20 @@ export interface Model {
 }
 ```
 
-### 2.5 Selective Verification: `//@ verify`
+### 2.5 Type Declarations: `//@ declare-type`
+
+When imported types can't be resolved by ts-morph (e.g., in monorepos with bundler module resolution), declare them manually:
+
+```typescript
+//@ declare-type Box { x: number, y: number, x2: number, y2: number }
+//@ declare-type Rect { x: number, y: number, width: number, height: number }
+```
+
+Each `declare-type` generates a Dafny `datatype` (or Lean `structure`) with the given fields. Field types use TS syntax (`number`, `string`, `boolean`, `T[]`, etc.) and are mapped through the standard type rules (§6.1).
+
+Place `declare-type` annotations before the first function that uses the type. They can appear as leading comments on any statement.
+
+### 2.6 Selective Verification: `//@ verify`
 
 By default, `lsc` extracts and verifies every function in the file. In brownfield codebases where most functions are outside the supported fragment, add `//@ verify` to opt in individual functions:
 
@@ -128,7 +143,7 @@ function isEmptyResult(result: string): boolean {
 
 If no function in the file has `//@ verify`, all functions are extracted as before. This keeps existing LemmaScript projects (where every function is in-fragment) working without changes.
 
-### 2.6 Backend Restriction: `//@ backend`
+### 2.7 Backend Restriction: `//@ backend`
 
 A file-level directive that restricts the file to a specific backend:
 
@@ -138,7 +153,7 @@ A file-level directive that restricts the file to a specific backend:
 
 When `lsc` runs with a different backend (e.g., `--backend=lean`), the file is silently skipped. This is used for features only supported in one backend, such as class methods (Dafny only).
 
-### 2.7 Classes
+### 2.8 Classes
 
 Class methods can be verified with `//@ verify`. The class fields become Dafny class fields, and `this.field` references work directly.
 
@@ -182,7 +197,7 @@ class Counter {
 
 **Lean:** Class support is Dafny-only. Use `//@ backend dafny` on files with classes.
 
-### 2.9 Havoc: `//@ havoc`
+### 2.10 Havoc: `//@ havoc`
 
 Marks a variable declaration as nondeterministic — the init expression is
 discarded and the variable receives an arbitrary value of its declared type:
@@ -279,6 +294,8 @@ No normalization of operators. Both backends handle all comparison directions.
 | `Math.floor(n)` (int arg) | identity | identity |
 | `Math.ceil(n)` (int arg) | identity | identity |
 | `Math.abs(x)` | `MathAbs(x)` | `MathAbs(x)` (preamble: `if x >= 0 then x else -x`) |
+| `Math.min(a, b)` | `MathMin(a, b)` | `MathMin(a, b)` (preamble: `if a <= b then a else b`) |
+| `Math.max(a, b)` | `MathMax(a, b)` | `MathMax(a, b)` (preamble: `if a >= b then a else b`) |
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `opt ? f(opt) : undefined` | match on Some/None | `match opt { case Some(v) => Some(f(v)) case None => None }` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
@@ -302,9 +319,12 @@ No normalization of operators. Both backends handle all comparison directions.
 | `expr \|\| default` (on string/array) | if non-empty | `if \|expr\| > 0 then expr else default` |
 | `expr?.method(args)` | — | `if key in map { ... }` |
 | `expr as T` | stripped | stripped |
+| `null` | `none` | `None` (same as `undefined`) |
+| `//@ skip` (before statement) | — | statement omitted from model |
 | `new Map(arr.map(fn))` | — | loop building `map[]` |
 | `[a, b, c]` | `#[a, b, c]` | `[a, b, c]` |
 | `[...arr, e]` | `Array.push arr e` | `(arr + [e])` |
+| `arr.concat(e)` | — | `(arr + [e])` |
 | `{ ...obj, f: v }` | `{ obj with f := v }` | `obj.(f := v)` |
 | `arr.with(i, v)` | `arr.set! i v` | `arr[i := v]` |
 | `` `${n} items` `` (int+string) | — | `NatToString(n) + " items"` |
