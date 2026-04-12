@@ -626,7 +626,7 @@ function isSyntacticallyPure(stmts: RawStmt[]): boolean {
   for (const s of stmts) {
     switch (s.kind) {
       case "while": case "forof": return false;
-      case "let": if (s.mutable) return false; break;
+      case "let": if (s.mutable || s.init.kind === "havoc") return false; break;
       case "if": if (!isSyntacticallyPure(s.then) || !isSyntacticallyPure(s.else)) return false; break;
       case "switch": if (!s.cases.every(c => isSyntacticallyPure(c.body)) || !isSyntacticallyPure(s.defaultBody)) return false; break;
     }

@@ -445,10 +445,27 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       const havocKey = havocMatch?.[1] ?? null;
       const isHavoc = !!havocMatch;
       for (const d of s.getDeclarations()) {
+        // Havoc on destructuring: emit each named binding as a separate havoced variable
+        const nameNode = d.getNameNode();
+        if (isHavoc && !havocKey && Node.isObjectBindingPattern(nameNode)) {
+          const rhsType = d.getType();
+          for (const el of nameNode.getElements()) {
+            const name = el.getName();
+            const propType = rhsType.getProperty(name)?.getTypeAtLocation(d);
+            const tsType = propType ? _eraseGenerics(typeToString(propType)) : "unknown";
+            result.push({
+              kind: "let", name, mutable: s.getDeclarationKind() === "let",
+              tsType, init: { kind: "havoc", tsType }, line,
+            });
+          }
+          continue;
+        }
         const declType = d.getType();
         let init: RawExpr;
         if (isHavoc && !havocKey) {
-          init = { kind: "havoc", tsType: typeToString(declType) };
+          // Use initializer type (pre-cast) when available — avoids losing optionality from `as` casts
+          const initType = d.getInitializer()?.getType();
+          init = { kind: "havoc", tsType: typeToString(initType ?? declType) };
         } else {
           const initializer = d.getInitializer();
           _havocKey = havocKey;
