@@ -1086,7 +1086,13 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       // Named type alias — resolve it instead of generating a synthetic name
       resolveType(retType, f.node);
       const aliasName = aliasSym.getName();
-      if (knownTypes.has(aliasName)) fn.returnType = aliasName;
+      if (knownTypes.has(aliasName)) {
+        // Preserve type arguments: Result<Model, Err> not just Result
+        const typeArgs = retType.getAliasTypeArguments();
+        fn.returnType = typeArgs.length > 0
+          ? `${aliasName}<${typeArgs.map(t => typeToString(t)).join(", ")}>`
+          : aliasName;
+      }
       continue;
     }
     const sym = retType.getSymbol();
