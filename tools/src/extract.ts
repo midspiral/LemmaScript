@@ -224,9 +224,16 @@ function extractExpr(node: Expression): RawExpr {
         ? `${name}<${typeArgs.map(t => t.getText()).join(", ")}>`
         : _eraseGenerics(typeToString(node.getType()));
       const args = node.getArguments();
-      // new Map(existingMap) — pass through (Dafny/Lean maps are value types)
+      // new Map(source) — clone existing map or build from entries
       if (name === "Map" && args && args.length === 1) {
-        return extractExpr(args[0] as Expression);
+        const argType = (args[0] as Expression).getType();
+        const argSymbol = argType.getSymbol()?.getName() ?? argType.getAliasSymbol()?.getName();
+        if (argSymbol === "Map") {
+          // new Map(existingMap) — identity (Dafny maps are value types)
+          return extractExpr(args[0] as Expression);
+        }
+        // new Map(entries) — map-from-array constructor
+        return { kind: "call", fn: { kind: "var", name: "__mapFromArray" }, args: [extractExpr(args[0] as Expression)] };
       }
       // new Set([a, b, c]) — set with initial elements
       if (name === "Set" && args && args.length === 1) {
