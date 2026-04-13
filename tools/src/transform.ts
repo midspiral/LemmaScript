@@ -380,7 +380,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // Discriminated union: { kind: 'NoOp' } → constructor NoOp
       if (e.ty.kind === "user" && !e.spread) {
         const tyName = e.ty.name;
-        const decl = _typeDecls.find(d => d.name === tyName && (d.kind === "discriminated-union" || d.kind === "string-union"));
+        // Match base type name (strip generic args: "Result<Model, Err>" → "Result")
+        const baseName = tyName.includes("<") ? tyName.slice(0, tyName.indexOf("<")) : tyName;
+        const decl = _typeDecls.find(d => d.name === baseName && (d.kind === "discriminated-union" || d.kind === "string-union"));
         if (decl && decl.discriminant) {
           const discField = e.fields.find(f => f.name === decl.discriminant);
           if (discField && (discField.value.kind === "str" || discField.value.kind === "bool")) {
