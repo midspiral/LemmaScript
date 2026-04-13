@@ -110,6 +110,17 @@ jobs:
         working-directory: ../case-study
         run: test -f ./check-extra.sh && ./check-extra.sh || true
 
+      - name: Check generated Dafny files are up to date
+        working-directory: ../case-study
+        run: |
+          git diff --exit-code -- '*.dfy.gen' '*.dfy'
+          untracked=$(git ls-files --others --exclude-standard -- '*.dfy.gen')
+          if [ -n "$untracked" ]; then
+            echo "ERROR: Untracked generated Dafny files:"
+            echo "$untracked"
+            exit 1
+          fi
+
   case-studies-lean:
     runs-on: ubuntu-latest
     strategy:
@@ -142,3 +153,14 @@ jobs:
       - name: Regenerate and build Lean
         working-directory: ../case-study
         run: ../LemmaScript/tools/check.sh lean
+
+      - name: Check generated Lean files are up to date
+        working-directory: ../case-study
+        run: |
+          git diff --exit-code -- '*.def.lean' '*.types.lean'
+          untracked=$(git ls-files --others --exclude-standard -- '*.def.lean' '*.types.lean')
+          if [ -n "$untracked" ]; then
+            echo "ERROR: Untracked generated Lean files:"
+            echo "$untracked"
+            exit 1
+          fi
