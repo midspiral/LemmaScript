@@ -37,7 +37,7 @@ export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number): b
   console.log("Running dafny verify...");
   try {
     const content = readFileSync(dfyPath, "utf-8");
-    const stdLibFlag = content.includes("import Std.") ? " --standard-libraries" : "";
+    const stdLibFlag = content.includes("Std.") ? " --standard-libraries" : "";
     const timeLimitFlag = timeLimit ? ` --verification-time-limit ${timeLimit}` : "";
     execSync(`dafny verify${stdLibFlag}${timeLimitFlag} "${dfyPath}"`, { cwd: dir, stdio: "inherit" });
     return true;
