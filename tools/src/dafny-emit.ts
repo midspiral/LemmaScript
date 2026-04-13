@@ -455,8 +455,10 @@ function emitDecl(d: Decl): string {
       lines.push(`}`);
       // Companion lemma for ensures (proof target for LLM)
       if (d.ensures.length > 0) {
+        // Strip constraints like (==) from type params — ghost lemmas don't need them
+        const lemmaTP = d.typeParams.length > 0 ? `<${d.typeParams.map(t => t.replace(/\(.*\)/, '')).join(", ")}>` : "";
         lines.push("");
-        lines.push(`lemma ${d.name}_ensures${tp}(${paramList(d.params)})`);
+        lines.push(`lemma ${d.name}_ensures${lemmaTP}(${paramList(d.params)})`);
         for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
         for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
         lines.push(`{`);

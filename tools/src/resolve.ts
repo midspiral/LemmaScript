@@ -886,8 +886,14 @@ function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Se
   const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
   const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
 
+  // Apply type parameter constraints from //@ type T (==) annotations
+  const typeParams = fn.typeParams.map(tp => {
+    const constraint = overrides.get(tp);
+    return constraint ? `${tp}${constraint}` : tp;
+  });
+
   return {
-    name: fn.name, typeParams: fn.typeParams, params, returnTy,
+    name: fn.name, typeParams, params, returnTy,
     requires: resolveSpecs(fn.requires, requiresCtx),
     ensures: resolveSpecs(fn.ensures, ensuresCtx),
     isPure: pureFns.has(fn.name),

@@ -96,6 +96,27 @@ The init expression in `ghost let` supports `new Set<T>()` and `new Map<K,V>()` 
 
 Use `nat` for non-negative loop counters and array indices.
 
+For generic functions that compare values with `===`, the Dafny backend needs an equality constraint on the type parameter. Annotate with:
+
+```
+//@ type T (==)
+```
+
+Example:
+```typescript
+export function seqContains<T>(s: T[], x: T): boolean {
+  //@ type T (==)
+  let i = 0
+  while (i < s.length) {
+    if (s[i] === x) return true
+    i = i + 1
+  }
+  return false
+}
+```
+
+This emits `method seqContains<T(==)>(...)` in Dafny. Without it, Dafny rejects `==` on values of unconstrained type `T`.
+
 User-defined types (string literal unions, discriminated unions) are generated automatically with the same name as the TS type. No annotation needed or supported for these.
 
 When a variable is Nat-typed:
