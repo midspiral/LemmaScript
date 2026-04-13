@@ -230,7 +230,15 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "binop": {
       let left = resolveExpr(e.left, ctx);
-      let right = resolveExpr(e.right, ctx);
+      // && narrowing: if left is "x !== undefined", narrow x for right side
+      let rightCtx = ctx;
+      if (e.op === "&&") {
+        const narrowed = narrowOptional(e.left, ctx.env);
+        if (narrowed && narrowed.inThen) {
+          rightCtx = withEnv(ctx, extend(ctx.env, narrowed.varName, narrowed.innerTy));
+        }
+      }
+      let right = resolveExpr(e.right, rightCtx);
       if (e.op === "===" || e.op === "!==") {
         left = coerceStr(left, right.ty);
         right = coerceStr(right, left.ty);
@@ -528,8 +536,20 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       return [{ kind: "assign", target: s.target, value: coerceStr(resolveExpr(s.value, ctx), targetTy) }, ctx.env];
     }
 
-    case "return":
-      return [{ kind: "return", value: coerceStr(resolveExpr(s.value, ctx), ctx.returnTy) }, ctx.env];
+    case "return": {
+      let value = coerceStr(resolveExpr(s.value, ctx), ctx.returnTy);
+      // Wrap non-optional return value in Some when function returns optional
+      // Skip if already optional, void, or undefined (which maps to None)
+      const isUndef = value.kind === "var" && value.name === "undefined";
+      if (ctx.returnTy.kind === "optional" && value.ty.kind !== "optional" && !isUndef) {
+        value = {
+          kind: "call" as const,
+          fn: { kind: "var" as const, name: "Some", ty: ctx.returnTy },
+          args: [value], ty: ctx.returnTy, callKind: "pure" as const,
+        };
+      }
+      return [{ kind: "return", value }, ctx.env];
+    }
 
     case "break":
       return [{ kind: "break" }, ctx.env];
@@ -548,6 +568,13 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         const env = extend(ctx.env, narrowed.varName, narrowed.innerTy);
         if (narrowed.inThen) thenCtx = withEnv(ctx, env);
         else elseCtx = withEnv(ctx, env);
+      }
+      // Also narrow from left side of && condition: if (x !== undefined && ...) { ... }
+      if (!narrowed && s.cond.kind === "binop" && s.cond.op === "&&") {
+        const leftNarrowed = narrowOptional(s.cond.left, ctx.env);
+        if (leftNarrowed && leftNarrowed.inThen) {
+          thenCtx = withEnv(ctx, extend(ctx.env, leftNarrowed.varName, leftNarrowed.innerTy));
+        }
       }
       return [{ kind: "if", cond: resolveExpr(s.cond, ctx), then: resolveBlock(s.then, thenCtx), else: resolveBlock(s.else, elseCtx) }, ctx.env];
     }

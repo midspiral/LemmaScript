@@ -758,6 +758,17 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     }
 
     case "if": {
+      // Restructure && with optional check: extract the leftmost optional check
+      // from a && chain and nest the rest inside. Handles left-associative chains:
+      // if ((x !== undefined && b) && c) → if (x !== undefined) { if (b && c) { ... } }
+      if (s.cond.kind === "binop" && s.cond.op === "&&" && s.else.length === 0) {
+        const extracted = extractLeftmostOptional(s.cond);
+        if (extracted) {
+          const innerIf: TStmt = { kind: "if", cond: extracted.rest, then: s.then, else: [] };
+          const outerIf: TStmt = { kind: "if", cond: extracted.optCond, then: [innerIf], else: [] };
+          return transformStmts([outerIf], typeDecls);
+        }
+      }
       // Lift from condition only (Lean rule: don't lift from branches)
       const { binds, expr: cond } = liftMethodCalls(s.cond);
       return [...binds, { kind: "if", cond, then: transformStmts(s.then, typeDecls), else: transformStmts(s.else, typeDecls) }];
@@ -869,6 +880,19 @@ function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind:
 /** Apply an expression transform to all expressions in a statement (convenience wrapper). */
 function mapStmtExprs(s: Stmt, r: (e: Expr) => Expr): Stmt {
   return mapStmt(s, e => r(e));
+}
+
+/** Extract the leftmost optional check from a && chain, returning the check and the rest.
+ *  (x !== undefined && b) && c → { optCond: x !== undefined, rest: b && c } */
+function extractLeftmostOptional(cond: TExpr): { optCond: TExpr; rest: TExpr } | null {
+  if (cond.kind !== "binop" || cond.op !== "&&") return null;
+  const check = parseOptionalCheck(cond.left);
+  if (check && !check.negated) return { optCond: cond.left, rest: cond.right };
+  if (cond.left.kind === "binop" && cond.left.op === "&&") {
+    const inner = extractLeftmostOptional(cond.left);
+    if (inner) return { optCond: inner.optCond, rest: { ...cond, left: inner.rest } as TExpr };
+  }
+  return null;
 }
 
 /** Detect `v !== undefined` or `undefined !== v` where v has optional type. */
