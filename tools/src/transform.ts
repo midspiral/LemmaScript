@@ -1095,27 +1095,7 @@ function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { n
   }));
 }
 
-function replaceFieldAccessInStmts(stmts: Stmt[], varName: string, fields: { name: string; tsType: string }[]): Stmt[] {
-  if (fields.length === 0) return stmts;
-  const f = (e: Expr): Expr | null => {
-    if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === varName) {
-      const fi = fields.find(fi => fi.name === e.field);
-      if (fi) return { kind: "var", name: matchBinder(fi.name, varName) };
-    }
-    return null;
-  };
-  const result: Stmt[] = [];
-  for (const s of stmts) {
-    // If a let shadows the matched variable, stop replacing from here on
-    if (s.kind === "let" && s.name === varName) {
-      result.push(s.value ? { ...s, value: mapExpr(s.value, f) } : s);
-      result.push(...stmts.slice(result.length));
-      break;
-    }
-    result.push(mapStmt(s, f));
-  }
-  return result;
-}
+
 
 // ── Pure function generation ─────────────────────────────────
 

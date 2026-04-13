@@ -124,7 +124,7 @@ function coerceStr(expr: TExpr, targetTy: Ty): TExpr {
 /** Detect `v !== undefined` or `undefined !== v` where v: optional<T>.
  *  Also handles field access chains like `obj.field !== undefined`.
  *  When `fieldExpr` is returned, callers must use `substituteRawExpr` to narrow. */
-function narrowOptional(cond: RawExpr, env: Env | null, ctx?: Ctx): { varName: string; innerTy: Ty; inThen: boolean; fieldExpr?: RawExpr } | null {
+function narrowOptional(cond: RawExpr, ctx: Ctx): { varName: string; innerTy: Ty; inThen: boolean; fieldExpr?: RawExpr } | null {
   if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) return null;
   // Identify the expression being checked against undefined
   let optExpr: RawExpr | null = null;
@@ -134,13 +134,13 @@ function narrowOptional(cond: RawExpr, env: Env | null, ctx?: Ctx): { varName: s
 
   // Simple variable
   if (optExpr.kind === "var") {
-    const ty = lookup(env, optExpr.name);
+    const ty = lookup(ctx.env, optExpr.name);
     if (!ty || ty.kind !== "optional") return null;
     return { varName: optExpr.name, innerTy: ty.inner, inThen: cond.op === "!==" };
   }
 
   // Field access chain: resolve the type to check if it's optional
-  if (optExpr.kind === "field" && ctx) {
+  if (optExpr.kind === "field") {
     const resolved = resolveExpr(optExpr, ctx);
     if (resolved.ty.kind === "optional") {
       const synVar = `_narr${_synVarCounter++}`;
@@ -254,7 +254,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let rightCtx = ctx;
       let rawRight = e.right;
       if (e.op === "&&") {
-        const narrowed = narrowOptional(e.left, ctx.env, ctx);
+        const narrowed = narrowOptional(e.left, ctx);
         if (narrowed && narrowed.inThen && !narrowed.fieldExpr) {
           rightCtx = withEnv(ctx, extend(ctx.env, narrowed.varName, narrowed.innerTy));
         }
@@ -496,7 +496,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // Explicit optional check: x !== undefined ? expr(x) : undefined
       // Explicit optional check: x !== undefined ? ... : ...
       if (!narrowedVar) {
-        const narrowed = narrowOptional(e.cond, ctx.env, ctx);
+        const narrowed = narrowOptional(e.cond, ctx);
         if (narrowed && narrowed.inThen) {
           narrowedVar = narrowed.varName;
           thenCtx = withEnv(ctx, extend(ctx.env, narrowed.varName, narrowed.innerTy));
@@ -520,7 +520,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         }
         // && with optional check in ternary: (field !== undefined && ...) ? field : default
         if (!narrowedVar && e.cond.kind === "binop" && e.cond.op === "&&") {
-          const leftNarrowed = narrowOptional(e.cond.left, ctx.env, ctx);
+          const leftNarrowed = narrowOptional(e.cond.left, ctx);
           if (leftNarrowed && leftNarrowed.inThen && leftNarrowed.fieldExpr) {
             narrowedVar = leftNarrowed.varName;
             narrowedExprResolved = resolveExpr(leftNarrowed.fieldExpr, ctx);
@@ -592,7 +592,7 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     env = nextEnv;
     // Flow narrowing: if (x === undefined) { return } narrows x for rest of block
     if (s.kind === "if" && s.then.length > 0 && s.then[s.then.length - 1].kind === "return" && s.else.length === 0) {
-      const narrowed = narrowOptional(s.cond, env, withEnv(ctx, env));
+      const narrowed = narrowOptional(s.cond, withEnv(ctx, env));
       if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
         env = extend(env, narrowed.varName, narrowed.innerTy);
       }
@@ -643,7 +643,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     case "if": {
       // Narrow optional<T> → T when checking !== undefined or undefined !==
       let thenCtx = ctx, elseCtx = ctx;
-      const narrowed = narrowOptional(s.cond, ctx.env, ctx);
+      const narrowed = narrowOptional(s.cond, ctx);
       if (narrowed) {
         const env = extend(ctx.env, narrowed.varName, narrowed.innerTy);
         if (narrowed.inThen) thenCtx = withEnv(ctx, env);
@@ -651,7 +651,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       }
       // Also narrow from left side of && condition: if (x !== undefined && ...) { ... }
       if (!narrowed && s.cond.kind === "binop" && s.cond.op === "&&") {
-        const leftNarrowed = narrowOptional(s.cond.left, ctx.env, ctx);
+        const leftNarrowed = narrowOptional(s.cond.left, ctx);
         if (leftNarrowed && leftNarrowed.inThen && !leftNarrowed.fieldExpr) {
           thenCtx = withEnv(ctx, extend(ctx.env, leftNarrowed.varName, leftNarrowed.innerTy));
         }
