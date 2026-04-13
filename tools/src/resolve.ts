@@ -224,6 +224,7 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
 function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
   switch (e.kind) {
     case "var":
+      if (e.name === "undefined") return { kind: "var", name: "undefined", ty: { kind: "void" } };
       return { kind: "var", name: e.name, ty: lookup(ctx.env, e.name) ?? { kind: "unknown" } };
 
     case "num":
@@ -254,7 +255,6 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let rawRight = e.right;
       if (e.op === "&&") {
         const narrowed = narrowOptional(e.left, ctx.env, ctx);
-        // Only substitute for simple variables (field chains need transform-phase match)
         if (narrowed && narrowed.inThen && !narrowed.fieldExpr) {
           rightCtx = withEnv(ctx, extend(ctx.env, narrowed.varName, narrowed.innerTy));
         }
@@ -541,8 +541,9 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       } else if (else_.ty.kind === "void" && then_.ty.kind !== "void" && then_.ty.kind !== "unknown") {
         ty = { kind: "optional", inner: then_.ty };
       }
-      // When narrowedExpr is set, the transform will emit a match producing Optional
-      if (narrowedExprResolved && ty.kind !== "optional") {
+      // When narrowedExpr is set AND a branch is void, the match produces Optional
+      const hasVoidBranch = then_.ty.kind === "void" || else_.ty.kind === "void";
+      if (narrowedExprResolved && hasVoidBranch && ty.kind !== "optional") {
         ty = { kind: "optional", inner: ty };
       }
       return { kind: "conditional", cond, then: then_, else: else_, ty, narrowedVar, narrowedExpr: narrowedExprResolved };
@@ -589,6 +590,13 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     const [typed, nextEnv] = resolveStmt(s, withEnv(ctx, env));
     result.push(typed);
     env = nextEnv;
+    // Flow narrowing: if (x === undefined) { return } narrows x for rest of block
+    if (s.kind === "if" && s.then.length > 0 && s.then[s.then.length - 1].kind === "return" && s.else.length === 0) {
+      const narrowed = narrowOptional(s.cond, env, withEnv(ctx, env));
+      if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
+        env = extend(env, narrowed.varName, narrowed.innerTy);
+      }
+    }
   }
   return result;
 }

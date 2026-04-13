@@ -509,12 +509,15 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         if (bound !== e.narrowedVar) {
           thenExpr = replaceVar(thenExpr, e.narrowedVar, { kind: "var", name: bound });
         }
-        const wrapSomeNone = (expr: Expr, raw: TExpr): Expr =>
-          (raw.kind === "var" && raw.name === "undefined")
-            ? { kind: "constructor", name: ".none" }
-            : { kind: "app", fn: "Some", args: [expr] };
-        thenExpr = wrapSomeNone(thenExpr, e.then);
-        elseExpr = wrapSomeNone(elseExpr, e.else);
+        // Wrap in Some/None only when result is optional (one branch is undefined)
+        if (e.ty.kind === "optional") {
+          const wrapSomeNone = (expr: Expr, raw: TExpr): Expr =>
+            (raw.kind === "var" && raw.name === "undefined")
+              ? { kind: "constructor", name: ".none" }
+              : { kind: "app", fn: "Some", args: [expr] };
+          thenExpr = wrapSomeNone(thenExpr, e.then);
+          elseExpr = wrapSomeNone(elseExpr, e.else);
+        }
         return {
           kind: "match", scrutinee,
           arms: [
