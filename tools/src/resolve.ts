@@ -374,6 +374,13 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           const f = decl.fields?.find(f => f.name === e.field);
           if (f) ty = resolveTsType(f.tsType, ctx.overrides);
         }
+        // Also resolve fields from discriminated-union variants
+        if (ty.kind === "unknown" && decl?.kind === "discriminated-union" && decl.variants) {
+          for (const variant of decl.variants) {
+            const f = variant.fields.find(f => f.name === e.field);
+            if (f) { ty = resolveTsType(f.tsType, ctx.overrides); break; }
+          }
+        }
       }
 
       return { kind: "field", obj, field: e.field, ty, isDiscriminant };

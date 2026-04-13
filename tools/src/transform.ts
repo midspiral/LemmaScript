@@ -443,21 +443,35 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           }
         }
       }
-      // For spread records, wrap non-optional values in Some for optional fields
+      // For spread records, propagate declared field types and wrap optionals
       if (e.spread) {
         const spreadTy = e.spread.ty.kind === "optional" ? e.spread.ty.inner : e.spread.ty;
         const structName = spreadTy.kind === "user" ? spreadTy.name : undefined;
         const structDecl = structName ? _typeDecls.find(d => d.name === structName && d.kind === "record") : undefined;
+        // Also check discriminated-union variants for field types
+        const unionDecl = structName ? _typeDecls.find(d => d.name === structName && d.kind === "discriminated-union") : undefined;
         const loweredFields = e.fields.map(f => {
-          let value = lowerExpr(f.value, binds);
-          if (structDecl?.fields) {
-            const fieldDecl = structDecl.fields.find(sf => sf.name === f.name);
-            if (fieldDecl) {
-              const fieldTy = parseTsType(fieldDecl.tsType);
-              const isUndef = f.value.kind === "var" && f.value.name === "undefined";
-              if (fieldTy.kind === "optional" && f.value.ty.kind !== "optional" && !isUndef) {
-                value = { kind: "app", fn: "Some", args: [value] };
-              }
+          // Propagate declared field type onto value if it has unknown type
+          let fieldValue = f.value;
+          const fieldDecl = structDecl?.fields?.find(sf => sf.name === f.name);
+          let declaredTy: Ty | undefined;
+          if (fieldDecl) {
+            declaredTy = parseTsType(fieldDecl.tsType);
+          } else if (unionDecl?.variants) {
+            for (const v of unionDecl.variants) {
+              const vf = v.fields.find(vf => vf.name === f.name);
+              if (vf) { declaredTy = parseTsType(vf.tsType); break; }
+            }
+          }
+          if (declaredTy && fieldValue.ty.kind === "unknown") {
+            fieldValue = { ...fieldValue, ty: declaredTy } as TExpr;
+          }
+          let value = lowerExpr(fieldValue, binds);
+          // Wrap non-optional values in Some for optional fields
+          if (declaredTy?.kind === "optional") {
+            const isUndef = f.value.kind === "var" && f.value.name === "undefined";
+            if (f.value.ty.kind !== "optional" && !isUndef) {
+              value = { kind: "app", fn: "Some", args: [value] };
             }
           }
           return { name: f.name, value };
