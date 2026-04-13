@@ -281,11 +281,15 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         argCtx = { ...ctx, returnTy: fn.obj.ty.elem };
       }
       let args = rawArgs.map(a => resolveExpr(a, argCtx));
-      // Coerce non-optional args to Option when callee expects optional param: wrap in Some
+      // Coerce args: string literals to user types, non-optional to Option, pad missing optional args
       if (fn.kind === "var" && ctx.fnParams.has(fn.name)) {
         const paramTys = ctx.fnParams.get(fn.name)!;
         args = args.map((a, i) => {
-          if (i < paramTys.length && a.ty.kind !== "optional" && paramTys[i].kind === "optional") {
+          if (i >= paramTys.length) return a;
+          // Coerce string literal to user type (e.g., 'MissingList' → Err constructor)
+          a = coerceStr(a, paramTys[i]);
+          // Wrap non-optional in Some when callee expects optional param
+          if (a.ty.kind !== "optional" && paramTys[i].kind === "optional") {
             return {
               kind: "call" as const,
               fn: { kind: "var" as const, name: "Some", ty: paramTys[i] },
@@ -296,6 +300,12 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           }
           return a;
         });
+        // Pad missing optional args with None
+        for (let i = args.length; i < paramTys.length; i++) {
+          if (paramTys[i].kind === "optional") {
+            args.push({ kind: "var" as const, name: "undefined", ty: paramTys[i] });
+          }
+        }
       }
       let ty: Ty = { kind: "unknown" };
       // Infer return types for collection methods
@@ -460,7 +470,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "emptyCollection": {
       const ty = parseTsType(e.tsType);
-      return { kind: "arrayLiteral", elems: [], ty };
+      const elems = e.initElems ? e.initElems.map(el => resolveExpr(el, ctx)) : [];
+      return { kind: "arrayLiteral", elems, ty };
     }
 
     case "havoc":

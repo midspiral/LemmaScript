@@ -8,15 +8,15 @@ set_option loom.semantics.termination "total"
 set_option loom.semantics.choice "demonic"
 
 method evalPartial (e : Expr) return (res : Int)
-  ensures match e with | .lit _val => res = _val | _ => true
-  ensures match e with | .add _a _b => res = _a + _b | _ => true
+  ensures match e with | .lit _e_val => res = _e_val | _ => true
+  ensures match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true
   do
     return Pure.evalPartial e
 
 method evalSwitch (e : Expr) return (res : Int)
-  ensures match e with | .lit _val => res = _val | _ => true
-  ensures match e with | .add _a _b => res = _a + _b | _ => true
-  ensures match e with | .neg _inner => res = 0 - _inner | _ => true
+  ensures match e with | .lit _e_val => res = _e_val | _ => true
+  ensures match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true
+  ensures match e with | .neg _e_inner => res = 0 - _e_inner | _ => true
   do
     return Pure.evalSwitch e
 

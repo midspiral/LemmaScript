@@ -35,10 +35,10 @@ datatype PriorityItem = PriorityItem(level: Priority, value: int)
 function evalPartial(e: Expr): int
 {
   match e {
-    case lit(i_val) =>
-      i_val
-    case add(i_a, i_b) =>
-      (i_a + i_b)
+    case lit(i_e_val) =>
+      i_e_val
+    case add(i_e_a, i_e_b) =>
+      (i_e_a + i_e_b)
     case _ =>
       0
   }
@@ -53,12 +53,12 @@ lemma evalPartial_ensures(e: Expr)
 function evalSwitch(e: Expr): int
 {
   match e {
-    case lit(i_val) =>
-      i_val
-    case add(i_a, i_b) =>
-      (i_a + i_b)
-    case neg(i_inner) =>
-      (0 - i_inner)
+    case lit(i_e_val) =>
+      i_e_val
+    case add(i_e_a, i_e_b) =>
+      (i_e_a + i_e_b)
+    case neg(i_e_inner) =>
+      (0 - i_e_inner)
   }
 }
 

@@ -219,13 +219,30 @@ function extractExpr(node: Expression): RawExpr {
     const name = node.getExpression().getText();
     if (name === "Map" || name === "Set") {
       const typeArgs = node.getTypeArguments();
+      // Use explicit type args if present, otherwise infer from TS type system
       const tsType = typeArgs && typeArgs.length > 0
         ? `${name}<${typeArgs.map(t => t.getText()).join(", ")}>`
-        : name;
+        : _eraseGenerics(typeToString(node.getType()));
       const args = node.getArguments();
-      // new Map(arr.map(fn)) — map-from-array constructor
+      // new Map(source) — clone existing map or build from entries
       if (name === "Map" && args && args.length === 1) {
+        const argType = (args[0] as Expression).getType();
+        const argSymbol = argType.getSymbol()?.getName() ?? argType.getAliasSymbol()?.getName();
+        if (argSymbol === "Map") {
+          // new Map(existingMap) — identity (Dafny maps are value types)
+          return extractExpr(args[0] as Expression);
+        }
+        // new Map(entries) — map-from-array constructor
         return { kind: "call", fn: { kind: "var", name: "__mapFromArray" }, args: [extractExpr(args[0] as Expression)] };
+      }
+      // new Set([a, b, c]) — set with initial elements
+      if (name === "Set" && args && args.length === 1) {
+        const arg = args[0] as Expression;
+        if (Node.isArrayLiteralExpression(arg)) {
+          return { kind: "emptyCollection", collectionType: "Set", tsType, initElems: arg.getElements().map(e => extractExpr(e as Expression)) };
+        }
+        // new Set(existingSet) — pass through
+        return extractExpr(arg);
       }
       return { kind: "emptyCollection", collectionType: name as "Map" | "Set", tsType };
     }
@@ -745,7 +762,10 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
           return { name, tsType: propType ? typeToString(propType) : "unknown" };
         });
       }
-      return [{ name: p.getName(), tsType: _eraseGenerics(p.getTypeNode()?.getText() ?? "unknown") }];
+      let tsType = _eraseGenerics(p.getTypeNode()?.getText() ?? "unknown");
+      // Optional parameters (foo?: T) need | undefined in the type string
+      if (p.hasQuestionToken()) tsType = `${tsType} | undefined`;
+      return [{ name: p.getName(), tsType }];
     }),
     returnType: (() => {
       const node = fn.getReturnTypeNode();
