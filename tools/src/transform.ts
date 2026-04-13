@@ -977,13 +977,18 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
   return { kind: "match", scrutinee: varName, arms };
 }
 
-/** Replace obj.field → binder var in typed IR (before transform), preserving field types. */
+/** Replace obj.field → binder var in typed IR (before transform).
+ *  Uses the variant's declared field type since the resolve phase may not
+ *  resolve field types on discriminated unions correctly. */
 function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { name: string; tsType: string }[]): TStmt[] {
   if (fields.length === 0) return stmts;
   return stmts.map(s => mapTStmt(s, e => {
     if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === varName) {
       const fi = fields.find(fi => fi.name === e.field);
-      if (fi) return { kind: "var", name: matchBinder(fi.name, varName), ty: e.ty };
+      if (fi) {
+        const ty = e.ty.kind !== "unknown" ? e.ty : parseTsType(fi.tsType);
+        return { kind: "var", name: matchBinder(fi.name, varName), ty };
+      }
     }
     return null;
   }));
