@@ -443,21 +443,35 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           }
         }
       }
-      // For spread records, wrap non-optional values in Some for optional fields
+      // For spread records, propagate declared field types and wrap optionals
       if (e.spread) {
         const spreadTy = e.spread.ty.kind === "optional" ? e.spread.ty.inner : e.spread.ty;
         const structName = spreadTy.kind === "user" ? spreadTy.name : undefined;
         const structDecl = structName ? _typeDecls.find(d => d.name === structName && d.kind === "record") : undefined;
+        // Also check discriminated-union variants for field types
+        const unionDecl = structName ? _typeDecls.find(d => d.name === structName && d.kind === "discriminated-union") : undefined;
         const loweredFields = e.fields.map(f => {
-          let value = lowerExpr(f.value, binds);
-          if (structDecl?.fields) {
-            const fieldDecl = structDecl.fields.find(sf => sf.name === f.name);
-            if (fieldDecl) {
-              const fieldTy = parseTsType(fieldDecl.tsType);
-              const isUndef = f.value.kind === "var" && f.value.name === "undefined";
-              if (fieldTy.kind === "optional" && f.value.ty.kind !== "optional" && !isUndef) {
-                value = { kind: "app", fn: "Some", args: [value] };
-              }
+          // Propagate declared field type onto value if it has unknown type
+          let fieldValue = f.value;
+          const fieldDecl = structDecl?.fields?.find(sf => sf.name === f.name);
+          let declaredTy: Ty | undefined;
+          if (fieldDecl) {
+            declaredTy = parseTsType(fieldDecl.tsType);
+          } else if (unionDecl?.variants) {
+            for (const v of unionDecl.variants) {
+              const vf = v.fields.find(vf => vf.name === f.name);
+              if (vf) { declaredTy = parseTsType(vf.tsType); break; }
+            }
+          }
+          if (declaredTy && fieldValue.ty.kind === "unknown") {
+            fieldValue = { ...fieldValue, ty: declaredTy } as TExpr;
+          }
+          let value = lowerExpr(fieldValue, binds);
+          // Wrap non-optional values in Some for optional fields
+          if (declaredTy?.kind === "optional") {
+            const isUndef = f.value.kind === "var" && f.value.name === "undefined";
+            if (f.value.ty.kind !== "optional" && !isUndef) {
+              value = { kind: "app", fn: "Some", args: [value] };
             }
           }
           return { name: f.name, value };
@@ -484,7 +498,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "exists", var: e.var, type: e.varTy, body: transformExpr(e.body) };
 
     case "conditional": {
-      const cond = lowerExpr(e.cond, binds);
+      // When narrowedExpr is set, the match replaces the condition — don't lift from it
+      const condBinds = (e.narrowedVar && e.narrowedExpr) ? null : binds;
+      const cond = lowerExpr(e.cond, condBinds);
       let thenExpr = lowerExpr(e.then, binds);
       let elseExpr = lowerExpr(e.else, binds);
 
@@ -495,12 +511,15 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         if (bound !== e.narrowedVar) {
           thenExpr = replaceVar(thenExpr, e.narrowedVar, { kind: "var", name: bound });
         }
-        const wrapSomeNone = (expr: Expr, raw: TExpr): Expr =>
-          (raw.kind === "var" && raw.name === "undefined")
-            ? { kind: "constructor", name: ".none" }
-            : { kind: "app", fn: "Some", args: [expr] };
-        thenExpr = wrapSomeNone(thenExpr, e.then);
-        elseExpr = wrapSomeNone(elseExpr, e.else);
+        // Wrap in Some/None only when result is optional (one branch is undefined)
+        if (e.ty.kind === "optional") {
+          const wrapSomeNone = (expr: Expr, raw: TExpr): Expr =>
+            (raw.kind === "var" && raw.name === "undefined")
+              ? { kind: "constructor", name: ".none" }
+              : { kind: "app", fn: "Some", args: [expr] };
+          thenExpr = wrapSomeNone(thenExpr, e.then);
+          elseExpr = wrapSomeNone(elseExpr, e.else);
+        }
         return {
           kind: "match", scrutinee,
           arms: [
@@ -632,7 +651,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
       const opt = parseOptionalCheck(s.cond);
       if (opt) {
         const rest = stmts.slice(i + 1);
-        result.push(emitOptionalMatch(opt.varName, opt.negated, s, typeDecls, rest));
+        result.push(emitOptionalMatch(opt.varName, opt.negated, s, typeDecls, rest, opt.fieldExpr));
         // If rest was consumed into the Some branch, skip remaining
         const someBranch = opt.negated ? s.else : s.then;
         if (someBranch.length === 0 && rest.length > 0) {
@@ -941,13 +960,32 @@ function parseDiscriminantCond(cond: TExpr): { varName: string; typeName: string
   return { varName: cond.left.obj.name, typeName: cond.left.obj.ty.name, variant: cond.right.value };
 }
 
-function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind: "if" }, typeDecls: TypeDeclInfo[], restStmts?: TStmt[]): Stmt {
+function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind: "if" }, typeDecls: TypeDeclInfo[], restStmts?: TStmt[], fieldExpr?: TExpr): Stmt {
   let someBranch = negated ? s.else : s.then;
   const noneBranch = negated ? s.then : s.else;
   // Early-return pattern: if (x === undefined) { return ... } — Some branch is empty,
   // so include remaining statements as the Some body
   if (someBranch.length === 0 && restStmts && restStmts.length > 0) {
     someBranch = restStmts;
+  }
+  // For field accesses, replace the field chain in TStmts before transforming
+  if (fieldExpr) {
+    const synName = matchBinder(`${varName}_val`);
+    const replaced = someBranch.map(stmt => mapTStmt(stmt, e => {
+      if (e.kind === "field" && fieldExpr.kind === "field" && e.field === fieldExpr.field &&
+          e.obj.kind === "var" && fieldExpr.obj.kind === "var" && e.obj.name === fieldExpr.obj.name) {
+        return { kind: "var", name: synName, ty: fieldExpr.ty.kind === "optional" ? fieldExpr.ty.inner : fieldExpr.ty } as TExpr;
+      }
+      return null;
+    }));
+    const someBody = transformStmts(replaced, typeDecls);
+    return {
+      kind: "match", scrutinee: varName,
+      arms: [
+        { pattern: `.some ${synName}`, body: someBody },
+        { pattern: ".none", body: noneBranch.length > 0 ? transformStmts(noneBranch, typeDecls) : [] },
+      ],
+    };
   }
   const bound = matchBinder(`${varName}_val`);
   const someBody = transformStmts(someBranch, typeDecls);
@@ -978,14 +1016,34 @@ function extractLeftmostOptional(cond: TExpr): { optCond: TExpr; rest: TExpr } |
   return null;
 }
 
-/** Detect `v !== undefined` or `undefined !== v` where v has optional type. */
-function parseOptionalCheck(cond: TExpr): { varName: string; negated: boolean } | null {
+/** Detect `v !== undefined` or `undefined !== v` where v has optional type.
+ *  Also handles field access chains like `obj.field !== undefined`.
+ *  When `fieldExpr` is returned, callers must use field-aware replacement. */
+function parseOptionalCheck(cond: TExpr): { varName: string; negated: boolean; fieldExpr?: TExpr } | null {
   if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) return null;
   let varExpr: TExpr | null = null;
   if (cond.right.kind === "var" && cond.right.name === "undefined") varExpr = cond.left;
   if (cond.left.kind === "var" && cond.left.name === "undefined") varExpr = cond.right;
-  if (!varExpr || varExpr.kind !== "var" || varExpr.ty.kind !== "optional") return null;
-  return { varName: varExpr.name, negated: cond.op === "===" };
+  if (!varExpr) return null;
+  if (varExpr.kind === "var" && varExpr.ty.kind === "optional") {
+    return { varName: varExpr.name, negated: cond.op === "===" };
+  }
+  if (varExpr.kind === "field" && varExpr.ty.kind === "optional") {
+    // Serialize field chain as a dotted name for use as match scrutinee
+    const chain = serializeFieldChain(varExpr);
+    if (chain) return { varName: chain, negated: cond.op === "===", fieldExpr: varExpr };
+  }
+  return null;
+}
+
+/** Serialize a field access chain to a dotted variable path, or null if not a simple chain. */
+function serializeFieldChain(e: TExpr): string | null {
+  if (e.kind === "var") return e.name;
+  if (e.kind === "field") {
+    const parent = serializeFieldChain(e.obj);
+    return parent ? `${parent}.${e.field}` : null;
+  }
+  return null;
 }
 
 function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): Stmt {
