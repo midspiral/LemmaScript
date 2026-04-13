@@ -69,6 +69,46 @@ function mapStmts(stmts: Stmt[], f: (e: Expr) => Expr | null): Stmt[] {
   return stmts.map(s => mapStmt(s, f));
 }
 
+/** Map over all sub-expressions in a TExpr (typed IR). */
+function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
+  const hit = f(e);
+  if (hit) return hit;
+  const r = (x: TExpr) => mapTExpr(x, f);
+  switch (e.kind) {
+    case "var": case "num": case "str": case "bool": case "result": case "havoc": return e;
+    case "binop": return { ...e, left: r(e.left), right: r(e.right) };
+    case "unop": return { ...e, expr: r(e.expr) };
+    case "call": return { ...e, fn: r(e.fn), args: e.args.map(r) };
+    case "index": return { ...e, obj: r(e.obj), idx: r(e.idx) };
+    case "field": return { ...e, obj: r(e.obj) };
+    case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
+    case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
+    case "conditional": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
+    case "forall": return { ...e, body: r(e.body) };
+    case "exists": return { ...e, body: r(e.body) };
+    case "lambda": return e;
+  }
+}
+
+/** Map over all expressions in a TStmt tree (typed IR). */
+function mapTStmt(s: TStmt, f: (e: TExpr) => TExpr | null): TStmt {
+  const r = (e: TExpr) => mapTExpr(e, f);
+  switch (s.kind) {
+    case "let": return { ...s, init: r(s.init) };
+    case "assign": return { ...s, value: r(s.value) };
+    case "return": return { ...s, value: r(s.value) };
+    case "break": case "continue": case "throw": return s;
+    case "expr": return { ...s, expr: r(s.expr) };
+    case "if": return { ...s, cond: r(s.cond), then: s.then.map(t => mapTStmt(t, f)), else: s.else.map(t => mapTStmt(t, f)) };
+    case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r), body: s.body.map(t => mapTStmt(t, f)) };
+    case "switch": return { ...s, expr: r(s.expr), cases: s.cases.map(c => ({ ...c, body: c.body.map(t => mapTStmt(t, f)) })), defaultBody: s.defaultBody.map(t => mapTStmt(t, f)) };
+    case "forof": return { ...s, iterable: r(s.iterable), invariants: s.invariants.map(r), body: s.body.map(t => mapTStmt(t, f)) };
+    case "ghostLet": return { ...s, init: r(s.init) };
+    case "ghostAssign": return { ...s, value: r(s.value) };
+    case "assert": return { ...s, expr: r(s.expr) };
+  }
+}
+
 // ── Backend configuration ───────────────────────────────────
 
 export type Backend = "lean" | "dafny";
@@ -911,8 +951,9 @@ function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): Stmt {
     const variant = decl?.variants?.find(v => v.name === c.variant);
     const fields = variant?.fields ?? [];
     const pattern = fields.length > 0 ? `.${c.variant} ${fields.map(f => matchBinder(f.name, chain.varName)).join(" ")}` : `.${c.variant}`;
-    let body = transformStmts(c.body, typeDecls);
-    body = replaceFieldAccessInStmts(body, chain.varName, fields);
+    // Replace field accesses in TStmt BEFORE transforming, so optional narrowing sees simple vars
+    const replaced = replaceFieldAccessInTStmts(c.body, chain.varName, fields);
+    const body = transformStmts(replaced, typeDecls);
     return { pattern, body };
   });
   if (chain.fallthrough.length > 0) arms.push({ pattern: "_", body: transformStmts(chain.fallthrough, typeDecls) });
@@ -927,12 +968,25 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
     const variant = decl?.variants?.find(v => v.name === c.label);
     const fields = variant?.fields ?? [];
     const pattern = fields.length > 0 ? `.${c.label} ${fields.map(f => matchBinder(f.name, varName)).join(" ")}` : `.${c.label}`;
-    let body = transformStmts(c.body, typeDecls);
-    body = replaceFieldAccessInStmts(body, varName, fields);
+    // Replace field accesses in TStmt BEFORE transforming, so optional narrowing sees simple vars
+    const replaced = replaceFieldAccessInTStmts(c.body, varName, fields);
+    const body = transformStmts(replaced, typeDecls);
     return { pattern, body };
   });
   if (s.defaultBody.length > 0) arms.push({ pattern: "_", body: transformStmts(s.defaultBody, typeDecls) });
   return { kind: "match", scrutinee: varName, arms };
+}
+
+/** Replace obj.field → binder var in typed IR (before transform), preserving field types. */
+function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { name: string; tsType: string }[]): TStmt[] {
+  if (fields.length === 0) return stmts;
+  return stmts.map(s => mapTStmt(s, e => {
+    if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === varName) {
+      const fi = fields.find(fi => fi.name === e.field);
+      if (fi) return { kind: "var", name: matchBinder(fi.name, varName), ty: e.ty };
+    }
+    return null;
+  }));
 }
 
 function replaceFieldAccessInStmts(stmts: Stmt[], varName: string, fields: { name: string; tsType: string }[]): Stmt[] {
