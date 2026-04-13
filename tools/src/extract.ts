@@ -219,13 +219,23 @@ function extractExpr(node: Expression): RawExpr {
     const name = node.getExpression().getText();
     if (name === "Map" || name === "Set") {
       const typeArgs = node.getTypeArguments();
+      // Use explicit type args if present, otherwise infer from TS type system
       const tsType = typeArgs && typeArgs.length > 0
         ? `${name}<${typeArgs.map(t => t.getText()).join(", ")}>`
-        : name;
+        : _eraseGenerics(typeToString(node.getType()));
       const args = node.getArguments();
-      // new Map(arr.map(fn)) — map-from-array constructor
+      // new Map(existingMap) — pass through (Dafny/Lean maps are value types)
       if (name === "Map" && args && args.length === 1) {
-        return { kind: "call", fn: { kind: "var", name: "__mapFromArray" }, args: [extractExpr(args[0] as Expression)] };
+        return extractExpr(args[0] as Expression);
+      }
+      // new Set([a, b, c]) — set with initial elements
+      if (name === "Set" && args && args.length === 1) {
+        const arg = args[0] as Expression;
+        if (Node.isArrayLiteralExpression(arg)) {
+          return { kind: "emptyCollection", collectionType: "Set", tsType, initElems: arg.getElements().map(e => extractExpr(e as Expression)) };
+        }
+        // new Set(existingSet) — pass through
+        return extractExpr(arg);
       }
       return { kind: "emptyCollection", collectionType: name as "Map" | "Set", tsType };
     }

@@ -91,9 +91,14 @@ export const DAFNY_OPTIONS: TransformOptions = {
 /** Active options — set before each transform call. */
 let _opts: TransformOptions = DAFNY_OPTIONS;
 
-/** Prefix match-bound field names to avoid capturing user variables. */
-function matchBinder(fieldName: string): string {
-  return `_${fieldName}`;
+/** Type declarations — set once per module transform for discriminated union handling. */
+let _typeDecls: TypeDeclInfo[] = [];
+
+/** Prefix match-bound field names to avoid capturing user variables.
+ *  When prefix is given (the scrutinee name), include it to avoid
+ *  collisions in nested matches on different variables. */
+function matchBinder(fieldName: string, prefix?: string): string {
+  return prefix ? `_${prefix}_${fieldName}` : `_${fieldName}`;
 }
 
 const _forofCounters = new Map<string, number>();
@@ -371,12 +376,39 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "app", fn: prefix + e.fn.name, args: e.args.map(a => lowerExpr(a, binds)) };
     }
 
-    case "record":
+    case "record": {
+      // Discriminated union: { kind: 'NoOp' } → constructor NoOp
+      if (e.ty.kind === "user" && !e.spread) {
+        const tyName = e.ty.name;
+        const decl = _typeDecls.find(d => d.name === tyName && (d.kind === "discriminated-union" || d.kind === "string-union"));
+        if (decl && decl.discriminant) {
+          const discField = e.fields.find(f => f.name === decl.discriminant);
+          if (discField && (discField.value.kind === "str" || discField.value.kind === "bool")) {
+            const variantName = String(discField.value.kind === "str" ? discField.value.value : discField.value.value);
+            const variant = decl.variants?.find(v => v.name === variantName);
+            if (variant) {
+              const nonDiscFields = e.fields.filter(f => f.name !== decl.discriminant);
+              if (nonDiscFields.length === 0) {
+                return { kind: "constructor", name: variantName, type: tyName };
+              }
+              // Constructor with args: match variant field order
+              const args = variant.fields.map(vf => {
+                const ef = nonDiscFields.find(f => f.name === vf.name);
+                return ef ? lowerExpr(ef.value, binds) : { kind: "var" as const, name: "None" };
+              });
+              return { kind: "app", fn: variantName, args };
+            }
+          }
+        }
+      }
       return { kind: "record", spread: e.spread ? lowerExpr(e.spread, binds) : null, fields: e.fields.map(f => ({ name: f.name, value: lowerExpr(f.value, binds) })) };
+    }
 
     case "arrayLiteral":
       if (e.ty.kind === "map" && e.elems.length === 0) return { kind: "emptyMap" };
       if (e.ty.kind === "set" && e.elems.length === 0) return { kind: "emptySet" };
+      // Set with initial elements: new Set([a, b]) → {a, b}
+      if (e.ty.kind === "set") return { kind: "app", fn: "SetLiteral", args: e.elems.map(el => lowerExpr(el, binds)) };
       return { kind: "arrayLiteral", elems: e.elems.map(el => lowerExpr(el, binds)) };
 
     case "lambda":
@@ -476,7 +508,7 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): Expr | null {
   if (!variant) return null;
 
   const fields = variant.fields;
-  const pattern = fields.length > 0 ? `.${variantName} ${fields.map(f => matchBinder(f.name)).join(" ")}` : `.${variantName}`;
+  const pattern = fields.length > 0 ? `.${variantName} ${fields.map(f => matchBinder(f.name, obj.name)).join(" ")}` : `.${variantName}`;
 
   let rhs = transformExpr(e.right);
   rhs = replaceFieldAccess(rhs, obj.name, fields);
@@ -488,7 +520,7 @@ function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; ts
   return mapExpr(e, x => {
     if (x.kind === "field" && x.obj.kind === "var" && x.obj.name === varName) {
       const f = fields.find(f => f.name === x.field);
-      if (f) return { kind: "var", name: matchBinder(f.name) };
+      if (f) return { kind: "var", name: matchBinder(f.name, varName) };
     }
     // If this let shadows the matched variable, stop replacing in the body
     if (x.kind === "let" && x.name === varName) return { ...x, value: replaceFieldAccess(x.value, varName, fields) };
@@ -852,7 +884,7 @@ function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): Stmt {
   const arms: StmtMatchArm[] = chain.cases.map(c => {
     const variant = decl?.variants?.find(v => v.name === c.variant);
     const fields = variant?.fields ?? [];
-    const pattern = fields.length > 0 ? `.${c.variant} ${fields.map(f => matchBinder(f.name)).join(" ")}` : `.${c.variant}`;
+    const pattern = fields.length > 0 ? `.${c.variant} ${fields.map(f => matchBinder(f.name, chain.varName)).join(" ")}` : `.${c.variant}`;
     let body = transformStmts(c.body, typeDecls);
     body = replaceFieldAccessInStmts(body, chain.varName, fields);
     return { pattern, body };
@@ -868,7 +900,7 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
   const arms: StmtMatchArm[] = s.cases.map(c => {
     const variant = decl?.variants?.find(v => v.name === c.label);
     const fields = variant?.fields ?? [];
-    const pattern = fields.length > 0 ? `.${c.label} ${fields.map(f => matchBinder(f.name)).join(" ")}` : `.${c.label}`;
+    const pattern = fields.length > 0 ? `.${c.label} ${fields.map(f => matchBinder(f.name, varName)).join(" ")}` : `.${c.label}`;
     let body = transformStmts(c.body, typeDecls);
     body = replaceFieldAccessInStmts(body, varName, fields);
     return { pattern, body };
@@ -882,7 +914,7 @@ function replaceFieldAccessInStmts(stmts: Stmt[], varName: string, fields: { nam
   const f = (e: Expr): Expr | null => {
     if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === varName) {
       const fi = fields.find(fi => fi.name === e.field);
-      if (fi) return { kind: "var", name: matchBinder(fi.name) };
+      if (fi) return { kind: "var", name: matchBinder(fi.name, varName) };
     }
     return null;
   };
@@ -956,11 +988,12 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
 function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Expr | null {
   const decl = typeDecls.find(d => d.name === (s.expr.ty.kind === "user" ? s.expr.ty.name : ""));
   if (!decl) return null;
+  const varName = s.expr.kind === "var" ? s.expr.name : undefined;
   const arms: MatchArm[] = [];
   for (const c of s.cases) {
     const variant = decl.variants?.find(v => v.name === c.label);
     const fields = variant?.fields ?? [];
-    const pattern = fields.length > 0 ? `.${c.label} ${fields.map(f => matchBinder(f.name)).join(" ")}` : `.${c.label}`;
+    const pattern = fields.length > 0 ? `.${c.label} ${fields.map(f => matchBinder(f.name, varName)).join(" ")}` : `.${c.label}`;
     let body = transformPureBody(c.body, typeDecls);
     if (!body) return null;
     if (fields.length > 0 && s.expr.kind === "var") body = replaceFieldAccess(body, s.expr.name, fields);
@@ -981,7 +1014,7 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
   for (const c of chain.cases) {
     const variant = decl?.variants?.find(v => v.name === c.variant);
     const fields = variant?.fields ?? [];
-    const pattern = fields.length > 0 ? `.${c.variant} ${fields.map(f => matchBinder(f.name)).join(" ")}` : `.${c.variant}`;
+    const pattern = fields.length > 0 ? `.${c.variant} ${fields.map(f => matchBinder(f.name, chain.varName)).join(" ")}` : `.${c.variant}`;
     let body = transformPureBody(c.body, typeDecls);
     if (!body) return null;
     if (fields.length > 0) body = replaceFieldAccess(body, chain.varName, fields);
@@ -1095,6 +1128,7 @@ export function transformModuleDafny(mod: TModule): { typesFile: Module | null; 
 
 export function transformModule(mod: TModule, specImport?: string): { typesFile: Module | null; defFile: Module } {
   _forofCounters.clear();
+  _typeDecls = mod.typeDecls;
   const typeDecls = mod.typeDecls.map(transformTypeDecl);
 
   // Module-level constants

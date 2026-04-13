@@ -210,6 +210,8 @@ function emitExpr(e: Expr): string {
       const args = e.args.map(emitExpr);
       if (e.fn === "SetToSeq") { needsSetToSeq = true; return `SetToSeq(${args.join(", ")})`; }
       if (e.fn === "BigInt" || e.fn === "Number") return args[0]; // identity: both map to int
+      // Set literal: {a, b, c}
+      if (e.fn === "SetLiteral") return `{${args.join(", ")}}`;
       if (e.fn === "JSFloorDiv") needsJSFloorDiv = true;
       if (e.fn === "CeilReal") needsCeilReal = true;
       if (e.fn === "FloorReal") needsFloorReal = true;
@@ -217,7 +219,7 @@ function emitExpr(e: Expr): string {
       if (e.fn === "MathAbs") needsMathAbs = true;
       if (e.fn === "MathMin") needsMathMin = true;
       if (e.fn === "MathMax") needsMathMax = true;
-      return `${e.fn}(${args.join(", ")})`;
+      return `${escapeName(e.fn)}(${args.join(", ")})`;
     }
 
     case "field": {

@@ -5,12 +5,12 @@ datatype Packet = syn(seq_: int) | ack(seq_: int) | data(seq_: int, len: int) | 
 function nextSeq(state: int, pkt: Packet): int
 {
   match pkt {
-    case syn(i_seq) =>
-      i_seq
-    case ack(i_seq) =>
+    case syn(i_pkt_seq) =>
+      i_pkt_seq
+    case ack(i_pkt_seq) =>
       state
-    case data(i_seq, i_len) =>
-      (state + i_len)
+    case data(i_pkt_seq, i_pkt_len) =>
+      (state + i_pkt_len)
     case _ =>
       state
   }

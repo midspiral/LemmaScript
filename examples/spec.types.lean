@@ -31,21 +31,21 @@ namespace Pure
 
 def evalPartial (e : Expr) : Int :=
   match e with
-  | .lit _val =>
-    _val
-  | .add _a _b =>
-    _a + _b
+  | .lit _e_val =>
+    _e_val
+  | .add _e_a _e_b =>
+    _e_a + _e_b
   | _ =>
     0
 
 def evalSwitch (e : Expr) : Int :=
   match e with
-  | .lit _val =>
-    _val
-  | .add _a _b =>
-    _a + _b
-  | .neg _inner =>
-    0 - _inner
+  | .lit _e_val =>
+    _e_val
+  | .add _e_a _e_b =>
+    _e_a + _e_b
+  | .neg _e_inner =>
+    0 - _e_inner
 
 def isHighPriority (p : Priority) : Bool :=
   if p = .high then

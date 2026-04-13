@@ -14,12 +14,12 @@ namespace Pure
 
 def nextSeq (state : Int) (pkt : Packet) : Int :=
   match pkt with
-  | .syn _seq =>
-    _seq
-  | .ack _seq =>
+  | .syn _pkt_seq =>
+    _pkt_seq
+  | .ack _pkt_seq =>
     state
-  | .data _seq _len =>
-    state + _len
+  | .data _pkt_seq _pkt_len =>
+    state + _pkt_len
   | _ =>
     state
 
