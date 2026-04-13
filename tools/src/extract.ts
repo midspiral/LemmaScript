@@ -87,9 +87,24 @@ function extractExpr(node: Expression): RawExpr {
     return { kind: "var", name: "this" };
   }
 
-  // Property access: x.foo
+  // Property access: x.foo or x?.foo
   if (Node.isPropertyAccessExpression(node)) {
-    return { kind: "field", obj: extractExpr(node.getExpression()), field: node.getName() };
+    const obj = extractExpr(node.getExpression());
+    const field = node.getName();
+    // Optional chaining on data access: x?.foo → x !== undefined ? x.foo : undefined
+    // Skip if this is a method call (parent is CallExpression) — handled differently.
+    if (node.hasQuestionDotToken()) {
+      const parent = node.getParent();
+      const isMethodCall = parent && Node.isCallExpression(parent) && parent.getExpression() === node;
+      if (!isMethodCall) {
+        return { kind: "conditional",
+          cond: { kind: "binop", op: "!==", left: obj, right: { kind: "var", name: "undefined" } },
+          then: { kind: "field", obj, field },
+          else: { kind: "var", name: "undefined" },
+        };
+      }
+    }
+    return { kind: "field", obj, field };
   }
 
   // Element access: arr[i]

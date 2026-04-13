@@ -23,6 +23,8 @@ let _synVarCounter = 0;
 function rawExprEquals(a: RawExpr, b: RawExpr): boolean {
   if (a.kind === "var" && b.kind === "var") return a.name === b.name;
   if (a.kind === "field" && b.kind === "field") return a.field === b.field && rawExprEquals(a.obj, b.obj);
+  if (a.kind === "call" && b.kind === "call") return rawExprEquals(a.fn, b.fn) && a.args.length === b.args.length && a.args.every((arg, i) => rawExprEquals(arg, b.args[i]));
+  if (a.kind === "index" && b.kind === "index") return rawExprEquals(a.obj, b.obj) && rawExprEquals(a.idx, b.idx);
   return false;
 }
 
@@ -451,20 +453,39 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // Narrow the optional to its inner type in the then-branch so that
       // field accesses resolve correctly (e.g. entry.decision.field).
       let narrowedVar: string | undefined;
+      let narrowedExprResolved: TExpr | undefined;
       let thenCtx = ctx;
       let rawThen = e.then;
       if (cond.ty.kind === "optional") {
         const innerTy = cond.ty.inner;
         if (e.cond.kind === "var") {
-          // Simple variable: narrow it directly in the env
           narrowedVar = e.cond.name;
           thenCtx = withEnv(ctx, extend(ctx.env, e.cond.name, innerTy));
         } else {
-          // Complex expression (field access chain): introduce a synthetic
-          // variable, substitute it into the raw then-expr, and narrow it
           narrowedVar = `_opt${_synVarCounter++}`;
           rawThen = substituteRawExpr(e.then, e.cond, { kind: "var", name: narrowedVar });
           thenCtx = withEnv(ctx, extend(ctx.env, narrowedVar, innerTy));
+        }
+      }
+      // Explicit optional check: x !== undefined ? expr(x) : undefined
+      // Narrow x to its inner type in the then-branch.
+      if (!narrowedVar) {
+        const narrowed = narrowOptional(e.cond, ctx.env);
+        if (narrowed && narrowed.inThen) {
+          narrowedVar = narrowed.varName;
+          thenCtx = withEnv(ctx, extend(ctx.env, narrowed.varName, narrowed.innerTy));
+        }
+        // Handle complex optional expressions: f() !== undefined ? f().field : undefined
+        if (!narrowedVar && e.cond.kind === "binop" && e.cond.op === "!==" &&
+            e.cond.right.kind === "var" && e.cond.right.name === "undefined") {
+          const optExpr = e.cond.left;
+          const resolvedOpt = resolveExpr(optExpr, ctx);
+          if (resolvedOpt.ty.kind === "optional") {
+            narrowedVar = `_opt${_synVarCounter++}`;
+            narrowedExprResolved = resolvedOpt;
+            rawThen = substituteRawExpr(e.then, optExpr, { kind: "var", name: narrowedVar });
+            thenCtx = withEnv(ctx, extend(ctx.env, narrowedVar, resolvedOpt.ty.inner));
+          }
         }
       }
 
@@ -472,8 +493,12 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let else_ = resolveExpr(e.else, ctx);
       then_ = coerceStr(then_, else_.ty);
       else_ = coerceStr(else_, then_.ty);
-      const ty = then_.ty.kind !== "unknown" ? then_.ty : else_.ty;
-      return { kind: "conditional", cond, then: then_, else: else_, ty, narrowedVar };
+      let ty = then_.ty.kind !== "unknown" ? then_.ty : else_.ty;
+      // When narrowedExpr is set, the transform will emit a match producing Optional
+      if (narrowedExprResolved && ty.kind !== "optional") {
+        ty = { kind: "optional", inner: ty };
+      }
+      return { kind: "conditional", cond, then: then_, else: else_, ty, narrowedVar, narrowedExpr: narrowedExprResolved };
     }
 
     case "emptyCollection": {

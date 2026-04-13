@@ -443,7 +443,28 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           }
         }
       }
-      return { kind: "record", spread: e.spread ? lowerExpr(e.spread, binds) : null, fields: e.fields.map(f => ({ name: f.name, value: lowerExpr(f.value, binds) })) };
+      // For spread records, wrap non-optional values in Some for optional fields
+      if (e.spread) {
+        const spreadTy = e.spread.ty.kind === "optional" ? e.spread.ty.inner : e.spread.ty;
+        const structName = spreadTy.kind === "user" ? spreadTy.name : undefined;
+        const structDecl = structName ? _typeDecls.find(d => d.name === structName && d.kind === "record") : undefined;
+        const loweredFields = e.fields.map(f => {
+          let value = lowerExpr(f.value, binds);
+          if (structDecl?.fields) {
+            const fieldDecl = structDecl.fields.find(sf => sf.name === f.name);
+            if (fieldDecl) {
+              const fieldTy = parseTsType(fieldDecl.tsType);
+              const isUndef = f.value.kind === "var" && f.value.name === "undefined";
+              if (fieldTy.kind === "optional" && f.value.ty.kind !== "optional" && !isUndef) {
+                value = { kind: "app", fn: "Some", args: [value] };
+              }
+            }
+          }
+          return { name: f.name, value };
+        });
+        return { kind: "record", spread: lowerExpr(e.spread, binds), fields: loweredFields };
+      }
+      return { kind: "record", spread: null, fields: e.fields.map(f => ({ name: f.name, value: lowerExpr(f.value, binds) })) };
     }
 
     case "arrayLiteral":
@@ -467,7 +488,29 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       let thenExpr = lowerExpr(e.then, binds);
       let elseExpr = lowerExpr(e.else, binds);
 
-      // Optional cond with narrowedVar → match Some/None
+      // Explicit !== undefined with narrowedExpr → match Some/None on the optional expression
+      if (e.narrowedVar && e.narrowedExpr) {
+        const scrutinee = lowerExpr(e.narrowedExpr, binds);
+        const bound = matchBinder(e.narrowedVar);
+        if (bound !== e.narrowedVar) {
+          thenExpr = replaceVar(thenExpr, e.narrowedVar, { kind: "var", name: bound });
+        }
+        const wrapSomeNone = (expr: Expr, raw: TExpr): Expr =>
+          (raw.kind === "var" && raw.name === "undefined")
+            ? { kind: "constructor", name: ".none" }
+            : { kind: "app", fn: "Some", args: [expr] };
+        thenExpr = wrapSomeNone(thenExpr, e.then);
+        elseExpr = wrapSomeNone(elseExpr, e.else);
+        return {
+          kind: "match", scrutinee,
+          arms: [
+            { pattern: `.some ${bound}`, body: thenExpr },
+            { pattern: ".none", body: elseExpr },
+          ],
+        };
+      }
+
+      // Optional cond with narrowedVar → match Some/None (truthiness)
       if (e.narrowedVar && e.cond.ty.kind === "optional") {
         const bound = matchBinder(e.narrowedVar);
         // Replace the synthetic/narrowed var with the match-bound name
