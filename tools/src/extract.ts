@@ -755,7 +755,10 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
           return { name, tsType: propType ? typeToString(propType) : "unknown" };
         });
       }
-      return [{ name: p.getName(), tsType: _eraseGenerics(p.getTypeNode()?.getText() ?? "unknown") }];
+      let tsType = _eraseGenerics(p.getTypeNode()?.getText() ?? "unknown");
+      // Optional parameters (foo?: T) need | undefined in the type string
+      if (p.hasQuestionToken()) tsType = `${tsType} | undefined`;
+      return [{ name: p.getName(), tsType }];
     }),
     returnType: (() => {
       const node = fn.getReturnTypeNode();
