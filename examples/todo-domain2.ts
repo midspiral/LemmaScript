@@ -310,10 +310,8 @@ export function apply(m: Model, a: Action): Result<Model, Err> {
       newTaskData.delete(tid)
     }
     const newLists = m.lists.filter(l => l !== a.listId)
-    const newListNames = new Map(m.listNames)
-    newListNames.delete(a.listId)
-    const newTasks = new Map(m.tasks)
-    newTasks.delete(a.listId)
+    const { [a.listId]: _ln, ...newListNames } = m.listNames
+    const { [a.listId]: _tk, ...newTasks } = m.tasks
     return ok({
       ...m,
       lists: newLists,
@@ -481,8 +479,7 @@ export function apply(m: Model, a: Action): Result<Model, Err> {
   case 'DeleteTag': {
     if (!(a.tagId in m.tags)) return ok(m)
     const newTaskData = removeTagFromAllTasks(m.taskData, a.tagId)
-    const newTags = new Map(m.tags)
-    newTags.delete(a.tagId)
+    const { [a.tagId]: _tg, ...newTags } = m.tags
     return ok({ ...m, taskData: newTaskData, tags: newTags })
   }
 
