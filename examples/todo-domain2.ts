@@ -287,15 +287,11 @@ export function apply(m: Model, a: Action): Result<Model, Err> {
   case 'AddList': {
     if (listNameExists(m, a.name)) return err('DuplicateList')
     const id = m.nextListId
-    const newListNames = new Map(m.listNames)
-    newListNames.set(id, a.name)
-    const newTasks = new Map(m.tasks)
-    newTasks.set(id, [])
     return ok({
       ...m,
       lists: [...m.lists, id],
-      listNames: newListNames,
-      tasks: newTasks,
+      listNames: { ...m.listNames, [id]: a.name },
+      tasks: { ...m.tasks, [id]: [] as TaskId[] },
       nextListId: m.nextListId + 1,
     })
   }
@@ -303,9 +299,7 @@ export function apply(m: Model, a: Action): Result<Model, Err> {
   case 'RenameList': {
     if (!m.lists.includes(a.listId)) return err('MissingList')
     if (listNameExists(m, a.newName, a.listId)) return err('DuplicateList')
-    const newListNames = new Map(m.listNames)
-    newListNames.set(a.listId, a.newName)
-    return ok({ ...m, listNames: newListNames })
+    return ok({ ...m, listNames: { ...m.listNames, [a.listId]: a.newName } })
   }
 
   case 'DeleteList': {
@@ -347,14 +341,10 @@ export function apply(m: Model, a: Action): Result<Model, Err> {
       assignees: [], tags: [], deleted: false,
     }
     const lane = m.tasks[a.listId] || []
-    const newTasks = new Map(m.tasks)
-    newTasks.set(a.listId, [...lane, id])
-    const newTaskData = new Map(m.taskData)
-    newTaskData.set(id, task)
     return ok({
       ...m,
-      tasks: newTasks,
-      taskData: newTaskData,
+      tasks: { ...m.tasks, [a.listId]: [...lane, id] },
+      taskData: { ...m.taskData, [id]: task },
       nextTaskId: m.nextTaskId + 1,
     })
   }
@@ -367,9 +357,7 @@ export function apply(m: Model, a: Action): Result<Model, Err> {
     if (listId !== undefined && taskTitleExistsInList(m, listId, a.title, a.taskId)) {
       return err('DuplicateTask')
     }
-    const newTaskData = new Map(m.taskData)
-    newTaskData.set(a.taskId, { ...task, title: a.title, notes: a.notes })
-    return ok({ ...m, taskData: newTaskData })
+    return ok({ ...m, taskData: { ...m.taskData, [a.taskId]: { ...task, title: a.title, notes: a.notes } } })
   }
 
   case 'DeleteTask': {
@@ -377,10 +365,8 @@ export function apply(m: Model, a: Action): Result<Model, Err> {
     if (task === undefined) return ok(m)
     if (task.deleted) return ok(m)
     const listId = findListForTask(m, a.taskId)
-    const newTaskData = new Map(m.taskData)
-    newTaskData.set(a.taskId, { ...task, deleted: true, deletedBy: a.userId, deletedFromList: listId })
     const newTasks = removeTaskFromAllLists(m.tasks, a.taskId)
-    return ok({ ...m, tasks: newTasks, taskData: newTaskData })
+    return ok({ ...m, tasks: newTasks, taskData: { ...m.taskData, [a.taskId]: { ...task, deleted: true, deletedBy: a.userId, deletedFromList: listId } } })
   }
 
   case 'RestoreTask': {
@@ -391,12 +377,12 @@ export function apply(m: Model, a: Action): Result<Model, Err> {
     const targetList = task.deletedFromList !== undefined && m.lists.includes(task.deletedFromList)
       ? task.deletedFromList : m.lists[0]
     if (taskTitleExistsInList(m, targetList, task.title)) return err('DuplicateTask')
-    const newTaskData = new Map(m.taskData)
-    newTaskData.set(a.taskId, { ...task, deleted: false, deletedBy: undefined, deletedFromList: undefined })
     const lane = m.tasks[targetList] || []
-    const newTasks = new Map(m.tasks)
-    newTasks.set(targetList, [...lane, a.taskId])
-    return ok({ ...m, tasks: newTasks, taskData: newTaskData })
+    return ok({
+      ...m,
+      tasks: { ...m.tasks, [targetList]: [...lane, a.taskId] },
+      taskData: { ...m.taskData, [a.taskId]: { ...task, deleted: false, deletedBy: undefined, deletedFromList: undefined } },
+    })
   }
 
   case 'MoveTask': {
@@ -411,45 +397,35 @@ export function apply(m: Model, a: Action): Result<Model, Err> {
     if (pos < 0) return err('BadAnchor')
     const clamped = Math.min(pos, targetLane.length)
     const newLane = insertAt(targetLane, clamped, a.taskId)
-    const newTasks = new Map(cleaned)
-    newTasks.set(a.toList, newLane)
-    return ok({ ...m, tasks: newTasks })
+    return ok({ ...m, tasks: { ...cleaned, [a.toList]: newLane } })
   }
 
   case 'CompleteTask': {
     const task = m.taskData[a.taskId]
     if (task === undefined) return err('MissingTask')
     if (task.deleted) return err('TaskDeleted')
-    const newTaskData = new Map(m.taskData)
-    newTaskData.set(a.taskId, { ...task, completed: true })
-    return ok({ ...m, taskData: newTaskData })
+    return ok({ ...m, taskData: { ...m.taskData, [a.taskId]: { ...task, completed: true } } })
   }
 
   case 'UncompleteTask': {
     const task = m.taskData[a.taskId]
     if (task === undefined) return err('MissingTask')
     if (task.deleted) return err('TaskDeleted')
-    const newTaskData = new Map(m.taskData)
-    newTaskData.set(a.taskId, { ...task, completed: false })
-    return ok({ ...m, taskData: newTaskData })
+    return ok({ ...m, taskData: { ...m.taskData, [a.taskId]: { ...task, completed: false } } })
   }
 
   case 'StarTask': {
     const task = m.taskData[a.taskId]
     if (task === undefined) return err('MissingTask')
     if (task.deleted) return err('TaskDeleted')
-    const newTaskData = new Map(m.taskData)
-    newTaskData.set(a.taskId, { ...task, starred: true })
-    return ok({ ...m, taskData: newTaskData })
+    return ok({ ...m, taskData: { ...m.taskData, [a.taskId]: { ...task, starred: true } } })
   }
 
   case 'UnstarTask': {
     const task = m.taskData[a.taskId]
     if (task === undefined) return err('MissingTask')
     if (task.deleted) return err('TaskDeleted')
-    const newTaskData = new Map(m.taskData)
-    newTaskData.set(a.taskId, { ...task, starred: false })
-    return ok({ ...m, taskData: newTaskData })
+    return ok({ ...m, taskData: { ...m.taskData, [a.taskId]: { ...task, starred: false } } })
   }
 
   case 'SetDueDate': {
@@ -457,9 +433,7 @@ export function apply(m: Model, a: Action): Result<Model, Err> {
     if (task === undefined) return err('MissingTask')
     if (task.deleted) return err('TaskDeleted')
     if (a.dueDate !== undefined && !validDate(a.dueDate)) return err('InvalidDate')
-    const newTaskData = new Map(m.taskData)
-    newTaskData.set(a.taskId, { ...task, dueDate: a.dueDate })
-    return ok({ ...m, taskData: newTaskData })
+    return ok({ ...m, taskData: { ...m.taskData, [a.taskId]: { ...task, dueDate: a.dueDate } } })
   }
 
   case 'AssignTask': {
@@ -467,18 +441,14 @@ export function apply(m: Model, a: Action): Result<Model, Err> {
     if (task === undefined) return err('MissingTask')
     if (task.deleted) return err('TaskDeleted')
     if (!m.members.includes(a.userId)) return err('NotAMember')
-    const newTaskData = new Map(m.taskData)
-    newTaskData.set(a.taskId, { ...task, assignees: [...task.assignees, a.userId] })
-    return ok({ ...m, taskData: newTaskData })
+    return ok({ ...m, taskData: { ...m.taskData, [a.taskId]: { ...task, assignees: [...task.assignees, a.userId] } } })
   }
 
   case 'UnassignTask': {
     const task = m.taskData[a.taskId]
     if (task === undefined) return err('MissingTask')
     if (task.deleted) return err('TaskDeleted')
-    const newTaskData = new Map(m.taskData)
-    newTaskData.set(a.taskId, { ...task, assignees: task.assignees.filter(u => u !== a.userId) })
-    return ok({ ...m, taskData: newTaskData })
+    return ok({ ...m, taskData: { ...m.taskData, [a.taskId]: { ...task, assignees: task.assignees.filter(u => u !== a.userId) } } })
   }
 
   case 'AddTagToTask': {
@@ -486,34 +456,26 @@ export function apply(m: Model, a: Action): Result<Model, Err> {
     if (task === undefined) return err('MissingTask')
     if (task.deleted) return err('TaskDeleted')
     if (!(a.tagId in m.tags)) return err('MissingTag')
-    const newTaskData = new Map(m.taskData)
-    newTaskData.set(a.taskId, { ...task, tags: [...task.tags, a.tagId] })
-    return ok({ ...m, taskData: newTaskData })
+    return ok({ ...m, taskData: { ...m.taskData, [a.taskId]: { ...task, tags: [...task.tags, a.tagId] } } })
   }
 
   case 'RemoveTagFromTask': {
     const task = m.taskData[a.taskId]
     if (task === undefined) return err('MissingTask')
     if (task.deleted) return err('TaskDeleted')
-    const newTaskData = new Map(m.taskData)
-    newTaskData.set(a.taskId, { ...task, tags: task.tags.filter(t => t !== a.tagId) })
-    return ok({ ...m, taskData: newTaskData })
+    return ok({ ...m, taskData: { ...m.taskData, [a.taskId]: { ...task, tags: task.tags.filter(t => t !== a.tagId) } } })
   }
 
   case 'CreateTag': {
     if (tagNameExists(m, a.name)) return err('DuplicateTag')
     const id = m.nextTagId
-    const newTags = new Map(m.tags)
-    newTags.set(id, { name: a.name })
-    return ok({ ...m, tags: newTags, nextTagId: m.nextTagId + 1 })
+    return ok({ ...m, tags: { ...m.tags, [id]: { name: a.name } }, nextTagId: m.nextTagId + 1 })
   }
 
   case 'RenameTag': {
     if (!(a.tagId in m.tags)) return err('MissingTag')
     if (tagNameExists(m, a.newName, a.tagId)) return err('DuplicateTag')
-    const newTags = new Map(m.tags)
-    newTags.set(a.tagId, { name: a.newName })
-    return ok({ ...m, tags: newTags })
+    return ok({ ...m, tags: { ...m.tags, [a.tagId]: { name: a.newName } } })
   }
 
   case 'DeleteTag': {

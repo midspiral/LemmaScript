@@ -567,11 +567,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
         return i_t5;
       }
       var id := m.nextListId;
-      var newListNames := m.listNames;
-      newListNames := newListNames[id := i_a_name];
-      var newTasks := m.tasks;
-      newTasks := newTasks[id := []];
-      var i_t6 := ok(m.(lists := (m.lists + [id]), listNames := newListNames, tasks := newTasks, nextListId := (m.nextListId + 1)));
+      var i_t6 := ok(m.(lists := (m.lists + [id]), listNames := m.listNames[id := i_a_name], tasks := m.tasks[id := []], nextListId := (m.nextListId + 1)));
       return i_t6;
     case RenameList(i_a_listId, i_a_newName) =>
       if !((i_a_listId in m.lists)) {
@@ -583,9 +579,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
         var i_t9 := err(Err.DuplicateList);
         return i_t9;
       }
-      var newListNames := m.listNames;
-      newListNames := newListNames[i_a_listId := i_a_newName];
-      var i_t10 := ok(m.(listNames := newListNames));
+      var i_t10 := ok(m.(listNames := m.listNames[i_a_listId := i_a_newName]));
       return i_t10;
     case DeleteList(i_a_listId) =>
       if !((i_a_listId in m.lists)) {
@@ -638,11 +632,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
       var id := m.nextTaskId;
       var task := Task(i_a_title, "", false, false, None, [], [], false, None, None);
       var lane := (match (if i_a_listId in m.tasks then Some(m.tasks[i_a_listId]) else None) { case Some(i_value) => i_value case None => [] });
-      var newTasks := m.tasks;
-      newTasks := newTasks[i_a_listId := (lane + [id])];
-      var newTaskData := m.taskData;
-      newTaskData := newTaskData[id := task];
-      var i_t21 := ok(m.(tasks := newTasks, taskData := newTaskData, nextTaskId := (m.nextTaskId + 1)));
+      var i_t21 := ok(m.(tasks := m.tasks[i_a_listId := (lane + [id])], taskData := m.taskData[id := task], nextTaskId := (m.nextTaskId + 1)));
       return i_t21;
     case EditTask(i_a_taskId, i_a_title, i_a_notes) =>
       var task := (if i_a_taskId in m.taskData then Some(m.taskData[i_a_taskId]) else None);
@@ -664,9 +654,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
             case None =>
 
           }
-          var newTaskData := m.taskData;
-          newTaskData := newTaskData[i_a_taskId := i_task_val.(title := i_a_title, notes := i_a_notes)];
-          var i_t26 := ok(m.(taskData := newTaskData));
+          var i_t26 := ok(m.(taskData := m.taskData[i_a_taskId := i_task_val.(title := i_a_title, notes := i_a_notes)]));
           return i_t26;
         case None =>
           var i_t27 := err(Err.MissingTask);
@@ -682,11 +670,9 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
           }
           var i_t29 := findListForTask(m, i_a_taskId);
           var listId := i_t29;
-          var newTaskData := m.taskData;
-          newTaskData := newTaskData[i_a_taskId := i_task_val.(deleted := true, deletedBy := Some(i_a_userId), deletedFromList := listId)];
           var i_t30 := removeTaskFromAllLists(m.tasks, i_a_taskId);
           var newTasks := i_t30;
-          var i_t31 := ok(m.(tasks := newTasks, taskData := newTaskData));
+          var i_t31 := ok(m.(tasks := newTasks, taskData := m.taskData[i_a_taskId := i_task_val.(deleted := true, deletedBy := Some(i_a_userId), deletedFromList := listId)]));
           return i_t31;
         case None =>
           var i_t32 := ok(m);
@@ -710,12 +696,8 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
             var i_t36 := err(Err.DuplicateTask);
             return i_t36;
           }
-          var newTaskData := m.taskData;
-          newTaskData := newTaskData[i_a_taskId := i_task_val.(deleted := false, deletedBy := None, deletedFromList := None)];
           var lane := (match (if targetList in m.tasks then Some(m.tasks[targetList]) else None) { case Some(i_value) => i_value case None => [] });
-          var newTasks := m.tasks;
-          newTasks := newTasks[targetList := (lane + [i_a_taskId])];
-          var i_t37 := ok(m.(tasks := newTasks, taskData := newTaskData));
+          var i_t37 := ok(m.(tasks := m.tasks[targetList := (lane + [i_a_taskId])], taskData := m.taskData[i_a_taskId := i_task_val.(deleted := false, deletedBy := None, deletedFromList := None)]));
           return i_t37;
         case None =>
           var i_t38 := err(Err.MissingTask);
@@ -750,9 +732,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
           var clamped := MathMin(pos, |targetLane|);
           var i_t46 := insertAt(targetLane, clamped, i_a_taskId);
           var newLane := i_t46;
-          var newTasks := cleaned;
-          newTasks := newTasks[i_a_toList := newLane];
-          var i_t47 := ok(m.(tasks := newTasks));
+          var i_t47 := ok(m.(tasks := cleaned[i_a_toList := newLane]));
           return i_t47;
         case None =>
           var i_t48 := err(Err.MissingTask);
@@ -766,9 +746,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
             var i_t49 := err(Err.TaskDeleted);
             return i_t49;
           }
-          var newTaskData := m.taskData;
-          newTaskData := newTaskData[i_a_taskId := i_task_val.(completed := true)];
-          var i_t50 := ok(m.(taskData := newTaskData));
+          var i_t50 := ok(m.(taskData := m.taskData[i_a_taskId := i_task_val.(completed := true)]));
           return i_t50;
         case None =>
           var i_t51 := err(Err.MissingTask);
@@ -782,9 +760,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
             var i_t52 := err(Err.TaskDeleted);
             return i_t52;
           }
-          var newTaskData := m.taskData;
-          newTaskData := newTaskData[i_a_taskId := i_task_val.(completed := false)];
-          var i_t53 := ok(m.(taskData := newTaskData));
+          var i_t53 := ok(m.(taskData := m.taskData[i_a_taskId := i_task_val.(completed := false)]));
           return i_t53;
         case None =>
           var i_t54 := err(Err.MissingTask);
@@ -798,9 +774,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
             var i_t55 := err(Err.TaskDeleted);
             return i_t55;
           }
-          var newTaskData := m.taskData;
-          newTaskData := newTaskData[i_a_taskId := i_task_val.(starred := true)];
-          var i_t56 := ok(m.(taskData := newTaskData));
+          var i_t56 := ok(m.(taskData := m.taskData[i_a_taskId := i_task_val.(starred := true)]));
           return i_t56;
         case None =>
           var i_t57 := err(Err.MissingTask);
@@ -814,9 +788,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
             var i_t58 := err(Err.TaskDeleted);
             return i_t58;
           }
-          var newTaskData := m.taskData;
-          newTaskData := newTaskData[i_a_taskId := i_task_val.(starred := false)];
-          var i_t59 := ok(m.(taskData := newTaskData));
+          var i_t59 := ok(m.(taskData := m.taskData[i_a_taskId := i_task_val.(starred := false)]));
           return i_t59;
         case None =>
           var i_t60 := err(Err.MissingTask);
@@ -840,9 +812,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
             case None =>
 
           }
-          var newTaskData := m.taskData;
-          newTaskData := newTaskData[i_a_taskId := i_task_val.(dueDate := i_a_dueDate)];
-          var i_t64 := ok(m.(taskData := newTaskData));
+          var i_t64 := ok(m.(taskData := m.taskData[i_a_taskId := i_task_val.(dueDate := i_a_dueDate)]));
           return i_t64;
         case None =>
           var i_t65 := err(Err.MissingTask);
@@ -860,9 +830,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
             var i_t67 := err(Err.NotAMember);
             return i_t67;
           }
-          var newTaskData := m.taskData;
-          newTaskData := newTaskData[i_a_taskId := i_task_val.(assignees := (i_task_val.assignees + [i_a_userId]))];
-          var i_t68 := ok(m.(taskData := newTaskData));
+          var i_t68 := ok(m.(taskData := m.taskData[i_a_taskId := i_task_val.(assignees := (i_task_val.assignees + [i_a_userId]))]));
           return i_t68;
         case None =>
           var i_t69 := err(Err.MissingTask);
@@ -876,9 +844,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
             var i_t70 := err(Err.TaskDeleted);
             return i_t70;
           }
-          var newTaskData := m.taskData;
-          newTaskData := newTaskData[i_a_taskId := i_task_val.(assignees := Std.Collections.Seq.Filter((u: string) => (u != a.userId), i_task_val.assignees))];
-          var i_t71 := ok(m.(taskData := newTaskData));
+          var i_t71 := ok(m.(taskData := m.taskData[i_a_taskId := i_task_val.(assignees := Std.Collections.Seq.Filter((u: string) => (u != a.userId), i_task_val.assignees))]));
           return i_t71;
         case None =>
           var i_t72 := err(Err.MissingTask);
@@ -896,9 +862,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
             var i_t74 := err(Err.MissingTag);
             return i_t74;
           }
-          var newTaskData := m.taskData;
-          newTaskData := newTaskData[i_a_taskId := i_task_val.(tags := (i_task_val.tags + [i_a_tagId]))];
-          var i_t75 := ok(m.(taskData := newTaskData));
+          var i_t75 := ok(m.(taskData := m.taskData[i_a_taskId := i_task_val.(tags := (i_task_val.tags + [i_a_tagId]))]));
           return i_t75;
         case None =>
           var i_t76 := err(Err.MissingTask);
@@ -912,9 +876,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
             var i_t77 := err(Err.TaskDeleted);
             return i_t77;
           }
-          var newTaskData := m.taskData;
-          newTaskData := newTaskData[i_a_taskId := i_task_val.(tags := Std.Collections.Seq.Filter((t: int) => (t != a.tagId), i_task_val.tags))];
-          var i_t78 := ok(m.(taskData := newTaskData));
+          var i_t78 := ok(m.(taskData := m.taskData[i_a_taskId := i_task_val.(tags := Std.Collections.Seq.Filter((t: int) => (t != a.tagId), i_task_val.tags))]));
           return i_t78;
         case None =>
           var i_t79 := err(Err.MissingTask);
@@ -927,9 +889,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
         return i_t81;
       }
       var id := m.nextTagId;
-      var newTags := m.tags;
-      newTags := newTags[id := Tag(i_a_name)];
-      var i_t82 := ok(m.(tags := newTags, nextTagId := (m.nextTagId + 1)));
+      var i_t82 := ok(m.(tags := m.tags[id := Tag(i_a_name)], nextTagId := (m.nextTagId + 1)));
       return i_t82;
     case RenameTag(i_a_tagId, i_a_newName) =>
       if !((i_a_tagId in m.tags)) {
@@ -941,9 +901,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
         var i_t85 := err(Err.DuplicateTag);
         return i_t85;
       }
-      var newTags := m.tags;
-      newTags := newTags[i_a_tagId := Tag(i_a_newName)];
-      var i_t86 := ok(m.(tags := newTags));
+      var i_t86 := ok(m.(tags := m.tags[i_a_tagId := Tag(i_a_newName)]));
       return i_t86;
     case DeleteTag(i_a_tagId) =>
       if !((i_a_tagId in m.tags)) {
