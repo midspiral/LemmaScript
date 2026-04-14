@@ -640,13 +640,13 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
         continue;
       }
       // Detect optional check → match on Some/None
-      const opt = parseOptionalCheck(s.cond);
-      if (opt) {
-        const rest = stmts.slice(i + 1);
-        result.push(emitOptionalMatch(opt.varName, opt.negated, s, typeDecls, rest, opt.fieldExpr));
+      const optMatch = prepareOptionalMatch(s, stmts.slice(i + 1));
+      if (optMatch) {
+        result.push(emitOptionalMatch(optMatch.check.varName, optMatch.check.negated, s, typeDecls,
+          stmts.slice(i + 1), optMatch.check.fieldExpr));
         // If rest was consumed into the Some branch, skip remaining
-        const someBranch = opt.negated ? s.else : s.then;
-        if (someBranch.length === 0 && rest.length > 0) {
+        const origSome = optMatch.check.negated ? s.else : s.then;
+        if (origSome.length === 0 && i + 1 < stmts.length) {
           return result;
         }
         i++;
@@ -1007,9 +1007,26 @@ function mapStmtExprs(s: Stmt, r: (e: Expr) => Expr): Stmt {
 //     so `emitOptionalMatch` can detect the inner optional check
 //
 // Both phases detect `v !== undefined` patterns. The resolve phase uses
-// `narrowOptional` (on RawExpr), the transform uses `parseOptionalCheck` (on TExpr).
+// `detectOptionalCheck` (on RawExpr), the transform uses `parseOptionalCheck` (on TExpr).
 // These are separate because they operate on different IR types, but both handle
 // simple variables and field access chains.
+
+/** Shared logic for optional match in both imperative and pure function paths.
+ *  Detects optional check, selects branches, handles early-return consumption.
+ *  Returns null if the condition is not an optional check. */
+function prepareOptionalMatch(s: TStmt & { kind: "if" }, restStmts: TStmt[]): {
+  check: { varName: string; negated: boolean; fieldExpr?: TExpr };
+  someBranch: TStmt[]; noneBranch: TStmt[]; bound: string;
+} | null {
+  const check = parseOptionalCheck(s.cond);
+  if (!check) return null;
+  let someBranch = check.negated ? s.else : s.then;
+  const noneBranch = check.negated ? s.then : (s.else.length > 0 ? s.else : restStmts);
+  // Early-return pattern: Some branch is empty → consume rest of block
+  if (someBranch.length === 0 && restStmts.length > 0) someBranch = restStmts;
+  const bound = matchBinder(`${check.varName}_val`);
+  return { check, someBranch, noneBranch, bound };
+}
 
 /** Extract the leftmost optional check from a && chain, returning the check and the rest.
  *  (x !== undefined && b) && c → { optCond: x !== undefined, rest: b && c } */
@@ -1141,21 +1158,17 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
       }
       case "if": {
         // Optional narrowing: if (x === undefined) → match x { None => ..., Some(x_val) => ... }
-        const optCheck = parseOptionalCheck(s.cond);
-        if (optCheck) {
-          let someBranch = optCheck.negated ? s.else : s.then;
-          const noneBranch = optCheck.negated ? s.then : (s.else.length > 0 ? s.else : rest);
-          if (someBranch.length === 0) someBranch = rest;
-          const bound = matchBinder(`${optCheck.varName}_val`);
-          const someExpr = transformPureBody(someBranch, typeDecls);
+        const optMatch = prepareOptionalMatch(s, rest);
+        if (optMatch) {
+          const someExpr = transformPureBody(optMatch.someBranch, typeDecls);
           if (!someExpr) return null;
-          const noneExpr = transformPureBody(noneBranch, typeDecls);
+          const noneExpr = transformPureBody(optMatch.noneBranch, typeDecls);
           if (!noneExpr) return null;
-          const someReplaced = replaceVar(someExpr, optCheck.varName, { kind: "var", name: bound });
+          const someReplaced = replaceVar(someExpr, optMatch.check.varName, { kind: "var", name: optMatch.bound });
           return {
-            kind: "match", scrutinee: optCheck.varName,
+            kind: "match", scrutinee: optMatch.check.varName,
             arms: [
-              { pattern: `.some ${bound}`, body: someReplaced },
+              { pattern: `.some ${optMatch.bound}`, body: someReplaced },
               { pattern: ".none", body: noneExpr },
             ],
           };
