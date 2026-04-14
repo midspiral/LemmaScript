@@ -64,6 +64,24 @@ function mapOp(op: string): string { return OP_MAP[op] ?? op; }
 
 // ── Expression emission ─────────────────────────────────────
 
+/** Emit a match scrutinee — either a variable name (string) or an expression. */
+function emitScrutinee(s: string | Expr): string {
+  return typeof s === "string" ? escapeName(s) : emitExpr(s);
+}
+
+/** Collapse nested forall/exists into a single quantifier with multiple bound vars. */
+function emitQuantifier(e: Expr & { kind: "forall" | "exists" }, keyword: string): string {
+  const vars: string[] = [];
+  let body: Expr = e;
+  while (body.kind === e.kind) {
+    const dty = tyToDafny((body as typeof e).type);
+    const ann = dty === "string" ? "" : `: ${dty}`;
+    vars.push(`${(body as typeof e).var}${ann}`);
+    body = (body as typeof e).body;
+  }
+  return `${keyword} ${vars.join(", ")} :: ${emitExpr(body)}`;
+}
+
 function emitExpr(e: Expr): string {
   switch (e.kind) {
     case "var": return e.name === "undefined" ? "None" : escapeName(e.name);
@@ -277,35 +295,13 @@ function emitExpr(e: Expr): string {
       return `if ${emitExpr(e.cond)} then ${emitExpr(e.then)} else ${emitExpr(e.else)}`;
 
     case "match": {
-      const scrut = typeof e.scrutinee === "string" ? escapeName(e.scrutinee) : emitExpr(e.scrutinee);
+      const scrut = emitScrutinee(e.scrutinee);
       const arms = e.arms.map(a => `case ${translatePattern(a.pattern)} => ${emitExpr(a.body)}`);
       return `(match ${scrut} { ${arms.join(" ")} })`;
     }
 
-    case "forall": {
-      // Collapse nested foralls: forall x :: forall y :: P → forall x, y :: P
-      const vars: string[] = [];
-      let body: Expr = e;
-      while (body.kind === "forall") {
-        const dty = tyToDafny(body.type);
-        const ann = dty === "string" ? "" : `: ${dty}`;
-        vars.push(`${body.var}${ann}`);
-        body = body.body;
-      }
-      return `forall ${vars.join(", ")} :: ${emitExpr(body)}`;
-    }
-    case "exists": {
-      // Collapse nested exists: exists x :: exists y :: P → exists x, y :: P
-      const vars: string[] = [];
-      let body: Expr = e;
-      while (body.kind === "exists") {
-        const dty = tyToDafny(body.type);
-        const ann = dty === "string" ? "" : `: ${dty}`;
-        vars.push(`${body.var}${ann}`);
-        body = body.body;
-      }
-      return `exists ${vars.join(", ")} :: ${emitExpr(body)}`;
-    }
+    case "forall": return emitQuantifier(e, "forall");
+    case "exists": return emitQuantifier(e, "exists");
 
     case "let": return `var ${escapeName(e.name)} := ${emitExpr(e.value)}; ${emitExpr(e.body)}`;
     case "havoc": return "*";
@@ -319,7 +315,7 @@ function emitPureExpr(e: Expr, indent: number): string {
     case "if":
       return `${pad}if ${emitExpr(e.cond)} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
     case "match": {
-      const scrut = typeof e.scrutinee === "string" ? escapeName(e.scrutinee) : emitExpr(e.scrutinee);
+      const scrut = emitScrutinee(e.scrutinee);
       const lines = [`${pad}match ${scrut} {`];
       for (const arm of e.arms) {
         lines.push(`${pad}  case ${translatePattern(arm.pattern)} =>`);
@@ -388,7 +384,7 @@ function emitStmt(s: Stmt, indent: number): string {
     }
 
     case "match": {
-      const scrut = typeof s.scrutinee === "string" ? escapeName(s.scrutinee) : emitExpr(s.scrutinee);
+      const scrut = emitScrutinee(s.scrutinee);
       const lines = [`${pad}match ${scrut} {`];
       for (const arm of s.arms) {
         lines.push(`${pad}  case ${translatePattern(arm.pattern)} =>`);

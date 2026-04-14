@@ -121,6 +121,14 @@ function coerceStr(expr: TExpr, targetTy: Ty): TExpr {
 
 // ── Helpers ──────────────────────────────────────────────────
 
+/** Wrap a resolved expression in Some() for optional coercion. */
+function wrapSome(value: TExpr, optionalTy: Ty): TExpr {
+  return {
+    kind: "call", fn: { kind: "var", name: "Some", ty: optionalTy },
+    args: [value], ty: optionalTy, callKind: "pure",
+  };
+}
+
 /** Detect `v !== undefined` or `undefined !== v` where v: optional<T>.
  *  Handles simple variables, field access chains, and arbitrary expressions.
  *  When `fieldExpr` is returned, callers must use `substituteRawExpr` to narrow.
@@ -329,13 +337,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           a = coerceStr(a, paramTys[i]);
           // Wrap non-optional in Some when callee expects optional param
           if (a.ty.kind !== "optional" && paramTys[i].kind === "optional") {
-            return {
-              kind: "call" as const,
-              fn: { kind: "var" as const, name: "Some", ty: paramTys[i] },
-              args: [a],
-              ty: paramTys[i],
-              callKind: "pure" as const,
-            };
+            return wrapSome(a, paramTys[i]);
           }
           return a;
         });
@@ -431,11 +433,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           value = coerceStr(value, declTy);
           // Coerce non-optional to optional: wrap in Some (only when value type is concrete)
           if (declTy.kind === "optional" && value.ty.kind !== "optional" && value.ty.kind !== "void" && value.ty.kind !== "unknown") {
-            value = {
-              kind: "call" as const,
-              fn: { kind: "var" as const, name: "Some", ty: declTy },
-              args: [value], ty: declTy, callKind: "pure" as const,
-            };
+            value = wrapSome(value, declTy);
           }
         }
         return { name: f.name, value };
@@ -613,11 +611,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // Skip if already optional, void, or undefined (which maps to None)
       const isUndef = value.kind === "var" && value.name === "undefined";
       if (ctx.returnTy.kind === "optional" && value.ty.kind !== "optional" && !isUndef) {
-        value = {
-          kind: "call" as const,
-          fn: { kind: "var" as const, name: "Some", ty: ctx.returnTy },
-          args: [value], ty: ctx.returnTy, callKind: "pure" as const,
-        };
+        value = wrapSome(value, ctx.returnTy);
       }
       return [{ kind: "return", value }, ctx.env];
     }

@@ -65,9 +65,6 @@ function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
   }
 }
 
-function mapStmts(stmts: Stmt[], f: (e: Expr) => Expr | null): Stmt[] {
-  return stmts.map(s => mapStmt(s, f));
-}
 
 /** Map over all sub-expressions in a TExpr (typed IR). */
 function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
@@ -1330,6 +1327,7 @@ export function transformModuleDafny(mod: TModule): { typesFile: Module | null; 
 
 export function transformModule(mod: TModule, specImport?: string): { typesFile: Module | null; defFile: Module } {
   _forofCounters.clear();
+  _liftCounter = 0;
   _typeDecls = mod.typeDecls;
   const typeDecls = mod.typeDecls.map(transformTypeDecl);
 
