@@ -138,6 +138,12 @@ function matchBinder(fieldName: string, prefix?: string): string {
   return prefix ? `_${prefix}_${fieldName}` : `_${fieldName}`;
 }
 
+/** Build a match arm pattern like `.VariantName _v_field1 _v_field2` from variant info. */
+function buildMatchPattern(variantName: string, fields: { name: string }[], scopePrefix?: string): string {
+  if (fields.length === 0) return `.${variantName}`;
+  return `.${variantName} ${fields.map(f => matchBinder(f.name, scopePrefix)).join(" ")}`;
+}
+
 const _forofCounters = new Map<string, number>();
 function isNat(ty: Ty): boolean { return ty.kind === "nat"; }
 function isArray(ty: Ty): boolean { return ty.kind === "array"; }
@@ -601,7 +607,7 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): Expr | null {
   if (!variant) return null;
 
   const fields = variant.fields;
-  const pattern = fields.length > 0 ? `.${variantName} ${fields.map(f => matchBinder(f.name, obj.name)).join(" ")}` : `.${variantName}`;
+  const pattern = buildMatchPattern(variantName, fields, obj.name);
 
   let rhs = transformExpr(e.right);
   rhs = replaceFieldAccess(rhs, obj.name, fields);
@@ -1073,7 +1079,7 @@ function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): Stmt {
   const arms: StmtMatchArm[] = chain.cases.map(c => {
     const variant = decl?.variants?.find(v => v.name === c.variant);
     const fields = variant?.fields ?? [];
-    const pattern = fields.length > 0 ? `.${c.variant} ${fields.map(f => matchBinder(f.name, chain.varName)).join(" ")}` : `.${c.variant}`;
+    const pattern = buildMatchPattern(c.variant, fields, chain.varName);
     // Replace field accesses in TStmt BEFORE transforming, so optional narrowing sees simple vars
     const replaced = replaceFieldAccessInTStmts(c.body, chain.varName, fields);
     const body = transformStmts(replaced, typeDecls);
@@ -1090,7 +1096,7 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
   const arms: StmtMatchArm[] = s.cases.map(c => {
     const variant = decl?.variants?.find(v => v.name === c.label);
     const fields = variant?.fields ?? [];
-    const pattern = fields.length > 0 ? `.${c.label} ${fields.map(f => matchBinder(f.name, varName)).join(" ")}` : `.${c.label}`;
+    const pattern = buildMatchPattern(c.label, fields, varName);
     // Replace field accesses in TStmt BEFORE transforming, so optional narrowing sees simple vars
     const replaced = replaceFieldAccessInTStmts(c.body, varName, fields);
     const body = transformStmts(replaced, typeDecls);
@@ -1192,7 +1198,7 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
   for (const c of s.cases) {
     const variant = decl.variants?.find(v => v.name === c.label);
     const fields = variant?.fields ?? [];
-    const pattern = fields.length > 0 ? `.${c.label} ${fields.map(f => matchBinder(f.name, varName)).join(" ")}` : `.${c.label}`;
+    const pattern = buildMatchPattern(c.label, fields, varName);
     let body = transformPureBody(c.body, typeDecls);
     if (!body) return null;
     if (fields.length > 0 && s.expr.kind === "var") body = replaceFieldAccess(body, s.expr.name, fields);
@@ -1213,7 +1219,7 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
   for (const c of chain.cases) {
     const variant = decl?.variants?.find(v => v.name === c.variant);
     const fields = variant?.fields ?? [];
-    const pattern = fields.length > 0 ? `.${c.variant} ${fields.map(f => matchBinder(f.name, chain.varName)).join(" ")}` : `.${c.variant}`;
+    const pattern = buildMatchPattern(c.variant, fields, chain.varName);
     let body = transformPureBody(c.body, typeDecls);
     if (!body) return null;
     if (fields.length > 0) body = replaceFieldAccess(body, chain.varName, fields);
