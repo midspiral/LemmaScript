@@ -403,13 +403,13 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         const decl = findDecl(ctx, obj.ty.name);
         if (decl?.kind === "record") {
           const f = decl.fields?.find(f => f.name === e.field);
-          if (f) ty = resolveTsType(f.tsType, ctx.overrides);
+          if (f) ty = f.type!;
         }
         // Also resolve fields from discriminated-union variants
         if (ty.kind === "unknown" && decl?.kind === "discriminated-union" && decl.variants) {
           for (const variant of decl.variants) {
             const f = variant.fields.find(f => f.name === e.field);
-            if (f) { ty = resolveTsType(f.tsType, ctx.overrides); break; }
+            if (f) { ty = f.type!; break; }
           }
         }
       }
@@ -429,7 +429,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         let value = resolveExpr(f.value, fieldCtx);
         const fieldDecl = decl?.fields?.find(df => df.name === f.name);
         if (fieldDecl) {
-          const declTy = parseTsType(fieldDecl.tsType);
+          const declTy = fieldDecl.type!;
           value = coerceStr(value, declTy);
           // Coerce non-optional to optional: wrap in Some (only when value type is concrete)
           if (declTy.kind === "optional" && value.ty.kind !== "optional" && value.ty.kind !== "void" && value.ty.kind !== "unknown") {
@@ -905,7 +905,18 @@ function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInf
   return { name: cls.name, fields, methods };
 }
 
+/** Pre-compute Ty on all TypeDeclInfo fields/variants/aliases.
+ *  Called once per module so consumers can read field.type instead of re-parsing tsType. */
+function precomputeFieldTypes(typeDecls: TypeDeclInfo[]) {
+  for (const d of typeDecls) {
+    if (d.fields) for (const f of d.fields) f.type = parseTsType(f.tsType);
+    if (d.variants) for (const v of d.variants) for (const f of v.fields) f.type = parseTsType(f.tsType);
+    if (d.aliasOf && !d.aliasOfTy) d.aliasOfTy = parseTsType(d.aliasOf);
+  }
+}
+
 export function resolveModule(raw: RawModule): TModule {
+  precomputeFieldTypes(raw.typeDecls);
   const pureFns = computePureFns(raw.functions);
   // Pre-compute function parameter types for optional coercion
   const fnParams = new Map<string, Ty[]>();

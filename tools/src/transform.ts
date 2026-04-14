@@ -468,11 +468,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           const fieldDecl = structDecl?.fields?.find(sf => sf.name === f.name);
           let declaredTy: Ty | undefined;
           if (fieldDecl) {
-            declaredTy = parseTsType(fieldDecl.tsType);
+            declaredTy = fieldDecl.type;
           } else if (unionDecl?.variants) {
             for (const v of unionDecl.variants) {
               const vf = v.fields.find(vf => vf.name === f.name);
-              if (vf) { declaredTy = parseTsType(vf.tsType); break; }
+              if (vf) { declaredTy = vf.type; break; }
             }
           }
           if (declaredTy && fieldValue.ty.kind === "unknown") {
@@ -1138,11 +1138,11 @@ function replaceFieldsInTStmts(
 
 /** Replace all variant fields of obj → match binder vars in typed IR.
  *  Thin wrapper around replaceFieldsInTStmts for discriminant match/switch. */
-function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { name: string; tsType: string }[]): TStmt[] {
+function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { name: string; tsType: string; type?: Ty }[]): TStmt[] {
   return replaceFieldsInTStmts(stmts, varName, fields.map(f => ({
     fieldName: f.name,
     newName: matchBinder(f.name, varName),
-    fallbackTy: parseTsType(f.tsType),
+    fallbackTy: f.type ?? parseTsType(f.tsType),
   })));
 }
 
@@ -1258,19 +1258,19 @@ function transformTypeDecl(d: TypeDeclInfo): Decl {
       typeParams: d.typeParams,
       constructors: d.variants!.map(v => ({
         name: v.name,
-        fields: v.fields.map(f => ({ name: f.name, type: parseTsType(f.tsType) })),
+        fields: v.fields.map(f => ({ name: f.name, type: f.type! })),
       })),
       deriving: ["Repr", "Inhabited"],
     };
   } else if (d.kind === "alias") {
     return {
       kind: "type-alias", name: d.name,
-      target: parseTsType(d.aliasOf!),
+      target: d.aliasOfTy!,
     };
   } else {
     return {
       kind: "structure", name: d.name,
-      fields: d.fields!.map(f => ({ name: f.name, type: parseTsType(f.tsType) })),
+      fields: d.fields!.map(f => ({ name: f.name, type: f.type! })),
       deriving: ["Repr", "Inhabited", "DecidableEq"],
     };
   }
