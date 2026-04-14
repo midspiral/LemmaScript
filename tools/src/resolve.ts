@@ -392,7 +392,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       const obj = resolveExpr(e.obj, ctx);
       const idx = resolveExpr(e.idx, ctx);
       const idxTy = obj.ty.kind === "array" ? obj.ty.elem
-        : obj.ty.kind === "map" ? obj.ty.value
+        : obj.ty.kind === "map" ? { kind: "optional" as const, inner: obj.ty.value }
         : { kind: "unknown" as const };
       return { kind: "index", obj, idx, ty: idxTy };
     }
@@ -601,8 +601,10 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
 function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
   switch (s.kind) {
     case "let": {
-      const ty = resolveTsType(s.tsType, ctx.overrides, s.name);
-      const init = coerceStr(resolveExpr(s.init, ctx), ty);
+      const declTy = resolveTsType(s.tsType, ctx.overrides, s.name);
+      const init = coerceStr(resolveExpr(s.init, ctx), declTy);
+      // Map indexing: TS says T, but access can fail → use Optional<T> from init
+      const ty = (declTy.kind !== "optional" && init.ty.kind === "optional") ? init.ty : declTy;
       // const collections are mutable in value-semantics world (TS mutates in place, Dafny/Lean reassign)
       const mutable = s.mutable || isRefMutableInTS(ty);
       return [{ kind: "let", name: s.name, ty, mutable, init }, extend(ctx.env, s.name, ty)];

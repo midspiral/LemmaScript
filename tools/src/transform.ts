@@ -366,6 +366,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
 
     case "index": {
       const idx = transformExpr(e.idx);
+      if (e.obj.ty.kind === "map") {
+        return { kind: "methodCall", obj: transformExpr(e.obj), objTy: e.obj.ty, method: "get", args: [idx], monadic: false };
+      }
       const wrappedIdx = isArray(e.obj.ty) && !isNat(e.idx.ty) ? { kind: "toNat" as const, expr: idx } : idx;
       return { kind: "index", arr: transformExpr(e.obj), idx: wrappedIdx };
     }
