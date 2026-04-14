@@ -292,6 +292,7 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
     if (fn.field === "add" || fn.field === "delete") return objTy;
   } else if (objTy.kind === "array") {
     if (fn.field === "includes") return { kind: "bool" };
+    if (fn.field === "indexOf") return { kind: "int" };
     if (fn.field === "shift") return objTy.elem;
     if (fn.field === "push" || fn.field === "concat") return objTy;
     if (fn.field === "filter") return objTy;

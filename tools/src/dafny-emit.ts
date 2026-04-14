@@ -106,6 +106,7 @@ function emitExpr(e: Expr): string {
       if (ty === "array") {
         if (e.method === "with")     return `${obj}[${args[0]} := ${args[1]}]`;
         if (e.method === "includes") return `(${args[0]} in ${obj})`;
+        if (e.method === "indexOf") { needPreamble("SeqIndexOf"); return `SeqIndexOf(${obj}, ${args[0]})`; }
         if (e.method === "push")     return `(${obj} + [${args[0]}])`;
         if (e.method === "concat")   return `(${obj} + [${args[0]}])`;
         if (e.method === "slice" && args.length === 1) return `${obj}[${args[0]}..]`;
@@ -548,6 +549,26 @@ const CEIL_REAL = `function CeilReal(x: real): int
   else x.Floor + 1
 }`;
 
+const SEQ_INDEX_OF = `function SeqIndexOf<T(==)>(s: seq<T>, x: T): int
+  ensures -1 <= SeqIndexOf(s, x) < |s|
+  ensures SeqIndexOf(s, x) >= 0 ==> s[SeqIndexOf(s, x)] == x
+  ensures SeqIndexOf(s, x) == -1 ==> x !in s
+{
+  SeqIndexOfFrom(s, x, 0)
+}
+
+function SeqIndexOfFrom<T(==)>(s: seq<T>, x: T, from: nat): int
+  requires from <= |s|
+  ensures -1 <= SeqIndexOfFrom(s, x, from) < |s|
+  ensures SeqIndexOfFrom(s, x, from) >= 0 ==> s[SeqIndexOfFrom(s, x, from)] == x
+  ensures SeqIndexOfFrom(s, x, from) == -1 ==> forall i :: from <= i < |s| ==> s[i] != x
+  decreases |s| - from
+{
+  if from == |s| then -1
+  else if s[from] == x then from as int
+  else SeqIndexOfFrom(s, x, from + 1)
+}`;
+
 const STRING_INDEX_OF = `function StringIndexOf(s: string, sub: string): int
 {
   StringIndexOfFrom(s, sub, 0)
@@ -647,6 +668,7 @@ const PREAMBLE_CODE: [string, string][] = [
   ["JSFloorDiv", JS_FLOOR_DIV],
   ["CeilReal", CEIL_REAL],
   ["FloorReal", FLOOR_REAL],
+  ["SeqIndexOf", SEQ_INDEX_OF],
   ["StringIndexOf", STRING_INDEX_OF],
   ["StringTrim", STRING_TRIM],
   ["StringToLower", STRING_TO_LOWER],
