@@ -18,7 +18,7 @@ function tyToDafny(ty: Ty): string {
     case "array": return `seq<${tyToDafny(ty.elem)}>`;
     case "map": return `map<${tyToDafny(ty.key)}, ${tyToDafny(ty.value)}>`;
     case "set": return `set<${tyToDafny(ty.elem)}>`;
-    case "optional": { needsOptionType = true; return `Option<${tyToDafny(ty.inner)}>`; }
+    case "optional": { needPreamble("OptionType"); return `Option<${tyToDafny(ty.inner)}>`; }
     case "user": return ty.name;
     case "unknown": return "int";
   }
@@ -125,19 +125,19 @@ function emitExpr(e: Expr): string {
       }
       // String methods
       if (ty === "string") {
-        if (e.method === "indexOf") { needsStringIndexOf = true; return `StringIndexOf(${obj}, ${args[0]})`; }
+        if (e.method === "indexOf") { needPreamble("StringIndexOf"); return `StringIndexOf(${obj}, ${args[0]})`; }
         if (e.method === "slice")   return `${obj}[${args[0]}..${args[1]}]`;
-        if (e.method === "trim")    { needsStringTrim = true; return `StringTrim(${obj})`; }
-        if (e.method === "toLowerCase") { needsStringToLower = true; return `StringToLower(${obj})`; }
-        if (e.method === "toUpperCase") { needsStringToUpper = true; return `StringToUpper(${obj})`; }
-        if (e.method === "includes") { needsStringIndexOf = true; return `(StringIndexOf(${obj}, ${args[0]}) >= 0)`; }
+        if (e.method === "trim")    { needPreamble("StringTrim"); return `StringTrim(${obj})`; }
+        if (e.method === "toLowerCase") { needPreamble("StringToLower"); return `StringToLower(${obj})`; }
+        if (e.method === "toUpperCase") { needPreamble("StringToUpper"); return `StringToUpper(${obj})`; }
+        if (e.method === "includes") { needPreamble("StringIndexOf"); return `(StringIndexOf(${obj}, ${args[0]}) >= 0)`; }
         if (e.method === "charCodeAt") return `(${obj}[${args[0]}] as int)`;
       }
       // Map methods
       if (ty === "map") {
         if (e.method === "getDirect") return `${obj}[${args[0]}]`;
         if (e.method === "get") {
-          needsOptionType = true;
+          needPreamble("OptionType");
           return `(if ${args[0]} in ${obj} then Some(${obj}[${args[0]}]) else None)`;
         }
         if (e.method === "set") return `${obj}[${args[0]} := ${args[1]}]`;
@@ -184,14 +184,14 @@ function emitExpr(e: Expr): string {
         if (e.right.kind === "num") {
           return `(${emitExpr(e.left)} / ${Math.pow(2, e.right.value)})`;
         }
-        needsPow2 = true;
+        needPreamble("Pow2");
         return `(${emitExpr(e.left)} / Pow2(${emitExpr(e.right)}))`;
       }
       if (e.op === "<<") {
         if (e.right.kind === "num") {
           return `(${emitExpr(e.left)} * ${Math.pow(2, e.right.value)})`;
         }
-        needsPow2 = true;
+        needPreamble("Pow2");
         return `(${emitExpr(e.left)} * Pow2(${emitExpr(e.right)}))`;
       }
       // x & mask → x % (mask + 1) for literal masks of form 2^n - 1, else BitAnd
@@ -203,7 +203,7 @@ function emitExpr(e: Expr): string {
             return `(${emitExpr(e.left)} % ${modulus})`;
           }
         }
-        needsBitAnd = true;
+        needPreamble("BitAnd");
         return `BitAnd(${emitExpr(e.left)}, ${emitExpr(e.right)})`;
       }
       // int * real coercion: wrap int side with "as real"
@@ -226,17 +226,17 @@ function emitExpr(e: Expr): string {
 
     case "app": {
       const args = e.args.map(emitExpr);
-      if (e.fn === "SetToSeq") { needsSetToSeq = true; return `SetToSeq(${args.join(", ")})`; }
+      if (e.fn === "SetToSeq") { needPreamble("SetToSeq"); return `SetToSeq(${args.join(", ")})`; }
       if (e.fn === "BigInt" || e.fn === "Number") return args[0]; // identity: both map to int
       // Set literal: {a, b, c}
       if (e.fn === "SetLiteral") return `{${args.join(", ")}}`;
-      if (e.fn === "JSFloorDiv") needsJSFloorDiv = true;
-      if (e.fn === "CeilReal") needsCeilReal = true;
-      if (e.fn === "FloorReal") needsFloorReal = true;
-      if (e.fn === "NatToString") needsNatToString = true;
-      if (e.fn === "MathAbs") needsMathAbs = true;
-      if (e.fn === "MathMin") needsMathMin = true;
-      if (e.fn === "MathMax") needsMathMax = true;
+      if (e.fn === "JSFloorDiv") needPreamble("JSFloorDiv");
+      if (e.fn === "CeilReal") needPreamble("CeilReal");
+      if (e.fn === "FloorReal") needPreamble("FloorReal");
+      if (e.fn === "NatToString") needPreamble("NatToString");
+      if (e.fn === "MathAbs") needPreamble("MathAbs");
+      if (e.fn === "MathMin") needPreamble("MathMin");
+      if (e.fn === "MathMax") needPreamble("MathMax");
       return `${escapeName(e.fn)}(${args.join(", ")})`;
     }
 
@@ -279,7 +279,7 @@ function emitExpr(e: Expr): string {
           const vals = structFields.map(sf => {
             const f = provided.get(sf.name);
             if (f) return emitExpr(f.value);
-            if (sf.type.kind === "optional") { needsOptionType = true; return "None"; }
+            if (sf.type.kind === "optional") { needPreamble("OptionType"); return "None"; }
             return `/* missing: ${sf.name} */`;
           });
           return `${ctorName}(${vals.join(", ")})`;
@@ -507,21 +507,9 @@ function emitDecl(d: Decl): string {
 
 // ── Preamble helpers ────────────────────────────────────────
 
-let needsStringIndexOf = false;
-let needsStringTrim = false;
-let needsStringToLower = false;
-let needsStringToUpper = false;
-let needsJSFloorDiv = false;
-let needsCeilReal = false;
-let needsFloorReal = false;
-let needsOptionType = false;
-let needsSetToSeq = false;
-let needsBitAnd = false;
-let needsPow2 = false;
-let needsNatToString = false;
-let needsMathAbs = false;
-let needsMathMin = false;
-let needsMathMax = false;
+/** Preamble tracking — emitters add keys via `needPreamble(key)`, emitDafnyFile emits them. */
+const _neededPreambles = new Set<string>();
+function needPreamble(key: string) { _neededPreambles.add(key); }
 
 const POW2 = `function Pow2(n: int): int
   requires n >= 0
@@ -632,6 +620,43 @@ const NAT_TO_STRING = `function NatToString(n: nat): string
 
 const MATH_ABS = `function MathAbs(x: int): nat { if x >= 0 then x else -x }`;
 
+const SET_TO_SEQ = `method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
+  ensures forall x :: x in s <==> x in res
+  ensures |res| == |s|
+{
+  var remaining := s;
+  res := [];
+  while remaining != {}
+    invariant remaining <= s
+    invariant forall x :: x in res <==> (x in s && x !in remaining)
+    invariant |res| + |remaining| == |s|
+    decreases remaining
+  {
+    var x :| x in remaining;
+    res := res + [x];
+    remaining := remaining - {x};
+  }
+}`;
+
+/** Preamble code keyed by name. Emitted in this order when needed. */
+const PREAMBLE_CODE: [string, string][] = [
+  ["OptionType", "datatype Option<T> = None | Some(value: T)"],
+  ["SetToSeq", SET_TO_SEQ],
+  ["Pow2", POW2],
+  ["BitAnd", BIT_AND],
+  ["JSFloorDiv", JS_FLOOR_DIV],
+  ["CeilReal", CEIL_REAL],
+  ["FloorReal", FLOOR_REAL],
+  ["StringIndexOf", STRING_INDEX_OF],
+  ["StringTrim", STRING_TRIM],
+  ["StringToLower", STRING_TO_LOWER],
+  ["StringToUpper", STRING_TO_UPPER],
+  ["NatToString", NAT_TO_STRING],
+  ["MathAbs", MATH_ABS],
+  ["MathMin", MATH_MIN],
+  ["MathMax", MATH_MAX],
+];
+
 // ── Constructor and record helpers ───────────────────────────
 
 let _recordCtors = new Map<string, string>();
@@ -691,27 +716,10 @@ function translatePattern(pattern: string): string {
   return `${ctorName}(${fieldNames.join(", ")})`;
 }
 
-const PREAMBLES: Record<string, string> = {
-  StringIndexOf: STRING_INDEX_OF,
-};
 
 export function emitDafnyFile(file: Module, tsFileName?: string): string {
   buildRecordCtorMap(file.decls);
-  needsStringIndexOf = false;
-  needsStringTrim = false;
-  needsStringToLower = false;
-  needsStringToUpper = false;
-  needsJSFloorDiv = false;
-  needsCeilReal = false;
-  needsFloorReal = false;
-  needsOptionType = false;
-  needsSetToSeq = false;
-  needsBitAnd = false;
-  needsPow2 = false;
-  needsNatToString = false;
-  needsMathAbs = false;
-  needsMathMin = false;
-  needsMathMax = false;
+  _neededPreambles.clear();
 
   // Collect pure def names so we can skip their method wrappers
   const pureDefs = new Set<string>();
@@ -745,40 +753,9 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   // Build output with needed preambles
   const lines: string[] = [];
   if (tsFileName) lines.push(`// Generated by lsc from ${tsFileName}`);
-  if (needsOptionType) { lines.push(""); lines.push("datatype Option<T> = None | Some(value: T)"); }
-  if (needsSetToSeq) {
-    lines.push("");
-    lines.push(`method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
-  ensures forall x :: x in s <==> x in res
-  ensures |res| == |s|
-{
-  var remaining := s;
-  res := [];
-  while remaining != {}
-    invariant remaining <= s
-    invariant forall x :: x in res <==> (x in s && x !in remaining)
-    invariant |res| + |remaining| == |s|
-    decreases remaining
-  {
-    var x :| x in remaining;
-    res := res + [x];
-    remaining := remaining - {x};
+  for (const [key, code] of PREAMBLE_CODE) {
+    if (_neededPreambles.has(key)) { lines.push(""); lines.push(code); }
   }
-}`);
-  }
-  if (needsPow2) { lines.push(""); lines.push(POW2); }
-  if (needsBitAnd) { lines.push(""); lines.push(BIT_AND); }
-  if (needsJSFloorDiv) { lines.push(""); lines.push(JS_FLOOR_DIV); }
-  if (needsCeilReal) { lines.push(""); lines.push(CEIL_REAL); }
-  if (needsFloorReal) { lines.push(""); lines.push(FLOOR_REAL); }
-  if (needsStringIndexOf) { lines.push(""); lines.push(PREAMBLES.StringIndexOf); }
-  if (needsStringTrim) { lines.push(""); lines.push(STRING_TRIM); }
-  if (needsStringToLower) { lines.push(""); lines.push(STRING_TO_LOWER); }
-  if (needsStringToUpper) { lines.push(""); lines.push(STRING_TO_UPPER); }
-  if (needsNatToString) { lines.push(""); lines.push(NAT_TO_STRING); }
-  if (needsMathAbs) { lines.push(""); lines.push(MATH_ABS); }
-  if (needsMathMin) { lines.push(""); lines.push(MATH_MIN); }
-  if (needsMathMax) { lines.push(""); lines.push(MATH_MAX); }
   lines.push(...declLines);
   return lines.join("\n") + "\n";
 }
