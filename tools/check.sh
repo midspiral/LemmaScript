@@ -2,7 +2,7 @@
 # Regenerate and verify LemmaScript artifacts.
 # Usage: ./check.sh <lean|dafny|dafny-slow> [file.ts ...]
 #
-# LemmaScript-files.txt format:  filepath [timeout_in_seconds]
+# LemmaScript-files.txt format:  filepath [timeout_in_seconds] [extra dafny flags...]
 # No timeout = use Dafny default.
 #
 # dafny:      verify files with timeout <= 60, gen-check the rest
@@ -36,26 +36,33 @@ check_lean() {
   lake build
 }
 
+parse_entry() {
+  # Sets: E_FILE, E_TIMEOUT, E_FLAGS
+  local entry="$1"
+  read -r E_FILE E_TIMEOUT E_FLAGS <<< "$entry"
+  if ! [ "$E_TIMEOUT" -gt 0 ] 2>/dev/null; then
+    E_FLAGS="$E_TIMEOUT $E_FLAGS"
+    E_TIMEOUT=""
+  fi
+  E_FLAGS="${E_FLAGS# }"
+}
+
 check_dafny() {
   for entry in "${FILES[@]}"; do
-    local f="${entry%% *}"
-    local t="${entry#* }"
-    [ "$t" = "$entry" ] && t=""
-    if [ -n "$t" ] && [ "$t" -gt "$CI_LIMIT" ] 2>/dev/null; then
-      echo "=== $(basename "$f") (timeout ${t}s > ${CI_LIMIT}s, gen-check only) ==="
-      $LSC gen-check --backend=dafny "$f"
+    parse_entry "$entry"
+    if [ -n "$E_TIMEOUT" ] && [ "$E_TIMEOUT" -gt "$CI_LIMIT" ] 2>/dev/null; then
+      echo "=== $(basename "$E_FILE") (timeout ${E_TIMEOUT}s > ${CI_LIMIT}s, gen-check only) ==="
+      $LSC gen-check --backend=dafny "$E_FILE"
     else
-      $LSC check --backend=dafny ${t:+--time-limit=$t} "$f"
+      $LSC check --backend=dafny ${E_TIMEOUT:+--time-limit=$E_TIMEOUT} ${E_FLAGS:+--extra-flags="$E_FLAGS"} "$E_FILE"
     fi
   done
 }
 
 check_dafny_slow() {
   for entry in "${FILES[@]}"; do
-    local f="${entry%% *}"
-    local t="${entry#* }"
-    [ "$t" = "$entry" ] && t=""
-    $LSC check --backend=dafny ${t:+--time-limit=$t} "$f"
+    parse_entry "$entry"
+    $LSC check --backend=dafny ${E_TIMEOUT:+--time-limit=$E_TIMEOUT} ${E_FLAGS:+--extra-flags="$E_FLAGS"} "$E_FILE"
   done
 }
 
