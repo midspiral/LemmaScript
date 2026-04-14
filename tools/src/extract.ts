@@ -205,6 +205,7 @@ function extractExpr(node: Expression): RawExpr {
   if (Node.isObjectLiteralExpression(node)) {
     let spread: RawExpr | null = null;
     const fields: { name: string; value: RawExpr }[] = [];
+    const computedFields: { key: RawExpr; value: RawExpr }[] = [];
     for (const prop of node.getProperties()) {
       if (Node.isSpreadAssignment(prop)) {
         spread = extractExpr(prop.getExpression());
@@ -212,9 +213,25 @@ function extractExpr(node: Expression): RawExpr {
         const name = prop.getName();
         fields.push({ name, value: { kind: "var", name } });
       } else if (Node.isPropertyAssignment(prop)) {
+        const nameNode = prop.getNameNode();
         const init = prop.getInitializer();
-        if (init) fields.push({ name: prop.getName(), value: extractExpr(init) });
+        if (init && Node.isComputedPropertyName(nameNode)) {
+          computedFields.push({ key: extractExpr(nameNode.getExpression()), value: extractExpr(init) });
+        } else if (init) {
+          fields.push({ name: prop.getName(), value: extractExpr(init) });
+        }
       }
+    }
+    // Desugar computed keys: { ...base, [k]: v } → base.set(k, v)
+    // No spread: { [k]: v } → {}.set(k, v) (empty map base)
+    if (computedFields.length > 0) {
+      let result: RawExpr = spread ?? { kind: "record", spread: null, fields: [] };
+      for (const cf of computedFields) {
+        result = { kind: "call",
+          fn: { kind: "field", obj: result, field: "set" },
+          args: [cf.key, cf.value] };
+      }
+      return result;
     }
     return { kind: "record", spread, fields };
   }
