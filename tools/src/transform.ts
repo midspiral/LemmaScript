@@ -432,10 +432,6 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     }
 
     case "record": {
-      // Empty object literal with map type: {} → emptyMap
-      if (!e.spread && e.fields.length === 0 && e.ty.kind === "map") {
-        return { kind: "emptyMap" };
-      }
       // Discriminated union: { kind: 'NoOp' } → constructor NoOp
       if (e.ty.kind === "user" && !e.spread) {
         const tyName = e.ty.name;

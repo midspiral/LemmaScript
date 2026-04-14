@@ -439,9 +439,9 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         if (fieldDecl) {
           const declTy = fieldDecl.type!;
           value = coerceStr(value, declTy);
-          // Propagate field type onto empty record literals (e.g. {} for map fields)
-          if (value.kind === "record" && value.fields.length === 0 && !value.spread && value.ty.kind === "unknown") {
-            value = { ...value, ty: declTy };
+          // Empty {} for map-typed fields → empty map (arrayLiteral with map type → emptyMap in transform)
+          if (value.kind === "record" && value.fields.length === 0 && !value.spread && declTy.kind === "map") {
+            value = { kind: "arrayLiteral", elems: [], ty: declTy };
           }
           // Coerce non-optional to optional: wrap in Some (only when value type is concrete)
           if (declTy.kind === "optional" && value.ty.kind !== "optional" && value.ty.kind !== "void" && value.ty.kind !== "unknown") {
