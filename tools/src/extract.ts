@@ -243,8 +243,9 @@ function extractExpr(node: Expression): RawExpr {
       if (name === "Map" && args && args.length === 1) {
         const argType = (args[0] as Expression).getType();
         const argSymbol = argType.getSymbol()?.getName() ?? argType.getAliasSymbol()?.getName();
-        if (argSymbol === "Map") {
-          // new Map(existingMap) — identity (Dafny maps are value types)
+        const argTypeText = _eraseGenerics(typeToString(argType));
+        if (argSymbol === "Map" || argTypeText.startsWith("Record<")) {
+          // new Map(existingMap) or new Map(record) — identity (Dafny maps are value types)
           return extractExpr(args[0] as Expression);
         }
         // new Map(entries) — map-from-array constructor
