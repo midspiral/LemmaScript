@@ -122,9 +122,16 @@ function coerceStr(expr: TExpr, targetTy: Ty): TExpr {
 // ── Helpers ──────────────────────────────────────────────────
 
 /** Detect `v !== undefined` or `undefined !== v` where v: optional<T>.
- *  Also handles field access chains like `obj.field !== undefined`.
- *  When `fieldExpr` is returned, callers must use `substituteRawExpr` to narrow. */
-function narrowOptional(cond: RawExpr, ctx: Ctx): { varName: string; innerTy: Ty; inThen: boolean; fieldExpr?: RawExpr } | null {
+ *  Handles simple variables, field access chains, and arbitrary expressions.
+ *  When `fieldExpr` is returned, callers must use `substituteRawExpr` to narrow.
+ *
+ *  Does NOT recurse into `&&` — callers that need to detect optional checks
+ *  inside `&&` conditions should check `cond.left` explicitly. */
+function detectOptionalCheck(cond: RawExpr, ctx: Ctx): {
+  varName: string; innerTy: Ty; inThen: boolean;
+  fieldExpr?: RawExpr;       // set for field chains and complex expressions — needs substitution
+  narrowedExpr?: TExpr;      // resolved optional expression — set for non-variable checks
+} | null {
   if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) return null;
   // Identify the expression being checked against undefined
   let optExpr: RawExpr | null = null;
@@ -132,20 +139,21 @@ function narrowOptional(cond: RawExpr, ctx: Ctx): { varName: string; innerTy: Ty
   if (cond.left.kind === "var" && cond.left.name === "undefined") optExpr = cond.right;
   if (!optExpr) return null;
 
-  // Simple variable
+  // Simple variable — env lookup, no substitution needed
   if (optExpr.kind === "var") {
     const ty = lookup(ctx.env, optExpr.name);
     if (!ty || ty.kind !== "optional") return null;
     return { varName: optExpr.name, innerTy: ty.inner, inThen: cond.op === "!==" };
   }
 
-  // Field access chain: resolve the type to check if it's optional
-  if (optExpr.kind === "field") {
-    const resolved = resolveExpr(optExpr, ctx);
-    if (resolved.ty.kind === "optional") {
-      const synVar = `_narr${_synVarCounter++}`;
-      return { varName: synVar, innerTy: resolved.ty.inner, inThen: cond.op === "!==", fieldExpr: optExpr };
-    }
+  // Field access chain or arbitrary expression — resolve to check type, needs substitution
+  const resolved = resolveExpr(optExpr, ctx);
+  if (resolved.ty.kind === "optional") {
+    const synVar = optExpr.kind === "field" ? `_narr${_synVarCounter++}` : `_opt${_synVarCounter++}`;
+    return {
+      varName: synVar, innerTy: resolved.ty.inner, inThen: cond.op === "!==",
+      fieldExpr: optExpr, narrowedExpr: resolved,
+    };
   }
 
   return null;
@@ -250,11 +258,13 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "binop": {
       let left = resolveExpr(e.left, ctx);
-      // && narrowing: if left is "x !== undefined", narrow x for right side
+      // && narrowing: if left is "x !== undefined", narrow x for right side.
+      // Field chains are excluded — resolve can't substitute in sub-expressions;
+      // transform's emitOptionalMatch handles field chains in statement contexts.
       let rightCtx = ctx;
       let rawRight = e.right;
       if (e.op === "&&") {
-        const narrowed = narrowOptional(e.left, ctx);
+        const narrowed = detectOptionalCheck(e.left, ctx);
         if (narrowed && narrowed.inThen && !narrowed.fieldExpr) {
           rightCtx = withEnv(ctx, extend(ctx.env, narrowed.varName, narrowed.innerTy));
         }
@@ -475,13 +485,12 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     case "conditional": {
       const cond = resolveExpr(e.cond, ctx);
 
-      // Optional truthiness: opt ? X : Y
-      // Narrow the optional to its inner type in the then-branch so that
-      // field accesses resolve correctly (e.g. entry.decision.field).
       let narrowedVar: string | undefined;
       let narrowedExprResolved: TExpr | undefined;
       let thenCtx = ctx;
       let rawThen = e.then;
+
+      // Phase 1: Optional truthiness — cond itself is optional (e.g. opt ? X : Y)
       if (cond.ty.kind === "optional") {
         const innerTy = cond.ty.inner;
         if (e.cond.kind === "var") {
@@ -493,39 +502,19 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           thenCtx = withEnv(ctx, extend(ctx.env, narrowedVar, innerTy));
         }
       }
-      // Explicit optional check: x !== undefined ? expr(x) : undefined
-      // Explicit optional check: x !== undefined ? ... : ...
+
+      // Phase 2: Explicit check — v !== undefined (simple vars, field chains,
+      // complex expressions all handled uniformly by detectOptionalCheck)
       if (!narrowedVar) {
-        const narrowed = narrowOptional(e.cond, ctx);
+        const narrowed = detectOptionalCheck(e.cond, ctx)
+          // Phase 3: && with optional check — (v !== undefined && ...) ? ... : ...
+          ?? (e.cond.kind === "binop" && e.cond.op === "&&" ? detectOptionalCheck(e.cond.left, ctx) : null);
         if (narrowed && narrowed.inThen) {
           narrowedVar = narrowed.varName;
           thenCtx = withEnv(ctx, extend(ctx.env, narrowed.varName, narrowed.innerTy));
           if (narrowed.fieldExpr) {
-            // Field chain: substitute field access with synthetic var in then-branch
-            narrowedExprResolved = resolveExpr(narrowed.fieldExpr, ctx);
+            narrowedExprResolved = narrowed.narrowedExpr ?? resolveExpr(narrowed.fieldExpr, ctx);
             rawThen = substituteRawExpr(e.then, narrowed.fieldExpr, { kind: "var", name: narrowed.varName });
-          }
-        }
-        // Handle complex optional expressions: f() !== undefined ? f().field : undefined
-        if (!narrowedVar && e.cond.kind === "binop" && e.cond.op === "!==" &&
-            e.cond.right.kind === "var" && e.cond.right.name === "undefined") {
-          const optExpr = e.cond.left;
-          const resolvedOpt = resolveExpr(optExpr, ctx);
-          if (resolvedOpt.ty.kind === "optional") {
-            narrowedVar = `_opt${_synVarCounter++}`;
-            narrowedExprResolved = resolvedOpt;
-            rawThen = substituteRawExpr(e.then, optExpr, { kind: "var", name: narrowedVar });
-            thenCtx = withEnv(ctx, extend(ctx.env, narrowedVar, resolvedOpt.ty.inner));
-          }
-        }
-        // && with optional check in ternary: (field !== undefined && ...) ? field : default
-        if (!narrowedVar && e.cond.kind === "binop" && e.cond.op === "&&") {
-          const leftNarrowed = narrowOptional(e.cond.left, ctx);
-          if (leftNarrowed && leftNarrowed.inThen && leftNarrowed.fieldExpr) {
-            narrowedVar = leftNarrowed.varName;
-            narrowedExprResolved = resolveExpr(leftNarrowed.fieldExpr, ctx);
-            rawThen = substituteRawExpr(e.then, leftNarrowed.fieldExpr, { kind: "var", name: leftNarrowed.varName });
-            thenCtx = withEnv(ctx, extend(ctx.env, leftNarrowed.varName, leftNarrowed.innerTy));
           }
         }
       }
@@ -590,9 +579,11 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     const [typed, nextEnv] = resolveStmt(s, withEnv(ctx, env));
     result.push(typed);
     env = nextEnv;
-    // Flow narrowing: if (x === undefined) { return } narrows x for rest of block
+    // Flow narrowing: if (x === undefined) { return } narrows x for rest of block.
+    // Field chains are excluded — resolve can't substitute in statement lists;
+    // transform's emitOptionalMatch handles field chains in statement contexts.
     if (s.kind === "if" && s.then.length > 0 && s.then[s.then.length - 1].kind === "return" && s.else.length === 0) {
-      const narrowed = narrowOptional(s.cond, withEnv(ctx, env));
+      const narrowed = detectOptionalCheck(s.cond, withEnv(ctx, env));
       if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
         env = extend(env, narrowed.varName, narrowed.innerTy);
       }
@@ -641,20 +632,17 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       return [{ kind: "expr", expr: resolveExpr(s.expr, ctx) }, ctx.env];
 
     case "if": {
-      // Narrow optional<T> → T when checking !== undefined or undefined !==
+      // Narrow optional<T> → T when checking !== undefined or undefined !==.
+      // Also checks left side of && conditions: if (x !== undefined && ...) { ... }
+      // Field chains are excluded — resolve can't substitute in statement bodies;
+      // transform's emitOptionalMatch handles field chains in statement contexts.
       let thenCtx = ctx, elseCtx = ctx;
-      const narrowed = narrowOptional(s.cond, ctx);
-      if (narrowed) {
+      const narrowed = detectOptionalCheck(s.cond, ctx)
+        ?? (s.cond.kind === "binop" && s.cond.op === "&&" ? detectOptionalCheck(s.cond.left, ctx) : null);
+      if (narrowed && !narrowed.fieldExpr) {
         const env = extend(ctx.env, narrowed.varName, narrowed.innerTy);
         if (narrowed.inThen) thenCtx = withEnv(ctx, env);
         else elseCtx = withEnv(ctx, env);
-      }
-      // Also narrow from left side of && condition: if (x !== undefined && ...) { ... }
-      if (!narrowed && s.cond.kind === "binop" && s.cond.op === "&&") {
-        const leftNarrowed = narrowOptional(s.cond.left, ctx);
-        if (leftNarrowed && leftNarrowed.inThen && !leftNarrowed.fieldExpr) {
-          thenCtx = withEnv(ctx, extend(ctx.env, leftNarrowed.varName, leftNarrowed.innerTy));
-        }
       }
       return [{ kind: "if", cond: resolveExpr(s.cond, ctx), then: resolveBlock(s.then, thenCtx), else: resolveBlock(s.else, elseCtx) }, ctx.env];
     }
