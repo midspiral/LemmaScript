@@ -235,6 +235,79 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   return "unknown";
 }
 
+// ── Call resolution helpers ─────────────────────────────────
+
+/** Infer lambda param types from array method context (map, filter, etc.).
+ *  Returns updated rawArgs with inferred tsType on the first lambda param. */
+function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[]): RawExpr[] {
+  if (fn.kind === "field" && fn.obj.ty.kind === "array" &&
+      ["map", "filter", "every", "some", "find"].includes(fn.field) &&
+      rawArgs.length >= 1 && rawArgs[0].kind === "lambda" &&
+      rawArgs[0].params.length >= 1 && !rawArgs[0].params[0].tsType) {
+    const elemTy = fn.obj.ty.elem;
+    const tsType = elemTy.kind === "user" ? elemTy.name
+      : elemTy.kind === "string" ? "string"
+      : elemTy.kind === "int" || elemTy.kind === "nat" ? "number"
+      : elemTy.kind === "bool" ? "boolean" : undefined;
+    if (tsType) {
+      const lam = rawArgs[0];
+      const updatedParams = [{ ...lam.params[0], tsType }, ...lam.params.slice(1)];
+      return [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
+    }
+  }
+  return rawArgs;
+}
+
+/** Coerce call arguments: string literals → user types, non-optional → Some, pad missing optional args. */
+function coerceCallArgs(args: TExpr[], fn: TExpr, ctx: Ctx): TExpr[] {
+  if (fn.kind !== "var" || !ctx.fnParams.has(fn.name)) return args;
+  const paramTys = ctx.fnParams.get(fn.name)!;
+  args = args.map((a, i) => {
+    if (i >= paramTys.length) return a;
+    a = coerceStr(a, paramTys[i]);
+    if (a.ty.kind !== "optional" && paramTys[i].kind === "optional") {
+      return wrapSome(a, paramTys[i]);
+    }
+    return a;
+  });
+  // Pad missing optional args with None
+  for (let i = args.length; i < paramTys.length; i++) {
+    if (paramTys[i].kind === "optional") {
+      args.push({ kind: "var" as const, name: "undefined", ty: paramTys[i] });
+    }
+  }
+  return args;
+}
+
+/** Infer return type for collection/string method calls. */
+function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
+  if (fn.kind !== "field") return { kind: "unknown" };
+  const objTy = fn.obj.ty;
+  if (objTy.kind === "map") {
+    if (fn.field === "get") return ctx.inSpec ? objTy.value : { kind: "optional", inner: objTy.value };
+    if (fn.field === "has") return { kind: "bool" };
+    if (fn.field === "set" || fn.field === "delete") return objTy;
+  } else if (objTy.kind === "set") {
+    if (fn.field === "has") return { kind: "bool" };
+    if (fn.field === "add" || fn.field === "delete") return objTy;
+  } else if (objTy.kind === "array") {
+    if (fn.field === "includes") return { kind: "bool" };
+    if (fn.field === "shift") return objTy.elem;
+    if (fn.field === "push" || fn.field === "concat") return objTy;
+    if (fn.field === "filter") return objTy;
+    if (fn.field === "every" || fn.field === "some") return { kind: "bool" };
+    if (fn.field === "map" && args.length >= 1 && args[0].kind === "lambda") {
+      const retTy = args[0].body.length > 0 && args[0].body[0].kind === "return"
+        ? args[0].body[0].value.ty : { kind: "unknown" as const };
+      return { kind: "array", elem: retTy };
+    }
+  } else if (objTy.kind === "string") {
+    if (fn.field === "trim" || fn.field === "toLowerCase" || fn.field === "toUpperCase") return { kind: "string" };
+    if (fn.field === "includes") return { kind: "bool" };
+  }
+  return { kind: "unknown" };
+}
+
 // ── Resolve expressions ──────────────────────────────────────
 
 function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
@@ -303,80 +376,15 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "call": {
       const fn = resolveExpr(e.fn, ctx);
-      // Infer lambda param types from array method context (map, filter, etc.)
-      let rawArgs = e.args;
-      if (fn.kind === "field" && fn.obj.ty.kind === "array" &&
-          ["map", "filter", "every", "some", "find"].includes(fn.field) &&
-          rawArgs.length >= 1 && rawArgs[0].kind === "lambda" &&
-          rawArgs[0].params.length >= 1 && !rawArgs[0].params[0].tsType) {
-        const elemTy = fn.obj.ty.elem;
-        const tsType = elemTy.kind === "user" ? elemTy.name
-          : elemTy.kind === "string" ? "string"
-          : elemTy.kind === "int" || elemTy.kind === "nat" ? "number"
-          : elemTy.kind === "bool" ? "boolean" : undefined;
-        if (tsType) {
-          const lam = rawArgs[0];
-          const updatedParams = [{ ...lam.params[0], tsType }, ...lam.params.slice(1)];
-          rawArgs = [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
-        }
-      }
-      // For .push() on a typed array, resolve the argument with element type context
-      // so record expressions can match fields and coerce types
+      const rawArgs = inferLambdaParamTypes(fn, e.args);
+      // For .push() on a typed array, resolve args with element type context
       let argCtx = ctx;
       if (fn.kind === "field" && fn.obj.ty.kind === "array" && fn.field === "push" &&
           fn.obj.ty.elem.kind === "user") {
         argCtx = { ...ctx, returnTy: fn.obj.ty.elem };
       }
-      let args = rawArgs.map(a => resolveExpr(a, argCtx));
-      // Coerce args: string literals to user types, non-optional to Option, pad missing optional args
-      if (fn.kind === "var" && ctx.fnParams.has(fn.name)) {
-        const paramTys = ctx.fnParams.get(fn.name)!;
-        args = args.map((a, i) => {
-          if (i >= paramTys.length) return a;
-          // Coerce string literal to user type (e.g., 'MissingList' → Err constructor)
-          a = coerceStr(a, paramTys[i]);
-          // Wrap non-optional in Some when callee expects optional param
-          if (a.ty.kind !== "optional" && paramTys[i].kind === "optional") {
-            return wrapSome(a, paramTys[i]);
-          }
-          return a;
-        });
-        // Pad missing optional args with None
-        for (let i = args.length; i < paramTys.length; i++) {
-          if (paramTys[i].kind === "optional") {
-            args.push({ kind: "var" as const, name: "undefined", ty: paramTys[i] });
-          }
-        }
-      }
-      let ty: Ty = { kind: "unknown" };
-      // Infer return types for collection methods
-      if (fn.kind === "field" && fn.obj.ty.kind === "map") {
-        if (fn.field === "get") ty = ctx.inSpec ? fn.obj.ty.value : { kind: "optional", inner: fn.obj.ty.value };
-        else if (fn.field === "has") ty = { kind: "bool" };
-        else if (fn.field === "set") ty = fn.obj.ty;
-        else if (fn.field === "delete") ty = fn.obj.ty;
-      } else if (fn.kind === "field" && fn.obj.ty.kind === "set") {
-        if (fn.field === "has") ty = { kind: "bool" };
-        else if (fn.field === "add") ty = fn.obj.ty;
-        else if (fn.field === "delete") ty = fn.obj.ty;
-      } else if (fn.kind === "field" && fn.obj.ty.kind === "array") {
-        if (fn.field === "includes") ty = { kind: "bool" };
-        else if (fn.field === "shift") ty = fn.obj.ty.elem;
-        else if (fn.field === "push") ty = fn.obj.ty;
-        else if (fn.field === "concat") ty = fn.obj.ty;
-        else if (fn.field === "map" && args.length >= 1 && args[0].kind === "lambda") {
-          const retTy = args[0].body.length > 0 && args[0].body[0].kind === "return"
-            ? args[0].body[0].value.ty : { kind: "unknown" as const };
-          ty = { kind: "array", elem: retTy };
-        }
-        else if (fn.field === "filter") ty = fn.obj.ty;
-        else if (fn.field === "every" || fn.field === "some") ty = { kind: "bool" };
-      } else if (fn.kind === "field" && fn.obj.ty.kind === "string") {
-        if (fn.field === "trim") ty = { kind: "string" };
-        else if (fn.field === "toLowerCase") ty = { kind: "string" };
-        else if (fn.field === "toUpperCase") ty = { kind: "string" };
-        else if (fn.field === "includes") ty = { kind: "bool" };
-      }
+      const args = coerceCallArgs(rawArgs.map(a => resolveExpr(a, argCtx)), fn, ctx);
+      const ty = inferMethodReturnTy(fn, args, ctx);
       return { kind: "call", fn, args, ty, callKind: classifyCall(e.fn, ctx) };
     }
 
@@ -403,13 +411,13 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         const decl = findDecl(ctx, obj.ty.name);
         if (decl?.kind === "record") {
           const f = decl.fields?.find(f => f.name === e.field);
-          if (f) ty = resolveTsType(f.tsType, ctx.overrides);
+          if (f) ty = f.type!;
         }
         // Also resolve fields from discriminated-union variants
         if (ty.kind === "unknown" && decl?.kind === "discriminated-union" && decl.variants) {
           for (const variant of decl.variants) {
             const f = variant.fields.find(f => f.name === e.field);
-            if (f) { ty = resolveTsType(f.tsType, ctx.overrides); break; }
+            if (f) { ty = f.type!; break; }
           }
         }
       }
@@ -429,7 +437,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         let value = resolveExpr(f.value, fieldCtx);
         const fieldDecl = decl?.fields?.find(df => df.name === f.name);
         if (fieldDecl) {
-          const declTy = parseTsType(fieldDecl.tsType);
+          const declTy = fieldDecl.type!;
           value = coerceStr(value, declTy);
           // Coerce non-optional to optional: wrap in Some (only when value type is concrete)
           if (declTy.kind === "optional" && value.ty.kind !== "optional" && value.ty.kind !== "void" && value.ty.kind !== "unknown") {
@@ -892,7 +900,7 @@ function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInf
   const fields = cls.fields.map(f => ({ name: f.name, ty: parseTsType(f.tsType) }));
   // Create a synthetic record type for 'this' so field access resolves
   const thisType: Ty = { kind: "user", name: cls.name };
-  const thisDecl: TypeDeclInfo = { name: cls.name, kind: "record", fields: cls.fields.map(f => ({ name: f.name, tsType: f.tsType })) };
+  const thisDecl: TypeDeclInfo = { name: cls.name, kind: "record", fields: cls.fields.map(f => ({ name: f.name, tsType: f.tsType, type: parseTsType(f.tsType) })) };
   const allTypeDecls = [...typeDecls, thisDecl];
 
   const methods = cls.methods.map(fn =>
@@ -905,7 +913,18 @@ function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInf
   return { name: cls.name, fields, methods };
 }
 
+/** Pre-compute Ty on all TypeDeclInfo fields/variants/aliases.
+ *  Called once per module so consumers can read field.type instead of re-parsing tsType. */
+function precomputeFieldTypes(typeDecls: TypeDeclInfo[]) {
+  for (const d of typeDecls) {
+    if (d.fields) for (const f of d.fields) f.type = parseTsType(f.tsType);
+    if (d.variants) for (const v of d.variants) for (const f of v.fields) f.type = parseTsType(f.tsType);
+    if (d.aliasOf && !d.aliasOfTy) d.aliasOfTy = parseTsType(d.aliasOf);
+  }
+}
+
 export function resolveModule(raw: RawModule): TModule {
+  precomputeFieldTypes(raw.typeDecls);
   const pureFns = computePureFns(raw.functions);
   // Pre-compute function parameter types for optional coercion
   const fnParams = new Map<string, Ty[]>();

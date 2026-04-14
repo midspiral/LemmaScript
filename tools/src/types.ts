@@ -7,9 +7,15 @@
 
 // ── Type info extracted from TS ──────────────────────────────
 
+export interface FieldInfo {
+  name: string;
+  tsType: string;
+  type?: Ty;     // pre-computed Ty — populated by resolveModule, avoids re-parsing tsType
+}
+
 export interface VariantInfo {
   name: string;
-  fields: { name: string; tsType: string }[];
+  fields: FieldInfo[];
 }
 
 export interface UnionTypeInfo {
@@ -28,9 +34,10 @@ export interface TypeDeclInfo {
   discriminant?: string;
   variants?: VariantInfo[];
   /** For records: the fields */
-  fields?: { name: string; tsType: string }[];
+  fields?: FieldInfo[];
   /** For alias: the underlying type string */
   aliasOf?: string;
+  aliasOfTy?: Ty;  // pre-computed Ty for aliasOf
 }
 
 // ── TS type string → Ty (single source of truth) ───────────

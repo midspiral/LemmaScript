@@ -468,11 +468,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           const fieldDecl = structDecl?.fields?.find(sf => sf.name === f.name);
           let declaredTy: Ty | undefined;
           if (fieldDecl) {
-            declaredTy = parseTsType(fieldDecl.tsType);
+            declaredTy = fieldDecl.type;
           } else if (unionDecl?.variants) {
             for (const v of unionDecl.variants) {
               const vf = v.fields.find(vf => vf.name === f.name);
-              if (vf) { declaredTy = parseTsType(vf.tsType); break; }
+              if (vf) { declaredTy = vf.type; break; }
             }
           }
           if (declaredTy && fieldValue.ty.kind === "unknown") {
@@ -1074,17 +1074,32 @@ function serializeFieldChain(e: TExpr): string | null {
   return null;
 }
 
-function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): Stmt {
-  const decl = typeDecls.find(d => d.name === chain.typeName);
-  const arms: StmtMatchArm[] = chain.cases.map(c => {
-    const variant = decl?.variants?.find(v => v.name === c.variant);
+/** Build match arms from variant cases — shared by imperative and pure paths.
+ *  Looks up variant fields from typeDecls, builds patterns via buildMatchPattern,
+ *  and delegates body transformation to the caller-provided function.
+ *  Returns null if any body transformation returns null (pure path abort). */
+function buildMatchArms<T>(
+  cases: { name: string; body: TStmt[] }[],
+  varName: string | undefined, typeName: string | undefined, typeDecls: TypeDeclInfo[],
+  transformBody: (body: TStmt[], varName: string | undefined, fields: { name: string; tsType: string }[]) => T | null
+): { pattern: string; body: T }[] | null {
+  const decl = typeName ? typeDecls.find(d => d.name === typeName) : undefined;
+  const arms: { pattern: string; body: T }[] = [];
+  for (const c of cases) {
+    const variant = decl?.variants?.find(v => v.name === c.name);
     const fields = variant?.fields ?? [];
-    const pattern = buildMatchPattern(c.variant, fields, chain.varName);
-    // Replace field accesses in TStmt BEFORE transforming, so optional narrowing sees simple vars
-    const replaced = replaceFieldAccessInTStmts(c.body, chain.varName, fields);
-    const body = transformStmts(replaced, typeDecls);
-    return { pattern, body };
-  });
+    const pattern = buildMatchPattern(c.name, fields, varName);
+    const body = transformBody(c.body, varName, fields);
+    if (body === null) return null;
+    arms.push({ pattern, body });
+  }
+  return arms;
+}
+
+function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): Stmt {
+  const cases = chain.cases.map(c => ({ name: c.variant, body: c.body }));
+  const arms = buildMatchArms(cases, chain.varName, chain.typeName, typeDecls,
+    (body, vn, fields) => transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls))!;
   if (chain.fallthrough.length > 0) arms.push({ pattern: "_", body: transformStmts(chain.fallthrough, typeDecls) });
   return { kind: "match", scrutinee: chain.varName, arms };
 }
@@ -1092,16 +1107,9 @@ function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): Stmt {
 function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Stmt {
   const varName = s.expr.kind === "var" ? s.expr.name : "?";
   const typeName = s.expr.ty.kind === "user" ? s.expr.ty.name : undefined;
-  const decl = typeName ? typeDecls.find(d => d.name === typeName) : undefined;
-  const arms: StmtMatchArm[] = s.cases.map(c => {
-    const variant = decl?.variants?.find(v => v.name === c.label);
-    const fields = variant?.fields ?? [];
-    const pattern = buildMatchPattern(c.label, fields, varName);
-    // Replace field accesses in TStmt BEFORE transforming, so optional narrowing sees simple vars
-    const replaced = replaceFieldAccessInTStmts(c.body, varName, fields);
-    const body = transformStmts(replaced, typeDecls);
-    return { pattern, body };
-  });
+  const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
+  const arms = buildMatchArms(cases, varName, typeName, typeDecls,
+    (body, vn, fields) => transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls))!;
   if (s.defaultBody.length > 0) arms.push({ pattern: "_", body: transformStmts(s.defaultBody, typeDecls) });
   return { kind: "match", scrutinee: varName, arms };
 }
@@ -1130,11 +1138,11 @@ function replaceFieldsInTStmts(
 
 /** Replace all variant fields of obj → match binder vars in typed IR.
  *  Thin wrapper around replaceFieldsInTStmts for discriminant match/switch. */
-function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { name: string; tsType: string }[]): TStmt[] {
+function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { name: string; tsType: string; type?: Ty }[]): TStmt[] {
   return replaceFieldsInTStmts(stmts, varName, fields.map(f => ({
     fieldName: f.name,
     newName: matchBinder(f.name, varName),
-    fallbackTy: parseTsType(f.tsType),
+    fallbackTy: f.type ?? parseTsType(f.tsType),
   })));
 }
 
@@ -1191,19 +1199,18 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
 }
 
 function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Expr | null {
-  const decl = typeDecls.find(d => d.name === (s.expr.ty.kind === "user" ? s.expr.ty.name : ""));
-  if (!decl) return null;
+  const typeName = s.expr.ty.kind === "user" ? s.expr.ty.name : "";
+  if (!typeDecls.find(d => d.name === typeName)) return null;
   const varName = s.expr.kind === "var" ? s.expr.name : undefined;
-  const arms: MatchArm[] = [];
-  for (const c of s.cases) {
-    const variant = decl.variants?.find(v => v.name === c.label);
-    const fields = variant?.fields ?? [];
-    const pattern = buildMatchPattern(c.label, fields, varName);
-    let body = transformPureBody(c.body, typeDecls);
-    if (!body) return null;
-    if (fields.length > 0 && s.expr.kind === "var") body = replaceFieldAccess(body, s.expr.name, fields);
-    arms.push({ pattern, body });
-  }
+  const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
+  const arms = buildMatchArms(cases, varName, typeName, typeDecls,
+    (body, vn, fields) => {
+      let result = transformPureBody(body, typeDecls);
+      if (!result) return null;
+      if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields);
+      return result;
+    });
+  if (!arms) return null;
   if (s.defaultBody.length > 0) {
     const body = transformPureBody(s.defaultBody, typeDecls);
     if (!body) return null;
@@ -1214,20 +1221,19 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
 }
 
 function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | null {
-  const decl = typeDecls.find(d => d.name === chain.typeName);
-  const arms: MatchArm[] = [];
-  for (const c of chain.cases) {
-    const variant = decl?.variants?.find(v => v.name === c.variant);
-    const fields = variant?.fields ?? [];
-    const pattern = buildMatchPattern(c.variant, fields, chain.varName);
-    let body = transformPureBody(c.body, typeDecls);
-    if (!body) return null;
-    if (fields.length > 0) body = replaceFieldAccess(body, chain.varName, fields);
-    arms.push({ pattern, body });
-  }
+  const cases = chain.cases.map(c => ({ name: c.variant, body: c.body }));
+  const arms = buildMatchArms(cases, chain.varName, chain.typeName, typeDecls,
+    (body, vn, fields) => {
+      let result = transformPureBody(body, typeDecls);
+      if (!result) return null;
+      if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields);
+      return result;
+    });
+  if (!arms) return null;
   // Idiomatic TS often has an unreachable fallthrough after exhaustive if-chains on
   // discriminated unions. Skip the catch-all arm when all variants are matched,
   // since Lean errors on redundant match arms.
+  const decl = typeDecls.find(d => d.name === chain.typeName);
   const allCovered = decl?.variants && chain.cases.length >= decl.variants.length;
   if (chain.fallthrough.length > 0 && !allCovered) {
     const body = transformPureBody(chain.fallthrough, typeDecls);
@@ -1252,19 +1258,19 @@ function transformTypeDecl(d: TypeDeclInfo): Decl {
       typeParams: d.typeParams,
       constructors: d.variants!.map(v => ({
         name: v.name,
-        fields: v.fields.map(f => ({ name: f.name, type: parseTsType(f.tsType) })),
+        fields: v.fields.map(f => ({ name: f.name, type: f.type! })),
       })),
       deriving: ["Repr", "Inhabited"],
     };
   } else if (d.kind === "alias") {
     return {
       kind: "type-alias", name: d.name,
-      target: parseTsType(d.aliasOf!),
+      target: d.aliasOfTy!,
     };
   } else {
     return {
       kind: "structure", name: d.name,
-      fields: d.fields!.map(f => ({ name: f.name, type: parseTsType(f.tsType) })),
+      fields: d.fields!.map(f => ({ name: f.name, type: f.type! })),
       deriving: ["Repr", "Inhabited", "DecidableEq"],
     };
   }
