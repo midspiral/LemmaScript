@@ -104,18 +104,20 @@ For generic functions that compare values with `===`, the Dafny backend needs an
 
 Example:
 ```typescript
-export function seqContains<T>(s: T[], x: T): boolean {
+export function linearSearch<T>(s: T[], x: T): number {
   //@ type T (==)
   let i = 0
   while (i < s.length) {
-    if (s[i] === x) return true
+    if (s[i] === x) return i
     i = i + 1
   }
-  return false
+  return -1
 }
 ```
 
-This emits `method seqContains<T(==)>(...)` in Dafny. Without it, Dafny rejects `==` on values of unconstrained type `T`.
+This emits `method linearSearch<T(==)>(...)` in Dafny. Without it, Dafny rejects `==` on values of unconstrained type `T`.
+
+Note: `arr.includes(x)` and `arr.indexOf(x)` are supported natively — no manual helpers needed. The compiler emits `(x in arr)` and `SeqIndexOf(arr, x)` respectively.
 
 User-defined types (string literal unions, discriminated unions) are generated automatically with the same name as the TS type. No annotation needed or supported for these.
 
@@ -352,6 +354,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `arr.every((x) => e)` | `arr.all (fun x => e)` | `Seq.All(arr, (x) => e)` |
 | `arr.some((x) => e)` | `arr.any (fun x => e)` | `exists x :: x in arr && e` |
 | `arr.includes(x)` | `arr.contains x` | `(x in arr)` |
+| `arr.indexOf(x)` | — | `SeqIndexOf(arr, x)` (preamble) |
 | `arr.find((x) => e)` | `arr.find? (fun x => e)` | — |
 | `arr.shift()` | — | `arr[0]` + `arr := arr[1..]` |
 | `arr.slice(start)` | — | `arr[start..]` |
@@ -370,6 +373,9 @@ No normalization of operators. Both backends handle all comparison directions.
 | `[a, ...b, c]` | `[a] + b + [c]` | `([a] + b + [c])` (general spread) |
 | `arr.concat(e)` | — | `(arr + [e])` |
 | `{ ...obj, f: v }` | `{ obj with f := v }` | `obj.(f := v)` |
+| `{ ...map, [k]: v }` | — | `map[k := v]` (desugared to `.set()` in extract) |
+| `{ [k]: v }` | — | `map[][k := v]` (desugared to `{}.set()` in extract) |
+| `const { [k]: _, ...rest } = map` | — | `var rest := (map k' \| k' in map && k' != k :: map[k'])` (desugared to `.delete()` in extract) |
 | `arr.with(i, v)` | `arr.set! i v` | `arr[i := v]` |
 | `` `${n} items` `` (int+string) | — | `NatToString(n) + " items"` |
 | `{ k1: v1, ... }: Record<K,V>` | — | `map["k1" := v1, ...]` |
@@ -507,10 +513,12 @@ The transform uses two strategies for translating `receiver.method(args)`:
 | `arr.every(f)` | `every` | `arr.all f` | `Seq.All(arr, f)` |
 | `arr.some(f)` | `some` | `arr.any f` | `exists x :: x in arr && ...` |
 | `arr.includes(x)` | `includes` | `arr.contains x` | `(x in arr)` |
+| `arr.indexOf(x)` | `indexOf` | — | `SeqIndexOf(arr, x)` |
 | `arr.find(f)` | `find` | `arr.find? f` | — |
 | `m.get(k)` | `mapGet` | `m.get? k` | `if k in m then Some(m[k]) else None` |
 | `m.has(k)` | `mapHas` | `m.contains k` | `(k in m)` |
 | `m.set(k, v)` | `mapSet` | `m.insert k v` | `m[k := v]` |
+| `m.delete(k)` | `mapDelete` | `m.erase k` | `(map k' \| k' in m && k' != k :: m[k'])` |
 | `s.has(x)` | `setHas` | `s.contains x` | `(x in s)` |
 | `s.add(x)` | `setAdd` | `s.insert x` | `(s + {x})` |
 | `s.delete(x)` | `setDelete` | `s.erase x` | `(s - {x})` |
