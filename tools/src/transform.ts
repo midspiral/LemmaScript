@@ -968,40 +968,60 @@ function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind:
   if (someBranch.length === 0 && restStmts && restStmts.length > 0) {
     someBranch = restStmts;
   }
-  // For field accesses, replace the field chain in TStmts before transforming
+  const bound = matchBinder(`${varName}_val`);
+  // Replace the narrowed variable/field in the Some branch body.
+  // Field chains: replace in TStmt before transform (so downstream narrowing sees simple vars).
+  // Simple vars: replace in IR after transform (the original mechanism).
+  let someBody: Stmt[];
   if (fieldExpr) {
-    const synName = matchBinder(`${varName}_val`);
+    const innerTy = fieldExpr.ty.kind === "optional" ? fieldExpr.ty.inner : fieldExpr.ty;
     const replaced = someBranch.map(stmt => mapTStmt(stmt, e => {
       if (e.kind === "field" && fieldExpr.kind === "field" && e.field === fieldExpr.field &&
           e.obj.kind === "var" && fieldExpr.obj.kind === "var" && e.obj.name === fieldExpr.obj.name) {
-        return { kind: "var", name: synName, ty: fieldExpr.ty.kind === "optional" ? fieldExpr.ty.inner : fieldExpr.ty } as TExpr;
+        return { kind: "var", name: bound, ty: innerTy } as TExpr;
       }
       return null;
     }));
-    const someBody = transformStmts(replaced, typeDecls);
-    return {
-      kind: "match", scrutinee: varName,
-      arms: [
-        { pattern: `.some ${synName}`, body: someBody },
-        { pattern: ".none", body: noneBranch.length > 0 ? transformStmts(noneBranch, typeDecls) : [] },
-      ],
-    };
+    someBody = transformStmts(replaced, typeDecls);
+  } else {
+    const transformed = transformStmts(someBranch, typeDecls);
+    someBody = transformed.map(stmt => mapStmtExprs(stmt, e => replaceVar(e, varName, { kind: "var", name: bound })));
   }
-  const bound = matchBinder(`${varName}_val`);
-  const someBody = transformStmts(someBranch, typeDecls);
-  const r = (e: Expr): Expr => replaceVar(e, varName, { kind: "var", name: bound });
-  const someReplaced = someBody.map(stmt => mapStmtExprs(stmt, r));
-  const arms: StmtMatchArm[] = [
-    { pattern: `.some ${bound}`, body: someReplaced },
-    { pattern: ".none", body: noneBranch.length > 0 ? transformStmts(noneBranch, typeDecls) : [] },
-  ];
-  return { kind: "match", scrutinee: varName, arms };
+  return {
+    kind: "match", scrutinee: varName,
+    arms: [
+      { pattern: `.some ${bound}`, body: someBody },
+      { pattern: ".none", body: noneBranch.length > 0 ? transformStmts(noneBranch, typeDecls) : [] },
+    ],
+  };
 }
 
 /** Apply an expression transform to all expressions in a statement (convenience wrapper). */
 function mapStmtExprs(s: Stmt, r: (e: Expr) => Expr): Stmt {
   return mapStmt(s, e => r(e));
 }
+
+// ── Optional narrowing helpers ──────────────────────────────
+//
+// Optional narrowing converts TS `if (x === undefined)` patterns to Dafny
+// `match x { Some(val) => ..., None => ... }`.
+//
+// The resolve phase (resolve.ts) handles:
+//   - Flow narrowing: after `if (x === undefined) return`, x is non-optional
+//   - && narrowing: in `x !== undefined && f(x)`, f(x) sees x as non-optional
+//   - Conditional narrowing: in `x !== undefined ? x.field : default`, sets
+//     narrowedVar/narrowedExpr on TExpr for the transform phase
+//
+// The transform phase (here) handles:
+//   - Statement-level: `transformStmts` detects optional checks → `emitOptionalMatch`
+//   - Expression-level: `lowerExpr` conditional reads narrowedVar/narrowedExpr → match
+//   - && restructuring: `extractLeftmostOptional` splits `&&` chains into nested ifs
+//     so `emitOptionalMatch` can detect the inner optional check
+//
+// Both phases detect `v !== undefined` patterns. The resolve phase uses
+// `narrowOptional` (on RawExpr), the transform uses `parseOptionalCheck` (on TExpr).
+// These are separate because they operate on different IR types, but both handle
+// simple variables and field access chains.
 
 /** Extract the leftmost optional check from a && chain, returning the check and the rest.
  *  (x !== undefined && b) && c → { optCond: x !== undefined, rest: b && c } */
@@ -1095,27 +1115,7 @@ function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { n
   }));
 }
 
-function replaceFieldAccessInStmts(stmts: Stmt[], varName: string, fields: { name: string; tsType: string }[]): Stmt[] {
-  if (fields.length === 0) return stmts;
-  const f = (e: Expr): Expr | null => {
-    if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === varName) {
-      const fi = fields.find(fi => fi.name === e.field);
-      if (fi) return { kind: "var", name: matchBinder(fi.name, varName) };
-    }
-    return null;
-  };
-  const result: Stmt[] = [];
-  for (const s of stmts) {
-    // If a let shadows the matched variable, stop replacing from here on
-    if (s.kind === "let" && s.name === varName) {
-      result.push(s.value ? { ...s, value: mapExpr(s.value, f) } : s);
-      result.push(...stmts.slice(result.length));
-      break;
-    }
-    result.push(mapStmt(s, f));
-  }
-  return result;
-}
+
 
 // ── Pure function generation ─────────────────────────────────
 
