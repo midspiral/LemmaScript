@@ -855,13 +855,18 @@ function containsReturn(stmts: RawStmt[]): boolean {
 
 // ── Resolve function / module ────────────────────────────────
 
-function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map()): TFunction {
+function resolveFunction(
+  fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Set<string>,
+  fnParams: Map<string, Ty[]> = new Map(),
+  opts?: { thisBinding?: { name: string; ty: Ty }; forcePure?: boolean }
+): TFunction {
 
   const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
   const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: resolveTsType(p.tsType, overrides, p.name) }));
   const returnTy = resolveTsType(fn.returnType, overrides, "\\result");
 
   let env: Env | null = null;
+  if (opts?.thisBinding) env = extend(env, opts.thisBinding.name, opts.thisBinding.ty);
   for (const p of params) env = extend(env, p.name, p.ty);
 
   const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, inSpec: false, inLambda: false };
@@ -878,7 +883,7 @@ function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Se
     name: fn.name, typeParams, params, returnTy,
     requires: resolveSpecs(fn.requires, requiresCtx),
     ensures: resolveSpecs(fn.ensures, ensuresCtx),
-    isPure: pureFns.has(fn.name),
+    isPure: opts?.forcePure !== undefined ? opts.forcePure : pureFns.has(fn.name),
     body: resolveBlock(fn.body, baseCtx),
   };
 }
@@ -890,28 +895,12 @@ function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInf
   const thisDecl: TypeDeclInfo = { name: cls.name, kind: "record", fields: cls.fields.map(f => ({ name: f.name, tsType: f.tsType })) };
   const allTypeDecls = [...typeDecls, thisDecl];
 
-  const methods = cls.methods.map(fn => {
-    // Add 'this' to the environment
-    const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
-    const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: resolveTsType(p.tsType, overrides, p.name) }));
-    const returnTy = resolveTsType(fn.returnType, overrides, "\\result");
-
-    let env: Env | null = null;
-    env = extend(env, "this", thisType);
-    for (const p of params) env = extend(env, p.name, p.ty);
-
-    const baseCtx: Ctx = { env, typeDecls: allTypeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, inSpec: false, inLambda: false };
-    const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
-    const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
-
-    return {
-      name: fn.name, typeParams: fn.typeParams, params, returnTy,
-      requires: resolveSpecs(fn.requires, requiresCtx),
-      ensures: resolveSpecs(fn.ensures, ensuresCtx),
-      isPure: false,  // class methods are never pure (they access this)
-      body: resolveBlock(fn.body, baseCtx),
-    };
-  });
+  const methods = cls.methods.map(fn =>
+    resolveFunction(fn, allTypeDecls, pureFns, fnParams, {
+      thisBinding: { name: "this", ty: thisType },
+      forcePure: false,  // class methods are never pure (they access this)
+    })
+  );
 
   return { name: cls.name, fields, methods };
 }
