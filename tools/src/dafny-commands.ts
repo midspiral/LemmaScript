@@ -33,13 +33,14 @@ export function dafnyCheckDiff(genPath: string, dfyPath: string): boolean {
   return true;
 }
 
-export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number): boolean {
+export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number, extraFlags?: string): boolean {
   console.log("Running dafny verify...");
   try {
     const content = readFileSync(dfyPath, "utf-8");
     const stdLibFlag = content.includes("Std.") ? " --standard-libraries" : "";
     const timeLimitFlag = timeLimit ? ` --verification-time-limit ${timeLimit}` : "";
-    execSync(`dafny verify${stdLibFlag}${timeLimitFlag} "${dfyPath}"`, { cwd: dir, stdio: "inherit" });
+    const extra = extraFlags ? ` ${extraFlags}` : "";
+    execSync(`dafny verify${stdLibFlag}${timeLimitFlag}${extra} "${dfyPath}"`, { cwd: dir, stdio: "inherit" });
     return true;
   } catch {
     return false;
