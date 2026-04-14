@@ -256,6 +256,10 @@ function emitExpr(e: Expr): string {
       return `${emitExpr(e.arr)}[${emitExpr(e.idx)}]`;
 
     case "record": {
+      // Empty record literal {} with map type → map[]
+      if (!e.spread && e.fields.length === 0 && e.ty?.kind === "map") {
+        return `map[]`;
+      }
       if (e.spread) {
         const updates = e.fields.map(f => `${escapeName(f.name)} := ${emitExpr(f.value)}`);
         return `${emitExpr(e.spread)}.(${updates.join(", ")})`;
