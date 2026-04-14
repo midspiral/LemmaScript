@@ -186,6 +186,15 @@ function transformExpr(e: TExpr): Expr { return lowerExpr(e, null); }
  * a method call can appear inline in TS.  It does NOT propagate into
  * field, index, record, forall, or exists sub-expressions.
  */
+
+/** Wrap an expression in Some/None for optional-typed conditionals.
+ *  If the raw TExpr is `undefined`, emit `.none`; otherwise wrap in `Some`. */
+function wrapOptionalBranch(expr: Expr, raw: TExpr): Expr {
+  return (raw.kind === "var" && raw.name === "undefined")
+    ? { kind: "constructor", name: ".none" }
+    : { kind: "app", fn: "Some", args: [expr] };
+}
+
 function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
   // Monadic lifting: extract embedded method calls to let-binds
   // Pass binds through to args so nested method calls are also lifted
@@ -513,12 +522,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         }
         // Wrap in Some/None only when result is optional (one branch is undefined)
         if (e.ty.kind === "optional") {
-          const wrapSomeNone = (expr: Expr, raw: TExpr): Expr =>
-            (raw.kind === "var" && raw.name === "undefined")
-              ? { kind: "constructor", name: ".none" }
-              : { kind: "app", fn: "Some", args: [expr] };
-          thenExpr = wrapSomeNone(thenExpr, e.then);
-          elseExpr = wrapSomeNone(elseExpr, e.else);
+          thenExpr = wrapOptionalBranch(thenExpr, e.then);
+          elseExpr = wrapOptionalBranch(elseExpr, e.else);
         }
         return {
           kind: "match", scrutinee,
@@ -537,13 +542,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           thenExpr = replaceVar(thenExpr, e.narrowedVar, { kind: "var", name: bound });
         }
         // The match produces an Optional: wrap branches in Some/None.
-        // Either branch being undefined signals None; otherwise wrap in Some.
-        const wrapSomeNone = (expr: Expr, raw: TExpr): Expr =>
-          (raw.kind === "var" && raw.name === "undefined")
-            ? { kind: "constructor", name: ".none" }
-            : { kind: "app", fn: "Some", args: [expr] };
-        thenExpr = wrapSomeNone(thenExpr, e.then);
-        elseExpr = wrapSomeNone(elseExpr, e.else);
+        thenExpr = wrapOptionalBranch(thenExpr, e.then);
+        elseExpr = wrapOptionalBranch(elseExpr, e.else);
         return {
           kind: "match", scrutinee: cond,
           arms: [
@@ -555,16 +555,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
 
       // Non-optional: regular if with optional wrapping
       if (e.ty.kind === "optional") {
-        if (e.then.kind === "var" && e.then.name === "undefined") {
-          thenExpr = { kind: "constructor", name: ".none" };
-        } else {
-          thenExpr = { kind: "app", fn: "Some", args: [thenExpr] };
-        }
-        if (e.else.kind === "var" && e.else.name === "undefined") {
-          elseExpr = { kind: "constructor", name: ".none" };
-        } else {
-          elseExpr = { kind: "app", fn: "Some", args: [elseExpr] };
-        }
+        thenExpr = wrapOptionalBranch(thenExpr, e.then);
+        elseExpr = wrapOptionalBranch(elseExpr, e.else);
       }
       return { kind: "if", cond, then: thenExpr, else: elseExpr };
     }
