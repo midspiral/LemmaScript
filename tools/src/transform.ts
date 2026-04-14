@@ -965,15 +965,11 @@ function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind:
   // Field chains: replace in TStmt before transform (so downstream narrowing sees simple vars).
   // Simple vars: replace in IR after transform (the original mechanism).
   let someBody: Stmt[];
-  if (fieldExpr) {
+  if (fieldExpr && fieldExpr.kind === "field" && fieldExpr.obj.kind === "var") {
     const innerTy = fieldExpr.ty.kind === "optional" ? fieldExpr.ty.inner : fieldExpr.ty;
-    const replaced = someBranch.map(stmt => mapTStmt(stmt, e => {
-      if (e.kind === "field" && fieldExpr.kind === "field" && e.field === fieldExpr.field &&
-          e.obj.kind === "var" && fieldExpr.obj.kind === "var" && e.obj.name === fieldExpr.obj.name) {
-        return { kind: "var", name: bound, ty: innerTy } as TExpr;
-      }
-      return null;
-    }));
+    const replaced = replaceFieldsInTStmts(someBranch, fieldExpr.obj.name, [
+      { fieldName: fieldExpr.field, newName: bound, fallbackTy: innerTy },
+    ]);
     someBody = transformStmts(replaced, typeDecls);
   } else {
     const transformed = transformStmts(someBranch, typeDecls);
@@ -1090,21 +1086,36 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
   return { kind: "match", scrutinee: varName, arms };
 }
 
-/** Replace obj.field → binder var in typed IR (before transform).
- *  Uses the variant's declared field type since the resolve phase may not
- *  resolve field types on discriminated unions correctly. */
-function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { name: string; tsType: string }[]): TStmt[] {
-  if (fields.length === 0) return stmts;
+/** Replace obj.field → replacement var in typed IR (before transform).
+ *  Used by discriminant match/switch and optional match to rewrite field accesses
+ *  into simple variables before the transform phase, so downstream narrowing
+ *  (parseOptionalCheck, extractLeftmostOptional) sees simple variable references.
+ *  Uses the TExpr's resolved type when available, falling back to `fallbackTy`. */
+function replaceFieldsInTStmts(
+  stmts: TStmt[], objName: string,
+  replacements: { fieldName: string; newName: string; fallbackTy: Ty }[]
+): TStmt[] {
+  if (replacements.length === 0) return stmts;
   return stmts.map(s => mapTStmt(s, e => {
-    if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === varName) {
-      const fi = fields.find(fi => fi.name === e.field);
-      if (fi) {
-        const ty = e.ty.kind !== "unknown" ? e.ty : parseTsType(fi.tsType);
-        return { kind: "var", name: matchBinder(fi.name, varName), ty };
+    if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === objName) {
+      const r = replacements.find(r => r.fieldName === e.field);
+      if (r) {
+        const ty = e.ty.kind !== "unknown" ? e.ty : r.fallbackTy;
+        return { kind: "var", name: r.newName, ty } as TExpr;
       }
     }
     return null;
   }));
+}
+
+/** Replace all variant fields of obj → match binder vars in typed IR.
+ *  Thin wrapper around replaceFieldsInTStmts for discriminant match/switch. */
+function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { name: string; tsType: string }[]): TStmt[] {
+  return replaceFieldsInTStmts(stmts, varName, fields.map(f => ({
+    fieldName: f.name,
+    newName: matchBinder(f.name, varName),
+    fallbackTy: parseTsType(f.tsType),
+  })));
 }
 
 
