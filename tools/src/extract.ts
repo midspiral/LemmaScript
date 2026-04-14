@@ -554,6 +554,38 @@ function extractStmts(stmts: Node[]): RawStmt[] {
           }
           continue;
         }
+        // Destructuring rest: const { [k]: _, ...rest } = map → let rest = map.delete(k)
+        if (!isHavoc && Node.isObjectBindingPattern(nameNode)) {
+          const elements = nameNode.getElements();
+          const restEl = elements.find(el => el.getDotDotDotToken());
+          const computedEls = elements.filter(el => {
+            const pn = el.getPropertyNameNode();
+            return pn && Node.isComputedPropertyName(pn);
+          });
+          if (restEl && computedEls.length > 0) {
+            const initializer = d.getInitializer();
+            if (initializer) {
+              let deleteInit: RawExpr = extractExpr(initializer);
+              for (const cel of computedEls) {
+                const pn = cel.getPropertyNameNode()!;
+                const keyExpr = extractExpr((pn as any).getExpression());
+                deleteInit = { kind: "call",
+                  fn: { kind: "field", obj: deleteInit, field: "delete" },
+                  args: [keyExpr] };
+              }
+              const declType = d.getType();
+              result.push({
+                kind: "let",
+                name: restEl.getName(),
+                mutable: s.getDeclarationKind() === "let",
+                tsType: _eraseGenerics(typeToString(declType)),
+                init: deleteInit,
+                line,
+              });
+              continue;
+            }
+          }
+        }
         const declType = d.getType();
         let init: RawExpr;
         if (isHavoc && !havocKey) {

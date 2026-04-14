@@ -597,10 +597,8 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
         i_tid_idx := i_tid_idx + 1;
       }
       var newLists := Std.Collections.Seq.Filter((l: int) => (l != a.listId), m.lists);
-      var newListNames := m.listNames;
-      newListNames := (map k | k in newListNames && k != i_a_listId :: newListNames[k]);
-      var newTasks := m.tasks;
-      newTasks := (map k | k in newTasks && k != i_a_listId :: newTasks[k]);
+      var newListNames := (map k | k in m.listNames && k != i_a_listId :: m.listNames[k]);
+      var newTasks := (map k | k in m.tasks && k != i_a_listId :: m.tasks[k]);
       var i_t12 := ok(m.(lists := newLists, listNames := newListNames, tasks := newTasks, taskData := newTaskData));
       return i_t12;
     case MoveList(i_a_listId, i_a_listPlace) =>
@@ -910,8 +908,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
       }
       var i_t88 := removeTagFromAllTasks(m.taskData, i_a_tagId);
       var newTaskData := i_t88;
-      var newTags := m.tags;
-      newTags := (map k | k in newTags && k != i_a_tagId :: newTags[k]);
+      var newTags := (map k | k in m.tags && k != i_a_tagId :: m.tags[k]);
       var i_t89 := ok(m.(taskData := newTaskData, tags := newTags));
       return i_t89;
     case MakeCollaborative =>
