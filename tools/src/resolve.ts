@@ -121,6 +121,14 @@ function coerceStr(expr: TExpr, targetTy: Ty): TExpr {
 
 // ── Helpers ──────────────────────────────────────────────────
 
+/** Wrap a resolved expression in Some() for optional coercion. */
+function wrapSome(value: TExpr, optionalTy: Ty): TExpr {
+  return {
+    kind: "call", fn: { kind: "var", name: "Some", ty: optionalTy },
+    args: [value], ty: optionalTy, callKind: "pure",
+  };
+}
+
 /** Detect `v !== undefined` or `undefined !== v` where v: optional<T>.
  *  Handles simple variables, field access chains, and arbitrary expressions.
  *  When `fieldExpr` is returned, callers must use `substituteRawExpr` to narrow.
@@ -329,13 +337,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           a = coerceStr(a, paramTys[i]);
           // Wrap non-optional in Some when callee expects optional param
           if (a.ty.kind !== "optional" && paramTys[i].kind === "optional") {
-            return {
-              kind: "call" as const,
-              fn: { kind: "var" as const, name: "Some", ty: paramTys[i] },
-              args: [a],
-              ty: paramTys[i],
-              callKind: "pure" as const,
-            };
+            return wrapSome(a, paramTys[i]);
           }
           return a;
         });
@@ -431,11 +433,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           value = coerceStr(value, declTy);
           // Coerce non-optional to optional: wrap in Some (only when value type is concrete)
           if (declTy.kind === "optional" && value.ty.kind !== "optional" && value.ty.kind !== "void" && value.ty.kind !== "unknown") {
-            value = {
-              kind: "call" as const,
-              fn: { kind: "var" as const, name: "Some", ty: declTy },
-              args: [value], ty: declTy, callKind: "pure" as const,
-            };
+            value = wrapSome(value, declTy);
           }
         }
         return { name: f.name, value };
@@ -613,11 +611,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // Skip if already optional, void, or undefined (which maps to None)
       const isUndef = value.kind === "var" && value.name === "undefined";
       if (ctx.returnTy.kind === "optional" && value.ty.kind !== "optional" && !isUndef) {
-        value = {
-          kind: "call" as const,
-          fn: { kind: "var" as const, name: "Some", ty: ctx.returnTy },
-          args: [value], ty: ctx.returnTy, callKind: "pure" as const,
-        };
+        value = wrapSome(value, ctx.returnTy);
       }
       return [{ kind: "return", value }, ctx.env];
     }
@@ -861,13 +855,18 @@ function containsReturn(stmts: RawStmt[]): boolean {
 
 // ── Resolve function / module ────────────────────────────────
 
-function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map()): TFunction {
+function resolveFunction(
+  fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Set<string>,
+  fnParams: Map<string, Ty[]> = new Map(),
+  opts?: { thisBinding?: { name: string; ty: Ty }; forcePure?: boolean }
+): TFunction {
 
   const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
   const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: resolveTsType(p.tsType, overrides, p.name) }));
   const returnTy = resolveTsType(fn.returnType, overrides, "\\result");
 
   let env: Env | null = null;
+  if (opts?.thisBinding) env = extend(env, opts.thisBinding.name, opts.thisBinding.ty);
   for (const p of params) env = extend(env, p.name, p.ty);
 
   const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, inSpec: false, inLambda: false };
@@ -884,7 +883,7 @@ function resolveFunction(fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Se
     name: fn.name, typeParams, params, returnTy,
     requires: resolveSpecs(fn.requires, requiresCtx),
     ensures: resolveSpecs(fn.ensures, ensuresCtx),
-    isPure: pureFns.has(fn.name),
+    isPure: opts?.forcePure !== undefined ? opts.forcePure : pureFns.has(fn.name),
     body: resolveBlock(fn.body, baseCtx),
   };
 }
@@ -896,28 +895,12 @@ function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInf
   const thisDecl: TypeDeclInfo = { name: cls.name, kind: "record", fields: cls.fields.map(f => ({ name: f.name, tsType: f.tsType })) };
   const allTypeDecls = [...typeDecls, thisDecl];
 
-  const methods = cls.methods.map(fn => {
-    // Add 'this' to the environment
-    const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
-    const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: resolveTsType(p.tsType, overrides, p.name) }));
-    const returnTy = resolveTsType(fn.returnType, overrides, "\\result");
-
-    let env: Env | null = null;
-    env = extend(env, "this", thisType);
-    for (const p of params) env = extend(env, p.name, p.ty);
-
-    const baseCtx: Ctx = { env, typeDecls: allTypeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, inSpec: false, inLambda: false };
-    const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
-    const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
-
-    return {
-      name: fn.name, typeParams: fn.typeParams, params, returnTy,
-      requires: resolveSpecs(fn.requires, requiresCtx),
-      ensures: resolveSpecs(fn.ensures, ensuresCtx),
-      isPure: false,  // class methods are never pure (they access this)
-      body: resolveBlock(fn.body, baseCtx),
-    };
-  });
+  const methods = cls.methods.map(fn =>
+    resolveFunction(fn, allTypeDecls, pureFns, fnParams, {
+      thisBinding: { name: "this", ty: thisType },
+      forcePure: false,  // class methods are never pure (they access this)
+    })
+  );
 
   return { name: cls.name, fields, methods };
 }
