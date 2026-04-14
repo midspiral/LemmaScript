@@ -572,7 +572,8 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         const nameNode = decl?.getNameNode();
         if (nameNode && Node.isArrayBindingPattern(nameNode)) {
           for (const elem of nameNode.getElements()) {
-            if (Node.isBindingElement(elem)) names.push(elem.getNameNode().getText());
+            if (Node.isOmittedExpression(elem)) names.push("_");
+            else if (Node.isBindingElement(elem)) names.push(elem.getNameNode().getText());
           }
         } else {
           names.push(decl?.getName() ?? "_");
