@@ -243,8 +243,9 @@ function extractExpr(node: Expression): RawExpr {
       if (name === "Map" && args && args.length === 1) {
         const argType = (args[0] as Expression).getType();
         const argSymbol = argType.getSymbol()?.getName() ?? argType.getAliasSymbol()?.getName();
-        if (argSymbol === "Map") {
-          // new Map(existingMap) — identity (Dafny maps are value types)
+        const argTypeText = _eraseGenerics(typeToString(argType));
+        if (argSymbol === "Map" || argTypeText.startsWith("Record<")) {
+          // new Map(existingMap) or new Map(record) — identity (Dafny maps are value types)
           return extractExpr(args[0] as Expression);
         }
         // new Map(entries) — map-from-array constructor
@@ -266,6 +267,18 @@ function extractExpr(node: Expression): RawExpr {
   // As-expression: expr as T — strip the type assertion
   if (Node.isAsExpression(node)) {
     return extractExpr(node.getExpression());
+  }
+
+  // delete obj[key] → map delete expression
+  if (Node.isDeleteExpression(node)) {
+    const expr = node.getExpression();
+    if (Node.isElementAccessExpression(expr)) {
+      return {
+        kind: "call",
+        fn: { kind: "field", obj: extractExpr(expr.getExpression()), field: "delete" },
+        args: [extractExpr(expr.getArgumentExpression()!)],
+      };
+    }
   }
 
   // null → undefined (both map to None in backends)
@@ -587,6 +600,28 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       result.push({
         kind: "forof",
         names,
+        iterable: extractExpr(s.getExpression()),
+        invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
+        doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
+        body: extractStmts(bodyStmts),
+        line,
+      });
+      continue;
+    }
+
+    // for...in: for (const k in obj) → treat as forof with single key name
+    if (Node.isForInStatement(s)) {
+      const init = s.getInitializer();
+      let name = "_";
+      if (Node.isVariableDeclarationList(init)) {
+        name = init.getDeclarations()[0]?.getName() ?? "_";
+      }
+      const bodyNode = s.getStatement();
+      const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [bodyNode];
+      const annots = collectAnnotations(s, bodyStmts);
+      result.push({
+        kind: "forof",
+        names: [name],
         iterable: extractExpr(s.getExpression()),
         invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
         doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,

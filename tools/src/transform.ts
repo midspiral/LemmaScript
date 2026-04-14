@@ -366,6 +366,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
 
     case "index": {
       const idx = transformExpr(e.idx);
+      if (e.obj.ty.kind === "map") {
+        return { kind: "methodCall", obj: transformExpr(e.obj), objTy: e.obj.ty, method: "get", args: [idx], monadic: false };
+      }
       const wrappedIdx = isArray(e.obj.ty) && !isNat(e.idx.ty) ? { kind: "toNat" as const, expr: idx } : idx;
       return { kind: "index", arr: transformExpr(e.obj), idx: wrappedIdx };
     }
@@ -661,6 +664,32 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
       const varName = s.names[0];
       const varTy = s.nameTypes[0] ?? { kind: "unknown" as const };
       let iterExpr = transformExpr(s.iterable);
+
+      // Map key-only iteration: for (const k in record) → iterate keys only
+      if (s.names.length === 1 && s.iterable.ty.kind === "map") {
+        const keyName = s.names[0];
+        const keyTy = s.nameTypes[0] ?? s.iterable.ty.key ?? { kind: "unknown" as const };
+        const keysSeqName = `_${keyName}_keys`;
+        const convExpr: Expr = { kind: "app", fn: "SetToSeq", args: [{ kind: "field", obj: iterExpr, field: "keys" }] };
+        result.push({ kind: "let", name: keysSeqName, type: { kind: "array", elem: keyTy }, mutable: false, value: convExpr });
+        const keysVar: Expr = { kind: "var", name: keysSeqName };
+        const count = _forofCounters.get(keyName) ?? 0;
+        _forofCounters.set(keyName, count + 1);
+        const suffix = count === 0 ? "" : `${count + 1}`;
+        const idxName = `_${keyName}_idx${suffix}`;
+        const idx: Expr = { kind: "var", name: idxName };
+        const arrSize: Expr = { kind: "field", obj: keysVar, field: "size" };
+        const bodyStmts = transformStmts(s.body, typeDecls);
+        const letKey: Stmt = { kind: "let", name: keyName, type: keyTy, mutable: false, value: { kind: "index", arr: keysVar, idx } };
+        const boundInv: Expr = { kind: "binop", op: "≤", left: idx, right: arrSize };
+        result.push({
+          kind: "forin", idx: idxName, bound: arrSize,
+          invariants: [boundInv, ...s.invariants.map(transformExpr)],
+          body: [letKey, ...bodyStmts],
+        });
+        i++;
+        continue;
+      }
 
       // Map iteration: for (const [k, v] of map) → iterate keys, look up values
       if (s.names.length >= 2 && s.iterable.ty.kind === "map") {
