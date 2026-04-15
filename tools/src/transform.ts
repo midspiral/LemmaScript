@@ -1213,10 +1213,12 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
             ],
           };
         }
-        const thenExpr = transformPureBody(s.then, typeDecls);
+        // Append rest to both branches so nested ifs that fall through
+        // can reach the continuation (e.g. early return inside then-branch)
+        const thenExpr = transformPureBody([...s.then, ...rest], typeDecls);
         if (!thenExpr) return null;
-        const elseBranch = s.else.length > 0 ? s.else : rest;
-        const elseExpr = transformPureBody(elseBranch, typeDecls);
+        const elseStmts = s.else.length > 0 ? [...s.else, ...rest] : rest;
+        const elseExpr = transformPureBody(elseStmts, typeDecls);
         if (!elseExpr) return null;
         return { kind: "if", cond: transformExpr(s.cond), then: thenExpr, else: elseExpr };
       }
