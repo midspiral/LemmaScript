@@ -465,6 +465,19 @@ function emitDecl(d: Decl): string {
       return lines.join("\n");
     }
 
+    case "def-by-method": {
+      const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
+      const lines = [`function ${d.name}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
+      for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
+      if (d.decreases) lines.push(`  decreases ${emitExpr(d.decreases)}`);
+      lines.push(`{`);
+      lines.push(`}`);
+      lines.push(`by method {`);
+      lines.push(emitStmts(d.methodBody, 1));
+      lines.push(`}`);
+      return lines.join("\n");
+    }
+
     case "method": {
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
       const lines = [`method ${d.name}${tp}(${paramList(d.params)}) returns (res: ${tyToDafny(d.returnType)})`];
@@ -774,6 +787,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
     try {
       declLines.push("");
       declLines.push(emitDecl(decl));
+      if (decl.kind === "def-by-method") emittedPureDefs.add(decl.name);
     } catch (e) {
       const name = "name" in decl ? decl.name : "unknown";
       const msg = (e as Error).message;

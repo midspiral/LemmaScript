@@ -94,6 +94,18 @@ export interface FnDef {
   body: Expr;
 }
 
+export interface FnDefByMethod {
+  kind: "def-by-method";
+  name: string;
+  typeParams: string[];
+  params: { name: string; type: Ty }[];
+  returnType: Ty;
+  requires: Expr[];
+  ensures: Expr[];
+  decreases: Expr | null;
+  methodBody: Stmt[];
+}
+
 export interface FnMethod {
   kind: "method";
   name: string;
@@ -131,7 +143,7 @@ export interface TypeAlias {
   target: Ty;
 }
 
-export type Decl = Inductive | Structure | FnDef | FnMethod | Namespace | ClassDecl | ConstDecl | TypeAlias;
+export type Decl = Inductive | Structure | FnDef | FnDefByMethod | FnMethod | Namespace | ClassDecl | ConstDecl | TypeAlias;
 
 export interface Module {
   comment: string;

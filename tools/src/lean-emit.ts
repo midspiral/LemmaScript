@@ -337,6 +337,9 @@ function emitDecl(d: Decl): string {
       return `def ${d.name} ${params} : ${tyToLean(d.returnType)} :=\n${emitPureExpr(d.body, 1)}`;
     }
 
+    case "def-by-method":
+      throw new Error("function by method is not supported for Lean backend");
+
     case "method": {
       const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`).join(" ");
       const lines = [`method ${d.name} ${params} return (res : ${tyToLean(d.returnType)})`];

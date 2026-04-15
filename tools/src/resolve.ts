@@ -818,6 +818,8 @@ function collectCallsStmts(stmts: RawStmt[], fns: Set<string>, out: Set<string>)
 
 function computePureFns(functions: RawFunction[]): Set<string> {
   const allFnNames = new Set(functions.map(fn => fn.name));
+  // //@ pure functions are always considered pure — never taint callers
+  const forcePure = new Set(functions.filter(fn => fn.pure).map(fn => fn.name));
 
   // Build call graph: fn → set of same-file functions it calls
   const callGraph = new Map<string, Set<string>>();
@@ -827,9 +829,9 @@ function computePureFns(functions: RawFunction[]): Set<string> {
     callGraph.set(fn.name, calls);
   }
 
-  // Seed: syntactically non-pure functions
+  // Seed: syntactically non-pure functions (skip //@ pure)
   const nonPure = new Set(
-    functions.filter(fn => !isSyntacticallyPure(fn.body)).map(fn => fn.name)
+    functions.filter(fn => !forcePure.has(fn.name) && !isSyntacticallyPure(fn.body)).map(fn => fn.name)
   );
 
   // Build reverse graph: fn → set of functions that call it
@@ -839,12 +841,12 @@ function computePureFns(functions: RawFunction[]): Set<string> {
     for (const callee of callees) callers.get(callee)!.add(caller);
   }
 
-  // Propagate impurity through reverse call graph
+  // Propagate impurity through reverse call graph (skip //@ pure)
   const worklist = [...nonPure];
   while (worklist.length > 0) {
     const fn = worklist.pop()!;
     for (const caller of callers.get(fn) ?? []) {
-      if (!nonPure.has(caller)) {
+      if (!nonPure.has(caller) && !forcePure.has(caller)) {
         nonPure.add(caller);
         worklist.push(caller);
       }

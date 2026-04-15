@@ -334,6 +334,17 @@ function collectAnnotations(node: Node, body?: Node[]): Annotation[] {
   return own;
 }
 
+/** Check for bare `//@ pure` annotation (no expression). */
+function hasPureAnnotation(node: Node, body?: Node[]): boolean {
+  const nodes = body && body.length > 0 ? [node, body[0]] : [node];
+  for (const n of nodes) {
+    for (const range of n.getLeadingCommentRanges()) {
+      if (range.getText().trim() === "//@ pure") return true;
+    }
+  }
+  return false;
+}
+
 // ── Type declaration extraction ──────────────────────────────
 
 function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
@@ -877,6 +888,7 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
     requires: annots.filter(a => a.kind === "requires").map(a => a.expr),
     ensures: annots.filter(a => a.kind === "ensures").map(a => a.expr),
     decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
+    pure: hasPureAnnotation(fn, body && Node.isBlock(body) ? body.getStatements() as Node[] : undefined),
     typeAnnotations,
     body: extractedBody,
     line: fn.getStartLineNumber(),

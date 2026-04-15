@@ -6,7 +6,7 @@
  */
 
 import type { TExpr, TStmt, TFunction, TModule, Ty } from "./typedir.js";
-import type { Expr, Stmt, Decl, Module, FnDef, FnMethod, MatchArm, StmtMatchArm, ConstDecl } from "./ir.js";
+import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, StmtMatchArm, ConstDecl } from "./ir.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 
@@ -1394,24 +1394,41 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
 
   // Pure function mirrors
   const pureDefs: FnDef[] = [];
+  const defByMethods: FnDefByMethod[] = [];
   for (const fn of mod.functions) {
     if (!fn.isPure) continue;
     const body = transformPureBody(fn.body, mod.typeDecls);
-    if (!body) continue;
-    // For ensures, replace \result (→ "res") with the function call
-    const fnCall: Expr = { kind: "app", fn: fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) };
-    const ensures = fn.ensures.map(e => replaceVar(transformExpr(e), "res", fnCall));
-    pureDefs.push({
-      kind: "def",
-      name: fn.name,
-      typeParams: fn.typeParams,
-      params: fn.params.map(p => ({ name: p.name, type: p.ty })),
-      returnType: fn.returnTy,
-      requires: fn.requires.map(transformExpr),
-      ensures,
-      decreases: fn.decreases ? transformExpr(fn.decreases) : null,
-      body,
-    });
+    if (body) {
+      // For ensures, replace \result (→ "res") with the function call
+      const fnCall: Expr = { kind: "app", fn: fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) };
+      const ensures = fn.ensures.map(e => replaceVar(transformExpr(e), "res", fnCall));
+      pureDefs.push({
+        kind: "def",
+        name: fn.name,
+        typeParams: fn.typeParams,
+        params: fn.params.map(p => ({ name: p.name, type: p.ty })),
+        returnType: fn.returnTy,
+        requires: fn.requires.map(transformExpr),
+        ensures,
+        decreases: fn.decreases ? transformExpr(fn.decreases) : null,
+        body,
+      });
+    } else {
+      // Pure annotation but body can't be auto-converted — emit function by method
+      _forofCounters.clear();
+      const methodBody = transformStmts(fn.body, mod.typeDecls);
+      defByMethods.push({
+        kind: "def-by-method",
+        name: fn.name,
+        typeParams: fn.typeParams,
+        params: fn.params.map(p => ({ name: p.name, type: p.ty })),
+        returnType: fn.returnTy,
+        requires: fn.requires.map(transformExpr),
+        ensures: fn.ensures.map(transformExpr),
+        decreases: fn.decreases ? transformExpr(fn.decreases) : null,
+        methodBody,
+      });
+    }
   }
 
   const base = mod.file.split("/").pop()?.replace(/\.ts$/, "") ?? "module";
@@ -1433,7 +1450,8 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
 
   // Def file: Velvet methods
   // Pure functions get a thin wrapper that calls Pure.fnName
-  const pureDefNames = new Set(pureDefs.map(d => d.name));
+  // def-by-method functions also skip their method wrappers
+  const pureDefNames = new Set([...pureDefs.map(d => d.name), ...defByMethods.map(d => d.name)]);
   const methods: FnMethod[] = mod.functions.map(fn => {
     const ensures: Expr[] = [];
     for (const e of fn.ensures) {
@@ -1503,7 +1521,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
       { key: "loom.semantics.termination", value: '"total"' },
       { key: "loom.semantics.choice", value: '"demonic"' },
     ],
-    decls: [...constDecls, ...methods, ...classDecls],
+    decls: [...constDecls, ...defByMethods, ...methods, ...classDecls],
   };
 
   return { typesFile, defFile };

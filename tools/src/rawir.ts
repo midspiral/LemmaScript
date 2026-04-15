@@ -151,6 +151,7 @@ export interface RawFunction {
   requires: string[];     // //@ annotation strings
   ensures: string[];
   decreases: string | null;
+  pure: boolean;           // //@ pure — force pure even if syntactically impure
   typeAnnotations: { name: string; type: string }[];
   body: RawStmt[];
   line: number;
