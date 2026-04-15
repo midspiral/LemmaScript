@@ -1056,7 +1056,8 @@ function prepareOptionalMatch(s: TStmt & { kind: "if" }, restStmts: TStmt[]): {
   const noneBranch = check.negated ? s.then : (s.else.length > 0 ? s.else : restStmts);
   // Early-return pattern: Some branch is empty → consume rest of block
   if (someBranch.length === 0 && restStmts.length > 0) someBranch = restStmts;
-  const bound = matchBinder(`${check.varName}_val`);
+  const sanitized = check.varName.replace(/\./g, "_");
+  const bound = matchBinder(`${sanitized}_val`);
   return { check, someBranch, noneBranch, bound };
 }
 
@@ -1210,11 +1211,28 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
         // Optional narrowing: if (x === undefined) → match x { None => ..., Some(x_val) => ... }
         const optMatch = prepareOptionalMatch(s, rest);
         if (optMatch) {
-          const someExpr = transformPureBody([...optMatch.someBranch, ...rest], typeDecls);
+          // For field chains (a.dueDate !== undefined), replace in TStmt before transform
+          let someBranch = [...optMatch.someBranch, ...rest];
+          const fe = optMatch.check.fieldExpr;
+          if (fe && fe.kind === "field" && fe.obj.kind === "var") {
+            const innerTy = fe.ty.kind === "optional" ? fe.ty.inner : fe.ty;
+            someBranch = replaceFieldsInTStmts(someBranch, fe.obj.name, [
+              { fieldName: fe.field, newName: optMatch.bound, fallbackTy: innerTy },
+            ]);
+            // The replacement keeps the original optional type, but the match binding
+            // unwraps it. Fix the type so downstream record coercion re-wraps with Some().
+            someBranch = someBranch.map(s => mapTStmt(s, e =>
+              e.kind === "var" && e.name === optMatch.bound && e.ty.kind === "optional"
+                ? { ...e, ty: e.ty.inner } as TExpr : null));
+          }
+          const someExpr = transformPureBody(someBranch, typeDecls);
           if (!someExpr) return null;
           const noneExpr = transformPureBody(optMatch.noneBranch, typeDecls);
           if (!noneExpr) return null;
-          const someReplaced = replaceVar(someExpr, optMatch.check.varName, { kind: "var", name: optMatch.bound });
+          // For simple vars, replace in Expr after transform
+          const someReplaced = optMatch.check.fieldExpr
+            ? someExpr
+            : replaceVar(someExpr, optMatch.check.varName, { kind: "var", name: optMatch.bound });
           return {
             kind: "match", scrutinee: optMatch.check.varName,
             arms: [
