@@ -599,7 +599,8 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     // Field chains are excluded — resolve can't substitute in statement lists;
     // transform's emitOptionalMatch handles field chains in statement contexts.
     if (s.kind === "if" && s.then.length > 0 && s.then[s.then.length - 1].kind === "return" && s.else.length === 0) {
-      const narrowed = detectOptionalCheck(s.cond, withEnv(ctx, env));
+      const narrowed = detectOptionalCheck(s.cond, withEnv(ctx, env))
+        ?? (s.cond.kind === "binop" && s.cond.op === "&&" ? detectOptionalCheck(s.cond.left, withEnv(ctx, env)) : null);
       if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
         env = extend(env, narrowed.varName, narrowed.innerTy);
       }
