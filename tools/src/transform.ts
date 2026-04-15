@@ -1232,7 +1232,7 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
           // For simple vars, replace in Expr after transform
           const someReplaced = optMatch.check.fieldExpr
             ? someExpr
-            : replaceVar(someExpr, optMatch.check.varName, { kind: "var", name: optMatch.bound });
+            : replaceVar(someExpr, optMatch.check.varName, { kind: "var", name: optMatch.bound }, true);
           return {
             kind: "match", scrutinee: optMatch.check.varName,
             arms: [
