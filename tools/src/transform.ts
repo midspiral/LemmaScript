@@ -1005,7 +1005,7 @@ function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind:
     someBody = transformStmts(replaced, typeDecls);
   } else {
     const transformed = transformStmts(someBranch, typeDecls);
-    someBody = transformed.map(stmt => mapStmtExprs(stmt, e => replaceVar(e, varName, { kind: "var", name: bound })));
+    someBody = transformed.map(stmt => mapStmtExprs(stmt, e => replaceVar(e, varName, { kind: "var", name: bound }, true)));
   }
   return {
     kind: "match", scrutinee: varName,
@@ -1361,13 +1361,34 @@ function findReassignedNames(stmts: TStmt[], names: Set<string>): Set<string> {
 }
 
 /** Replace all occurrences of a variable name with a new expression. */
-function replaceVar(e: Expr, name: string, replacement: Expr): Expr {
+/**
+ * Replace all occurrences of variable `name` with `replacement`.
+ * If `narrowing` is true, the replacement is an unwrapped Optional value
+ * (e.g., replacing `x: Option<T>` with `x_val: T`). In that case, when the
+ * variable appears directly as a record spread field value, it's wrapped in
+ * Some() to preserve the field's Optional type.
+ */
+function replaceVar(e: Expr, name: string, replacement: Expr, narrowing?: boolean): Expr {
+  const rec = (expr: Expr) => replaceVar(expr, name, replacement, narrowing);
   return mapExpr(e, x => {
     if (x.kind === "var" && x.name === name) return replacement;
+    // Record spread: wrap direct variable uses in field values with Some when narrowing
+    if (narrowing && x.kind === "record" && x.spread) {
+      return {
+        ...x,
+        spread: rec(x.spread),
+        fields: x.fields.map(f => {
+          if (f.value.kind === "var" && f.value.name === name) {
+            return { ...f, value: { kind: "app" as const, fn: "Some", args: [replacement] } };
+          }
+          return { ...f, value: rec(f.value) };
+        }),
+      };
+    }
     // Don't descend past bindings that shadow the name
     if (x.kind === "forall" && x.var === name) return x;
     if (x.kind === "exists" && x.var === name) return x;
-    if (x.kind === "let" && x.name === name) return { ...x, value: replaceVar(x.value, name, replacement) };
+    if (x.kind === "let" && x.name === name) return { ...x, value: replaceVar(x.value, name, replacement, narrowing) };
     return null;
   });
 }
