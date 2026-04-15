@@ -1413,8 +1413,8 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
         decreases: fn.decreases ? transformExpr(fn.decreases) : null,
         body,
       });
-    } else {
-      // Pure annotation but body can't be auto-converted — emit function by method
+    } else if (fn.forcePure) {
+      // //@ pure but body can't be auto-converted — emit function by method
       _forofCounters.clear();
       const methodBody = transformStmts(fn.body, mod.typeDecls);
       defByMethods.push({

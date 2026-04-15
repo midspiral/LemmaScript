@@ -90,6 +90,7 @@ export interface TFunction {
   ensures: TExpr[];
   decreases: TExpr | null;
   isPure: boolean;          // no while, no mutable let
+  forcePure: boolean;       // //@ pure — emit function by method if body can't be pure
   body: TStmt[];
 }
 

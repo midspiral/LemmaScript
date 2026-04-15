@@ -907,6 +907,7 @@ function resolveFunction(
     ensures: resolveSpecs(fn.ensures, ensuresCtx),
     decreases: fn.decreases ? resolveSpec(fn.decreases, requiresCtx) : null,
     isPure: opts?.forcePure !== undefined ? opts.forcePure : pureFns.has(fn.name),
+    forcePure: fn.pure,
     body: resolveBlock(fn.body, baseCtx),
   };
 }
