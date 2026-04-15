@@ -32,12 +32,13 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `requires` | Before first statement of function body | Precondition |
 | `ensures` | Before first statement of function body | Postcondition (`\result` refers to return value) |
 | `invariant` | Before first statement of loop body | Loop invariant |
-| `decreases` | Before first statement of loop body | Termination metric |
+| `decreases` | Before first statement of loop or function body | Termination metric |
 | `done_with` | Before first statement of loop body | Post-loop condition (see §5.2) |
 | `type` | Before first statement of function body | Type override for a variable (see §2.4) |
 | `ghost let x = e` | Before any statement | Ghost variable (proof-only, not runtime). See §2.3. |
 | `ghost x = e` | Before any statement | Ghost variable reassignment. |
 | `assert e` | Before any statement | Assertion (`assertGadget` in Lean, `assert` in Dafny). |
+| `pure` | Before function declaration | Force function to be pure — Dafny: `function by method` if body can't auto-convert (see §5.1). |
 | `havoc` | Before a variable declaration | Nondeterministic value — skip init expression (see §2.9). |
 | `havoc <key>` | Before a variable declaration | Nondeterministic subexpression — replace calls matching `<key>` (see §2.10). |
 | `declare-type N { f: T, ... }` | Before any statement | Declare a record type for cross-file types (see §2.5). |
@@ -683,12 +684,60 @@ match pkt {
 
 ## 5. Pure Function Detection
 
-A function is **pure** if its body contains no `while` statements and no mutable `let` declarations, and it does not transitively call any non-pure function (determined via call-graph analysis in the resolve phase).
+A function is **pure** if its body contains no `while` statements, no `for...of` statements, and no mutable `let` declarations, and it does not transitively call any non-pure function (determined via call-graph analysis in the resolve phase).
 
 Pure functions are handled differently by each backend:
 
 - **Lean:** generates a plain `def` in `foo.types.lean` inside `namespace Pure`, plus a Velvet method wrapper: `return Pure.foo params`. This enables proofs by standard Lean induction. In spec annotations, calls to pure functions emit as `Pure.fnName`. See [SPEC_LEAN.md](SPEC_LEAN.md).
 - **Dafny:** generates a `function` declaration (no wrapper, no namespace). `requires` and `ensures` are emitted directly. If the function has `ensures`, a companion `lemma` is generated as a proof target. See [SPEC_DAFNY.md](SPEC_DAFNY.md).
+
+### 5.1 `//@ pure` — Forced Purity and `function by method`
+
+The `//@ pure` annotation forces a function to be treated as pure in the call graph, even if it contains loops or calls impure functions. This prevents impurity from propagating to callers.
+
+```typescript
+//@ pure
+function tagNameExists(m: Model, name: string, excludeTag?: TagId): boolean {
+  for (const [tid, tag] of m.tags) {
+    if (excludeTag === undefined || tid !== excludeTag) {
+      if (eqIgnoreCase(tag.name, name)) return true
+    }
+  }
+  return false
+}
+```
+
+If `transformPureBody` can auto-convert the body to a pure expression, the function emits as a normal Dafny `function`. If it cannot (e.g., the body has loops), it emits as `function by method`:
+
+```dafny
+function tagNameExists(m: Model, name: string, excludeTag: Option<TagId>): bool
+{
+}
+by method {
+  var i_tid_keys := SetToSeq(m.tags.Keys);
+  // ... auto-generated imperative body
+}
+```
+
+The empty `{ }` block is the spec body placeholder. The user completes it in the `.dfy` file:
+
+```dafny
+function tagNameExists(m: Model, name: string, excludeTag: Option<TagId>): bool
+{
+  exists tid :: tid in m.tags &&
+    (match excludeTag { case None => true case Some(v) => v != tid }) &&
+    eqIgnoreCase(m.tags[tid].name, name)
+}
+by method {
+  // ... auto-generated, preserved by regen
+}
+```
+
+The spec body is purely additive — `regen` three-way-merges and preserves user additions while updating the `by method` block when the TypeScript changes.
+
+**Effect on callers:** Since `//@ pure` functions are `function`s in Dafny, callers that only invoke pure functions become pure automatically. For example, a large `switch`-based `apply` function becomes a `function` if all the map-iterating helpers it calls are marked `//@ pure`.
+
+**Lean backend:** `//@ pure` with `function by method` is Dafny-specific. Using `//@ pure` on a function whose body cannot be auto-converted will throw an error for the Lean backend.
 
 ---
 
