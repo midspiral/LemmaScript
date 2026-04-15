@@ -150,6 +150,7 @@ export interface RawFunction {
   returnType: string;
   requires: string[];     // //@ annotation strings
   ensures: string[];
+  decreases: string | null;
   typeAnnotations: { name: string; type: string }[];
   body: RawStmt[];
   line: number;

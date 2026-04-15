@@ -1197,10 +1197,20 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
         return { kind: "let", name: s.name, value: transformExpr(s.init), body: restExpr };
       }
       case "if": {
+        // Restructure && with optional check: split into nested ifs so
+        // prepareOptionalMatch can detect the optional check and bind the unwrapped value
+        if (s.cond.kind === "binop" && s.cond.op === "&&" && s.else.length === 0) {
+          const extracted = extractLeftmostOptional(s.cond);
+          if (extracted) {
+            const innerIf: TStmt = { kind: "if", cond: extracted.rest, then: s.then, else: [] };
+            const outerIf: TStmt = { kind: "if", cond: extracted.optCond, then: [innerIf], else: [] };
+            return transformPureBody([outerIf, ...rest], typeDecls);
+          }
+        }
         // Optional narrowing: if (x === undefined) → match x { None => ..., Some(x_val) => ... }
         const optMatch = prepareOptionalMatch(s, rest);
         if (optMatch) {
-          const someExpr = transformPureBody(optMatch.someBranch, typeDecls);
+          const someExpr = transformPureBody([...optMatch.someBranch, ...rest], typeDecls);
           if (!someExpr) return null;
           const noneExpr = transformPureBody(optMatch.noneBranch, typeDecls);
           if (!noneExpr) return null;
@@ -1399,6 +1409,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
       returnType: fn.returnTy,
       requires: fn.requires.map(transformExpr),
       ensures,
+      decreases: fn.decreases ? transformExpr(fn.decreases) : null,
       body,
     });
   }

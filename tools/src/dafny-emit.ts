@@ -447,6 +447,7 @@ function emitDecl(d: Decl): string {
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
       const lines = [`function ${d.name}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
+      if (d.decreases) lines.push(`  decreases ${emitExpr(d.decreases)}`);
       lines.push(`{`);
       lines.push(emitPureExpr(d.body, 1));
       lines.push(`}`);

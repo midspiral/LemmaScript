@@ -88,6 +88,7 @@ export interface TFunction {
   returnTy: Ty;
   requires: TExpr[];
   ensures: TExpr[];
+  decreases: TExpr | null;
   isPure: boolean;          // no while, no mutable let
   body: TStmt[];
 }

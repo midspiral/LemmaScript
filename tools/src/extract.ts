@@ -876,6 +876,7 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
     })(),
     requires: annots.filter(a => a.kind === "requires").map(a => a.expr),
     ensures: annots.filter(a => a.kind === "ensures").map(a => a.expr),
+    decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
     typeAnnotations,
     body: extractedBody,
     line: fn.getStartLineNumber(),

@@ -95,6 +95,7 @@ interface Ctx {
   returnTy: Ty;
   pureFns: Set<string>;  // names of pure functions in this module
   fnParams: Map<string, Ty[]>;  // function name → parameter types
+  fnReturns: Map<string, Ty>;  // function name → return type
   inSpec: boolean;
   inLambda: boolean;
 }
@@ -385,7 +386,11 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         argCtx = { ...ctx, returnTy: fn.obj.ty.elem };
       }
       const args = coerceCallArgs(rawArgs.map(a => resolveExpr(a, argCtx)), fn, ctx);
-      const ty = inferMethodReturnTy(fn, args, ctx);
+      let ty = inferMethodReturnTy(fn, args, ctx);
+      // For same-file function calls, use the known return type
+      if (ty.kind === "unknown" && fn.kind === "var" && ctx.fnReturns.has(fn.name)) {
+        ty = ctx.fnReturns.get(fn.name)!;
+      }
       return { kind: "call", fn, args, ty, callKind: classifyCall(e.fn, ctx) };
     }
 
@@ -872,7 +877,7 @@ function containsReturn(stmts: RawStmt[]): boolean {
 
 function resolveFunction(
   fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Set<string>,
-  fnParams: Map<string, Ty[]> = new Map(),
+  fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map(),
   opts?: { thisBinding?: { name: string; ty: Ty }; forcePure?: boolean }
 ): TFunction {
 
@@ -884,7 +889,7 @@ function resolveFunction(
   if (opts?.thisBinding) env = extend(env, opts.thisBinding.name, opts.thisBinding.ty);
   for (const p of params) env = extend(env, p.name, p.ty);
 
-  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, inSpec: false, inLambda: false };
+  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false };
   const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
   const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
 
@@ -898,12 +903,13 @@ function resolveFunction(
     name: fn.name, typeParams, params, returnTy,
     requires: resolveSpecs(fn.requires, requiresCtx),
     ensures: resolveSpecs(fn.ensures, ensuresCtx),
+    decreases: fn.decreases ? resolveSpec(fn.decreases, requiresCtx) : null,
     isPure: opts?.forcePure !== undefined ? opts.forcePure : pureFns.has(fn.name),
     body: resolveBlock(fn.body, baseCtx),
   };
 }
 
-function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map()): import("./typedir.js").TClass {
+function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map()): import("./typedir.js").TClass {
   const fields = cls.fields.map(f => ({ name: f.name, ty: parseTsType(f.tsType) }));
   // Create a synthetic record type for 'this' so field access resolves
   const thisType: Ty = { kind: "user", name: cls.name };
@@ -911,7 +917,7 @@ function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInf
   const allTypeDecls = [...typeDecls, thisDecl];
 
   const methods = cls.methods.map(fn =>
-    resolveFunction(fn, allTypeDecls, pureFns, fnParams, {
+    resolveFunction(fn, allTypeDecls, pureFns, fnParams, fnReturns, {
       thisBinding: { name: "this", ty: thisType },
       forcePure: false,  // class methods are never pure (they access this)
     })
@@ -933,13 +939,15 @@ function precomputeFieldTypes(typeDecls: TypeDeclInfo[]) {
 export function resolveModule(raw: RawModule): TModule {
   precomputeFieldTypes(raw.typeDecls);
   const pureFns = computePureFns(raw.functions);
-  // Pre-compute function parameter types for optional coercion
+  // Pre-compute function parameter and return types
   const fnParams = new Map<string, Ty[]>();
+  const fnReturns = new Map<string, Ty>();
   for (const fn of raw.functions) {
     const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
     fnParams.set(fn.name, fn.params.map(p => resolveTsType(p.tsType, overrides, p.name)));
+    fnReturns.set(fn.name, resolveTsType(fn.returnType, overrides, "\\result"));
   }
-  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, inSpec: false, inLambda: false };
+  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false };
   const constants = (raw.constants ?? []).map(c => ({
     name: c.name,
     ty: parseTsType(c.tsType),
@@ -950,7 +958,7 @@ export function resolveModule(raw: RawModule): TModule {
     file: raw.file,
     typeDecls: raw.typeDecls,
     constants,
-    functions: raw.functions.map(fn => resolveFunction(fn, raw.typeDecls, pureFns, fnParams)),
-    classes: (raw.classes ?? []).map(cls => resolveClass(cls, raw.typeDecls, pureFns, fnParams)),
+    functions: raw.functions.map(fn => resolveFunction(fn, raw.typeDecls, pureFns, fnParams, fnReturns)),
+    classes: (raw.classes ?? []).map(cls => resolveClass(cls, raw.typeDecls, pureFns, fnParams, fnReturns)),
   };
 }
