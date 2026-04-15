@@ -197,7 +197,6 @@ function taskTitleExistsInList(m: Model, listId: ListId, title: string, excludeT
 }
 
 function tagNameExists(m: Model, name: string, excludeTag?: TagId): boolean {
-  //@ havoc
   for (const [tid, tag] of m.tags) {
     if (excludeTag === undefined || tid !== excludeTag) {
       if (eqIgnoreCase(tag.name, name)) return true
@@ -222,7 +221,6 @@ export function findListForTask(m: Model, taskId: TaskId): ListId | undefined {
 
 function removeTaskFromAllLists(tasks: Record<number, TaskId[]>, taskId: TaskId): Record<number, TaskId[]> {
   const result = new Map<ListId, TaskId[]>()
-  //@ havoc
   for (const [lid, lane] of tasks) {
     result.set(lid, lane.filter(id => id !== taskId))
   }
@@ -232,7 +230,6 @@ function removeTaskFromAllLists(tasks: Record<number, TaskId[]>, taskId: TaskId)
 
 function removeTagFromAllTasks(taskData: Record<number, Task>, tagId: TagId): Record<number, Task> {
   const result = new Map<TaskId, Task>()
-  //@ havoc
   for (const [tid, task] of taskData) {
     const newTags = task.tags.filter(t => t !== tagId)
     result.set(tid, { ...task, tags: newTags })
@@ -243,7 +240,6 @@ function removeTagFromAllTasks(taskData: Record<number, Task>, tagId: TagId): Re
 
 function clearAssigneeFromAllTasks(taskData: Record<number, Task>, userId: UserId): Record<number, Task> {
   const result = new Map<TaskId, Task>()
-  //@ havoc
   for (const [tid, task] of taskData) {
     const newAssignees = task.assignees.filter(u => u !== userId)
     result.set(tid, { ...task, assignees: newAssignees })
@@ -627,7 +623,6 @@ export function getTagName(m: Model, tagId: TagId): string | undefined {
 export function countPriorityTasks(m: Model): number {
   //@ ensures \result >= 0
   let count = 0
-  //@ havoc
   for (const [, task] of m.taskData) {
     if (isPriorityTask(task)) count = count + 1
   }
@@ -637,7 +632,6 @@ export function countPriorityTasks(m: Model): number {
 export function countLogbookTasks(m: Model): number {
   //@ ensures \result >= 0
   let count = 0
-  //@ havoc
   for (const [, task] of m.taskData) {
     if (isLogbookTask(task)) count = count + 1
   }
