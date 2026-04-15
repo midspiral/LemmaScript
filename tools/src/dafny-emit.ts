@@ -743,20 +743,33 @@ export function emitDafnyFile(file: Module, tsFileName?: string): string {
   buildRecordCtorMap(file.decls);
   _neededPreambles.clear();
 
-  // Collect pure def names so we can skip their method wrappers
-  const pureDefs = new Set<string>();
-  for (const d of file.decls) {
-    if (d.kind === "namespace") {
-      for (const inner of d.decls) if (inner.kind === "def") pureDefs.add(inner.name);
-    }
-    if (d.kind === "def") pureDefs.add(d.name);
-  }
+  // Track successfully emitted pure defs — method wrappers are only
+  // skipped when the corresponding pure def was actually emitted.
+  const emittedPureDefs = new Set<string>();
 
   // Emit declarations
   const declLines: string[] = [];
   const skipped: string[] = [];
   for (const decl of file.decls) {
-    if (decl.kind === "method" && pureDefs.has(decl.name)) continue;
+    if (decl.kind === "method" && emittedPureDefs.has(decl.name)) continue;
+    if (decl.kind === "namespace") {
+      // Emit each inner decl individually — if one fails, the rest survive
+      // and failed defs fall back to their method wrappers
+      for (const inner of decl.decls) {
+        try {
+          declLines.push("");
+          declLines.push(emitDecl(inner));
+          if (inner.kind === "def") emittedPureDefs.add(inner.name);
+        } catch (e) {
+          const name = "name" in inner ? inner.name : "unknown";
+          const msg = (e as Error).message;
+          console.error(`WARNING: skipping pure '${name}': ${msg}`);
+          declLines.push(`\n// LemmaScript: skipped pure ${name}`);
+          skipped.push(name);
+        }
+      }
+      continue;
+    }
     try {
       declLines.push("");
       declLines.push(emitDecl(decl));
