@@ -599,6 +599,9 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         }
         // Compound || with === undefined: narrow all checked vars in else branch
         // e.g. if (a === undefined || b === undefined) then X else Y → narrow a,b in Y
+        // TODO: resolve-time narrowing works but transform doesn't emit match unwrap
+        // for || conditions yet — decompose || into nested matches in transform.
+        // Workaround: split || into separate if guards in user code.
         if (!narrowed && e.cond.kind === "binop" && e.cond.op === "||") {
           for (const n of collectEarlyReturnNarrowings(e.cond, ctx)) {
             elseCtx = withEnv(elseCtx, extend(elseCtx.env, n.varName, n.innerTy));
