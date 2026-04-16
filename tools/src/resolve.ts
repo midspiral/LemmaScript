@@ -177,6 +177,20 @@ function detectOptionalCheck(cond: RawExpr, ctx: Ctx): {
   return null;
 }
 
+/** Collect all optional narrowings from an early-return condition.
+ *  Handles single checks (x === undefined) and compound || chains
+ *  (x === undefined || y === undefined). */
+function collectEarlyReturnNarrowings(cond: RawExpr, ctx: Ctx): { varName: string; innerTy: Ty }[] {
+  if (cond.kind === "binop" && cond.op === "||") {
+    return [...collectEarlyReturnNarrowings(cond.left, ctx), ...collectEarlyReturnNarrowings(cond.right, ctx)];
+  }
+  const narrowed = detectOptionalCheck(cond, ctx);
+  if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
+    return [{ varName: narrowed.varName, innerTy: narrowed.innerTy }];
+  }
+  return [];
+}
+
 /** TS reference types that become value types in Dafny/Lean — const bindings need mutable var. */
 function isRefMutableInTS(ty: Ty): boolean {
   return ty.kind === "array" || ty.kind === "map" || ty.kind === "set";
@@ -632,12 +646,13 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     result.push(typed);
     env = nextEnv;
     // Flow narrowing: if (x === undefined) { return } narrows x for rest of block.
+    // Also handles compound: if (x === undefined || y === undefined) { return }
     // Field chains are excluded — resolve can't substitute in statement lists;
     // transform's emitOptionalMatch handles field chains in statement contexts.
     if (s.kind === "if" && s.then.length > 0 && s.then[s.then.length - 1].kind === "return" && s.else.length === 0) {
-      const narrowed = detectOptionalCheck(s.cond, withEnv(ctx, env));
-      if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
-        env = extend(env, narrowed.varName, narrowed.innerTy);
+      const narrowings = collectEarlyReturnNarrowings(s.cond, withEnv(ctx, env));
+      for (const n of narrowings) {
+        env = extend(env, n.varName, n.innerTy);
       }
     }
   }
