@@ -408,7 +408,16 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           fn.obj.ty.elem.kind === "user") {
         argCtx = { ...ctx, returnTy: fn.obj.ty.elem };
       }
-      const args = coerceCallArgs(rawArgs.map(a => resolveExpr(a, argCtx)), fn, ctx);
+      // Propagate parameter types to arguments for record literal resolution
+      // (enables inline discriminated union construction in function arguments)
+      const paramTypes = fn.kind === "var" && ctx.fnParams.has(fn.name) ? ctx.fnParams.get(fn.name)! : null;
+      const args = coerceCallArgs(rawArgs.map((a, i) => {
+        let aCtx = argCtx;
+        if (paramTypes && i < paramTypes.length && paramTypes[i].kind === "user") {
+          aCtx = { ...aCtx, returnTy: paramTypes[i] };
+        }
+        return resolveExpr(a, aCtx);
+      }), fn, ctx);
       let ty = inferMethodReturnTy(fn, args, ctx);
       // For same-file function calls, use the known return type
       if (ty.kind === "unknown" && fn.kind === "var" && ctx.fnReturns.has(fn.name)) {
