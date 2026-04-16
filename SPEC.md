@@ -394,6 +394,8 @@ No normalization of operators. Both backends handle all comparison directions.
 | `s.delete(x)` | `s := s.erase x` | `s := (s - {x})` |
 | `s.size` | `s.size` | `\|s\|` |
 | `for (const x of s)` | `.toArray` + for-in | `SetToSeq` + while |
+| `for (const [k, v] of Object.entries(m))` | `.toArray` + for-in | `SetToSeq(m.Keys)` + while |
+| `for (const v of Object.values(m))` | `.toArray` + for-in | `SetToSeq(m.Keys)` + while |
 | `v !== undefined` | `if h : v.isSome then ... else ...` | `match v { case Some(...) => ... }` |
 | `\result` | `res` | `res` |
 | `"foo"` (enum context) | `.foo` | `Type.foo` |
@@ -548,7 +550,7 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 **Set iteration:** `for (const x of s)` where `s` is a `Set<T>` converts the set to an array first (Lean: `.toArray`, Dafny: `SetToSeq` helper), then iterates with a standard indexed loop.
 
-**Map destructuring iteration:** `for (const [k, v] of map)` where the iterable has type `Map<K,V>` desugars to iterating over `map.Keys` (via `SetToSeq`), with `k` bound to each key and `v` bound to `map[k]`. General destructuring in for-of (e.g., `for (const [a, b, c] of tuples)`) binds each name to `elem[0]`, `elem[1]`, etc.
+**Map/Record iteration via `Object.entries`:** `for (const [k, v] of Object.entries(map))` where `map` has type `Map<K,V>` or `Record<K,V>` desugars to iterating over `map.Keys` (via `SetToSeq`), with `k` bound to each key and `v` bound to `map[k]`. The `Object.entries()` wrapper is required because `for...of` on plain objects is not valid TypeScript or JavaScript — `Record<K,V>` is a plain object at runtime and does not have a `[Symbol.iterator]()` method. Similarly, `for (const v of Object.values(map))` desugars to the same key-iteration pattern, binding only the values. General destructuring in for-of (e.g., `for (const [a, b, c] of tuples)`) binds each name to `elem[0]`, `elem[1]`, etc.
 
 ---
 
@@ -698,7 +700,7 @@ The `//@ pure` annotation forces a function to be treated as pure in the call gr
 ```typescript
 //@ pure
 function tagNameExists(m: Model, name: string, excludeTag?: TagId): boolean {
-  for (const [tid, tag] of m.tags) {
+  for (const [tid, tag] of Object.entries(m.tags)) {
     if (excludeTag === undefined || tid !== excludeTag) {
       if (eqIgnoreCase(tag.name, name)) return true
     }

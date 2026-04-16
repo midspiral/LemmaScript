@@ -692,13 +692,30 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       } else {
         names.push("_");
       }
+      // Unwrap Object.entries(expr) / Object.values(expr) to bare map iteration
+      let iterableExpr = s.getExpression();
+      if (Node.isCallExpression(iterableExpr)) {
+        const callee = iterableExpr.getExpression();
+        if (Node.isPropertyAccessExpression(callee) &&
+            callee.getExpression().getText() === "Object") {
+          const method = callee.getName();
+          if ((method === "entries" || method === "values") && iterableExpr.getArguments().length === 1) {
+            iterableExpr = iterableExpr.getArguments()[0] as Expression;
+            // Object.values with single name → prepend "_" so it looks like [_, v] destructuring
+            if (method === "values" && names.length === 1) {
+              names.unshift("_");
+            }
+          }
+        }
+      }
+
       const bodyNode = s.getStatement();
       const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [bodyNode];
       const annots = collectAnnotations(s, bodyStmts);
       result.push({
         kind: "forof",
         names,
-        iterable: extractExpr(s.getExpression()),
+        iterable: extractExpr(iterableExpr),
         invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
         doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
         body: extractStmts(bodyStmts),
