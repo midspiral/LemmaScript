@@ -690,7 +690,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
             var i_t34 := err(Err.MissingList);
             return i_t34;
           }
-          var targetList := (match i_task_val.deletedFromList { case Some(i__narr1) => i__narr1 case None => m.lists[0] });
+          var targetList := (match i_task_val.deletedFromList { case Some(i_task_deletedFromList_val) => if (i_task_deletedFromList_val in m.lists) then i_task_deletedFromList_val else m.lists[0] case None => m.lists[0] });
           var i_t35 := taskTitleExistsInList(m, targetList, i_task_val.title, None);
           if i_t35 {
             var i_t36 := err(Err.DuplicateTask);
