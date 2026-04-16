@@ -700,7 +700,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
             callee.getExpression().getText() === "Object") {
           const method = callee.getName();
           if ((method === "entries" || method === "values") && iterableExpr.getArguments().length === 1) {
-            iterableExpr = iterableExpr.getArguments()[0];
+            iterableExpr = iterableExpr.getArguments()[0] as Expression;
             // Object.values with single name → prepend "_" so it looks like [_, v] destructuring
             if (method === "values" && names.length === 1) {
               names.unshift("_");
