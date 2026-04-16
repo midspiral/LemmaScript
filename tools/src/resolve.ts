@@ -428,8 +428,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       } else if (ty.kind === "unknown" && e.field === "size" && (obj.ty.kind === "map" || obj.ty.kind === "set")) {
         ty = { kind: "nat" };
       } else if (ty.kind === "unknown" && obj.ty.kind === "user") {
-        if (getDiscriminant(ctx, obj.ty.name) === e.field) isDiscriminant = true;
-        const decl = findDecl(ctx, obj.ty.name);
+        // Strip generic args for type lookup: "Result<Model, Err>" → "Result"
+        const baseTyName = obj.ty.name.includes("<") ? obj.ty.name.slice(0, obj.ty.name.indexOf("<")) : obj.ty.name;
+        if (getDiscriminant(ctx, baseTyName) === e.field) isDiscriminant = true;
+        const decl = findDecl(ctx, baseTyName);
         if (decl?.kind === "record") {
           const f = decl.fields?.find(f => f.name === e.field);
           if (f) ty = f.type!;
