@@ -496,6 +496,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         });
         return { kind: "record", spread: lowerExpr(e.spread, binds), fields: loweredFields };
       }
+      // Empty record with map type → empty map
+      if (e.fields.length === 0 && !e.spread && e.ty.kind === "map") {
+        return { kind: "emptyMap" };
+      }
       return { kind: "record", spread: null, fields: e.fields.map(f => ({ name: f.name, value: lowerExpr(f.value, binds) })) };
     }
 
