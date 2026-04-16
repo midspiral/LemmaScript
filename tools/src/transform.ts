@@ -691,13 +691,13 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
       if (s.names.length === 1 && s.iterable.ty.kind === "map") {
         const keyName = s.names[0];
         const keyTy = s.nameTypes[0] ?? s.iterable.ty.key ?? { kind: "unknown" as const };
-        const keysSeqName = `_${keyName}_keys`;
-        const convExpr: Expr = { kind: "app", fn: "SetToSeq", args: [{ kind: "field", obj: iterExpr, field: "keys" }] };
-        result.push({ kind: "let", name: keysSeqName, type: { kind: "array", elem: keyTy }, mutable: false, value: convExpr });
-        const keysVar: Expr = { kind: "var", name: keysSeqName };
         const count = _forofCounters.get(keyName) ?? 0;
         _forofCounters.set(keyName, count + 1);
         const suffix = count === 0 ? "" : `${count + 1}`;
+        const keysSeqName = `_${keyName}_keys${suffix}`;
+        const convExpr: Expr = { kind: "app", fn: "SetToSeq", args: [{ kind: "field", obj: iterExpr, field: "keys" }] };
+        result.push({ kind: "let", name: keysSeqName, type: { kind: "array", elem: keyTy }, mutable: false, value: convExpr });
+        const keysVar: Expr = { kind: "var", name: keysSeqName };
         const idxName = `_${keyName}_idx${suffix}`;
         const idx: Expr = { kind: "var", name: idxName };
         const arrSize: Expr = { kind: "field", obj: keysVar, field: "size" };
@@ -718,13 +718,13 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
         const keyName = s.names[0], valueName = s.names[1];
         const keyTy = s.nameTypes[0] ?? { kind: "unknown" as const };
         const valueTy = s.nameTypes[1] ?? { kind: "unknown" as const };
-        const keysSeqName = `_${keyName}_keys`;
-        const convExpr: Expr = { kind: "app", fn: "SetToSeq", args: [{ kind: "field", obj: iterExpr, field: "keys" }] };
-        result.push({ kind: "let", name: keysSeqName, type: { kind: "array", elem: keyTy }, mutable: false, value: convExpr });
-        const keysVar: Expr = { kind: "var", name: keysSeqName };
         const count = _forofCounters.get(keyName) ?? 0;
         _forofCounters.set(keyName, count + 1);
         const suffix = count === 0 ? "" : `${count + 1}`;
+        const keysSeqName = `_${keyName}_keys${suffix}`;
+        const convExpr: Expr = { kind: "app", fn: "SetToSeq", args: [{ kind: "field", obj: iterExpr, field: "keys" }] };
+        result.push({ kind: "let", name: keysSeqName, type: { kind: "array", elem: keyTy }, mutable: false, value: convExpr });
+        const keysVar: Expr = { kind: "var", name: keysSeqName };
         const idxName = `_${keyName}_idx${suffix}`;
         const idx: Expr = { kind: "var", name: idxName };
         const arrSize: Expr = { kind: "field", obj: keysVar, field: "size" };
