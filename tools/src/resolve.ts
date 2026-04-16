@@ -455,8 +455,13 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // Clear returnTy for field values — it applies to THIS record, not nested ones
       const fieldCtx = recordTy ? { ...ctx, returnTy: { kind: "unknown" as const } as Ty } : ctx;
       const fields = e.fields.map(f => {
-        let value = resolveExpr(f.value, fieldCtx);
         const fieldDecl = decl?.fields?.find(df => df.name === f.name);
+        // Propagate declared field type into context so nested records resolve
+        // their union variant correctly (e.g., { kind: 'Idle' } → EffectMode.Idle)
+        const valueCtx = (fieldDecl?.type?.kind === "user")
+          ? { ...fieldCtx, returnTy: fieldDecl.type }
+          : fieldCtx;
+        let value = resolveExpr(f.value, valueCtx);
         if (fieldDecl) {
           const declTy = fieldDecl.type!;
           value = coerceStr(value, declTy);
@@ -641,7 +646,10 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
   switch (s.kind) {
     case "let": {
       const declTy = resolveTsType(s.tsType, ctx.overrides, s.name);
-      const init = coerceStr(resolveExpr(s.init, ctx), declTy);
+      // Propagate declared type as returnTy so nested record expressions
+      // resolve union variants correctly (e.g., EffectState → mode: EffectMode → { kind: 'Idle' })
+      const initCtx = declTy.kind === "user" ? { ...ctx, returnTy: declTy } : ctx;
+      const init = coerceStr(resolveExpr(s.init, initCtx), declTy);
       // Map indexing: TS says T, but access can fail → use Optional<T> from init
       const ty = (declTy.kind !== "optional" && init.ty.kind === "optional") ? init.ty : declTy;
       // const collections are mutable in value-semantics world (TS mutates in place, Dafny/Lean reassign)

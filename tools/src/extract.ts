@@ -14,6 +14,14 @@ import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawG
 /** When set, calls whose function/method name matches this key are replaced with havoc. */
 let _havocKey: string | null = null;
 
+/**
+ * Maps property-name fingerprints to type alias names for collapsed single-variant unions.
+ * TypeScript collapses `type X = | { kind: 'A'; ... }` to the underlying object type,
+ * causing getAliasSymbol() to return null. This map lets typeToString recover the alias.
+ * Populated in extractModule before type extraction; used by typeToString.
+ */
+let _collapsedUnionMap: Map<string, string> = new Map();
+
 /** Generic bounds erasure map — set during extractFunction, applied in extractStmts. */
 let _typeParamMap: Map<string, string> = new Map();
 function _eraseGenerics(tsType: string): string {
@@ -378,6 +386,30 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
     }
   }
 
+  // Single-variant discriminated union: type X = | { kind: 'Foo', ... }
+  // TypeScript collapses single-member unions to their member type,
+  // so type.isUnion() returns false. Detect by checking the source text
+  // for union syntax '|' AND a string-literal discriminant field.
+  if (type.isObject() && !type.isIntersection()) {
+    const srcText = decl.getTypeNode()?.getText() ?? "";
+    if (srcText.includes("|")) {
+      const disc = findDiscriminant([type]);
+      if (disc) {
+        const tagProp = type.getProperty(disc);
+        const tagType = tagProp?.getTypeAtLocation(decl);
+        const tag = tagType?.isStringLiteral() ? String(tagType.getLiteralValue()) : null;
+        if (tag) {
+          const fields: { name: string; tsType: string }[] = [];
+          for (const prop of type.getProperties()) {
+            if (prop.getName() === disc) continue;
+            fields.push({ name: prop.getName(), tsType: typeToString(prop.getTypeAtLocation(decl)) });
+          }
+          return { name, typeParams: tpField, kind: "discriminated-union", discriminant: disc, variants: [{ name: tag, fields }] };
+        }
+      }
+    }
+  }
+
   if (type.isObject() || type.isIntersection()) return extractRecord(name, type, decl, undefined, extraDecls);
   // Primitive type alias: type TaskId = number → alias
   const tsType = typeToString(type);
@@ -481,6 +513,12 @@ function typeToString(type: Type): string {
   const symbol = type.getSymbol() ?? type.getAliasSymbol();
   if (symbol) {
     const name = symbol.getName();
+    // Recover collapsed single-variant union alias via property fingerprint
+    if (name === "__type" && _collapsedUnionMap.size > 0) {
+      const props = type.getProperties().map(p => p.getName()).sort().join(",");
+      const alias = _collapsedUnionMap.get(props);
+      if (alias) return alias;
+    }
     const typeArgs = type.getTypeArguments();
     if (typeArgs.length > 0) {
       return `${name}<${typeArgs.map(t => typeToString(t)).join(", ")}>`;
@@ -932,6 +970,23 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     }
   }
 
+  // Pre-scan for collapsed single-variant unions so typeToString can recover alias names.
+  // TypeScript collapses `type X = | { kind: 'A'; ... }` to a plain object type, losing
+  // the alias. We record a fingerprint (sorted property names) → alias name mapping.
+  _collapsedUnionMap = new Map();
+  for (const stmt of sourceFile.getStatements()) {
+    if (Node.isTypeAliasDeclaration(stmt)) {
+      const type = stmt.getType();
+      if (!type.isUnion() && type.isObject() && !type.isIntersection()) {
+        const srcText = stmt.getTypeNode()?.getText() ?? "";
+        if (srcText.includes("|") && findDiscriminant([type])) {
+          const props = type.getProperties().map(p => p.getName()).sort().join(",");
+          _collapsedUnionMap.set(props, stmt.getName());
+        }
+      }
+    }
+  }
+
   // Extract type declarations in source order to respect dependencies
   // Skip types already declared via //@ declare-type
   const declaredNames = new Set(typeDecls.map(d => d.name));
@@ -1210,6 +1265,12 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     }
     const sym = retType.getSymbol();
     if (sym?.getName() === "__type" && retType.isObject() && !retType.isArray()) {
+      // Try typeToString first — it resolves collapsed single-variant unions
+      const resolved = typeToString(retType);
+      if (resolved !== "__type" && !resolved.includes("__type") && knownTypes.has(resolved)) {
+        fn.returnType = resolved;
+        continue;
+      }
       const synName = fn.name.charAt(0).toUpperCase() + fn.name.slice(1) + "Result";
       if (!knownTypes.has(synName)) {
         const extra: TypeDeclInfo[] = [];

@@ -878,6 +878,15 @@ Generated (Dafny):
 datatype Packet = syn(seq: int) | ack(seq: int) | data(seq: int, len: int) | fin
 ```
 
+**Single-variant unions** are supported. TypeScript collapses `type X = | { kind: 'Foo'; ... }` to a plain object type, so `lsc` detects single-variant unions by checking for `|` syntax in the source declaration text combined with a string-literal discriminant field.
+
+```typescript
+type MultiAction =
+  | { kind: 'SingleAction'; projectId: string; action: Action }
+```
+
+→ Dafny: `datatype MultiAction = SingleAction(projectId: string, action: Action)`
+
 **Ensures with discriminated unions** — specs that condition on the variant use `match`:
 
 ```typescript

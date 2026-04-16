@@ -288,6 +288,7 @@ function emitExpr(e: Expr): string {
         const vals = e.fields.map(f => emitExpr(f.value));
         return `${ctorName}(${vals.join(", ")})`;
       }
+      if (e.fields.length === 0) return `map[]`;
       const vals = e.fields.map(f => emitExpr(f.value));
       return `(${vals.join(", ")})`;
     }
