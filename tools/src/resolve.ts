@@ -139,7 +139,9 @@ function wrapSome(value: TExpr, optionalTy: Ty): TExpr {
 
 /** Detect `v !== undefined` or `undefined !== v` where v: optional<T>.
  *  Handles simple variables, field access chains, and arbitrary expressions.
- *  When `fieldExpr` is returned, callers must use `substituteRawExpr` to narrow.
+ *  When `fieldExpr` is returned for a simple field chain (obj.field), callers
+ *  can narrow via `narrowedFields` context. For complex expressions (calls, etc.),
+ *  callers should fall back to `substituteRawExpr`.
  *
  *  Does NOT recurse into `&&` — callers that need to detect optional checks
  *  inside `&&` conditions should check `cond.left` explicitly. */
