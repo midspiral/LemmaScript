@@ -56,7 +56,10 @@ function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
     case "return": return { ...s, value: r(s.value) };
     case "break": case "continue": return s;
     case "if": return { ...s, cond: r(s.cond), then: s.then.map(t => mapStmt(t, f)), else: s.else.map(t => mapStmt(t, f)) };
-    case "match": return { ...s, arms: s.arms.map(a => ({ ...a, body: a.body.map(t => mapStmt(t, f)) })) };
+    case "match": {
+      const scr = typeof s.scrutinee === "string" ? s.scrutinee : r(s.scrutinee);
+      return { ...s, scrutinee: scr, arms: s.arms.map(a => ({ ...a, body: a.body.map(t => mapStmt(t, f)) })) };
+    }
     case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r), body: s.body.map(t => mapStmt(t, f)) };
     case "forin": return { ...s, bound: r(s.bound), invariants: s.invariants.map(r), body: s.body.map(t => mapStmt(t, f)) };
     case "ghostLet": return { ...s, value: r(s.value) };
@@ -848,6 +851,21 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           return stmts;
         }
       }
+      // Desugar: const x = optCheck && guard ? A : B
+      // → var x := B; if (optCheck && guard) { x := A; }
+      // This avoids putting method calls (from guard) inside a match expression,
+      // which Dafny doesn't allow.  The if-case in transformStmt handles the &&
+      // via extractLeftmostOptional → emitOptionalMatch (statement-level match).
+      if (s.init.kind === "conditional" && s.init.cond.kind === "binop" && s.init.cond.op === "&&") {
+        const extracted = extractLeftmostOptional(s.init.cond);
+        if (extracted) {
+          const desugared: TStmt[] = [
+            { kind: "let", name: s.name, ty: s.ty, mutable: true, init: s.init.else },
+            { kind: "if", cond: s.init.cond, then: [{ kind: "assign", target: s.name, value: s.init.then }], else: [] },
+          ];
+          return desugared.flatMap(ds => transformStmt(ds, typeDecls));
+        }
+      }
       const { binds, expr } = liftMethodCalls(s.init);
       return [...binds, { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: expr }];
     }
@@ -1011,7 +1029,8 @@ function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind:
   if (someBranch.length === 0 && restStmts && restStmts.length > 0) {
     someBranch = restStmts;
   }
-  const bound = matchBinder(`${varName}_val`);
+  const sanitized = varName.replace(/\./g, "_");
+  const bound = matchBinder(`${sanitized}_val`);
   // Replace the narrowed variable/field in the Some branch body.
   // Field chains: replace in TStmt before transform (so downstream narrowing sees simple vars).
   // Simple vars: replace in IR after transform (the original mechanism).
@@ -1026,8 +1045,14 @@ function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind:
     const transformed = transformStmts(someBranch, typeDecls);
     someBody = transformed.map(stmt => mapStmtExprs(stmt, e => replaceVar(e, varName, { kind: "var", name: bound }, true)));
   }
+  // For field chains, use an Expr scrutinee so outer match replaceVar can
+  // substitute the object variable (e.g. task → i_task_val in task.deletedFromList).
+  // String scrutinees are opaque to replaceVar/mapExpr.
+  const scrutinee: Expr | string = (fieldExpr && fieldExpr.kind === "field" && fieldExpr.obj.kind === "var")
+    ? { kind: "field", obj: { kind: "var", name: (fieldExpr.obj as TExpr & { kind: "var" }).name }, field: (fieldExpr as TExpr & { kind: "field" }).field }
+    : varName;
   return {
-    kind: "match", scrutinee: varName,
+    kind: "match", scrutinee,
     arms: [
       { pattern: `.some ${bound}`, body: someBody },
       { pattern: ".none", body: noneBranch.length > 0 ? transformStmts(noneBranch, typeDecls) : [] },
@@ -1268,9 +1293,12 @@ function lowerOptionalConditional(
   }
 
   // Build Some arm body — add guard for && patterns
+  // Note: if the guard has method calls, the impure path desugars the let to a
+  // statement-level if+match in transformStmt, so this expression-level path only
+  // runs for pure guards. Use null for binds to avoid escaping the match scope.
   let someBody: Expr;
   if (guard) {
-    let guardExpr = lowerExpr(guardTExpr!, binds);
+    let guardExpr = lowerExpr(guardTExpr!, null);
     if (!isFieldChain) {
       guardExpr = replaceVar(guardExpr, check.varName, { kind: "var", name: bound }, true);
     }
