@@ -177,6 +177,20 @@ function detectOptionalCheck(cond: RawExpr, ctx: Ctx): {
   return null;
 }
 
+/** Collect all optional narrowings from an early-return condition.
+ *  Handles single checks (x === undefined) and compound || chains
+ *  (x === undefined || y === undefined). */
+function collectEarlyReturnNarrowings(cond: RawExpr, ctx: Ctx): { varName: string; innerTy: Ty }[] {
+  if (cond.kind === "binop" && cond.op === "||") {
+    return [...collectEarlyReturnNarrowings(cond.left, ctx), ...collectEarlyReturnNarrowings(cond.right, ctx)];
+  }
+  const narrowed = detectOptionalCheck(cond, ctx);
+  if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
+    return [{ varName: narrowed.varName, innerTy: narrowed.innerTy }];
+  }
+  return [];
+}
+
 /** TS reference types that become value types in Dafny/Lean — const bindings need mutable var. */
 function isRefMutableInTS(ty: Ty): boolean {
   return ty.kind === "array" || ty.kind === "map" || ty.kind === "set";
@@ -394,7 +408,16 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           fn.obj.ty.elem.kind === "user") {
         argCtx = { ...ctx, returnTy: fn.obj.ty.elem };
       }
-      const args = coerceCallArgs(rawArgs.map(a => resolveExpr(a, argCtx)), fn, ctx);
+      // Propagate parameter types to arguments for record literal resolution
+      // (enables inline discriminated union construction in function arguments)
+      const paramTypes = fn.kind === "var" && ctx.fnParams.has(fn.name) ? ctx.fnParams.get(fn.name)! : null;
+      const args = coerceCallArgs(rawArgs.map((a, i) => {
+        let aCtx = argCtx;
+        if (paramTypes && i < paramTypes.length && paramTypes[i].kind === "user") {
+          aCtx = { ...aCtx, returnTy: paramTypes[i] };
+        }
+        return resolveExpr(a, aCtx);
+      }), fn, ctx);
       let ty = inferMethodReturnTy(fn, args, ctx);
       // For same-file function calls, use the known return type
       if (ty.kind === "unknown" && fn.kind === "var" && ctx.fnReturns.has(fn.name)) {
@@ -544,6 +567,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // Resolve only narrows the type environment; transform handles all structural
       // narrowing (match generation, variable binding, && splitting).
       let narrowedExprResolved: TExpr | undefined;
+      let elseCtx = ctx;
       if (!narrowedVar) {
         const narrowed = detectOptionalCheck(e.cond, ctx)
           ?? (e.cond.kind === "binop" && e.cond.op === "&&" ? detectOptionalCheck(e.cond.left, ctx) : null);
@@ -569,11 +593,24 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
             rawThen = substituteRawExpr(e.then, narrowed.fieldExpr, { kind: "var", name: narrowed.varName });
             thenCtx = withEnv(thenCtx, extend(thenCtx.env, narrowed.varName, narrowed.innerTy));
           }
+        } else if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
+          // v === undefined: narrow v in the else branch
+          elseCtx = withEnv(elseCtx, extend(elseCtx.env, narrowed.varName, narrowed.innerTy));
+        }
+        // Compound || with === undefined: narrow all checked vars in else branch
+        // e.g. if (a === undefined || b === undefined) then X else Y → narrow a,b in Y
+        // TODO: resolve-time narrowing works but transform doesn't emit match unwrap
+        // for || conditions yet — decompose || into nested matches in transform.
+        // Workaround: split || into separate if guards in user code.
+        if (!narrowed && e.cond.kind === "binop" && e.cond.op === "||") {
+          for (const n of collectEarlyReturnNarrowings(e.cond, ctx)) {
+            elseCtx = withEnv(elseCtx, extend(elseCtx.env, n.varName, n.innerTy));
+          }
         }
       }
 
       let then_ = resolveExpr(rawThen, thenCtx);
-      let else_ = resolveExpr(e.else, ctx);
+      let else_ = resolveExpr(e.else, elseCtx);
       then_ = coerceStr(then_, else_.ty);
       else_ = coerceStr(else_, then_.ty);
       let ty = then_.ty.kind !== "unknown" ? then_.ty : else_.ty;
@@ -632,12 +669,13 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     result.push(typed);
     env = nextEnv;
     // Flow narrowing: if (x === undefined) { return } narrows x for rest of block.
+    // Also handles compound: if (x === undefined || y === undefined) { return }
     // Field chains are excluded — resolve can't substitute in statement lists;
     // transform's emitOptionalMatch handles field chains in statement contexts.
     if (s.kind === "if" && s.then.length > 0 && s.then[s.then.length - 1].kind === "return" && s.else.length === 0) {
-      const narrowed = detectOptionalCheck(s.cond, withEnv(ctx, env));
-      if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
-        env = extend(env, narrowed.varName, narrowed.innerTy);
+      const narrowings = collectEarlyReturnNarrowings(s.cond, withEnv(ctx, env));
+      for (const n of narrowings) {
+        env = extend(env, n.varName, n.innerTy);
       }
     }
   }
