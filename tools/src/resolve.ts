@@ -646,7 +646,10 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
   switch (s.kind) {
     case "let": {
       const declTy = resolveTsType(s.tsType, ctx.overrides, s.name);
-      const init = coerceStr(resolveExpr(s.init, ctx), declTy);
+      // Propagate declared type as returnTy so nested record expressions
+      // resolve union variants correctly (e.g., EffectState → mode: EffectMode → { kind: 'Idle' })
+      const initCtx = declTy.kind === "user" ? { ...ctx, returnTy: declTy } : ctx;
+      const init = coerceStr(resolveExpr(s.init, initCtx), declTy);
       // Map indexing: TS says T, but access can fail → use Optional<T> from init
       const ty = (declTy.kind !== "optional" && init.ty.kind === "optional") ? init.ty : declTy;
       // const collections are mutable in value-semantics world (TS mutates in place, Dafny/Lean reassign)
