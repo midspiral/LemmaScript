@@ -378,6 +378,30 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
     }
   }
 
+  // Single-variant discriminated union: type X = | { kind: 'Foo', ... }
+  // TypeScript collapses single-member unions to their member type,
+  // so type.isUnion() returns false. Detect by checking the source text
+  // for union syntax '|' AND a string-literal discriminant field.
+  if (type.isObject() && !type.isIntersection()) {
+    const srcText = decl.getTypeNode()?.getText() ?? "";
+    if (srcText.includes("|")) {
+      const disc = findDiscriminant([type]);
+      if (disc) {
+        const tagProp = type.getProperty(disc);
+        const tagType = tagProp?.getTypeAtLocation(decl);
+        const tag = tagType?.isStringLiteral() ? String(tagType.getLiteralValue()) : null;
+        if (tag) {
+          const fields: { name: string; tsType: string }[] = [];
+          for (const prop of type.getProperties()) {
+            if (prop.getName() === disc) continue;
+            fields.push({ name: prop.getName(), tsType: typeToString(prop.getTypeAtLocation(decl)) });
+          }
+          return { name, typeParams: tpField, kind: "discriminated-union", discriminant: disc, variants: [{ name: tag, fields }] };
+        }
+      }
+    }
+  }
+
   if (type.isObject() || type.isIntersection()) return extractRecord(name, type, decl, undefined, extraDecls);
   // Primitive type alias: type TaskId = number → alias
   const tsType = typeToString(type);
