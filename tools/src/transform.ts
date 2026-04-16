@@ -365,6 +365,18 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         return { kind: "field", obj: transformExpr(e.obj), field: "length" };
       if (e.field === "size" && (e.obj.ty.kind === "map" || e.obj.ty.kind === "set"))
         return { kind: "field", obj: transformExpr(e.obj), field: "collectionSize" };
+      // Boolean discriminant bare access: `result.ok` where Result has variants
+      // {ok: true, ...} | {ok: false, ...}. String discriminants are always used via
+      // comparison (x.kind === 'Foo' → x.Foo?), but boolean discriminants are used
+      // as bare truthiness checks. Emit as the Dafny discriminator predicate for the
+      // 'true' variant: result.ok → result.true_?
+      if (e.isDiscriminant && e.obj.ty.kind === "user") {
+        const baseName = e.obj.ty.name.includes("<") ? e.obj.ty.name.slice(0, e.obj.ty.name.indexOf("<")) : e.obj.ty.name;
+        const decl = _typeDecls.find(d => d.name === baseName && d.kind === "discriminated-union");
+        if (decl?.variants?.some(v => v.name === "true")) {
+          return { kind: "field", obj: transformExpr(e.obj), field: "true_?" };
+        }
+      }
       return { kind: "field", obj: transformExpr(e.obj), field: e.field };
 
     case "index": {
