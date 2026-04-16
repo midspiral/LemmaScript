@@ -1048,9 +1048,7 @@ function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind:
   // For field chains, use an Expr scrutinee so outer match replaceVar can
   // substitute the object variable (e.g. task → i_task_val in task.deletedFromList).
   // String scrutinees are opaque to replaceVar/mapExpr.
-  const scrutinee: Expr | string = (fieldExpr && fieldExpr.kind === "field" && fieldExpr.obj.kind === "var")
-    ? { kind: "field", obj: { kind: "var", name: (fieldExpr.obj as TExpr & { kind: "var" }).name }, field: (fieldExpr as TExpr & { kind: "field" }).field }
-    : varName;
+  const scrutinee: Expr | string = fieldExpr ? transformExpr(fieldExpr) : varName;
   return {
     kind: "match", scrutinee,
     arms: [
