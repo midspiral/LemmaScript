@@ -429,6 +429,15 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         if (method === "get" && e.fn.obj.ty.kind === "map" && e.ty.kind !== "optional") {
           method = "getDirect";
         }
+        // map.set(k, v): if v is an Optional-wrapped map get, unwrap to getDirect
+        // (the desugared spread { ...m, [k]: m2[k] } becomes m.set(k, m2.get(k)),
+        // but the value should be direct access, not Optional)
+        if (method === "set" && e.fn.obj.ty.kind === "map" && args.length === 2) {
+          const val = args[1];
+          if (val.kind === "methodCall" && val.method === "get" && val.objTy.kind === "map") {
+            args[1] = { ...val, method: "getDirect" };
+          }
+        }
         // Check if any lambda arg has monadic body
         const needsMonadic = _opts.monadic && args.some(a => a.kind === "lambda" && isMonadicBody(a.body));
         const result: Expr = { kind: "methodCall", obj: recv, objTy: e.fn.obj.ty, method, args, monadic: needsMonadic };
