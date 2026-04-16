@@ -567,6 +567,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // Resolve only narrows the type environment; transform handles all structural
       // narrowing (match generation, variable binding, && splitting).
       let narrowedExprResolved: TExpr | undefined;
+      let elseCtx = ctx;
       if (!narrowedVar) {
         const narrowed = detectOptionalCheck(e.cond, ctx)
           ?? (e.cond.kind === "binop" && e.cond.op === "&&" ? detectOptionalCheck(e.cond.left, ctx) : null);
@@ -592,11 +593,21 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
             rawThen = substituteRawExpr(e.then, narrowed.fieldExpr, { kind: "var", name: narrowed.varName });
             thenCtx = withEnv(thenCtx, extend(thenCtx.env, narrowed.varName, narrowed.innerTy));
           }
+        } else if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
+          // v === undefined: narrow v in the else branch
+          elseCtx = withEnv(elseCtx, extend(elseCtx.env, narrowed.varName, narrowed.innerTy));
+        }
+        // Compound || with === undefined: narrow all checked vars in else branch
+        // e.g. if (a === undefined || b === undefined) then X else Y → narrow a,b in Y
+        if (!narrowed && e.cond.kind === "binop" && e.cond.op === "||") {
+          for (const n of collectEarlyReturnNarrowings(e.cond, ctx)) {
+            elseCtx = withEnv(elseCtx, extend(elseCtx.env, n.varName, n.innerTy));
+          }
         }
       }
 
       let then_ = resolveExpr(rawThen, thenCtx);
-      let else_ = resolveExpr(e.else, ctx);
+      let else_ = resolveExpr(e.else, elseCtx);
       then_ = coerceStr(then_, else_.ty);
       else_ = coerceStr(else_, then_.ty);
       let ty = then_.ty.kind !== "unknown" ? then_.ty : else_.ty;
