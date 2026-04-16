@@ -51,7 +51,7 @@ export type Stmt =
   | { kind: "break" }
   | { kind: "continue" }
   | { kind: "if"; cond: Expr; then: Stmt[]; else: Stmt[] }
-  | { kind: "match"; scrutinee: string; arms: StmtMatchArm[] }
+  | { kind: "match"; scrutinee: string | Expr; arms: StmtMatchArm[] }
   | { kind: "while"; cond: Expr; invariants: Expr[]; decreasing: Expr | null;
       doneWith: Expr | null; body: Stmt[] }
   | { kind: "forin"; idx: string; bound: Expr; invariants: Expr[]; body: Stmt[] }

@@ -440,7 +440,7 @@ function apply(m: Model, a: Action): Result<Model, Err>
             if (|m.lists| == 0) then
               err(Err.MissingList)
             else
-              var targetList := (match i_task_val.deletedFromList { case Some(i__narr1) => i__narr1 case None => m.lists[0] });
+              var targetList := (match i_task_val.deletedFromList { case Some(i_task_deletedFromList_val) => if (i_task_deletedFromList_val in m.lists) then i_task_deletedFromList_val else m.lists[0] case None => m.lists[0] });
               if taskTitleExistsInList(m, targetList, i_task_val.title, None) then
                 err(Err.DuplicateTask)
               else

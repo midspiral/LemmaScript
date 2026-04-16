@@ -56,7 +56,10 @@ function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
     case "return": return { ...s, value: r(s.value) };
     case "break": case "continue": return s;
     case "if": return { ...s, cond: r(s.cond), then: s.then.map(t => mapStmt(t, f)), else: s.else.map(t => mapStmt(t, f)) };
-    case "match": return { ...s, arms: s.arms.map(a => ({ ...a, body: a.body.map(t => mapStmt(t, f)) })) };
+    case "match": {
+      const scr = typeof s.scrutinee === "string" ? s.scrutinee : r(s.scrutinee);
+      return { ...s, scrutinee: scr, arms: s.arms.map(a => ({ ...a, body: a.body.map(t => mapStmt(t, f)) })) };
+    }
     case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r), body: s.body.map(t => mapStmt(t, f)) };
     case "forin": return { ...s, bound: r(s.bound), invariants: s.invariants.map(r), body: s.body.map(t => mapStmt(t, f)) };
     case "ghostLet": return { ...s, value: r(s.value) };
@@ -513,20 +516,16 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "exists", var: e.var, type: e.varTy, body: transformExpr(e.body) };
 
     case "conditional": {
-      // When narrowedExpr is set, the match replaces the condition — don't lift from it
-      const condBinds = (e.narrowedVar && e.narrowedExpr) ? null : binds;
-      const cond = lowerExpr(e.cond, condBinds);
-      let thenExpr = lowerExpr(e.then, binds);
-      let elseExpr = lowerExpr(e.else, binds);
-
-      // Explicit !== undefined with narrowedExpr → match Some/None on the optional expression
+      // Phase 0: Complex expression check (call results, etc.) — resolve substituted
+      // and set narrowedVar + narrowedExpr because transform can't detect these.
       if (e.narrowedVar && e.narrowedExpr) {
         const scrutinee = lowerExpr(e.narrowedExpr, binds);
         const bound = matchBinder(e.narrowedVar);
+        let thenExpr = lowerExpr(e.then, binds);
+        let elseExpr = lowerExpr(e.else, binds);
         if (bound !== e.narrowedVar) {
           thenExpr = replaceVar(thenExpr, e.narrowedVar, { kind: "var", name: bound });
         }
-        // Wrap in Some/None only when result is optional (one branch is undefined)
         if (e.ty.kind === "optional") {
           thenExpr = wrapOptionalBranch(thenExpr, e.then);
           elseExpr = wrapOptionalBranch(elseExpr, e.else);
@@ -540,14 +539,16 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         };
       }
 
-      // Optional cond with narrowedVar → match Some/None (truthiness)
+      // Phase 1: Truthiness — cond itself is optional (e.g. opt ? X : Y)
+      // Uses narrowedVar set by resolve's Phase 1 (unchanged).
       if (e.narrowedVar && e.cond.ty.kind === "optional") {
+        const cond = lowerExpr(e.cond, binds);
+        let thenExpr = lowerExpr(e.then, binds);
+        let elseExpr = lowerExpr(e.else, binds);
         const bound = matchBinder(e.narrowedVar);
-        // Replace the synthetic/narrowed var with the match-bound name
         if (bound !== e.narrowedVar) {
           thenExpr = replaceVar(thenExpr, e.narrowedVar, { kind: "var", name: bound });
         }
-        // The match produces an Optional: wrap branches in Some/None.
         thenExpr = wrapOptionalBranch(thenExpr, e.then);
         elseExpr = wrapOptionalBranch(elseExpr, e.else);
         return {
@@ -559,7 +560,28 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         };
       }
 
-      // Non-optional: regular if with optional wrapping
+      // Phase 2: Explicit check — x !== undefined ? A : B
+      // Transform detects the pattern itself (no narrowedVar/narrowedExpr from resolve).
+      const check = parseOptionalCheck(e.cond);
+      if (check && !check.negated) {
+        return lowerOptionalConditional(e, check, null, binds);
+      }
+
+      // Phase 3: && with optional check — x !== undefined && guard(x) ? A : B
+      if (e.cond.kind === "binop" && e.cond.op === "&&") {
+        const extracted = extractLeftmostOptional(e.cond);
+        if (extracted) {
+          const innerCheck = parseOptionalCheck(extracted.optCond);
+          if (innerCheck && !innerCheck.negated) {
+            return lowerOptionalConditional(e, innerCheck, extracted.rest, binds);
+          }
+        }
+      }
+
+      // Phase 4: Regular conditional (no optional narrowing)
+      const cond = lowerExpr(e.cond, binds);
+      let thenExpr = lowerExpr(e.then, binds);
+      let elseExpr = lowerExpr(e.else, binds);
       if (e.ty.kind === "optional") {
         thenExpr = wrapOptionalBranch(thenExpr, e.then);
         elseExpr = wrapOptionalBranch(elseExpr, e.else);
@@ -829,6 +851,21 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           return stmts;
         }
       }
+      // Desugar: const x = optCheck && guard ? A : B
+      // → var x := B; if (optCheck && guard) { x := A; }
+      // This avoids putting method calls (from guard) inside a match expression,
+      // which Dafny doesn't allow.  The if-case in transformStmt handles the &&
+      // via extractLeftmostOptional → emitOptionalMatch (statement-level match).
+      if (s.init.kind === "conditional" && s.init.cond.kind === "binop" && s.init.cond.op === "&&") {
+        const extracted = extractLeftmostOptional(s.init.cond);
+        if (extracted) {
+          const desugared: TStmt[] = [
+            { kind: "let", name: s.name, ty: s.ty, mutable: true, init: s.init.else },
+            { kind: "if", cond: s.init.cond, then: [{ kind: "assign", target: s.name, value: s.init.then }], else: [] },
+          ];
+          return desugared.flatMap(ds => transformStmt(ds, typeDecls));
+        }
+      }
       const { binds, expr } = liftMethodCalls(s.init);
       return [...binds, { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: expr }];
     }
@@ -992,7 +1029,8 @@ function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind:
   if (someBranch.length === 0 && restStmts && restStmts.length > 0) {
     someBranch = restStmts;
   }
-  const bound = matchBinder(`${varName}_val`);
+  const sanitized = varName.replace(/\./g, "_");
+  const bound = matchBinder(`${sanitized}_val`);
   // Replace the narrowed variable/field in the Some branch body.
   // Field chains: replace in TStmt before transform (so downstream narrowing sees simple vars).
   // Simple vars: replace in IR after transform (the original mechanism).
@@ -1007,8 +1045,12 @@ function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind:
     const transformed = transformStmts(someBranch, typeDecls);
     someBody = transformed.map(stmt => mapStmtExprs(stmt, e => replaceVar(e, varName, { kind: "var", name: bound }, true)));
   }
+  // For field chains, use an Expr scrutinee so outer match replaceVar can
+  // substitute the object variable (e.g. task → i_task_val in task.deletedFromList).
+  // String scrutinees are opaque to replaceVar/mapExpr.
+  const scrutinee: Expr | string = fieldExpr ? transformExpr(fieldExpr) : varName;
   return {
-    kind: "match", scrutinee: varName,
+    kind: "match", scrutinee,
     arms: [
       { pattern: `.some ${bound}`, body: someBody },
       { pattern: ".none", body: noneBranch.length > 0 ? transformStmts(noneBranch, typeDecls) : [] },
@@ -1023,25 +1065,21 @@ function mapStmtExprs(s: Stmt, r: (e: Expr) => Expr): Stmt {
 
 // ── Optional narrowing helpers ──────────────────────────────
 //
-// Optional narrowing converts TS `if (x === undefined)` patterns to Dafny
-// `match x { Some(val) => ..., None => ... }`.
+// Optional narrowing converts TS `if (x === undefined)` / `x !== undefined ? a : b`
+// patterns to `match x { Some(val) => ..., None => ... }`.
 //
-// The resolve phase (resolve.ts) handles:
+// The resolve phase (resolve.ts) handles TYPE narrowing only:
 //   - Flow narrowing: after `if (x === undefined) return`, x is non-optional
 //   - && narrowing: in `x !== undefined && f(x)`, f(x) sees x as non-optional
-//   - Conditional narrowing: in `x !== undefined ? x.field : default`, sets
-//     narrowedVar/narrowedExpr on TExpr for the transform phase
+//   - Conditional type narrowing: extends env (simple vars) or narrowedFields context
+//     (field chains) so the then-branch resolves with the unwrapped type
 //
-// The transform phase (here) handles:
+// The transform phase (here) handles ALL structural narrowing:
 //   - Statement-level: `transformStmts` detects optional checks → `emitOptionalMatch`
-//   - Expression-level: `lowerExpr` conditional reads narrowedVar/narrowedExpr → match
-//   - && restructuring: `extractLeftmostOptional` splits `&&` chains into nested ifs
-//     so `emitOptionalMatch` can detect the inner optional check
-//
-// Both phases detect `v !== undefined` patterns. The resolve phase uses
-// `detectOptionalCheck` (on RawExpr), the transform uses `parseOptionalCheck` (on TExpr).
-// These are separate because they operate on different IR types, but both handle
-// simple variables and field access chains.
+//   - Expression-level: `lowerExpr` detects optional checks via `parseOptionalCheck`
+//     and `extractLeftmostOptional` → `lowerOptionalConditional`
+//   - && restructuring: `extractLeftmostOptional` splits `&&` chains, generating
+//     match with guard: `match x { Some(val) => if guard then A else B, None => B }`
 
 /** Shared logic for optional match in both imperative and pure function paths.
  *  Detects optional check, selects branches, handles early-return consumption.
@@ -1174,6 +1212,116 @@ function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { n
     newName: matchBinder(f.name, varName),
     fallbackTy: f.type ?? parseTsType(f.tsType),
   })));
+}
+
+/** Replace obj.field → replacement var in typed IR expressions (before lowering).
+ *  Mirrors replaceFieldsInTStmts but operates on a single TExpr tree. */
+function replaceFieldInTExpr(
+  expr: TExpr, objName: string,
+  replacements: { fieldName: string; newName: string; fallbackTy: Ty }[]
+): TExpr {
+  if (replacements.length === 0) return expr;
+  return mapTExpr(expr, e => {
+    if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === objName) {
+      const r = replacements.find(r => r.fieldName === e.field);
+      if (r) {
+        const ty = e.ty.kind !== "unknown" ? e.ty : r.fallbackTy;
+        return { kind: "var", name: r.newName, ty } as TExpr;
+      }
+    }
+    return null;
+  });
+}
+
+/** Unwrap optional type on match-bound variables in TExpr.
+ *  After replaceFieldInTExpr, the replaced variable carries the original optional
+ *  type from the field declaration. The match binding unwraps it to the inner type. */
+function fixBoundType(expr: TExpr, boundName: string): TExpr {
+  return mapTExpr(expr, e =>
+    e.kind === "var" && e.name === boundName && e.ty.kind === "optional"
+      ? { ...e, ty: e.ty.inner } as TExpr : null
+  );
+}
+
+/** Lower a conditional with an optional check (Phase 2: explicit, Phase 3: && with guard).
+ *  Generates: match scrutinee { Some(val) => [if guard then] A [else B], None => B }
+ *  For field chains, replaces field accesses in TExpr before lowering.
+ *  For simple vars, replaces variable names in Expr after lowering. */
+function lowerOptionalConditional(
+  e: TExpr & { kind: "conditional" },
+  check: { varName: string; negated: boolean; fieldExpr?: TExpr },
+  guard: TExpr | null,
+  binds: Stmt[] | null
+): Expr {
+  const sanitized = check.varName.replace(/\./g, "_");
+  const bound = matchBinder(`${sanitized}_val`);
+  const isFieldChain = check.fieldExpr && check.fieldExpr.kind === "field" &&
+    (check.fieldExpr as TExpr & { kind: "field" }).obj.kind === "var";
+
+  // Determine which branch is Some (unwrapped) vs None
+  let thenTExpr = e.then;
+  let guardTExpr = guard;
+
+  // For field chains: replace field access with bound var in TExpr before lowering
+  if (isFieldChain) {
+    const fe = check.fieldExpr as TExpr & { kind: "field"; obj: TExpr & { kind: "var" } };
+    const innerTy = fe.ty.kind === "optional" ? fe.ty.inner : fe.ty;
+    const replacements = [{ fieldName: fe.field, newName: bound, fallbackTy: innerTy }];
+    thenTExpr = fixBoundType(replaceFieldInTExpr(thenTExpr, fe.obj.name, replacements), bound);
+    if (guardTExpr) {
+      guardTExpr = fixBoundType(replaceFieldInTExpr(guardTExpr, fe.obj.name, replacements), bound);
+    }
+  }
+
+  let thenExpr = lowerExpr(thenTExpr, binds);
+  let elseExpr = lowerExpr(e.else, binds);
+
+  // For simple vars: replace after lowering
+  if (!isFieldChain) {
+    thenExpr = replaceVar(thenExpr, check.varName, { kind: "var", name: bound }, true);
+  }
+
+  // Optional wrapping: check if either branch is undefined (produces optional result)
+  const isOptionalResult =
+    (e.then.kind === "var" && e.then.name === "undefined") ||
+    (e.else.kind === "var" && e.else.name === "undefined");
+  if (isOptionalResult) {
+    thenExpr = wrapOptionalBranch(thenExpr, e.then);
+    elseExpr = wrapOptionalBranch(elseExpr, e.else);
+  }
+
+  // Build Some arm body — add guard for && patterns
+  // Note: if the guard has method calls, the impure path desugars the let to a
+  // statement-level if+match in transformStmt, so this expression-level path only
+  // runs for pure guards. Use null for binds to avoid escaping the match scope.
+  let someBody: Expr;
+  if (guard) {
+    let guardExpr = lowerExpr(guardTExpr!, null);
+    if (!isFieldChain) {
+      guardExpr = replaceVar(guardExpr, check.varName, { kind: "var", name: bound }, true);
+    }
+    // Guard-else gets the same expression as None arm
+    let guardElse = lowerExpr(e.else, null);
+    if (isOptionalResult) {
+      guardElse = wrapOptionalBranch(guardElse, e.else);
+    }
+    someBody = { kind: "if", cond: guardExpr, then: thenExpr, else: guardElse };
+  } else {
+    someBody = thenExpr;
+  }
+
+  // Build scrutinee
+  const scrutinee: Expr | string = isFieldChain
+    ? lowerExpr(check.fieldExpr!, binds)
+    : check.varName;
+
+  return {
+    kind: "match", scrutinee,
+    arms: [
+      { pattern: `.some ${bound}`, body: someBody },
+      { pattern: ".none", body: elseExpr },
+    ],
+  };
 }
 
 
