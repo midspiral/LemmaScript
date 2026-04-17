@@ -551,6 +551,39 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 **Optional truthiness in conditionals:** `opt ? f(opt) : undefined` where `opt` has optional type generates a match expression. The resolve phase introduces a synthetic variable for the unwrapped value, substitutes it in the then-branch, and narrows its type to the inner type. The transform generates `match opt { case Some(v) => Some(f(v)) case None => None }`. For field-access conditions like `entry.decision ? ... : undefined`, the synthetic variable replaces the entire field-access chain in the then-branch.
 
+**Peephole simplification of `Map.get` ceremony.** The transform produces verbose-looking output for common `Map.get` consumer patterns — the call lowers to `(if k in m then Some(m[k]) else None)` followed by a match. A peephole pass between transform and emit collapses these into idiomatic Dafny. See [TOOLS.md](TOOLS.md#peephole-rules) for the full rule list.
+
+The user-visible effect:
+```typescript
+// TS source
+if (m.get(k) === 0) { ... }
+```
+```dafny
+// Without peephole
+if (match (if k in m then Some(m[k]) else None) {
+      case Some(v) => v == 0
+      case None => false
+    }) { ... }
+
+// With peephole (current behavior)
+if (k in m && m[k] == 0) { ... }
+```
+
+The let-collapse rules apply when the partial result is bound to a local that's only used as the match scrutinee:
+```typescript
+// TS source
+const lane = m.tasks[listId];
+if (lane === undefined) return false;
+return process(lane);
+```
+```dafny
+// Output (peephole'd)
+if !(listId in m.tasks) { return false; }
+return process(m.tasks[listId]);
+```
+
+When the bound variable IS used after the match, the `let` is preserved and the `Option` value remains; only the inline match-on-`get` form is simplified.
+
 **Quantifier type inference:** When a quantifier variable is used as a collection key or element (e.g., `forall(k, map.has(k) ==> ...)`, `forall(v, arr.includes(v) ==> ...)`), the variable type is inferred from the collection's key/element type instead of defaulting to `Int`.
 
 **Set iteration:** `for (const x of s)` where `s` is a `Set<T>` converts the set to an array first (Lean: `.toArray`, Dafny: `SetToSeq` helper), then iterates with a standard indexed loop.

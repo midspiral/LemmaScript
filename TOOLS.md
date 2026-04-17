@@ -9,6 +9,7 @@ TS source (.ts)
   → extract    (ts-morph → Raw IR)
   → resolve    (Raw IR → Typed IR)
   → transform  (Typed IR → IR, configured per backend)
+  → peephole   (IR → IR, local rewrites that eliminate Some/None ceremony)
   → emit       (IR → Lean text or Dafny text)
 ```
 
@@ -46,6 +47,8 @@ Type names: `Expr`, `Stmt`, `Decl`, `Module`, `FnDef`, `FnMethod`, `Inductive`, 
 **Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser.
 
 **Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). No type lookups, no string parsing.
+
+**Peephole** (`peephole.ts`): IR → IR. Local rewrite rules applied bottom-up to fixed point. Eliminates wrap-then-unwrap ceremony around partial-access expressions like `m.get(k)` (which is internally lowered to `methodCall(map, "get", [k])` and emits as `(if k in m then Some(m[k]) else None)`). See [Peephole rules](#peephole-rules) below.
 
 **Emit** (`lean-emit.ts` / `dafny-emit.ts`): IR → text. Each emitter maps `Ty` objects to backend type syntax and method calls to backend-specific syntax.
 
@@ -93,6 +96,7 @@ TS source (.ts)
   → extract    (ts-morph → Raw IR)
   → resolve    (Raw IR → Typed IR)
   → transform  (Typed IR → IR, with LEAN_OPTIONS)
+  → peephole   (IR → IR)
   → emit       (IR → Lean text)
 ```
 
@@ -110,6 +114,7 @@ TS source (.ts)
   → extract    (ts-morph → Raw IR)
   → resolve    (Raw IR → Typed IR)
   → transform  (Typed IR → IR, with DAFNY_OPTIONS)
+  → peephole   (IR → IR)
   → dafny-emit (IR → Dafny text)
 ```
 
@@ -126,6 +131,34 @@ Each TS source produces two Dafny files:
 - `lsc regen --backend=dafny foo.ts` — regenerate `.dfy.gen`, three-way merge, verify
 - `lsc check --backend=dafny foo.ts` — gen + additions-only check + `dafny verify`
 
+## Peephole Rules
+
+Local IR-to-IR rewrites applied bottom-up to fixed point at each node, in `peephole.ts`. They eliminate Some/None ceremony that comes from `Map.get(k)` and `Record<K,V>` index access (both lowered to `methodCall(map, "get", [k])`, which `dafny-emit` renders as `(if k in m then Some(m[k]) else None)`).
+
+Each rule is local and semantics-preserving. They are always on (no flag).
+
+**Expression rules**
+
+| Pattern | Rewrites to |
+|---------|-------------|
+| `match m.get(k) { Some(v) => sb, None => nb }` | `if k in m then sb[v := m[k]] else nb` |
+| `let x = m.get(k) in match x { Some(v) => sb, None => nb }` (when `x` not used in arms) | `if k in m then sb[v := m[k]] else nb` |
+| `if c then false else true` | `¬c` |
+| `if c then true else false` | `c` |
+| `if c then b else false` | `c && b` |
+| `if c then true else b` | `c || b` |
+
+**Statement rules**
+
+| Pattern | Rewrites to |
+|---------|-------------|
+| `match m.get(k) { Some(v) => sb, None => nb }` (statement-level) | `if k in m { sb[v := m[k]] } else { nb }` |
+| `let x = m.get(k); match x { Some(v) => sb, None => nb }` (when `x` not used after) | `if k in m { sb[v := m[k]] } else { nb }` |
+
+The let-collapse rules require the bound variable to not be referenced after the match (conservative use-count check, no shadowing analysis). When the variable is referenced elsewhere, the `let` is preserved and only the inline `match` rule fires.
+
+The substitution `sb[v := m[k]]` walks the body replacing var references; it respects binders (let, forall, exists) that shadow `v`.
+
 ## Current State
 
 | File | Phase | Role |
@@ -137,6 +170,7 @@ Each TS source produces two Dafny files:
 | `typedir.ts` | Types | Typed IR type definitions |
 | `ir.ts` | Types | Backend-neutral IR type definitions |
 | `transform.ts` | Transform | Typed IR → IR |
+| `peephole.ts` | Peephole | IR → IR (Some/None ceremony elimination) |
 | `types.ts` | (shared) | TypeDeclInfo, parseTsType |
 | `lean-emit.ts` | Emit | IR → Lean text |
 | `dafny-emit.ts` | Emit | IR → Dafny text |
