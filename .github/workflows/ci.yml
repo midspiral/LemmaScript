@@ -76,6 +76,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - repo: midspiral/collab-todo-lemmascript
+            branch: main
           - repo: midspiral/colorwheel-lemmascript
             branch: main
           - repo: midspiral/node-casbin-lemmascript
