@@ -45,13 +45,6 @@ function main() {
     args.splice(extraFlagsIdx, 1);
   }
 
-  const peepholeIdx = args.findIndex(a => a === "--peephole");
-  let peepholeFlag = false;
-  if (peepholeIdx >= 0) {
-    peepholeFlag = true;
-    args.splice(peepholeIdx, 1);
-  }
-
   const [cmd, filePath] = args;
   if (!cmd || !filePath) {
     console.error("Usage: lsc <gen|check|regen|extract> [--backend=lean|dafny] <file.ts>");
@@ -89,10 +82,6 @@ function main() {
     return;
   }
 
-  // //@ peephole directive in source enables peephole pass for that file.
-  const peepholeDirective = /\/\/@ peephole\b/.test(sourceFile.getFullText());
-  const peephole = peepholeFlag || peepholeDirective;
-
   // Extract: ts-morph → Raw IR
   const raw = extractModule(sourceFile);
 
@@ -110,10 +99,8 @@ function main() {
   // ── Dafny backend ─────────────────────────────────────────
   if (backend === "dafny") {
     let { typesFile, defFile } = transformModuleDafny(typed);
-    if (peephole) {
-      if (typesFile) typesFile = peepholeModule(typesFile);
-      defFile = peepholeModule(defFile);
-    }
+    if (typesFile) typesFile = peepholeModule(typesFile);
+    defFile = peepholeModule(defFile);
     const allDecls = [...(typesFile?.decls ?? []), ...defFile.decls];
     const merged = { ...defFile, decls: allDecls };
     const text = emitDafnyFile(merged, path.basename(filePath));
@@ -142,10 +129,8 @@ function main() {
   const specPath = path.join(dir, `${base}.spec.lean`);
   const specImport = existsSync(specPath) ? `«${base}.spec»` : undefined;
   let { typesFile, defFile } = transformModuleLean(typed, specImport);
-  if (peephole) {
-    if (typesFile) typesFile = peepholeModule(typesFile);
-    defFile = peepholeModule(defFile);
-  }
+  if (typesFile) typesFile = peepholeModule(typesFile);
+  defFile = peepholeModule(defFile);
 
   const typesPath = typesFile ? path.join(dir, `${base}.types.lean`) : null;
   const typesText = typesFile ? emitLeanFile(typesFile) : null;
