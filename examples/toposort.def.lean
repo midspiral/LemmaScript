@@ -32,23 +32,17 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
       invariant ∀ k : String, inDegree.contains k → inDegree.get! k ≥ 0
     do
       let id := nodeIds[_id_idx2]!
-      let nodeDeps := deps.get? id
-      if h_nodeDeps : (nodeDeps).isSome = true then
-        let _nodeDeps_val := (nodeDeps).get h_nodeDeps
+      if deps.contains id then
+        let _nodeDeps_val := deps[id]!
         inDegree := inDegree.insert id _nodeDeps_val.size
         let _dep_seq := _nodeDeps_val.toArray
         for _dep_idx in [:_dep_seq.size]
           invariant _dep_idx ≤ _dep_seq.size
         do
           let dep := _dep_seq[_dep_idx]!
-          let adj := adjacency.get? dep
-          if h_adj : (adj).isSome = true then
-            let _adj_val := (adj).get h_adj
+          if adjacency.contains dep then
+            let _adj_val := adjacency[dep]!
             adjacency := adjacency.insert dep (_adj_val ++ #[id])
-          else
-            pure ()
-      else
-        pure ()
     let mut enqueued : Std.HashSet String := Std.HashSet.empty
     let mut queue : Array String := #[]
     for _id_idx3 in [:nodeIds.size]
@@ -63,7 +57,8 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
       invariant ∀ k : String, enqueued.contains k → nodeIdSet.contains k
     do
       let id := nodeIds[_id_idx3]!
-      if match inDegree.get? id with | .some _value => _value == 0 | .none => false then
+      if inDegree.contains id ∧ let _value := inDegree[id]!
+_value == 0 then
         assertGadget (¬(enqueued.contains id))
         queue := queue ++ #[id]
         enqueued := enqueued.insert id
@@ -85,9 +80,8 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
       let id := queue[qHead.toNat]!
       sorted := sorted ++ #[id]
       qHead := qHead + 1
-      let neighbors := adjacency.get? id
-      if h_neighbors : (neighbors).isSome = true then
-        let _neighbors_val := (neighbors).get h_neighbors
+      if adjacency.contains id then
+        let _neighbors_val := adjacency[id]!
         for _neighbor_idx in [:_neighbors_val.size]
           invariant _neighbor_idx ≤ _neighbors_val.size
           invariant qHead ≤ queue.size
@@ -101,17 +95,12 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
         do
           let neighbor := _neighbors_val[_neighbor_idx]!
           assertGadget (nodeIdSet.contains neighbor)
-          let deg := inDegree.get? neighbor
-          if h_deg : (deg).isSome = true then
-            let _deg_val := (deg).get h_deg
+          if inDegree.contains neighbor then
+            let _deg_val := inDegree[neighbor]!
             let newDeg := _deg_val - 1
             inDegree := inDegree.insert neighbor newDeg
             if newDeg = 0 then
               assertGadget (¬(enqueued.contains neighbor))
               queue := queue ++ #[neighbor]
               enqueued := enqueued.insert neighbor
-          else
-            pure ()
-      else
-        pure ()
     return sorted

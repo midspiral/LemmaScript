@@ -48,10 +48,7 @@ def evalSwitch (e : Expr) : Int :=
     0 - _e_inner
 
 def isHighPriority (p : Priority) : Bool :=
-  if p = .high then
-    true
-  else
-    false
+  p = .high
 
 def defaultConfig  : Config :=
   { threshold := 0, maxRetries := 3, enabled := true }
