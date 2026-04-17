@@ -381,6 +381,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `` `${n} items` `` (int+string) | — | `NatToString(n) + " items"` |
 | `{ k1: v1, ... }: Record<K,V>` | — | `map["k1" := v1, ...]` |
 | `new Map<K,V>()` | `Std.HashMap.empty` | `map[]` |
+| `Object.fromEntries(m)` | identity | identity |
 | `m.get(k)` (in code) | `m.get? k` | `if k in m then Some(m[k]) else None` |
 | `m.get(k)` (in spec) | `m.get! k` | `m[k]` |
 | `m.set(k, v)` | `m := m.insert k v` | `m := m[k := v]` |
@@ -529,6 +530,10 @@ The transform uses two strategies for translating `receiver.method(args)`:
 The transform checks helper-function methods first, then dot-notation methods. If neither matches, it errors.
 
 ### 3.9 Map, Set, and Optional Narrowing
+
+**Map vs Record runtime mismatch.** In both backends, `Record<K,V>` and `Map<K,V>` map to the same type (`map<K,V>` in Dafny, `HashMap` in Lean). But at JavaScript runtime they are different: `Record` is a plain object (`Object.keys` works, bracket access works) while `Map` is a Map instance (`Object.keys` returns `[]`, bracket access returns `undefined`). Code that builds a `Map` with `new Map()` + `.set()` and returns it as a `Record` will verify in Dafny but fail at runtime — the caller receives a Map where it expects a plain object.
+
+**Fix:** When returning a `Map` as a `Record`, wrap with `Object.fromEntries(result)`. LemmaScript strips `Object.fromEntries()` during extraction (identity — Map and Record are the same type in the backend), but at runtime it converts the Map to a plain object. This is necessary whenever a function uses the `new Map()` + `.set()` pattern to build a Record result.
 
 **Map and Set** (`Map<K,V>`, `Set<T>`) are immutable types in both backends. `const` declarations of collection types are automatically promoted to mutable bindings, since TS mutates in place but the backends require reassignment.
 

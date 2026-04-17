@@ -124,6 +124,14 @@ function extractExpr(node: Expression): RawExpr {
 
   // Call expression: f(a, b)
   if (Node.isCallExpression(node)) {
+    // Object.fromEntries(map) → identity (Map IS Record in Dafny)
+    const callee = node.getExpression();
+    if (Node.isPropertyAccessExpression(callee) &&
+        callee.getExpression().getText() === "Object" &&
+        callee.getName() === "fromEntries" &&
+        node.getArguments().length === 1) {
+      return extractExpr(node.getArguments()[0] as Expression);
+    }
     return {
       kind: "call",
       fn: extractExpr(node.getExpression()),
