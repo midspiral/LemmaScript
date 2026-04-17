@@ -47,61 +47,8 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
   }
 }
 
-// ── Variable substitution ────────────────────────────────────
-
-/** Replace var with replacement in expression, respecting binders. */
-function substVarExpr(e: Expr, name: string, replacement: Expr): Expr {
-  return mapExpr(e, x => {
-    if (x.kind === "var" && x.name === name) return replacement;
-    if (x.kind === "let" && x.name === name) {
-      return { ...x, value: substVarExpr(x.value, name, replacement) };
-    }
-    if (x.kind === "forall" && x.var === name) return x;
-    if (x.kind === "exists" && x.var === name) return x;
-    return null;
-  });
-}
-
-/** Replace var with replacement in a list of statements. */
-function substVarStmts(stmts: Stmt[], name: string, replacement: Expr): Stmt[] {
-  return stmts.map(s => substVarStmt(s, name, replacement));
-}
-
-function substVarStmt(s: Stmt, name: string, replacement: Expr): Stmt {
-  const re = (e: Expr) => substVarExpr(e, name, replacement);
-  switch (s.kind) {
-    case "let":
-      if (s.name === name) return { ...s, value: re(s.value) };
-      return { ...s, value: re(s.value) };
-    case "assign":
-      return { ...s, value: re(s.value) };
-    case "bind":
-    case "let-bind":
-      if (s.kind === "let-bind" && s.name === name) return { ...s, value: re(s.value) };
-      return { ...s, value: re(s.value) };
-    case "return": return { ...s, value: re(s.value) };
-    case "break": case "continue": return s;
-    case "if": return { ...s, cond: re(s.cond),
-      then: substVarStmts(s.then, name, replacement),
-      else: substVarStmts(s.else, name, replacement) };
-    case "match": {
-      const scr = typeof s.scrutinee === "string" ? s.scrutinee : re(s.scrutinee);
-      return { ...s, scrutinee: scr,
-        arms: s.arms.map(a => ({ ...a, body: substVarStmts(a.body, name, replacement) })) };
-    }
-    case "while": return { ...s, cond: re(s.cond), invariants: s.invariants.map(re),
-      body: substVarStmts(s.body, name, replacement) };
-    case "forin":
-      if (s.idx === name) return { ...s, bound: re(s.bound), invariants: s.invariants.map(re), body: s.body };
-      return { ...s, bound: re(s.bound), invariants: s.invariants.map(re),
-        body: substVarStmts(s.body, name, replacement) };
-    case "ghostLet":
-      if (s.name === name) return { ...s, value: re(s.value) };
-      return { ...s, value: re(s.value) };
-    case "ghostAssign": return { ...s, value: re(s.value) };
-    case "assert": return { ...s, expr: re(s.expr) };
-  }
-}
+// (Note: peephole rules now bind once via let/var rather than substitute,
+//  so semantics are preserved under any mutation. No substVar helpers needed.)
 
 // ── Shape detection ──────────────────────────────────────────
 
@@ -132,7 +79,10 @@ function getSomeNoneArms<A extends { pattern: string; body: any }>(arms: A[]): {
 
 // ── Expression rewrite rules ────────────────────────────────
 
-/** Rule 1 (expr): match m.get(k) { Some(v) => sb, None => nb } → if k in m then sb[v := m[k]] else nb */
+/** Rule 1 (expr): match m.get(k) { Some(v) => sb, None => nb }
+ *  → if k in m then (let v = m[k] in sb) else nb
+ *  Bind once (let-expression) rather than substitute, so the verifier doesn't
+ *  re-derive `k in m` at every use of v inside sb. */
 function ruleMatchOnMapGetExpr(e: Expr): Expr | null {
   if (e.kind !== "match" || typeof e.scrutinee === "string") return null;
   const get = isMapGet(e.scrutinee);
@@ -140,7 +90,9 @@ function ruleMatchOnMapGetExpr(e: Expr): Expr | null {
   const arms = getSomeNoneArms(e.arms);
   if (!arms) return null;
   const idx: Expr = { kind: "index", arr: get.obj, idx: get.key };
-  const someBody = arms.binder ? substVarExpr(arms.someArm.body, arms.binder, idx) : arms.someArm.body;
+  const someBody: Expr = arms.binder
+    ? { kind: "let", name: arms.binder, value: idx, body: arms.someArm.body }
+    : arms.someArm.body;
   const has: Expr = { kind: "methodCall", obj: get.obj, objTy: get.objTy, method: "has", args: [get.key], monadic: false };
   return { kind: "if", cond: has, then: someBody, else: arms.noneArm.body };
 }
@@ -174,8 +126,9 @@ function ruleIfTrueElse(e: Expr): Expr | null {
 }
 
 /** Rule 6 (let-expr collapse): let x = m.get(k) in match x { Some(v) => sb, None => nb }
- *  → if k in m then sb[v := m[k]] else nb
- *  Body must reference x only as the match scrutinee. */
+ *  → if k in m then (let v = m[k] in sb) else nb
+ *  Body must reference x only as the match scrutinee. Bind v once via let-expression
+ *  rather than substitute, so semantics are preserved under any mutation. */
 function ruleLetMatchOnMapGetExpr(e: Expr): Expr | null {
   if (e.kind !== "let") return null;
   const get = isMapGet(e.value);
@@ -191,7 +144,9 @@ function ruleLetMatchOnMapGetExpr(e: Expr): Expr | null {
   // x must not appear in arm bodies (otherwise the binding is needed)
   if (containsVarRefExpr(arms.someArm.body, e.name) || containsVarRefExpr(arms.noneArm.body, e.name)) return null;
   const idx: Expr = { kind: "index", arr: get.obj, idx: get.key };
-  const someBody = arms.binder ? substVarExpr(arms.someArm.body, arms.binder, idx) : arms.someArm.body;
+  const someBody: Expr = arms.binder
+    ? { kind: "let", name: arms.binder, value: idx, body: arms.someArm.body }
+    : arms.someArm.body;
   const has: Expr = { kind: "methodCall", obj: get.obj, objTy: get.objTy, method: "has", args: [get.key], monadic: false };
   return { kind: "if", cond: has, then: someBody, else: arms.noneArm.body };
 }
@@ -221,7 +176,10 @@ const EXPR_RULES = [
 
 // ── Statement rewrite rules ──────────────────────────────────
 
-/** Stmt rule 1: match m.get(k) { Some(v) => sb, None => nb } → if k in m { sb[v := m[k]] } else { nb } */
+/** Stmt rule 1: match m.get(k) { Some(v) => sb, None => nb }
+ *  → if k in m { var v := m[k]; sb } else { nb }
+ *  Bind once (var declaration) rather than substitute — substituting would
+ *  re-evaluate m[k] at every use, changing semantics if the body mutates m. */
 function ruleMatchOnMapGetStmt(s: Stmt): Stmt | null {
   if (s.kind !== "match" || typeof s.scrutinee === "string") return null;
   const get = isMapGet(s.scrutinee);
@@ -229,7 +187,10 @@ function ruleMatchOnMapGetStmt(s: Stmt): Stmt | null {
   const arms = getSomeNoneArms(s.arms);
   if (!arms) return null;
   const idx: Expr = { kind: "index", arr: get.obj, idx: get.key };
-  const someBody = arms.binder ? substVarStmts(arms.someArm.body, arms.binder, idx) : arms.someArm.body;
+  const valTy = get.objTy.kind === "map" ? get.objTy.value : { kind: "unknown" as const };
+  const someBody: Stmt[] = arms.binder
+    ? [{ kind: "let", name: arms.binder, type: valTy, mutable: false, value: idx }, ...arms.someArm.body]
+    : arms.someArm.body;
   const has: Expr = { kind: "methodCall", obj: get.obj, objTy: get.objTy, method: "has", args: [get.key], monadic: false };
   return { kind: "if", cond: has, then: someBody, else: arms.noneArm.body };
 }
@@ -292,8 +253,9 @@ function containsVarRefStmts(stmts: Stmt[], name: string): boolean {
 // ── Statement-list rules (pairs of adjacent stmts) ──────────
 
 /** Pair rule: let x = m.get(k); match x { Some(v) => sb, None => nb }
- *  → if k in m { sb[v := m[k]] } else { nb }
- *  Requires x not referenced in any stmt after the match. */
+ *  → if k in m { var v := m[k]; sb } else { nb }
+ *  Requires x not referenced in any stmt after the match. Bind v once instead
+ *  of substituting, to preserve semantics under mutation of m. */
 function tryLetMatchOnMapGet(s1: Stmt, s2: Stmt, restStmts: Stmt[]): Stmt | null {
   if (s1.kind !== "let" || s1.mutable) return null;
   const get = isMapGet(s1.value);
@@ -307,7 +269,10 @@ function tryLetMatchOnMapGet(s1: Stmt, s2: Stmt, restStmts: Stmt[]): Stmt | null
   if (!arms) return null;
   if (containsVarRefStmts(restStmts, s1.name)) return null;
   const idx: Expr = { kind: "index", arr: get.obj, idx: get.key };
-  const someBody = arms.binder ? substVarStmts(arms.someArm.body, arms.binder, idx) : arms.someArm.body;
+  const valTy = get.objTy.kind === "map" ? get.objTy.value : { kind: "unknown" as const };
+  const someBody: Stmt[] = arms.binder
+    ? [{ kind: "let", name: arms.binder, type: valTy, mutable: false, value: idx }, ...arms.someArm.body]
+    : arms.someArm.body;
   const has: Expr = { kind: "methodCall", obj: get.obj, objTy: get.objTy, method: "has", args: [get.key], monadic: false };
   return { kind: "if", cond: has, then: someBody, else: arms.noneArm.body };
 }

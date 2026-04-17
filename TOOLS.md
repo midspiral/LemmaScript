@@ -141,8 +141,8 @@ Each rule is local and semantics-preserving. They are always on (no flag).
 
 | Pattern | Rewrites to |
 |---------|-------------|
-| `match m.get(k) { Some(v) => sb, None => nb }` | `if k in m then sb[v := m[k]] else nb` |
-| `let x = m.get(k) in match x { Some(v) => sb, None => nb }` (when `x` not used in arms) | `if k in m then sb[v := m[k]] else nb` |
+| `match m.get(k) { Some(v) => sb, None => nb }` | `if k in m then (let v = m[k] in sb) else nb` |
+| `let x = m.get(k) in match x { Some(v) => sb, None => nb }` (when `x` not used in arms) | `if k in m then (let v = m[k] in sb) else nb` |
 | `if c then false else true` | `¬c` |
 | `if c then true else false` | `c` |
 | `if c then b else false` | `c && b` |
@@ -152,12 +152,12 @@ Each rule is local and semantics-preserving. They are always on (no flag).
 
 | Pattern | Rewrites to |
 |---------|-------------|
-| `match m.get(k) { Some(v) => sb, None => nb }` (statement-level) | `if k in m { sb[v := m[k]] } else { nb }` |
-| `let x = m.get(k); match x { Some(v) => sb, None => nb }` (when `x` not used after) | `if k in m { sb[v := m[k]] } else { nb }` |
+| `match m.get(k) { Some(v) => sb, None => nb }` (statement-level) | `if k in m { var v := m[k]; sb } else { nb }` |
+| `let x = m.get(k); match x { Some(v) => sb, None => nb }` (when `x` not used after) | `if k in m { var v := m[k]; sb } else { nb }` |
 
 The let-collapse rules require the bound variable to not be referenced after the match (conservative use-count check, no shadowing analysis). When the variable is referenced elsewhere, the `let` is preserved and only the inline `match` rule fires.
 
-The substitution `sb[v := m[k]]` walks the body replacing var references; it respects binders (let, forall, exists) that shadow `v`.
+The bound value `m[k]` is captured once via `let` (expression form) or `var` (statement form). Substitution would re-evaluate `m[k]` at every use, which changes semantics if the body mutates `m`.
 
 ## Current State
 

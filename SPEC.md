@@ -578,9 +578,15 @@ return process(lane);
 ```
 ```dafny
 // Output (peephole'd)
-if !(listId in m.tasks) { return false; }
-return process(m.tasks[listId]);
+if (listId in m.tasks) {
+  var lane := m.tasks[listId];
+  return process(lane);
+} else {
+  return false;
+}
 ```
+
+The unwrapped value is bound once via a `var` (or `let` expression in pure contexts), preserving the source binding's name and capture semantics. Substituting `m.tasks[listId]` at every use would re-evaluate the access — incorrect if the body mutates `m`.
 
 When the bound variable IS used after the match, the `let` is preserved and the `Option` value remains; only the inline match-on-`get` form is simplified.
 
