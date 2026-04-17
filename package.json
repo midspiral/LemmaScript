@@ -12,7 +12,8 @@
   "scripts": {
     "build": "tsc -p tools/tsconfig.json",
     "prepublishOnly": "npm run build",
-    "typecheck": "tsc -p tools/tsconfig.json --noEmit"
+    "typecheck": "tsc -p tools/tsconfig.json --noEmit",
+    "typecheck:examples": "tsc -p examples/tsconfig.json"
   },
   "dependencies": {
     "ts-morph": "^25.0.0"

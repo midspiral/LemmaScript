@@ -47,7 +47,7 @@ export function topologicalSort(
 
   // Phase 3: seed queue with zero in-degree nodes
   //@ ghost let enqueued = new Set<string>()
-  const queue: string[] = [];
+  let queue: string[] = [];
   for (const id of nodeIds) {
     //@ invariant queue.length <= nodeIds.length
     //@ invariant queue.length <= _id_idx3

@@ -25,6 +25,10 @@ jobs:
         working-directory: tools
         run: npm run typecheck
 
+      - name: Typecheck examples
+        working-directory: tools
+        run: npx tsc -p ../examples/tsconfig.json
+
       - name: Regenerate Lean from TypeScript
         run: ./regen-lean.sh
 
