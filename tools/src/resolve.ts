@@ -1017,6 +1017,7 @@ function precomputeFieldTypes(typeDecls: TypeDeclInfo[]) {
 }
 
 export function resolveModule(raw: RawModule): TModule {
+  _synVarCounter = 0;
   precomputeFieldTypes(raw.typeDecls);
   const pureFns = computePureFns(raw.functions);
   // Pre-compute function parameter and return types
