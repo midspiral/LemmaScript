@@ -626,20 +626,32 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "havoc", type: e.ty };
 
     case "someMatch": {
-      // Produced by pe.ts from `x !== undefined ? a : b`. Lower to IR match
-      // Some/None, substituting the binder for occurrences of varName in someBody.
-      // Wrap branches in Some when the result is itself optional-typed and a branch
-      // is the bare value (matching wrapOptionalBranch behavior on the original
-      // conditional path).
-      let someBody = lowerExpr(e.someBody, binds);
+      // Produced by pe.ts from `e !== undefined ? a : b`. Lower to IR match Some/None.
+      // Var scrutinee: lower body, replace var refs with binder.
+      // Field scrutinee: replace `obj.field` refs in TExpr before lowering;
+      //   match scrutinee is the lowered field expression.
+      let someBody: Expr;
+      let scrutinee: Expr | string;
+      if (e.scrutinee.kind === "var") {
+        someBody = lowerExpr(e.someBody, binds);
+        someBody = replaceVar(someBody, e.scrutinee.name, { kind: "var", name: e.binder }, true);
+        scrutinee = e.scrutinee.name;
+      } else if (e.scrutinee.kind === "field" && e.scrutinee.obj.kind === "var") {
+        const replaced = fixBoundType(replaceFieldInTExpr(e.someBody, e.scrutinee.obj.name, [
+          { fieldName: e.scrutinee.field, newName: e.binder, fallbackTy: e.binderTy }
+        ]), e.binder);
+        someBody = lowerExpr(replaced, binds);
+        scrutinee = lowerExpr(e.scrutinee, binds);
+      } else {
+        throw new Error(`someMatch (expr): unsupported scrutinee kind ${e.scrutinee.kind}`);
+      }
       let noneBody = lowerExpr(e.noneBody, binds);
-      someBody = replaceVar(someBody, e.varName, { kind: "var", name: e.binder }, true);
       if (e.ty.kind === "optional") {
         someBody = wrapOptionalBranch(someBody, e.someBody);
         noneBody = wrapOptionalBranch(noneBody, e.noneBody);
       }
       return {
-        kind: "match", scrutinee: e.varName,
+        kind: "match", scrutinee,
         arms: [
           { pattern: `.some ${e.binder}`, body: someBody },
           { pattern: ".none", body: noneBody },
@@ -1015,19 +1027,44 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       return [{ kind: "assert", expr: transformExpr(s.expr) }];
 
     case "someMatch": {
-      // Produced by pe.ts. Lower to IR match Some/None, substituting the
-      // match-bound name for occurrences of the narrowed variable in someBody.
-      const someTransformed = transformStmts(s.someBody, typeDecls);
-      const someBody = someTransformed.map(stmt =>
-        mapStmtExprs(stmt, e => replaceVar(e, s.varName, { kind: "var", name: s.binder }, true)));
-      const noneBody = transformStmts(s.noneBody, typeDecls);
-      return [{
-        kind: "match", scrutinee: s.varName,
-        arms: [
-          { pattern: `.some ${s.binder}`, body: someBody },
-          { pattern: ".none", body: noneBody },
-        ],
-      }];
+      // Produced by pe.ts. Lower to IR match Some/None.
+      // Var scrutinee: lower body, then replace var refs with the binder name.
+      // Field scrutinee: replace `obj.field` refs in TStmt before lowering;
+      //   match scrutinee is the lowered field expression (Expr), not a string.
+      // Some body is lowered FIRST so lift counters match the original
+      // transform's emitOptionalMatch order.
+      if (s.scrutinee.kind === "var") {
+        const someTransformed = transformStmts(s.someBody, typeDecls);
+        const someBody = someTransformed.map(stmt =>
+          mapStmtExprs(stmt, e => replaceVar(e, (s.scrutinee as TExpr & { kind: "var" }).name,
+            { kind: "var", name: s.binder }, true)));
+        const noneBody = transformStmts(s.noneBody, typeDecls);
+        return [{
+          kind: "match", scrutinee: s.scrutinee.name,
+          arms: [
+            { pattern: `.some ${s.binder}`, body: someBody },
+            { pattern: ".none", body: noneBody },
+          ],
+        }];
+      }
+      if (s.scrutinee.kind === "field" && s.scrutinee.obj.kind === "var") {
+        const objName = s.scrutinee.obj.name;
+        const fieldName = s.scrutinee.field;
+        const replaced = replaceFieldsInTStmts(s.someBody, objName, [
+          { fieldName, newName: s.binder, fallbackTy: s.binderTy }
+        ]);
+        const someBody = transformStmts(replaced, typeDecls);
+        const noneBody = transformStmts(s.noneBody, typeDecls);
+        const scrutinee = transformExpr(s.scrutinee);
+        return [{
+          kind: "match", scrutinee,
+          arms: [
+            { pattern: `.some ${s.binder}`, body: someBody },
+            { pattern: ".none", body: noneBody },
+          ],
+        }];
+      }
+      throw new Error(`someMatch: unsupported scrutinee kind ${s.scrutinee.kind}`);
     }
   }
 }
@@ -1468,18 +1505,38 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
         // Produced by pe.ts. Lower to expression-form match Some/None.
         // Append rest to both arms so a non-terminating arm falls through to
         // the rest of the block (matches the if-case treatment above).
-        const someExpr = transformPureBody([...s.someBody, ...rest], typeDecls);
-        if (!someExpr) return null;
-        const noneExpr = transformPureBody([...s.noneBody, ...rest], typeDecls);
-        if (!noneExpr) return null;
-        const someReplaced = replaceVar(someExpr, s.varName, { kind: "var", name: s.binder }, true);
-        return {
-          kind: "match", scrutinee: s.varName,
-          arms: [
-            { pattern: `.some ${s.binder}`, body: someReplaced },
-            { pattern: ".none", body: noneExpr },
-          ],
-        };
+        if (s.scrutinee.kind === "var") {
+          const someExpr = transformPureBody([...s.someBody, ...rest], typeDecls);
+          if (!someExpr) return null;
+          const noneExpr = transformPureBody([...s.noneBody, ...rest], typeDecls);
+          if (!noneExpr) return null;
+          const someReplaced = replaceVar(someExpr, s.scrutinee.name, { kind: "var", name: s.binder }, true);
+          return {
+            kind: "match", scrutinee: s.scrutinee.name,
+            arms: [
+              { pattern: `.some ${s.binder}`, body: someReplaced },
+              { pattern: ".none", body: noneExpr },
+            ],
+          };
+        }
+        if (s.scrutinee.kind === "field" && s.scrutinee.obj.kind === "var") {
+          const replaced = replaceFieldsInTStmts(s.someBody, s.scrutinee.obj.name, [
+            { fieldName: s.scrutinee.field, newName: s.binder, fallbackTy: s.binderTy }
+          ]);
+          const someExpr = transformPureBody([...replaced, ...rest], typeDecls);
+          if (!someExpr) return null;
+          const noneExpr = transformPureBody([...s.noneBody, ...rest], typeDecls);
+          if (!noneExpr) return null;
+          const scrutinee = transformExpr(s.scrutinee);
+          return {
+            kind: "match", scrutinee,
+            arms: [
+              { pattern: `.some ${s.binder}`, body: someExpr },
+              { pattern: ".none", body: noneExpr },
+            ],
+          };
+        }
+        return null;
       }
       default: return null;
     }

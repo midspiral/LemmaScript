@@ -28,15 +28,23 @@ const emptyEnv: Env = {};
 
 // ── Optional-check detection ────────────────────────────────
 
-/** Detect `v !== undefined` or `undefined !== v` where v is a simple variable
- *  of optional type. Returns the var name + inner type if so. */
-function parseSimpleOptionalCheck(cond: TExpr): { varName: string; innerTy: Ty; negated: boolean } | null {
+/** Detect `e !== undefined` or `undefined !== e` where e is either:
+ *  - a simple variable of optional type, or
+ *  - a simple `obj.field` chain where obj is a var and the field has optional type.
+ *  Returns the scrutinee expression + unwrapped inner type. */
+function parseSimpleOptionalCheck(cond: TExpr): { scrutinee: TExpr; innerTy: Ty; negated: boolean; binderHint: string } | null {
   if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) return null;
-  let vExpr: TExpr | null = null;
-  if (cond.right.kind === "var" && cond.right.name === "undefined") vExpr = cond.left;
-  if (cond.left.kind === "var" && cond.left.name === "undefined") vExpr = cond.right;
-  if (!vExpr || vExpr.kind !== "var" || vExpr.ty.kind !== "optional") return null;
-  return { varName: vExpr.name, innerTy: vExpr.ty.inner, negated: cond.op === "===" };
+  let e: TExpr | null = null;
+  if (cond.right.kind === "var" && cond.right.name === "undefined") e = cond.left;
+  if (cond.left.kind === "var" && cond.left.name === "undefined") e = cond.right;
+  if (!e || e.ty.kind !== "optional") return null;
+  if (e.kind === "var") {
+    return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binderHint: `_${e.name}_val` };
+  }
+  if (e.kind === "field" && e.obj.kind === "var") {
+    return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binderHint: `_${e.obj.name}_${e.field}_val` };
+  }
+  return null;
 }
 
 // ── Walkers ──────────────────────────────────────────────────
@@ -122,9 +130,9 @@ function recurseStmt(s: TStmt, env: Env): TStmt {
 
 // ── Rules ───────────────────────────────────────────────────
 
-/** Rule: `if (x !== undefined) then else` where x is a simple optional var
- *  and the Some branch is non-empty.
- *  → `someMatch x { Some(_x_val) => then, None => else }`. */
+/** Rule: `if (e !== undefined) then else` where e is a simple optional var or
+ *  `obj.field` chain, and the Some branch is non-empty.
+ *  → `someMatch e { Some(_e_val) => then, None => else }`. */
 function ruleIfOptionalSimple(s: TStmt): TStmt | null {
   if (s.kind !== "if") return null;
   const check = parseSimpleOptionalCheck(s.cond);
@@ -134,14 +142,14 @@ function ruleIfOptionalSimple(s: TStmt): TStmt | null {
   if (someBody.length === 0) return null;
   return {
     kind: "someMatch",
-    varName: check.varName, varTy: check.innerTy,
-    binder: `_${check.varName}_val`,
+    scrutinee: check.scrutinee, binderTy: check.innerTy,
+    binder: check.binderHint,
     someBody, noneBody,
   };
 }
 
-/** Rule: `if (x === undefined) terminate; rest` (early return / throw / break).
- *  → `someMatch x { Some(_x_val) => rest, None => terminate }`.
+/** Rule: `if (e === undefined) terminate; rest` (early return / throw / break).
+ *  → `someMatch e { Some(_e_val) => rest, None => terminate }`.
  *  Fires when the Some branch is empty AND there's a non-empty rest of the
  *  block — pulling the continuation into the narrowed scope. */
 function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[]): TStmt | null {
@@ -154,15 +162,16 @@ function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[]): TStmt | null {
   if (someBranch.length !== 0) return null;
   return {
     kind: "someMatch",
-    varName: check.varName, varTy: check.innerTy,
-    binder: `_${check.varName}_val`,
+    scrutinee: check.scrutinee, binderTy: check.innerTy,
+    binder: check.binderHint,
     someBody: rest,
     noneBody: noneBranch,
   };
 }
 
-/** Rule (expression): `x !== undefined ? a : b` where x is a simple optional var
- *  → `someMatch x { Some(_x_val) => a, None => b }` (TExpr form). */
+/** Rule (expression): `e !== undefined ? a : b` where e is a simple optional
+ *  var or `obj.field` chain.
+ *  → `someMatch e { Some(_e_val) => a, None => b }` (TExpr form). */
 function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
   if (e.kind !== "conditional") return null;
   const check = parseSimpleOptionalCheck(e.cond);
@@ -171,8 +180,8 @@ function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
   const noneBody = check.negated ? e.then : e.else;
   return {
     kind: "someMatch",
-    varName: check.varName, varTy: check.innerTy,
-    binder: `_${check.varName}_val`,
+    scrutinee: check.scrutinee, binderTy: check.innerTy,
+    binder: check.binderHint,
     someBody, noneBody,
     ty: e.ty,
   };

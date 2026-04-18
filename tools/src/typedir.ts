@@ -42,10 +42,12 @@ export type TExpr =
   | { kind: "conditional"; cond: TExpr; then: TExpr; else: TExpr; ty: Ty;
       narrowedVar?: string;   // set when cond is optional (truthiness) or complex expression check — then-branch uses this var for the unwrapped value
       narrowedExpr?: TExpr }  // the original optional expression to match on (for complex expressions like call results, not for simple vars or field chains)
-  // Produced by pe.ts from `x !== undefined ? a : b` patterns.
-  // `binder` shadows `varName` over `someBody` with the unwrapped type.
-  | { kind: "someMatch"; varName: string; varTy: Ty;
-      binder: string; someBody: TExpr; noneBody: TExpr; ty: Ty }
+  // Produced by pe.ts from `e !== undefined ? a : b` patterns. Scrutinee is
+  // the checked optional expression (a var or a simple `obj.field` chain).
+  // `binder` shadows references to the scrutinee over `someBody` with the
+  // unwrapped (non-optional) type.
+  | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
+      someBody: TExpr; noneBody: TExpr; ty: Ty }
   // Spec-only (from //@ annotations):
   | { kind: "result"; ty: Ty }
   | { kind: "forall"; var: string; varTy: Ty; body: TExpr; ty: Ty }
@@ -77,10 +79,12 @@ export type TStmt =
   | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
   | { kind: "ghostAssign"; target: string; value: TExpr }
   | { kind: "assert"; expr: TExpr }
-  // Produced by pe.ts from `if (x !== undefined) use(x)` patterns.
-  // `binder` shadows `varName` over `someBody` with the unwrapped type.
-  | { kind: "someMatch"; varName: string; varTy: Ty;     // varTy is the inner (non-Optional) type
-      binder: string; someBody: TStmt[]; noneBody: TStmt[] }
+  // Produced by pe.ts from `if (e !== undefined) use(e)` patterns. Scrutinee
+  // is the checked optional expression (a var or a simple `obj.field` chain).
+  // `binder` shadows references to the scrutinee over `someBody` with the
+  // unwrapped (non-optional) type.
+  | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
+      someBody: TStmt[]; noneBody: TStmt[] }
 
 // ── Top-level ────────────────────────────────────────────────
 
