@@ -41,9 +41,32 @@ function parseSimpleOptionalCheck(cond: TExpr): { varName: string; innerTy: Ty; 
 
 // ── Walkers ──────────────────────────────────────────────────
 
-function walkExpr(e: TExpr, _env: Env): TExpr {
-  // No-op for now.
-  return e;
+function walkExpr(e: TExpr, env: Env): TExpr {
+  // Recurse into children first, then try rules at this node.
+  const r = recurseExpr(e, env);
+  return ruleConditionalOptionalSimple(r) ?? r;
+}
+
+function recurseExpr(e: TExpr, env: Env): TExpr {
+  const re = (x: TExpr) => walkExpr(x, env);
+  switch (e.kind) {
+    case "var": case "num": case "str": case "bool":
+    case "result": case "havoc":
+      return e;
+    case "binop": return { ...e, left: re(e.left), right: re(e.right) };
+    case "unop": return { ...e, expr: re(e.expr) };
+    case "call": return { ...e, fn: re(e.fn), args: e.args.map(re) };
+    case "index": return { ...e, obj: re(e.obj), idx: re(e.idx) };
+    case "field": return { ...e, obj: re(e.obj) };
+    case "record": return { ...e, spread: e.spread ? re(e.spread) : null,
+      fields: e.fields.map(f => ({ ...f, value: re(f.value) })) };
+    case "arrayLiteral": return { ...e, elems: e.elems.map(re) };
+    case "lambda": return { ...e, body: walkStmts(e.body, env) };
+    case "conditional": return { ...e, cond: re(e.cond), then: re(e.then), else: re(e.else) };
+    case "forall": return { ...e, body: re(e.body) };
+    case "exists": return { ...e, body: re(e.body) };
+    case "someMatch": return { ...e, someBody: re(e.someBody), noneBody: re(e.noneBody) };
+  }
 }
 
 function walkStmt(s: TStmt, env: Env): TStmt {
@@ -135,6 +158,23 @@ function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[]): TStmt | null {
     binder: `_${check.varName}_val`,
     someBody: rest,
     noneBody: noneBranch,
+  };
+}
+
+/** Rule (expression): `x !== undefined ? a : b` where x is a simple optional var
+ *  → `someMatch x { Some(_x_val) => a, None => b }` (TExpr form). */
+function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
+  if (e.kind !== "conditional") return null;
+  const check = parseSimpleOptionalCheck(e.cond);
+  if (!check) return null;
+  const someBody = check.negated ? e.else : e.then;
+  const noneBody = check.negated ? e.then : e.else;
+  return {
+    kind: "someMatch",
+    varName: check.varName, varTy: check.innerTy,
+    binder: `_${check.varName}_val`,
+    someBody, noneBody,
+    ty: e.ty,
   };
 }
 

@@ -84,6 +84,7 @@ function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
     case "conditional": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
+    case "someMatch": return { ...e, someBody: r(e.someBody), noneBody: r(e.noneBody) };
     case "forall": return { ...e, body: r(e.body) };
     case "exists": return { ...e, body: r(e.body) };
     case "lambda": return e;
@@ -623,6 +624,28 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         return { kind: "var", name };
       }
       return { kind: "havoc", type: e.ty };
+
+    case "someMatch": {
+      // Produced by pe.ts from `x !== undefined ? a : b`. Lower to IR match
+      // Some/None, substituting the binder for occurrences of varName in someBody.
+      // Wrap branches in Some when the result is itself optional-typed and a branch
+      // is the bare value (matching wrapOptionalBranch behavior on the original
+      // conditional path).
+      let someBody = lowerExpr(e.someBody, binds);
+      let noneBody = lowerExpr(e.noneBody, binds);
+      someBody = replaceVar(someBody, e.varName, { kind: "var", name: e.binder }, true);
+      if (e.ty.kind === "optional") {
+        someBody = wrapOptionalBranch(someBody, e.someBody);
+        noneBody = wrapOptionalBranch(noneBody, e.noneBody);
+      }
+      return {
+        kind: "match", scrutinee: e.varName,
+        arms: [
+          { pattern: `.some ${e.binder}`, body: someBody },
+          { pattern: ".none", body: noneBody },
+        ],
+      };
+    }
   }
 }
 

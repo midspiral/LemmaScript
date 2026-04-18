@@ -42,6 +42,10 @@ export type TExpr =
   | { kind: "conditional"; cond: TExpr; then: TExpr; else: TExpr; ty: Ty;
       narrowedVar?: string;   // set when cond is optional (truthiness) or complex expression check — then-branch uses this var for the unwrapped value
       narrowedExpr?: TExpr }  // the original optional expression to match on (for complex expressions like call results, not for simple vars or field chains)
+  // Produced by pe.ts from `x !== undefined ? a : b` patterns.
+  // `binder` shadows `varName` over `someBody` with the unwrapped type.
+  | { kind: "someMatch"; varName: string; varTy: Ty;
+      binder: string; someBody: TExpr; noneBody: TExpr; ty: Ty }
   // Spec-only (from //@ annotations):
   | { kind: "result"; ty: Ty }
   | { kind: "forall"; var: string; varTy: Ty; body: TExpr; ty: Ty }
