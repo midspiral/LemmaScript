@@ -205,3 +205,19 @@ method deepAccess (t : Tree) return (res : Int)
   ensures (match t.middle with | .some _ => false | .none => true) → res = 0
   do
     return Pure.deepAccess t
+
+method ocField (o : Option Outer) return (res : Option Inner)
+  do
+    return Pure.ocField o
+
+method ocChain (o : Option Outer) return (res : Option Int)
+  do
+    return Pure.ocChain o
+
+method ocMethodCall (s : Option (Std.HashSet String)) (k : String) return (res : Option Bool)
+  do
+    return Pure.ocMethodCall s k
+
+method ocIndex (m : Option (Std.HashMap String String)) (k : String) return (res : Option String)
+  do
+    return Pure.ocIndex m k

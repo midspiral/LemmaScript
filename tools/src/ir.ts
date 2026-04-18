@@ -14,7 +14,7 @@ export type Expr =
   | { kind: "num"; value: number }
   | { kind: "bool"; value: boolean }
   | { kind: "str"; value: string }
-  | { kind: "constructor"; name: string; type?: string }       // .idle, .allow (type = parent datatype name)
+  | { kind: "constructor"; name: string; type?: string; args?: Expr[] }   // .idle / .some x — name is lowercase; emitters capitalize per backend
   | { kind: "binop"; op: string; left: Expr; right: Expr }
   | { kind: "unop"; op: string; expr: Expr }
   | { kind: "app"; fn: string; args: Expr[] }            // f a b

@@ -40,6 +40,10 @@ datatype Middle = Middle(leaf: Option<Leaf>)
 
 datatype Tree = Tree(middle: Option<Middle>)
 
+datatype Inner = Inner(val: int)
+
+datatype Outer = Outer(inner: Option<Inner>)
+
 function evalPartial(e: Expr): int
 {
   match e {
@@ -271,6 +275,46 @@ lemma deepAccess_ensures(t: Tree)
   ensures (match t.middle { case Some(i_t_middle_val) => (match i_t_middle_val.leaf { case Some(i_t_middle_leaf_val) => (deepAccess(t) == i_t_middle_leaf_val.value) case None => true }) case None => true })
   ensures ((match t.middle { case Some(i_) => false case None => true }) ==> (deepAccess(t) == 0))
 {
+}
+
+function ocField(o: Option<Outer>): Option<Inner>
+{
+  match o {
+    case Some(i_oc0_val) =>
+      i_oc0_val.inner
+    case None =>
+      None
+  }
+}
+
+function ocChain(o: Option<Outer>): Option<int>
+{
+  match (match o { case Some(i_oc1_val) => i_oc1_val.inner case None => None }) {
+    case Some(i_oc2_val) =>
+      Some(i_oc2_val.val)
+    case None =>
+      None
+  }
+}
+
+function ocMethodCall(s: Option<set<string>>, k: string): Option<bool>
+{
+  match s {
+    case Some(i_oc3_val) =>
+      Some((k in i_oc3_val))
+    case None =>
+      None
+  }
+}
+
+function ocIndex(m: Option<map<string, string>>, k: string): Option<string>
+{
+  match m {
+    case Some(i_oc4_val) =>
+      (if k in i_oc4_val then Some(i_oc4_val[k]) else None)
+    case None =>
+      None
+  }
 }
 
 method countAbove(arr: seq<int>, threshold: int) returns (res: int)

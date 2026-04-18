@@ -297,3 +297,30 @@ function deepAccess(t: Tree): number {
   }
   return 0;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Optional chaining `?.` — all flavors: field, method call, index, chained
+// ═══════════════════════════════════════════════════════════════
+
+interface Inner { val: number }
+interface Outer { inner: Inner | undefined }
+
+// `?.field`: simple property access — single short-circuit
+function ocField(o: Outer | undefined): Inner | undefined {
+  return o?.inner;
+}
+
+// `?.field.field`: ?. then non-? continuation — short-circuit only at first ?
+function ocChain(o: Outer | undefined): number | undefined {
+  return o?.inner?.val;
+}
+
+// `?.foo()`: method call after ?. — peephole collapses set.has to `in`
+function ocMethodCall(s: Set<string> | undefined, k: string): boolean | undefined {
+  return s?.has(k);
+}
+
+// `?.[k]`: index access via ?.[ ] — Map[k] returns Option<value>
+function ocIndex(m: Map<string, string> | undefined, k: string): string | undefined {
+  return m?.[k];
+}

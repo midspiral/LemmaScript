@@ -22,7 +22,8 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
   if (hit) return hit;
   const r = (x: Expr) => mapExpr(x, f);
   switch (e.kind) {
-    case "var": case "num": case "bool": case "str": case "constructor": case "emptyMap": case "emptySet": case "havoc": return e;
+    case "var": case "num": case "bool": case "str": case "emptyMap": case "emptySet": case "havoc": return e;
+    case "constructor": return e.args ? { ...e, args: e.args.map(r) } : e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
     case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };
@@ -84,7 +85,10 @@ function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
     case "conditional": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
-    case "optChain": return { ...e, obj: r(e.obj) };
+    case "optChain": return { ...e, obj: r(e.obj),
+      chain: e.chain.map(s => s.kind === "call" ? { ...s, args: s.args.map(r) }
+        : s.kind === "index" ? { ...s, idx: r(s.idx) }
+        : s) };
     case "someMatch": return { ...e, scrutinee: r(e.scrutinee), someBody: r(e.someBody), noneBody: r(e.noneBody) };
     case "forall": return { ...e, body: r(e.body) };
     case "exists": return { ...e, body: r(e.body) };
@@ -199,9 +203,9 @@ function transformExpr(e: TExpr): Expr { return lowerExpr(e, null); }
 /** Wrap an expression in Some/None for optional-typed conditionals.
  *  If the raw TExpr is `undefined`, emit `.none`; otherwise wrap in `Some`. */
 function wrapOptionalBranch(expr: Expr, raw: TExpr): Expr {
-  return (raw.kind === "var" && raw.name === "undefined")
-    ? { kind: "constructor", name: ".none" }
-    : { kind: "app", fn: "Some", args: [expr] };
+  if (raw.kind === "var" && raw.name === "undefined") return { kind: "constructor", name: "none" };
+  if (raw.ty.kind === "optional") return expr;  // already Option<T>, don't double-wrap
+  return { kind: "constructor", name: "some", args: [expr] };
 }
 
 function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {

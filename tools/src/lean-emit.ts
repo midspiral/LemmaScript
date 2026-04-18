@@ -113,7 +113,14 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "bool": return e.value ? "true" : "false";
     case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 
-    case "constructor": return `.${e.name}`;
+    case "constructor": {
+      const head = `.${e.name}`;
+      if (!e.args || e.args.length === 0) return head;
+      const args = e.args.map(a =>
+        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall") ? `(${emitExpr(a)})` : emitExpr(a)
+      );
+      return `${head} ${args.join(" ")}`;
+    }
     case "arrayLiteral":
       if (e.elems.length === 0) return `#[]`;
       return `#[${e.elems.map(el => emitExpr(el)).join(", ")}]`;

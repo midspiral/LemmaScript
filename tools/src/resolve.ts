@@ -466,16 +466,50 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "optChain": {
-      // obj?.field — obj has type Option<T>; result type is Option<fieldTy(T)>.
-      // Pe assumes the field type is non-optional (`ty.inner` is the unwrapped
-      // field type). `obj?.optionalField` is not currently supported.
+      // obj?.<chain> — obj has type Option<T>; we walk the chain stepping
+      // through types from T. The final result is Option<finalStepTy>
+      // (collapsed: if finalStepTy is already optional, we don't double-wrap).
+      // Narrow rewrites this to a someMatch with the chain applied to the binder.
       const obj = resolveExpr(e.obj, ctx);
-      const innerTy = obj.ty.kind === "optional" ? obj.ty.inner : obj.ty;
-      const fieldTy = lookupFieldTy(innerTy, e.field, ctx).ty;
-      if (fieldTy.kind === "optional") {
-        throw new Error(`optChain on already-optional field '${e.field}' is not supported`);
+      let stepInTy = obj.ty.kind === "optional" ? obj.ty.inner : obj.ty;
+      const chain: import("./typedir.js").TChainStep[] = [];
+      for (const step of e.chain) {
+        if (step.kind === "field") {
+          const fieldTy = lookupFieldTy(stepInTy, step.name, ctx).ty;
+          chain.push({ kind: "field", name: step.name, ty: fieldTy });
+          stepInTy = fieldTy;
+        } else if (step.kind === "index") {
+          const idx = resolveExpr(step.idx, ctx);
+          const idxTy: Ty = stepInTy.kind === "array" ? stepInTy.elem
+            : stepInTy.kind === "map" ? { kind: "optional", inner: stepInTy.value }
+            : { kind: "unknown" };
+          chain.push({ kind: "index", idx, ty: idxTy });
+          stepInTy = idxTy;
+        } else {
+          // call: prev step yielded a callable (typically a method via field).
+          // Build a fake fn TExpr from prev steps to reuse inferMethodReturnTy.
+          const args = step.args.map(a => resolveExpr(a, ctx));
+          const lastField = chain.length > 0 && chain[chain.length - 1].kind === "field"
+            ? chain[chain.length - 1] as { kind: "field"; name: string; ty: Ty } : null;
+          let callTy: Ty = { kind: "unknown" };
+          let callKind: CallKind = "unknown";
+          if (lastField) {
+            // Build a synthetic field TExpr with the prior step's input type as obj
+            // so inferMethodReturnTy can dispatch on the receiver type.
+            const priorInTy = chain.length >= 2 ? chain[chain.length - 2].ty
+              : (obj.ty.kind === "optional" ? obj.ty.inner : obj.ty);
+            const fakeObj: TExpr = { kind: "var", name: "_chain_recv", ty: priorInTy };
+            const fakeFn: TExpr = { kind: "field", obj: fakeObj, field: lastField.name, ty: lastField.ty };
+            callTy = inferMethodReturnTy(fakeFn, args, ctx);
+            callKind = "method";
+          }
+          chain.push({ kind: "call", args, ty: callTy, callKind });
+          stepInTy = callTy;
+        }
       }
-      return { kind: "optChain", obj, field: e.field, ty: { kind: "optional", inner: fieldTy } };
+      const finalTy = stepInTy;
+      const ty: Ty = finalTy.kind === "optional" ? finalTy : { kind: "optional", inner: finalTy };
+      return { kind: "optChain", obj, chain, ty };
     }
 
     case "record": {

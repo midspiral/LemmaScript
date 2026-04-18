@@ -96,7 +96,10 @@ function recurseExpr(e: TExpr): TExpr {
     case "arrayLiteral": return { ...e, elems: e.elems.map(re) };
     case "lambda": return { ...e, body: walkStmts(e.body) };
     case "conditional": return { ...e, cond: re(e.cond), then: re(e.then), else: re(e.else) };
-    case "optChain": return { ...e, obj: re(e.obj) };
+    case "optChain": return { ...e, obj: re(e.obj),
+      chain: e.chain.map(s => s.kind === "call" ? { ...s, args: s.args.map(re) }
+        : s.kind === "index" ? { ...s, idx: re(s.idx) }
+        : s) };
     case "forall": return { ...e, body: re(e.body) };
     case "exists": return { ...e, body: re(e.body) };
     case "someMatch": return { ...e, someBody: re(e.someBody), noneBody: re(e.noneBody) };
@@ -292,26 +295,30 @@ function ruleImplOptional(e: TExpr): TExpr | null {
   };
 }
 
-/** Rule (expression): `obj?.field` — single-eval optional chain.
- *  → `someMatch obj { Some(_oc{N}_val) => _oc{N}_val.field, None => undefined }`.
- *  The someBody references the binder directly, so transform doesn't substitute.
- *  This is the one case where someMatch may have a complex (call/index) scrutinee. */
+/** Rule (expression): `obj?.<chain>` — single-eval optional chain.
+ *  → `someMatch obj { Some(_oc{N}_val) => apply(chain, _oc{N}_val), None => undefined }`.
+ *  The someBody applies the chain to the binder directly (field/call/index),
+ *  so transform doesn't substitute. Scrutinee can be any expression. */
 function ruleOptChain(e: TExpr): TExpr | null {
   if (e.kind !== "optChain") return null;
   if (e.obj.ty.kind !== "optional") return null;
   const innerTy = e.obj.ty.inner;
-  const fieldTy = e.ty.kind === "optional" ? e.ty.inner : e.ty;
   const binder = `_oc${_ocCounter++}_val`;
-  const someBody: TExpr = {
-    kind: "field",
-    obj: { kind: "var", name: binder, ty: innerTy },
-    field: e.field, ty: fieldTy,
-  };
+  let body: TExpr = { kind: "var", name: binder, ty: innerTy };
+  for (const step of e.chain) {
+    if (step.kind === "field") {
+      body = { kind: "field", obj: body, field: step.name, ty: step.ty };
+    } else if (step.kind === "index") {
+      body = { kind: "index", obj: body, idx: step.idx, ty: step.ty };
+    } else {
+      body = { kind: "call", fn: body, args: step.args, ty: step.ty, callKind: step.callKind };
+    }
+  }
   const noneBody: TExpr = { kind: "var", name: "undefined", ty: { kind: "void" } };
   return {
     kind: "someMatch",
     scrutinee: e.obj, binder, binderTy: innerTy,
-    someBody, noneBody, ty: e.ty,
+    someBody: body, noneBody, ty: e.ty,
   };
 }
 

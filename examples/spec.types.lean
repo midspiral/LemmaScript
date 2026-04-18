@@ -39,6 +39,14 @@ structure Tree where
   middle : Option Middle
 deriving Repr, Inhabited, DecidableEq
 
+structure Inner where
+  val : Int
+deriving Repr, Inhabited, DecidableEq
+
+structure Outer where
+  inner : Option Inner
+deriving Repr, Inhabited, DecidableEq
+
 namespace Pure
 
 def evalPartial (e : Expr) : Int :=
@@ -144,5 +152,33 @@ def deepAccess (t : Tree) : Int :=
       0
   | .none =>
     0
+
+def ocField (o : Option Outer) : Option Inner :=
+  match o with
+  | .some _oc0_val =>
+    _oc0_val.inner
+  | .none =>
+    .none
+
+def ocChain (o : Option Outer) : Option Int :=
+  match (match o with | .some _oc1_val => _oc1_val.inner | .none => .none) with
+  | .some _oc2_val =>
+    .some _oc2_val.val
+  | .none =>
+    .none
+
+def ocMethodCall (s : Option (Std.HashSet String)) (k : String) : Option Bool :=
+  match s with
+  | .some _oc3_val =>
+    .some (_oc3_val.contains k)
+  | .none =>
+    .none
+
+def ocIndex (m : Option (Std.HashMap String String)) (k : String) : Option String :=
+  match m with
+  | .some _oc4_val =>
+    _oc4_val.get? k
+  | .none =>
+    .none
 
 end Pure
