@@ -91,8 +91,8 @@ function walkStmts(stmts: TStmt[], env: Env): TStmt[] {
   for (let i = 0; i < stmts.length; i++) {
     const s = stmts[i];
     const rest = stmts.slice(i + 1);
-    // Early-return rule consumes the rest of the block, so try it before per-stmt walk.
-    const consumed = ruleEarlyReturnConsume(s, rest);
+    // List-level rules consume the rest of the block, so try them before per-stmt walk.
+    const consumed = ruleEarlyReturnOrChain(s, rest) ?? ruleEarlyReturnConsume(s, rest);
     if (consumed) {
       result.push(walkStmt(consumed, env));
       return result;  // rest is now inside someBody
@@ -170,6 +170,46 @@ function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[]): TStmt | null {
     someBody: rest,
     noneBody: noneBranch,
   };
+}
+
+/** Collect a `||` chain of negative optional checks (`x === undefined`).
+ *  Returns the list of checks if every leaf is a negative optional check; null otherwise. */
+function collectOrChainOfNegativeChecks(cond: TExpr): ReturnType<typeof parseSimpleOptionalCheck>[] | null {
+  if (cond.kind === "binop" && cond.op === "||") {
+    const left = collectOrChainOfNegativeChecks(cond.left);
+    const right = collectOrChainOfNegativeChecks(cond.right);
+    if (!left || !right) return null;
+    return [...left, ...right];
+  }
+  const check = parseSimpleOptionalCheck(cond);
+  if (!check || !check.negated) return null;
+  return [check];
+}
+
+/** Rule: `if (x === undefined || y === undefined || ...) terminate; rest`.
+ *  → nested someMatches narrowing each var in turn, each None branch = terminate,
+ *    deepest someBody = rest.
+ *  Closes the resolve.ts:602 TODO ("|| narrowing"). */
+function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[]): TStmt | null {
+  if (s.kind !== "if") return null;
+  if (rest.length === 0) return null;
+  if (s.then.length === 0 || s.else.length !== 0) return null;
+  if (s.cond.kind !== "binop" || s.cond.op !== "||") return null;  // single check is the simpler rule
+  const checks = collectOrChainOfNegativeChecks(s.cond);
+  if (!checks || checks.length < 2) return null;
+  // Build nested someMatch from innermost outward
+  let inner: TStmt[] = rest;
+  for (let i = checks.length - 1; i >= 0; i--) {
+    const check = checks[i]!;
+    inner = [{
+      kind: "someMatch",
+      scrutinee: check.scrutinee, binderTy: check.innerTy,
+      binder: check.binderHint,
+      someBody: inner,
+      noneBody: s.then,
+    }];
+  }
+  return inner[0];
 }
 
 /** Rule (expression): `e !== undefined ? a : b` where e is a simple optional
