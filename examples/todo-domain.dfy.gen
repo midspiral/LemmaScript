@@ -405,11 +405,11 @@ method posFromPlace(lane: seq<TaskId>, p: Place) returns (res: int)
     case Before(i_p_anchor) =>
       var i_t0 := indexOf(lane, i_p_anchor);
       var idx := i_t0;
-      return if (idx < 0) then -1 else idx;
+      return (if (idx < 0) then -1 else idx);
     case _ =>
       var i_t1 := indexOf(lane, p.anchor);
       var idx := i_t1;
-      return if (idx < 0) then -1 else (idx + 1);
+      return (if (idx < 0) then -1 else (idx + 1));
   }
 }
 
@@ -421,11 +421,11 @@ method posFromListPlace(lists: seq<ListId>, p: ListPlace) returns (res: int)
     case ListBefore(i_p_anchor) =>
       var i_t2 := indexOf(lists, i_p_anchor);
       var idx := i_t2;
-      return if (idx < 0) then -1 else idx;
+      return (if (idx < 0) then -1 else idx);
     case _ =>
       var i_t3 := indexOf(lists, p.anchor);
       var idx := i_t3;
-      return if (idx < 0) then -1 else (idx + 1);
+      return (if (idx < 0) then -1 else (idx + 1));
   }
 }
 
@@ -611,7 +611,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
         var i_t18 := ok(m);
         return i_t18;
       }
-      var lane := if (i_a_listId in m.tasks) then var i_value := m.tasks[i_a_listId]; i_value else [];
+      var lane := (if (i_a_listId in m.tasks) then (var i_value := m.tasks[i_a_listId]; i_value) else []);
       var newTaskData := m.taskData;
       var i_tid_idx := 0;
       while i_tid_idx < |lane|
@@ -659,7 +659,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
       }
       var id := m.nextTaskId;
       var task := Task(i_a_title, "", false, false, None, {}, {}, false, None, None);
-      var lane := if (i_a_listId in m.tasks) then var i_value := m.tasks[i_a_listId]; i_value else [];
+      var lane := (if (i_a_listId in m.tasks) then (var i_value := m.tasks[i_a_listId]; i_value) else []);
       var newTasks := m.tasks;
       newTasks := newTasks[i_a_listId := (lane + [id])];
       var newTaskData := m.taskData;
@@ -740,7 +740,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
         }
         var newTaskData := m.taskData;
         newTaskData := newTaskData[i_a_taskId := i_task_val.(deleted := false, deletedBy := None, deletedFromList := None)];
-        var lane := if (targetList in m.tasks) then var i_value := m.tasks[targetList]; i_value else [];
+        var lane := (if (targetList in m.tasks) then (var i_value := m.tasks[targetList]; i_value) else []);
         var newTasks := m.tasks;
         newTasks := newTasks[targetList := (lane + [i_a_taskId])];
         var i_t47 := ok(m.(tasks := newTasks, taskData := newTaskData));
@@ -768,7 +768,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
         }
         var i_t54 := removeTaskFromAllLists(m.tasks, i_a_taskId);
         var cleaned := i_t54;
-        var targetLane := if (i_a_toList in cleaned) then var i_value := cleaned[i_a_toList]; i_value else [];
+        var targetLane := (if (i_a_toList in cleaned) then (var i_value := cleaned[i_a_toList]; i_value) else []);
         var i_t55 := posFromPlace(targetLane, i_a_taskPlace);
         var pos := i_t55;
         if (pos < 0) {

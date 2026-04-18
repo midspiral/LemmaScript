@@ -82,7 +82,7 @@ method topologicalSort(nodeIds: seq<string>, deps: map<string, set<string>>) ret
     invariant forall k :: ((k in enqueued) ==> (k in nodeIdSet))
   {
     var id := nodeIds[i_id_idx3];
-    if ((id in inDegree) && var i_value := inDegree[id]; (i_value == 0)) {
+    if ((id in inDegree) && (var i_value := inDegree[id]; (i_value == 0))) {
       assert !((id in enqueued));
       queue := (queue + [id]);
       enqueued := (enqueued + {id});

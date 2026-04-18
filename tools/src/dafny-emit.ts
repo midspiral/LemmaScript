@@ -294,7 +294,7 @@ function emitExpr(e: Expr): string {
     }
 
     case "if":
-      return `if ${emitExpr(e.cond)} then ${emitExpr(e.then)} else ${emitExpr(e.else)}`;
+      return `(if ${emitExpr(e.cond)} then ${emitExpr(e.then)} else ${emitExpr(e.else)})`;
 
     case "match": {
       const scrut = emitScrutinee(e.scrutinee);
@@ -305,7 +305,7 @@ function emitExpr(e: Expr): string {
     case "forall": return emitQuantifier(e, "forall");
     case "exists": return emitQuantifier(e, "exists");
 
-    case "let": return `var ${escapeName(e.name)} := ${emitExpr(e.value)}; ${emitExpr(e.body)}`;
+    case "let": return `(var ${escapeName(e.name)} := ${emitExpr(e.value)}; ${emitExpr(e.body)})`;
     case "havoc": return "*";
   }
 }
