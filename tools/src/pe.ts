@@ -101,13 +101,20 @@ function walkStmts(stmts: TStmt[], env: Env): TStmt[] {
   for (let i = 0; i < stmts.length; i++) {
     const s = stmts[i];
     const rest = stmts.slice(i + 1);
-    // List-level rules consume the rest of the block, so try them before per-stmt walk.
     const consumed = ruleEarlyReturnOrChain(s, rest) ?? ruleEarlyReturnConsume(s, rest);
     if (consumed) {
       result.push(walkStmt(consumed, env));
-      return result;  // rest is now inside someBody
+      return result;
     }
-    result.push(walkStmt(s, env));
+    // walkStmt first — pe's expression rules may rewrite the let init from
+    // `conditional` to `someMatch`, in which case the let-cond desugar shouldn't fire.
+    const walked = walkStmt(s, env);
+    const expanded = ruleLetCondAndOptional(walked);
+    if (expanded) {
+      for (const x of expanded) result.push(walkStmt(x, env));
+      continue;
+    }
+    result.push(walked);
   }
   return result;
 }
@@ -340,12 +347,46 @@ function ruleIfAndOptional(s: TStmt): TStmt | null {
   };
 }
 
-/** Does this expression contain a method call (impure)? Method-call results
- *  get lifted to var bindings outside their containing expression by transform,
- *  which is unsafe inside a match arm that introduces a binder — the lifted
- *  binding would reference a name only valid in the arm. */
+/** Rule (statement): `let x = (e_opt && rest) ? a : b` where rest may contain
+ *  method calls. → `var x: T := b; someMatch e_opt { Some(_v) => { if rest { x := a } } }`.
+ *  Statement-level form is needed because Dafny doesn't allow method calls
+ *  inside match expression arms. */
+function ruleLetCondAndOptional(s: TStmt): TStmt[] | null {
+  if (s.kind !== "let" || s.mutable) return null;
+  if (s.init.kind !== "conditional") return null;
+  const extracted = extractLeftmostOptionalCheck(s.init.cond);
+  if (!extracted) return null;
+  const { check, restCond } = extracted;
+  const sm: TStmt = {
+    kind: "someMatch",
+    scrutinee: check.scrutinee, binderTy: check.innerTy,
+    binder: check.binderHint,
+    someBody: [{ kind: "if", cond: restCond,
+      then: [{ kind: "assign", target: s.name, value: s.init.then }], else: [] }],
+    noneBody: [],
+  };
+  return [
+    { kind: "let", name: s.name, ty: s.ty, mutable: true, init: s.init.else },
+    sm,
+  ];
+}
+
+/** Built-in collection methods that lower to pure Dafny expressions
+ *  (`x in arr`, `x in m`, `x in s`, `|s|`, `s.Keys`, etc.) even though they
+ *  carry `callKind: "method"` from resolve. Safe inside match arms. */
+const PURE_BUILTIN_METHODS = new Set([
+  "includes", "has", "size", "length", "keys", "values",
+]);
+
+/** Does this expression contain a method call that would be lifted to a
+ *  var binding outside its containing expression by transform? Such calls
+ *  are unsafe inside a match arm — the lifted binding would reference a
+ *  name only valid in the arm. Built-in pure methods are exempt. */
 function containsMethodCall(e: TExpr): boolean {
-  if (e.kind === "call" && e.callKind === "method") return true;
+  if (e.kind === "call" && e.callKind === "method" &&
+      !(e.fn.kind === "field" && PURE_BUILTIN_METHODS.has(e.fn.field))) {
+    return true;
+  }
   switch (e.kind) {
     case "var": case "num": case "str": case "bool":
     case "result": case "havoc":
