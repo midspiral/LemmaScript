@@ -358,6 +358,16 @@ function negField(o: Outer, fallback: int): int
   }
 }
 
+function truthyVar(o: Option<Inner>, fallback: int): int
+{
+  match o {
+    case Some(i_o_val) =>
+      i_o_val.val
+    case None =>
+      fallback
+  }
+}
+
 function nestedAndTernary(o: Option<Outer>, fallback: int): int
 {
   match o {

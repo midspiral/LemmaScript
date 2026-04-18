@@ -355,6 +355,12 @@ function negField(o: Outer, fallback: number): number {
   return o.inner.val;
 }
 
+// Bare optional truthiness: `if (o)` is the same as `if (o !== undefined)`.
+function truthyVar(o: Inner | undefined, fallback: number): number {
+  if (o) return o.val;
+  return fallback;
+}
+
 // Chained `&&` of optional checks in a ternary — both checks narrow.
 // Tests that ruleConditionalAndOptional walks its inner conditional so
 // nested optional checks become nested someMatches.

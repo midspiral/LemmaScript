@@ -121,7 +121,11 @@ function detectOptionalCheck(cond: RawExpr, ctx: Ctx): {
     const inner = classifyOptExpr(cond.expr, ctx);
     return inner ? { ...inner, inThen: false } : null;
   }
-  if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) return null;
+  if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) {
+    // Bare optional truthiness: `if (v)` where v: T | undefined — same as `v !== undefined`.
+    const inner = classifyOptExpr(cond, ctx);
+    return inner ? { ...inner, inThen: true } : null;
+  }
   // Identify the expression being checked against undefined
   let optExpr: RawExpr | null = null;
   if (cond.right.kind === "var" && cond.right.name === "undefined") optExpr = cond.left;

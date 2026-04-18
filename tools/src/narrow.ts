@@ -54,7 +54,15 @@ function parseOptionalCheck(cond: TExpr): { scrutinee: TExpr; innerTy: Ty; negat
     if (hint === null) return null;
     return { scrutinee: e, innerTy, negated: true, binderHint: hint };
   }
-  if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) return null;
+  if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) {
+    // Bare optional truthiness: `if (e)` where e: T | undefined — same as `e !== undefined`.
+    if (cond.ty.kind === "optional") {
+      const hint = binderHintFor(cond);
+      if (hint === null) return null;
+      return { scrutinee: cond, innerTy: cond.ty.inner, negated: false, binderHint: hint };
+    }
+    return null;
+  }
   let e: TExpr | null = null;
   if (cond.right.kind === "var" && cond.right.name === "undefined") e = cond.left;
   if (cond.left.kind === "var" && cond.left.name === "undefined") e = cond.right;
