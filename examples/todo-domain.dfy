@@ -854,8 +854,8 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
           return i_t72;
         }
         match i_a_dueDate {
-          case Some(i__a_dueDate_val) =>
-            var i_t73 := validDate(i__a_dueDate_val);
+          case Some(i_a_dueDate_val) =>
+            var i_t73 := validDate(i_a_dueDate_val);
             if !(i_t73) {
               var i_t74 := err(Err.InvalidDate);
               return i_t74;

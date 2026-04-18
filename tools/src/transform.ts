@@ -84,7 +84,7 @@ function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
     case "conditional": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
-    case "someMatch": return { ...e, someBody: r(e.someBody), noneBody: r(e.noneBody) };
+    case "someMatch": return { ...e, scrutinee: r(e.scrutinee), someBody: r(e.someBody), noneBody: r(e.noneBody) };
     case "forall": return { ...e, body: r(e.body) };
     case "exists": return { ...e, body: r(e.body) };
     case "lambda": return e;
@@ -107,7 +107,7 @@ function mapTStmt(s: TStmt, f: (e: TExpr) => TExpr | null): TStmt {
     case "ghostLet": return { ...s, init: r(s.init) };
     case "ghostAssign": return { ...s, value: r(s.value) };
     case "assert": return { ...s, expr: r(s.expr) };
-    case "someMatch": return { ...s, someBody: s.someBody.map(t => mapTStmt(t, f)), noneBody: s.noneBody.map(t => mapTStmt(t, f)) };
+    case "someMatch": return { ...s, scrutinee: r(s.scrutinee), someBody: s.someBody.map(t => mapTStmt(t, f)), noneBody: s.noneBody.map(t => mapTStmt(t, f)) };
   }
 }
 

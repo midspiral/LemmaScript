@@ -80,7 +80,10 @@ function recurseExpr(e: TExpr, env: Env): TExpr {
 function walkStmt(s: TStmt, env: Env): TStmt {
   // Recurse into children first, then try rules at this node.
   const r = recurseStmt(s, env);
-  return ruleIfOptionalSimple(r) ?? r;
+  // && rule fires before simple rule because it produces nested ifs whose
+  // inner shape doesn't match simple rule directly. someMatch result needs
+  // no further rewriting at this level.
+  return ruleIfAndOptional(r) ?? ruleIfOptionalSimple(r) ?? r;
 }
 
 function walkStmts(stmts: TStmt[], env: Env): TStmt[] {
@@ -184,6 +187,43 @@ function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
     binder: check.binderHint,
     someBody, noneBody,
     ty: e.ty,
+  };
+}
+
+/** Extract the leftmost optional check from an `&&` chain.
+ *  `(x !== undefined && b) && c` → { check, restCond: b && c }. */
+function extractLeftmostOptionalCheck(cond: TExpr): {
+  check: NonNullable<ReturnType<typeof parseSimpleOptionalCheck>>;
+  restCond: TExpr;
+} | null {
+  if (cond.kind !== "binop" || cond.op !== "&&") return null;
+  const check = parseSimpleOptionalCheck(cond.left);
+  if (check && !check.negated) return { check, restCond: cond.right };
+  if (cond.left.kind === "binop" && cond.left.op === "&&") {
+    const inner = extractLeftmostOptionalCheck(cond.left);
+    if (inner) return { check: inner.check, restCond: { ...cond, left: inner.restCond } as TExpr };
+  }
+  return null;
+}
+
+/** Rule: `if (x !== undefined && rest) then` (no else) where x is a simple
+ *  optional var or `obj.field` chain.
+ *  → `someMatch x { Some(_x_val) => if rest then then; , None => {} }`.
+ *  The substitution of x→_x_val happens during transform via the someMatch
+ *  handler, so the inner `if rest then` automatically gets x narrowed. */
+function ruleIfAndOptional(s: TStmt): TStmt | null {
+  if (s.kind !== "if") return null;
+  if (s.else.length !== 0) return null;
+  const extracted = extractLeftmostOptionalCheck(s.cond);
+  if (!extracted) return null;
+  const { check, restCond } = extracted;
+  const innerIf: TStmt = { kind: "if", cond: restCond, then: s.then, else: [] };
+  return {
+    kind: "someMatch",
+    scrutinee: check.scrutinee, binderTy: check.innerTy,
+    binder: check.binderHint,
+    someBody: [innerIf],
+    noneBody: [],
   };
 }
 
