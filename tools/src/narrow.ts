@@ -36,11 +36,16 @@
  */
 
 import type { TModule, TFunction, TStmt, TExpr, Ty } from "./typedir.js";
+import type { TypeDeclInfo } from "./types.js";
 
 // ── Optional-check detection ────────────────────────────────
 
 /** Counter for naming optChain binders. Reset per module. */
 let _ocCounter = 0;
+
+/** Type declarations for this module. Set in narrowModule, used by the
+ *  discriminant-narrowing rules to resolve `'key' in x` to a variant. */
+let _typeDecls: TypeDeclInfo[] = [];
 
 /** Detect optional checks: `e !== undefined`, `e === undefined`, or `!e` for a
  *  pure-access-path optional-typed e. `!e` is equivalent to `=== undefined`.
@@ -117,6 +122,9 @@ function recurseExpr(e: TExpr): TExpr {
     case "forall": return { ...e, body: re(e.body) };
     case "exists": return { ...e, body: re(e.body) };
     case "someMatch": return { ...e, someBody: re(e.someBody), noneBody: re(e.noneBody) };
+    case "tagMatch": return { ...e, scrutinee: re(e.scrutinee),
+      cases: e.cases.map(c => ({ ...c, body: re(c.body) })),
+      fallthrough: e.fallthrough ? re(e.fallthrough) : null };
   }
 }
 
@@ -134,6 +142,13 @@ function walkStmts(stmts: TStmt[]): TStmt[] {
   for (let i = 0; i < stmts.length; i++) {
     const s = stmts[i];
     const rest = stmts.slice(i + 1);
+    // Discriminant rules consume a prefix of stmts; remaining is processed normally.
+    const tagged = ruleDiscriminantChain(stmts.slice(i)) ?? ruleDiscriminantNegEarlyReturn(stmts.slice(i));
+    if (tagged) {
+      result.push(walkStmt(tagged.stmt));
+      i += tagged.consumed - 1;
+      continue;
+    }
     const consumed = ruleEarlyReturnOrChain(s, rest) ?? ruleEarlyReturnConsume(s, rest);
     if (consumed) {
       result.push(walkStmt(consumed));
@@ -178,6 +193,9 @@ function recurseStmt(s: TStmt): TStmt {
     case "ghostAssign": return { ...s, value: re(s.value) };
     case "assert": return { ...s, expr: re(s.expr) };
     case "someMatch": return { ...s, someBody: rs(s.someBody), noneBody: rs(s.noneBody) };
+    case "tagMatch": return { ...s, scrutinee: re(s.scrutinee),
+      cases: s.cases.map(c => ({ ...c, body: rs(c.body) })),
+      fallthrough: rs(s.fallthrough) };
   }
 }
 
@@ -405,6 +423,104 @@ function ruleIfAndOptional(s: TStmt): TStmt | null {
   };
 }
 
+// ── Discriminant narrowing ──────────────────────────────────
+
+/** Detect `x.kind === "variant"` or `'key' in x` as a positive discriminant
+ *  check. Returns the scrutinee var (with its type), type name, and variant. */
+function parseDiscriminantCond(cond: TExpr): { scrutinee: TExpr & { kind: "var" }; typeName: string; variant: string } | null {
+  // Pattern: x.discriminant === "variant"
+  if (cond.kind === "binop" && cond.op === "===" && cond.right.kind === "str" &&
+      cond.left.kind === "field" && cond.left.isDiscriminant &&
+      cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
+    return { scrutinee: cond.left.obj, typeName: cond.left.obj.ty.name, variant: cond.right.value };
+  }
+  // Pattern: 'key' in x — narrows x to the unique variant containing `key`.
+  if (cond.kind === "binop" && cond.op === "in" &&
+      cond.left.kind === "str" && cond.right.kind === "var" &&
+      cond.right.ty.kind === "user") {
+    const key = cond.left.value;
+    const typeName = cond.right.ty.name;
+    const baseTyName = typeName.includes("<") ? typeName.slice(0, typeName.indexOf("<")) : typeName;
+    const decl = _typeDecls.find(d => d.name === baseTyName);
+    if (decl?.kind === "discriminated-union" && decl.variants) {
+      const matches = decl.variants.filter(v => v.fields.some(f => f.name === key));
+      if (matches.length === 1) {
+        return { scrutinee: cond.right, typeName, variant: matches[0].name };
+      }
+    }
+  }
+  return null;
+}
+
+/** Detect `x.kind !== "variant"` (negative discriminant check). */
+function parseNegativeDiscriminantCond(cond: TExpr): { scrutinee: TExpr & { kind: "var" }; typeName: string; variant: string } | null {
+  if (cond.kind === "binop" && cond.op === "!==" && cond.right.kind === "str" &&
+      cond.left.kind === "field" && cond.left.isDiscriminant &&
+      cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
+    return { scrutinee: cond.left.obj, typeName: cond.left.obj.ty.name, variant: cond.right.value };
+  }
+  return null;
+}
+
+function isTerminating(stmts: TStmt[]): boolean {
+  if (stmts.length === 0) return false;
+  const last = stmts[stmts.length - 1];
+  return last.kind === "return" || last.kind === "throw" || last.kind === "break" || last.kind === "continue";
+}
+
+/** Rule (list-level): consecutive `if (x.kind === "v") ...` chain → tagMatch.
+ *  Walks consecutive top-level ifs on the same discriminator var; the first
+ *  one with an else-branch ends the chain (else becomes fallthrough; if-else-if
+ *  flattens into more cases). Returns the tagMatch and how many stmts consumed. */
+function ruleDiscriminantChain(stmts: TStmt[]): { stmt: TStmt; consumed: number } | null {
+  if (stmts.length === 0 || stmts[0].kind !== "if") return null;
+  const first = parseDiscriminantCond(stmts[0].cond);
+  if (!first) return null;
+
+  const cases: { variant: string; body: TStmt[] }[] = [];
+
+  function collectElse(s: TStmt & { kind: "if" }): TStmt[] {
+    const p = parseDiscriminantCond(s.cond);
+    if (!p || p.scrutinee.name !== first!.scrutinee.name) return [s];
+    cases.push({ variant: p.variant, body: s.then });
+    if (s.else.length === 0) return [];
+    if (s.else.length === 1 && s.else[0].kind === "if") return collectElse(s.else[0]);
+    return s.else;
+  }
+
+  let consumed = 0;
+  for (let i = 0; i < stmts.length; i++) {
+    const s = stmts[i];
+    if (s.kind !== "if") break;
+    const p = parseDiscriminantCond(s.cond);
+    if (!p || p.scrutinee.name !== first.scrutinee.name) break;
+    cases.push({ variant: p.variant, body: s.then });
+    consumed = i + 1;
+    if (s.else.length > 0) {
+      const ft = (s.else.length === 1 && s.else[0].kind === "if") ? collectElse(s.else[0]) : s.else;
+      return { stmt: { kind: "tagMatch", scrutinee: first.scrutinee, typeName: first.typeName,
+        cases, fallthrough: ft }, consumed };
+    }
+  }
+  if (cases.length === 0) return null;
+  return { stmt: { kind: "tagMatch", scrutinee: first.scrutinee, typeName: first.typeName,
+    cases, fallthrough: stmts.slice(consumed) }, consumed: stmts.length };
+}
+
+/** Rule (list-level): `if (x.kind !== "v") terminate; rest` → tagMatch
+ *  with cases = [{ variant: v, body: rest }] and fallthrough = terminate. */
+function ruleDiscriminantNegEarlyReturn(stmts: TStmt[]): { stmt: TStmt; consumed: number } | null {
+  if (stmts.length < 2) return null;
+  const first = stmts[0];
+  if (first.kind !== "if" || first.else.length > 0) return null;
+  if (!isTerminating(first.then)) return null;
+  const cond = parseNegativeDiscriminantCond(first.cond);
+  if (!cond) return null;
+  return { stmt: { kind: "tagMatch", scrutinee: cond.scrutinee, typeName: cond.typeName,
+    cases: [{ variant: cond.variant, body: stmts.slice(1) }], fallthrough: first.then },
+    consumed: stmts.length };
+}
+
 /** Rule (statement): `let x = (e_opt && rest) ? a : b` where rest may contain
  *  method calls. → `var x: T := b; someMatch e_opt { Some(_v) => { if rest { x := a } } }`.
  *  Statement-level form is needed because Dafny doesn't allow method calls
@@ -466,6 +582,9 @@ function containsMethodCall(e: TExpr): boolean {
     case "forall": case "exists": return containsMethodCall(e.body);
     case "someMatch": return containsMethodCall(e.scrutinee) ||
       containsMethodCall(e.someBody) || containsMethodCall(e.noneBody);
+    case "tagMatch": return containsMethodCall(e.scrutinee) ||
+      e.cases.some(c => containsMethodCall(c.body)) ||
+      (e.fallthrough ? containsMethodCall(e.fallthrough) : false);
   }
 }
 
@@ -510,6 +629,7 @@ function narrowFunction(fn: TFunction): TFunction {
 
 export function narrowModule(mod: TModule): TModule {
   _ocCounter = 0;
+  _typeDecls = mod.typeDecls;
   return {
     ...mod,
     constants: mod.constants.map(c => ({ ...c, value: walkExpr(c.value) })),

@@ -165,23 +165,27 @@ because extract emits single-evaluation IR nodes for them.
 
 ## Discriminated-Union Narrowing
 
-Currently lives in `transform.ts` (not narrow), via `detectDiscriminantChain`
-+ `emitMatchStmt`. Recognized patterns:
+Detected in `narrow.ts` (alongside optional narrowing) via
+`ruleDiscriminantChain` and `ruleDiscriminantNegEarlyReturn`. Each emits
+a `tagMatch` IR node — the multi-case analog of `someMatch` — that
+transform lowers via `emitMatchStmt` / `transformPureMatch`.
+
+Recognized patterns:
 
 - `if (x.kind === "v") ... else if (x.kind === "w") ...` — chain of equality
   checks on a discriminator field.
 - `if ('key' in x) ...` — narrows to the unique variant containing `key`.
-- `if (x.kind !== "v") terminate; rest` — early-return form; rest is the
-  variant's body.
-- `switch (x.kind) { case "v": ... }` — exhaustive variant matching.
+  Looks up the variant from the type's declarations (narrow holds module-level
+  `_typeDecls` for this).
+- `if (x.kind !== "v") terminate; rest` — negative early-return form;
+  rest becomes the variant's body, terminator becomes the fallthrough.
+- `switch (x.kind) { case "v": ... }` — exhaustive variant matching
+  (still handled in transform's `emitSwitchStmt` since it's a syntactic
+  switch, not an if-chain).
 
 When the chain covers all variants but one, the fallthrough `_` arm is
 replaced with the remaining variant's destructured pattern (Lean requires
 this for variant-specific field access in the fallthrough).
-
-A potential refactor (see [REFACTORING.md](REFACTORING.md)) would fold this
-into narrow as a generalized `someMatch`-like primitive carrying a variant
-name. Not done yet.
 
 ---
 

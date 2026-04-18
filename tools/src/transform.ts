@@ -91,6 +91,9 @@ function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
         : s) };
     case "nullish": return { ...e, left: r(e.left), right: r(e.right) };
     case "someMatch": return { ...e, scrutinee: r(e.scrutinee), someBody: r(e.someBody), noneBody: r(e.noneBody) };
+    case "tagMatch": return { ...e, scrutinee: r(e.scrutinee),
+      cases: e.cases.map(c => ({ ...c, body: r(c.body) })),
+      fallthrough: e.fallthrough ? r(e.fallthrough) : null };
     case "forall": return { ...e, body: r(e.body) };
     case "exists": return { ...e, body: r(e.body) };
     case "lambda": return e;
@@ -114,6 +117,9 @@ function mapTStmt(s: TStmt, f: (e: TExpr) => TExpr | null): TStmt {
     case "ghostAssign": return { ...s, value: r(s.value) };
     case "assert": return { ...s, expr: r(s.expr) };
     case "someMatch": return { ...s, scrutinee: r(s.scrutinee), someBody: s.someBody.map(t => mapTStmt(t, f)), noneBody: s.noneBody.map(t => mapTStmt(t, f)) };
+    case "tagMatch": return { ...s, scrutinee: r(s.scrutinee),
+      cases: s.cases.map(c => ({ ...c, body: c.body.map(t => mapTStmt(t, f)) })),
+      fallthrough: s.fallthrough.map(t => mapTStmt(t, f)) };
   }
 }
 
@@ -611,6 +617,12 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         ],
       };
     }
+
+    case "tagMatch":
+      // Spec/expr-position tagMatch — narrow shouldn't produce these (it only
+      // emits stmt-form tagMatch from if-chain detection on stmts). If reached,
+      // bug in narrow.
+      throw new Error(`tagMatch reached lowerExpr — narrow only emits stmt-form tagMatch`);
   }
 }
 
@@ -673,22 +685,6 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
   let i = 0;
   while (i < stmts.length) {
     const s = stmts[i];
-    // Detect discriminant if-chain → match
-    if (s.kind === "if") {
-      const chain = detectDiscriminantChain(stmts.slice(i), typeDecls);
-      if (chain) {
-        result.push(emitMatchStmt(chain.chain, typeDecls));
-        i += chain.consumed;
-        continue;
-      }
-      // `if (x.kind !== "variant") terminate; rest` → match x { variant => rest, _ => terminate }
-      const negEarly = detectNegativeDiscriminantEarlyReturn(stmts.slice(i), typeDecls);
-      if (negEarly) {
-        result.push(emitMatchStmt(negEarly.chain, typeDecls));
-        i += negEarly.consumed;
-        continue;
-      }
-    }
     // Transform for-of → for-in over range
     if (s.kind === "forof") {
       const varName = s.names[0];
@@ -968,6 +964,12 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       }
       throw new Error(`someMatch stmt scrutinee must be a pure access path, got ${s.scrutinee.kind}`);
     }
+
+    case "tagMatch": {
+      const varName = s.scrutinee.kind === "var" ? s.scrutinee.name : "?";
+      const chain: Chain = { varName, typeName: s.typeName, cases: s.cases, fallthrough: s.fallthrough };
+      return [emitMatchStmt(chain, typeDecls)];
+    }
   }
 }
 
@@ -978,106 +980,6 @@ interface Chain {
   typeName: string;
   cases: { variant: string; body: TStmt[] }[];
   fallthrough: TStmt[];
-}
-
-function detectDiscriminantChain(stmts: TStmt[], typeDecls: TypeDeclInfo[]): { chain: Chain; consumed: number } | null {
-  if (stmts.length === 0 || stmts[0].kind !== "if") return null;
-
-  const first = parseDiscriminantCond(stmts[0].cond, typeDecls);
-  if (!first) return null;
-
-  const cases: { variant: string; body: TStmt[] }[] = [];
-
-  // Follow else branches within one if-else-if tree
-  function collectElse(s: TStmt & { kind: "if" }): TStmt[] {
-    const p = parseDiscriminantCond(s.cond, typeDecls);
-    if (!p || p.varName !== first!.varName) return [s];
-    cases.push({ variant: p.variant, body: s.then });
-    if (s.else.length === 0) return [];
-    if (s.else.length === 1 && s.else[0].kind === "if") return collectElse(s.else[0]);
-    return s.else;
-  }
-
-  // Walk consecutive top-level ifs on the same discriminant
-  let consumed = 0;
-  for (let i = 0; i < stmts.length; i++) {
-    const s = stmts[i];
-    if (s.kind !== "if") break;
-    const p = parseDiscriminantCond(s.cond, typeDecls);
-    if (!p || p.varName !== first.varName) break;
-    cases.push({ variant: p.variant, body: s.then });
-    consumed = i + 1;
-    if (s.else.length > 0) {
-      const ft = (s.else.length === 1 && s.else[0].kind === "if") ? collectElse(s.else[0]) : s.else;
-      return cases.length > 0 ? { chain: { ...first, cases, fallthrough: ft }, consumed } : null;
-    }
-  }
-
-  if (cases.length === 0) return null;
-  return { chain: { ...first, cases, fallthrough: stmts.slice(consumed) }, consumed: stmts.length };
-}
-
-/** Detect `if (x.kind !== "variant") terminate; rest`. Returns a Chain that
- *  emitMatchStmt can lower: cases = [{ variant, body: rest }], fallthrough
- *  = the terminating then-branch. Equivalent to `if (x.kind === "variant") { rest }
- *  else { terminate }` with body order swapped. */
-function detectNegativeDiscriminantEarlyReturn(stmts: TStmt[], typeDecls: TypeDeclInfo[]): { chain: Chain; consumed: number } | null {
-  if (stmts.length < 2) return null;
-  const first = stmts[0];
-  if (first.kind !== "if" || first.else.length > 0) return null;
-  if (!isTerminating(first.then)) return null;
-  const cond = parseNegativeDiscriminantCond(first.cond);
-  if (!cond) return null;
-  const rest = stmts.slice(1);
-  return {
-    chain: {
-      varName: cond.varName, typeName: cond.typeName,
-      cases: [{ variant: cond.variant, body: rest }],
-      fallthrough: first.then,
-    },
-    consumed: stmts.length,
-  };
-}
-
-function parseNegativeDiscriminantCond(cond: TExpr): { varName: string; typeName: string; variant: string } | null {
-  if (cond.kind === "binop" && cond.op === "!==" && cond.right.kind === "str" &&
-      cond.left.kind === "field" && cond.left.isDiscriminant &&
-      cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
-    return { varName: cond.left.obj.name, typeName: cond.left.obj.ty.name, variant: cond.right.value };
-  }
-  return null;
-}
-
-/** Does the statement list end in a control-flow terminator (return, throw, break, continue)? */
-function isTerminating(stmts: TStmt[]): boolean {
-  if (stmts.length === 0) return false;
-  const last = stmts[stmts.length - 1];
-  return last.kind === "return" || last.kind === "throw" || last.kind === "break" || last.kind === "continue";
-}
-
-function parseDiscriminantCond(cond: TExpr, typeDecls: TypeDeclInfo[]): { varName: string; typeName: string; variant: string } | null {
-  // Pattern: x.discriminant === "variant"
-  if (cond.kind === "binop" && cond.op === "===" && cond.right.kind === "str" &&
-      cond.left.kind === "field" && cond.left.isDiscriminant &&
-      cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
-    return { varName: cond.left.obj.name, typeName: cond.left.obj.ty.name, variant: cond.right.value };
-  }
-  // Pattern: 'key' in x  — narrows x to the unique variant containing `key`.
-  if (cond.kind === "binop" && cond.op === "in" &&
-      cond.left.kind === "str" && cond.right.kind === "var" &&
-      cond.right.ty.kind === "user") {
-    const key = cond.left.value;
-    const typeName = cond.right.ty.name;
-    const baseTyName = typeName.includes("<") ? typeName.slice(0, typeName.indexOf("<")) : typeName;
-    const decl = typeDecls.find(d => d.name === baseTyName);
-    if (decl?.kind === "discriminated-union" && decl.variants) {
-      const matches = decl.variants.filter(v => v.fields.some(f => f.name === key));
-      if (matches.length === 1) {
-        return { varName: cond.right.name, typeName, variant: matches[0].name };
-      }
-    }
-  }
-  return null;
 }
 
 /** Apply an expression transform to all expressions in a statement (convenience wrapper). */
@@ -1246,12 +1148,12 @@ function fixBoundType(expr: TExpr, boundName: string): TExpr {
 // ── Pure function generation ─────────────────────────────────
 
 function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | null {
-  // Detect discriminant if-chain
-  if (stmts.length > 0 && stmts[0].kind === "if") {
-    const chain = detectDiscriminantChain(stmts, typeDecls);
-    if (chain) return transformPureMatch(chain.chain, typeDecls);
-    const negEarly = detectNegativeDiscriminantEarlyReturn(stmts, typeDecls);
-    if (negEarly) return transformPureMatch(negEarly.chain, typeDecls);
+  // tagMatch (from narrow's discriminant detection) is the leading stmt and consumes the rest.
+  if (stmts.length > 0 && stmts[0].kind === "tagMatch") {
+    const t = stmts[0];
+    const varName = t.scrutinee.kind === "var" ? t.scrutinee.name : "?";
+    const chain: Chain = { varName, typeName: t.typeName, cases: t.cases, fallthrough: t.fallthrough };
+    return transformPureMatch(chain, typeDecls);
   }
 
   for (let i = 0; i < stmts.length; i++) {

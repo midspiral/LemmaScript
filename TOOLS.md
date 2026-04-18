@@ -47,7 +47,7 @@ Type names: `Expr`, `Stmt`, `Decl`, `Module`, `FnDef`, `FnMethod`, `Inductive`, 
 
 **Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedPaths`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: simple vars and pure access paths (`a.b.c`, any depth) narrow. `&&` chains accumulate narrowings (each premise in scope for later ones); `==>` propagates premise narrowings into the conclusion. **Type narrowing only** — no structural rewriting.
 
-**Narrow** (`narrow.ts`): Typed IR → Typed IR. Owns all structural narrowing for optional checks. Detects `if (e !== undefined)` (incl. `=== undefined`, `!e`, bare truthy), ternary `e !== undefined ? a : b`, `&&` chains, `||` early returns, `opt ? a : b` truthiness, the let-with-impure-guard pattern, `==>` premise narrowing in specs, `left ?? right` (nullish coalescing), and `obj?.<chain>` for any combination of `?.field`, `?.foo()`, `?.[i]`, and continuations (via the `optChain` IR node). Rewrites each into a `someMatch` IR node carrying the scrutinee, binder, and arms. Narrowing rules fire for any pure access path (`var(x)`, `field(purePath, name)`); `optChain` and `nullish` are the sole paths for complex scrutinees. See [Narrow rules](#narrow-rules) below.
+**Narrow** (`narrow.ts`): Typed IR → Typed IR. Owns all structural narrowing — both for optional checks and for discriminated unions. Optional patterns rewrite to `someMatch`; discriminant patterns (`x.kind === "v"`, `'k' in x`, `x.kind !== "v") return; ...`) rewrite to `tagMatch`. Also handles `==>` premise narrowing in specs, `left ?? right` (nullish coalescing), and `obj?.<chain>` for any combination of `?.field`, `?.foo()`, `?.[i]`, and continuations (via the `optChain` IR node). Rules fire for pure access paths (`var(x)`, `field(purePath, name)`); `optChain` and `nullish` are the sole paths for complex scrutinees. See [Narrow rules](#narrow-rules) below.
 
 **Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None — substituting the binder for any pure access path scrutinee, or lowering naively when the scrutinee is complex (narrow pre-bound the someBody). No optional-narrowing logic of its own.
 
@@ -139,13 +139,13 @@ Each TS source produces two Dafny files:
 
 ## Narrow Rules
 
-`narrow.ts` (structural-narrowing rewrite pass) takes typed IR and rewrites optional-narrowing patterns into a single `someMatch` IR node. The someMatch carries the scrutinee (a TExpr — pure access path, or for `optChain` rewrites, any expression), a binder name, the unwrapped type, and the some/none arms.
+`narrow.ts` (structural-narrowing rewrite pass) takes typed IR and rewrites narrowing patterns into IR nodes that transform lowers uniformly: `someMatch` (binary, for optional checks) or `tagMatch` (multi-case, for discriminated unions). Each carries the scrutinee, the matched cases, and the fallthrough.
 
 The walker is bottom-up over TExpr/TStmt. At each node, recurse into children, then try the rules in order.
 
 Throughout, `e !== undefined` includes equivalent forms: `undefined !== e`, bare truthiness `e` where `e` is optional-typed, and (for the negative direction) `e === undefined`, `undefined === e`, `!e`.
 
-**Statement-level rules**
+**Statement-level rules — optional narrowing**
 
 | Pattern | Rewrites to |
 |---------|-------------|
@@ -154,6 +154,13 @@ Throughout, `e !== undefined` includes equivalent forms: `undefined !== e`, bare
 | `if (e !== undefined && rest) S` (no else) | `someMatch e { Some(_e_val) => if rest S, None => {} }` |
 | `if (a === undefined \|\| b === undefined \|\| ...) terminate; rest` | nested `someMatch` for each var, deepest body is rest |
 | `let x = (e_opt && rest) ? a : b` (statement, impure-OK guard) | `var x := b; someMatch e_opt { Some(_v) => { if rest { x := a } } }` |
+
+**Statement-level rules — discriminated-union narrowing** (emit `tagMatch` IR)
+
+| Pattern | Rewrites to |
+|---------|-------------|
+| `if (x.kind === "v1") S1 [else if (x.kind === "v2") S2 ...]` (or `'k' in x` form) | `tagMatch x { v1 => S1, v2 => S2, ..., _ => fallthrough }` |
+| `if (x.kind !== "v") terminate; rest` | `tagMatch x { v => rest, _ => terminate }` |
 
 **Expression-level rules**
 
@@ -170,9 +177,11 @@ The `&&`-ternary rule skips when `rest` contains impure method calls (those woul
 
 **Scrutinee handling**
 
-All narrowing rules above (except `optChain`) accept any pure access path (`var(x)`, `field(var(o), f)`, or any depth of `field(field(...), name)`) — matching TS, which narrows access paths but not method-call results. The rules build `someMatch` with the body still referencing the scrutinee; transform substitutes via `replacePathInTExpr` / `replacePathInTStmts` at lowering time. Binder name joins the path: `_root_val` for a bare var, `_root_f1_f2_val` for `root.f1.f2`.
+All optional-narrowing rules above (except `optChain` and `nullish`) accept any pure access path (`var(x)`, `field(var(o), f)`, or any depth of `field(field(...), name)`) — matching TS, which narrows access paths but not method-call results. The rules build `someMatch` with the body still referencing the scrutinee; transform substitutes via `replacePathInTExpr` / `replacePathInTStmts` at lowering time. Binder name joins the path: `_root_val` for a bare var, `_root_f1_f2_val` for `root.f1.f2`.
 
-The `optChain` rule is the exception: its scrutinee can be any expression (call result, deep chain, etc.), and narrow constructs the someBody to reference the binder directly — so transform's lowering skips substitution for complex scrutinees.
+The `optChain` and `nullish` rules are exceptions: their scrutinee can be any expression (call result, deep chain, etc.), and narrow constructs the someBody to reference the binder directly — so transform's lowering skips substitution for complex scrutinees.
+
+The discriminant rules require the scrutinee to be a simple var (`x.kind === "v"` requires `x` to be a var). Transform's `emitMatchStmt` does the variant destructuring (replaces `x.field` with the variant binder). Discriminator must be the named discriminant field of a user `discriminated-union` type.
 
 ## Peephole Rules
 
@@ -228,7 +237,7 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 | `specparser.ts` | (parser) | Parses `//@ ` annotations → RawExpr |
 | `resolve.ts` | Resolve | Raw IR → Typed IR (types and type-narrowing) |
 | `typedir.ts` | Types | Typed IR type definitions (incl. `someMatch`) |
-| `narrow.ts` | Narrow | Typed IR → Typed IR (structural narrowing → `someMatch`) |
+| `narrow.ts` | Narrow | Typed IR → Typed IR (structural narrowing → `someMatch` / `tagMatch`) |
 | `ir.ts` | Types | Backend-neutral IR type definitions |
 | `transform.ts` | Transform | Typed IR → IR |
 | `peephole.ts` | Peephole | IR → IR (Some/None ceremony elimination) |
