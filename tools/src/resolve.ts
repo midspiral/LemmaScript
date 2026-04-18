@@ -104,39 +104,44 @@ function wrapSome(value: TExpr, optionalTy: Ty): TExpr {
   };
 }
 
-/** Detect `v !== undefined` or `undefined !== v` where v: optional<T>.
+/** Detect optional checks: `v !== undefined` (positive narrows then-branch),
+ *  `v === undefined` (negative narrows else-branch), or `!v` (equivalent to
+ *  `=== undefined`).
  *  Returns:
  *    - simple var: `varName` set, `fieldExpr` unset
  *    - complex (field chain or call): `fieldExpr` set, `varName` empty
+ *    - inThen: true for `!==` (truthy), false for `===` and `!v` (falsy).
  *  Does NOT recurse into `&&`. */
 function detectOptionalCheck(cond: RawExpr, ctx: Ctx): {
   varName: string; innerTy: Ty; inThen: boolean;
   fieldExpr?: RawExpr;
 } | null {
+  // `!v` where v is optional — same shape as `v === undefined` (inThen: false).
+  if (cond.kind === "unop" && cond.op === "!") {
+    const inner = classifyOptExpr(cond.expr, ctx);
+    return inner ? { ...inner, inThen: false } : null;
+  }
   if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) return null;
   // Identify the expression being checked against undefined
   let optExpr: RawExpr | null = null;
   if (cond.right.kind === "var" && cond.right.name === "undefined") optExpr = cond.left;
   if (cond.left.kind === "var" && cond.left.name === "undefined") optExpr = cond.right;
   if (!optExpr) return null;
+  const inner = classifyOptExpr(optExpr, ctx);
+  return inner ? { ...inner, inThen: cond.op === "!==" } : null;
+}
 
-  // Simple variable — env lookup, no substitution needed
-  if (optExpr.kind === "var") {
-    const ty = lookup(ctx.env, optExpr.name);
+/** Classify an expression as a simple var or field-chain optional, returning
+ *  the shape needed by detectOptionalCheck (sans inThen). */
+function classifyOptExpr(e: RawExpr, ctx: Ctx): { varName: string; innerTy: Ty; fieldExpr?: RawExpr } | null {
+  if (e.kind === "var") {
+    const ty = lookup(ctx.env, e.name);
     if (!ty || ty.kind !== "optional") return null;
-    return { varName: optExpr.name, innerTy: ty.inner, inThen: cond.op === "!==" };
+    return { varName: e.name, innerTy: ty.inner };
   }
-
-  // Field access chain or arbitrary expression — resolve to check type.
-  const resolved = resolveExpr(optExpr, ctx);
-  if (resolved.ty.kind === "optional") {
-    return {
-      varName: "", innerTy: resolved.ty.inner, inThen: cond.op === "!==",
-      fieldExpr: optExpr,
-    };
-  }
-
-  return null;
+  const resolved = resolveExpr(e, ctx);
+  if (resolved.ty.kind !== "optional") return null;
+  return { varName: "", innerTy: resolved.ty.inner, fieldExpr: e };
 }
 
 /** Collect all optional narrowings from an early-return condition.

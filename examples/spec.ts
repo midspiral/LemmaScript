@@ -338,3 +338,19 @@ function nullishVar(o: Inner | undefined, fallback: number): number {
 function nullishMapGet(m: Map<string, number>, k: string, fallback: number): number {
   return m.get(k) ?? fallback;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Negative truthiness `if (!x)` — equivalent to `x === undefined`
+// ═══════════════════════════════════════════════════════════════
+
+// Var early-return: !o narrows o to Inner after the if
+function negVar(o: Inner | undefined, fallback: number): number {
+  if (!o) return fallback;
+  return o.val;
+}
+
+// Field-chain early-return: !o.inner narrows o.inner to Inner after the if
+function negField(o: Outer, fallback: number): number {
+  if (!o.inner) return fallback;
+  return o.inner.val;
+}

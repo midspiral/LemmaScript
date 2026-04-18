@@ -336,6 +336,26 @@ function nullishMapGet(m: map<string, int>, k: string, fallback: int): int
     fallback
 }
 
+function negVar(o: Option<Inner>, fallback: int): int
+{
+  match o {
+    case Some(i_o_val) =>
+      i_o_val.val
+    case None =>
+      fallback
+  }
+}
+
+function negField(o: Outer, fallback: int): int
+{
+  match o.inner {
+    case Some(i_o_inner_val) =>
+      i_o_inner_val.val
+    case None =>
+      fallback
+  }
+}
+
 method countAbove(arr: seq<int>, threshold: int) returns (res: int)
   ensures (res <= |arr|)
 {

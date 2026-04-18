@@ -229,3 +229,11 @@ method nullishVar (o : Option Inner) (fallback : Int) return (res : Int)
 method nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) return (res : Int)
   do
     return Pure.nullishMapGet m k fallback
+
+method negVar (o : Option Inner) (fallback : Int) return (res : Int)
+  do
+    return Pure.negVar o fallback
+
+method negField (o : Outer) (fallback : Int) return (res : Int)
+  do
+    return Pure.negField o fallback

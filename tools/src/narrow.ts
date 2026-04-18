@@ -42,13 +42,18 @@ import type { TModule, TFunction, TStmt, TExpr, Ty } from "./typedir.js";
 /** Counter for naming optChain binders. Reset per module. */
 let _ocCounter = 0;
 
-/** Detect `e !== undefined` or `undefined !== e` for a simple optional-typed e.
- *  Following TS, only simple vars and simple `obj.field` chains narrow.
- *  Complex scrutinees return null — user must bind first.
- *  - Simple var: binder is `_${name}_val`, scrutinee handled via replaceVar
- *  - Simple `obj.field` chain: binder is `_${obj}_${field}_val`, scrutinee
- *    handled via replaceFieldsInTStmts */
+/** Detect optional checks: `e !== undefined`, `e === undefined`, or `!e` for a
+ *  pure-access-path optional-typed e. `!e` is equivalent to `=== undefined`.
+ *  Following TS, only pure access paths narrow; complex scrutinees return null. */
 function parseOptionalCheck(cond: TExpr): { scrutinee: TExpr; innerTy: Ty; negated: boolean; binderHint: string } | null {
+  // `!e` where e is optional — same as `e === undefined` (negated: true).
+  if (cond.kind === "unop" && cond.op === "!" && cond.expr.ty.kind === "optional") {
+    const e = cond.expr;
+    const innerTy = cond.expr.ty.inner;
+    const hint = binderHintFor(e);
+    if (hint === null) return null;
+    return { scrutinee: e, innerTy, negated: true, binderHint: hint };
+  }
   if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) return null;
   let e: TExpr | null = null;
   if (cond.right.kind === "var" && cond.right.name === "undefined") e = cond.left;

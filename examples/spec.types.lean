@@ -195,4 +195,18 @@ def nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) : I
   else
     fallback
 
+def negVar (o : Option Inner) (fallback : Int) : Int :=
+  match o with
+  | .some _o_val =>
+    _o_val.val
+  | .none =>
+    fallback
+
+def negField (o : Outer) (fallback : Int) : Int :=
+  match o.inner with
+  | .some _o_inner_val =>
+    _o_inner_val.val
+  | .none =>
+    fallback
+
 end Pure
