@@ -98,22 +98,25 @@ transform skips substitution and lowers naively.
 
 ## Why a Separate Pass
 
-Pe is a separate pass rather than additional resolve or transform logic
-because:
+Pe is a separate pass mostly because the rewrites compose better in
+isolation than they did when scattered across resolve and transform:
 
-- **Bounded responsibility.** Pe does one thing — convert flow-sensitive
-  narrowing patterns into structural `someMatch` nodes. It can be tested
-  in isolation: feed it typed IR, check the output.
-- **Compositional rules.** Each TS pattern gets its own rule, all dispatched
-  by a uniform bottom-up walk. Adding a pattern is one new rule, not a
-  new path through resolve and a new path through transform.
-- **No interaction with unrelated work.** Method dispatch, HOF lowering,
-  loop transformation, monadic ANF — all stay in transform. Pe doesn't
-  touch them, they don't touch pe.
+- **Each pattern is one rule** instead of a code path in resolve plus one
+  in transform. Adding a TS narrowing pattern is one rule in pe.
+- **Pe doesn't touch unrelated work.** Method dispatch, HOF lowering,
+  loop transformation, monadic ANF — all stay in transform. Pe only
+  rewrites optional-narrowing shapes.
+- **The `someMatch` primitive** is the contract between layers. Resolve
+  produces conditionals (no someMatch); transform consumes someMatch
+  (lowers to match Some/None). Pe sits in between, doing the conversion.
 
-The `someMatch` primitive is the contract. Resolve doesn't see it
-(produces conditionals); transform sees it (lowers to match). Pe is
-sandwiched in between, owning the conversion.
+It's not as self-contained as "bounded responsibility" suggests, though
+— each new TS pattern still touches all three layers (resolve to type
+narrowed accesses, pe to rewrite the shape, transform to substitute the
+binder). Pe is the *structural* layer of a three-layer system, not a
+hermetic component. It's also not "partial evaluation" in any classical
+sense — it's syntax-directed pattern matching on typed IR. The name is
+historical; a more accurate one would be "narrow" or "rewriteOptionals".
 
 ---
 

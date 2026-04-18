@@ -34,17 +34,6 @@
 
 import type { TModule, TFunction, TStmt, TExpr, Ty } from "./typedir.js";
 
-// ── Environment ──────────────────────────────────────────────
-//
-// Will eventually carry:
-//   - bindings  (var → translated value, for inlined consts)
-//   - narrowing facts (var → known-Some / known-None)
-// For now it's a placeholder so the walker has the shape.
-
-interface Env { /* empty for now */ }
-
-const emptyEnv: Env = {};
-
 // ── Optional-check detection ────────────────────────────────
 
 /** Counter for naming optChain binders. Reset per module. */
@@ -83,13 +72,13 @@ const parseSimpleOptionalCheck = parseOptionalCheck;
 
 // ── Walkers ──────────────────────────────────────────────────
 
-function walkExpr(e: TExpr, env: Env): TExpr {
-  const r = recurseExpr(e, env);
-  return ruleOptChain(r) ?? ruleImplOptional(r, env) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
+function walkExpr(e: TExpr): TExpr {
+  const r = recurseExpr(e);
+  return ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
 }
 
-function recurseExpr(e: TExpr, env: Env): TExpr {
-  const re = (x: TExpr) => walkExpr(x, env);
+function recurseExpr(e: TExpr): TExpr {
+  const re = walkExpr;
   switch (e.kind) {
     case "var": case "num": case "str": case "bool":
     case "result": case "havoc":
@@ -102,7 +91,7 @@ function recurseExpr(e: TExpr, env: Env): TExpr {
     case "record": return { ...e, spread: e.spread ? re(e.spread) : null,
       fields: e.fields.map(f => ({ ...f, value: re(f.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(re) };
-    case "lambda": return { ...e, body: walkStmts(e.body, env) };
+    case "lambda": return { ...e, body: walkStmts(e.body) };
     case "conditional": return { ...e, cond: re(e.cond), then: re(e.then), else: re(e.else) };
     case "optChain": return { ...e, obj: re(e.obj) };
     case "forall": return { ...e, body: re(e.body) };
@@ -111,31 +100,31 @@ function recurseExpr(e: TExpr, env: Env): TExpr {
   }
 }
 
-function walkStmt(s: TStmt, env: Env): TStmt {
+function walkStmt(s: TStmt): TStmt {
   // Recurse into children first, then try rules at this node.
-  const r = recurseStmt(s, env);
+  const r = recurseStmt(s);
   // && rule fires before simple rule because it produces nested ifs whose
   // inner shape doesn't match simple rule directly. someMatch result needs
   // no further rewriting at this level.
-  return ruleIfAndOptional(r, env) ?? ruleIfOptionalSimple(r) ?? r;
+  return ruleIfAndOptional(r) ?? ruleIfOptionalSimple(r) ?? r;
 }
 
-function walkStmts(stmts: TStmt[], env: Env): TStmt[] {
+function walkStmts(stmts: TStmt[]): TStmt[] {
   const result: TStmt[] = [];
   for (let i = 0; i < stmts.length; i++) {
     const s = stmts[i];
     const rest = stmts.slice(i + 1);
     const consumed = ruleEarlyReturnOrChain(s, rest) ?? ruleEarlyReturnConsume(s, rest);
     if (consumed) {
-      result.push(walkStmt(consumed, env));
+      result.push(walkStmt(consumed));
       return result;
     }
     // walkStmt first — pe's expression rules may rewrite the let init from
     // `conditional` to `someMatch`, in which case the let-cond desugar shouldn't fire.
-    const walked = walkStmt(s, env);
+    const walked = walkStmt(s);
     const expanded = ruleLetCondAndOptional(walked);
     if (expanded) {
-      for (const x of expanded) result.push(walkStmt(x, env));
+      for (const x of expanded) result.push(walkStmt(x));
       continue;
     }
     result.push(walked);
@@ -143,9 +132,9 @@ function walkStmts(stmts: TStmt[], env: Env): TStmt[] {
   return result;
 }
 
-function recurseStmt(s: TStmt, env: Env): TStmt {
-  const re = (e: TExpr) => walkExpr(e, env);
-  const rs = (xs: TStmt[]) => walkStmts(xs, env);
+function recurseStmt(s: TStmt): TStmt {
+  const re = walkExpr;
+  const rs = walkStmts;
   switch (s.kind) {
     case "let": return { ...s, init: re(s.init) };
     case "assign": return { ...s, value: re(s.value) };
@@ -274,7 +263,7 @@ function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
  *  bind narrowed values that the conclusion can use.
  *  → `someMatch path { Some(_p_val) => (rest ==> B), None => true }`.
  *  Walks the inner ==> recursively so chained checks (`a !== undefined && a.b !== undefined ==> ...`) become nested someMatches. */
-function ruleImplOptional(e: TExpr, env: Env): TExpr | null {
+function ruleImplOptional(e: TExpr): TExpr | null {
   if (e.kind !== "binop" || e.op !== "==>") return null;
   let check: NonNullable<ReturnType<typeof parseSimpleOptionalCheck>>;
   let restCond: TExpr | null = null;
@@ -294,7 +283,7 @@ function ruleImplOptional(e: TExpr, env: Env): TExpr | null {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
     binder: check.binderHint,
-    someBody: walkExpr(innerBody, env),
+    someBody: walkExpr(innerBody),
     noneBody: { kind: "bool", value: true, ty: { kind: "bool" } },
     ty: { kind: "bool" },
   };
@@ -359,7 +348,7 @@ function extractLeftmostOptionalCheck(cond: TExpr): {
  *  → `someMatch x { Some(_x_val) => if rest then then; , None => {} }`.
  *  Walks the inner if back through pe so that nested optional checks in rest
  *  (`a !== undefined && a.b !== undefined && ...`) also become someMatches. */
-function ruleIfAndOptional(s: TStmt, env: Env): TStmt | null {
+function ruleIfAndOptional(s: TStmt): TStmt | null {
   if (s.kind !== "if") return null;
   if (s.else.length !== 0) return null;
   const extracted = extractLeftmostOptionalCheck(s.cond);
@@ -370,7 +359,7 @@ function ruleIfAndOptional(s: TStmt, env: Env): TStmt | null {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
     binder: check.binderHint,
-    someBody: [walkStmt(innerIf, env)],
+    someBody: [walkStmt(innerIf)],
     noneBody: [],
   };
 }
@@ -467,10 +456,10 @@ function ruleConditionalAndOptional(e: TExpr): TExpr | null {
 function peFunction(fn: TFunction): TFunction {
   return {
     ...fn,
-    requires: fn.requires.map(e => walkExpr(e, emptyEnv)),
-    ensures: fn.ensures.map(e => walkExpr(e, emptyEnv)),
-    decreases: fn.decreases ? walkExpr(fn.decreases, emptyEnv) : null,
-    body: walkStmts(fn.body, emptyEnv),
+    requires: fn.requires.map(e => walkExpr(e)),
+    ensures: fn.ensures.map(e => walkExpr(e)),
+    decreases: fn.decreases ? walkExpr(fn.decreases) : null,
+    body: walkStmts(fn.body),
   };
 }
 
@@ -478,7 +467,7 @@ export function peModule(mod: TModule): TModule {
   _ocCounter = 0;
   return {
     ...mod,
-    constants: mod.constants.map(c => ({ ...c, value: walkExpr(c.value, emptyEnv) })),
+    constants: mod.constants.map(c => ({ ...c, value: walkExpr(c.value) })),
     functions: mod.functions.map(peFunction),
     classes: mod.classes.map(cls => ({
       ...cls,
