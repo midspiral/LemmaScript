@@ -50,6 +50,9 @@ export type TExpr =
   | { kind: "nullish"; left: TExpr; right: TExpr; ty: Ty }
   | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
       someBody: TExpr; noneBody: TExpr; ty: Ty }
+  | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
+      cases: { variant: string; body: TExpr }[];
+      fallthrough: TExpr | null; ty: Ty }
   // Spec-only (from //@ annotations):
   | { kind: "result"; ty: Ty }
   | { kind: "forall"; var: string; varTy: Ty; body: TExpr; ty: Ty }
@@ -83,6 +86,9 @@ export type TStmt =
   | { kind: "assert"; expr: TExpr }
   | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
       someBody: TStmt[]; noneBody: TStmt[] }
+  | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
+      cases: { variant: string; body: TStmt[] }[];
+      fallthrough: TStmt[] }
 
 // ── Top-level ────────────────────────────────────────────────
 
