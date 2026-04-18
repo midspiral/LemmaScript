@@ -547,7 +547,22 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 **`Map.get` returns `Option`** in code context (since the key may not exist). In spec context (annotations), `map.get(k)` emits direct access without an Option wrapper, matching how specs reason about map contents.
 
-**Optional narrowing.** Patterns of the form `v !== undefined`, `v === undefined` (early return), `v && rest`, `a === undefined || b === undefined`, and truthiness `opt ? a : b` all narrow the optional to its inner type in the appropriate scope. The narrow pass (`narrow.ts`) detects these patterns on the typed IR and rewrites them into a single `someMatch` IR node with a fresh binder. Transform lowers `someMatch` into Dafny `match` Some/None (or `if .Some? { ... .value ... }` after the peephole pass). Following TS, narrowing fires for any pure access path (`x`, `obj.field`, `a.b.c.d`); method-call results must be bound first (`const v = m.get(k); if (v !== undefined) ...`). Optional chaining `obj?.field` is handled separately via an `optChain` IR node that narrow rewrites to a single-evaluation `someMatch`. See [TOOLS.md](TOOLS.md#narrow-rules) for the full rule list.
+**Optional narrowing.** All these patterns narrow the optional to its inner type in the appropriate scope:
+
+- Equality: `v !== undefined`, `v === undefined` (early return)
+- Truthiness: `if (v)`, `if (!v)`, `opt ? a : b`
+- Composition: `v && rest`, `a === undefined || b === undefined`
+- Spec implication: `path !== undefined && rest ==> B` (premise narrows conclusion)
+- Optional chaining: `obj?.field`, `obj?.foo()`, `obj?.[i]`, chained `obj?.a?.b?.c` and `obj?.a.b.c`
+- Nullish coalescing: `x ?? default`
+
+The narrow pass (`narrow.ts`) detects these on the typed IR and rewrites them into a single `someMatch` IR node with a fresh binder. Transform lowers `someMatch` into Dafny `match` Some/None (or `if .Some? { ... .value ... }` after the peephole pass).
+
+Following TS, the equality/truthiness/`&&`/`||`/`==>` patterns fire only for pure access paths (`x`, `obj.field`, `a.b.c.d`); method-call results must be bound first (`const v = m.get(k); if (v !== undefined) ...`). The `obj?.<chain>` and `x ?? d` forms are exceptions: extract emits dedicated single-evaluation IR nodes (`optChain`, `nullish`), so any expression on the left is allowed.
+
+**Discriminated-union narrowing.** `if (e.kind === "lit") use(e.val)`, `if ('field' in x) use(x.field)`, and `if (x.kind !== "v") return; rest` all lower to `match` constructs that destructure variant-specific fields. Switch on a discriminator works similarly. Currently handled in `transform.ts` rather than `narrow.ts` (see ARCHITECTURE_NARROWING.md for the architectural note).
+
+See [TOOLS.md](TOOLS.md#narrow-rules) for the full rule list.
 
 **Peephole simplification of `Map.get` ceremony.** The transform produces verbose-looking output for common `Map.get` consumer patterns — the call lowers to `(if k in m then Some(m[k]) else None)` followed by a match. A peephole pass between transform and emit collapses these into idiomatic backend code. See [TOOLS.md](TOOLS.md#peephole-rules) for the full rule list.
 

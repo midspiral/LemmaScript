@@ -138,37 +138,67 @@ is a `Map.get` call.
 
 ---
 
-## Optional Chaining (`?.`)
+## Optional Chaining (`?.`) and Nullish Coalescing (`??`)
 
-TS's `obj?.field` reads the field once, yielding `field's type | undefined`
-if `obj` is defined. Extract emits an `optChain { obj, field }` IR node —
-a first-class single-evaluation form. Narrow's `ruleOptChain` rewrites it to:
+TS's `obj?.field` reads the field once. Extract emits an `optChain { obj, chain }`
+IR node where `chain` is a list of steps — each step is a `field`, `call`,
+or `index`. So `obj?.foo()`, `obj?.[k]`, `obj?.a.b.c`, and `obj?.a?.b?.c` all
+share the same IR (chained `?.` produces nested optChains). Narrow's
+`ruleOptChain` rewrites by applying the chain to a fresh binder:
 
 ```
-someMatch obj { Some(_oc{N}_val) => _oc{N}_val.field, None => undefined }
+someMatch obj { Some(_oc{N}_val) => apply(chain, _oc{N}_val), None => undefined }
 ```
 
-The someBody references the binder directly (not the original `obj`), so
-transform skips substitution. This is the one case where `someMatch` is
-allowed to carry a complex scrutinee (e.g. `m.get(k)`).
+`x ?? y` (nullish coalescing) gets its own `nullish` IR node that narrow
+rewrites to `someMatch x { Some(_v) => _v, None => y }`.
+
+For both, the someBody references the binder directly (not the original
+`obj`/`left`), so transform skips substitution. These are the only cases
+where `someMatch` carries a complex scrutinee (call result, etc.).
 
 The pattern `if (e !== undefined) use(e)` with a complex `e` is *not*
-narrowed — per TS semantics, the user must bind: `const v = e; if (v !== undefined) use(v)`. Only `?.` gets special treatment, and only because
-extract emits a single-evaluation IR node for it.
+narrowed — per TS semantics, the user must bind: `const v = e; if (v !== undefined) use(v)`. Only `?.` and `??` get special treatment, and only
+because extract emits single-evaluation IR nodes for them.
+
+---
+
+## Discriminated-Union Narrowing
+
+Currently lives in `transform.ts` (not narrow), via `detectDiscriminantChain`
++ `emitMatchStmt`. Recognized patterns:
+
+- `if (x.kind === "v") ... else if (x.kind === "w") ...` — chain of equality
+  checks on a discriminator field.
+- `if ('key' in x) ...` — narrows to the unique variant containing `key`.
+- `if (x.kind !== "v") terminate; rest` — early-return form; rest is the
+  variant's body.
+- `switch (x.kind) { case "v": ... }` — exhaustive variant matching.
+
+When the chain covers all variants but one, the fallthrough `_` arm is
+replaced with the remaining variant's destructured pattern (Lean requires
+this for variant-specific field access in the fallthrough).
+
+A potential refactor (see [REFACTORING.md](REFACTORING.md)) would fold this
+into narrow as a generalized `someMatch`-like primitive carrying a variant
+name. Not done yet.
 
 ---
 
 ## What Narrow Does NOT Cover
 
-- **Discriminated-union narrowing.** `if (e.kind === "lit") use(e.val)` —
-  same shape as optional narrowing (a tag check followed by access to
-  variant-specific data) but currently handled by transform's
-  `detectDiscriminantChain`. Could fold into narrow with a generalized
-  `someMatch`-like primitive carrying a variant name; not done yet.
 - **Cross-function narrowing.** TS narrows across function calls if the
   callee is a type predicate (`function isString(x): x is string`).
   LemmaScript doesn't currently support type predicates.
+- **`typeof x === "string"`** for `string | number` unions. Our subset
+  uses tagged unions, so this is rare.
+- **`instanceof`** — irrelevant in our subset (no class hierarchies).
+- **Compound discriminants** (`x.kind === "a" || x.kind === "b" ==> use(x.shared)`).
+  TS narrows to the variants that share the field; we don't.
 - **Complex-expression narrowing.** `if (m.get(k) !== undefined) use(m.get(k))` is rejected (TS-faithful). Users must bind first.
+- **Re-widening on mutation.** TS conservatively widens a narrowed access
+  after any function call that could mutate. We don't widen — once narrowed,
+  stays narrowed within the scope.
 - **Map.get ceremony elimination.** That's the peephole's job, not narrow's.
   Once narrowing lowers to `match m.get(k) { ... }`, peephole collapses
   the shape into `if k in m { ... m[k] ... }`.

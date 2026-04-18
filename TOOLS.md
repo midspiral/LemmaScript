@@ -47,7 +47,7 @@ Type names: `Expr`, `Stmt`, `Decl`, `Module`, `FnDef`, `FnMethod`, `Inductive`, 
 
 **Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedPaths`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: simple vars and pure access paths (`a.b.c`, any depth) narrow. `&&` chains accumulate narrowings (each premise in scope for later ones); `==>` propagates premise narrowings into the conclusion. **Type narrowing only** — no structural rewriting.
 
-**Narrow** (`narrow.ts`): Typed IR → Typed IR. Owns all structural narrowing for optional checks. Detects `if (e !== undefined)`, ternary `e !== undefined ? a : b`, `&&` chains, `||` early returns, `opt ? a : b` truthiness, the let-with-impure-guard pattern, `==>` premise narrowing in specs, and `obj?.field` (via the `optChain` IR node). Rewrites each into a `someMatch` IR node carrying the scrutinee, binder, and arms. Narrowing rules fire for any pure access path (`var(x)`, `field(purePath, name)`); `optChain` is the sole path for complex scrutinees. See [Narrow rules](#narrow-rules) below.
+**Narrow** (`narrow.ts`): Typed IR → Typed IR. Owns all structural narrowing for optional checks. Detects `if (e !== undefined)` (incl. `=== undefined`, `!e`, bare truthy), ternary `e !== undefined ? a : b`, `&&` chains, `||` early returns, `opt ? a : b` truthiness, the let-with-impure-guard pattern, `==>` premise narrowing in specs, `left ?? right` (nullish coalescing), and `obj?.<chain>` for any combination of `?.field`, `?.foo()`, `?.[i]`, and continuations (via the `optChain` IR node). Rewrites each into a `someMatch` IR node carrying the scrutinee, binder, and arms. Narrowing rules fire for any pure access path (`var(x)`, `field(purePath, name)`); `optChain` and `nullish` are the sole paths for complex scrutinees. See [Narrow rules](#narrow-rules) below.
 
 **Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None — substituting the binder for any pure access path scrutinee, or lowering naively when the scrutinee is complex (narrow pre-bound the someBody). No optional-narrowing logic of its own.
 
@@ -143,6 +143,8 @@ Each TS source produces two Dafny files:
 
 The walker is bottom-up over TExpr/TStmt. At each node, recurse into children, then try the rules in order.
 
+Throughout, `e !== undefined` includes equivalent forms: `undefined !== e`, bare truthiness `e` where `e` is optional-typed, and (for the negative direction) `e === undefined`, `undefined === e`, `!e`.
+
 **Statement-level rules**
 
 | Pattern | Rewrites to |
@@ -160,10 +162,11 @@ The walker is bottom-up over TExpr/TStmt. At each node, recurse into children, t
 | `e !== undefined ? a : b` | `someMatch e { Some(_e_val) => a, None => b }` |
 | `e !== undefined && rest ? a : b` (pure rest) | `someMatch e { Some(_e_val) => if rest then a else b, None => b }` |
 | `opt ? a : b` (truthiness; cond is optional-typed) | `someMatch opt { Some(_opt_val) => a, None => b }` |
+| `left ?? right` (nullish coalescing) | `someMatch left { Some(_v) => _v, None => right }` |
 | `path !== undefined [&& rest] ==> B` (spec implication) | `someMatch path { Some(_p_val) => (rest ==> B), None => true }` |
-| `optChain(obj, field)` (from extract's `obj?.field`) | `someMatch obj { Some(_oc{N}_val) => _oc{N}_val.field, None => undefined }` |
+| `optChain(obj, chain)` (from extract's `obj?.<chain>` — chain may be field/call/index steps) | `someMatch obj { Some(_oc{N}_val) => apply(chain, _oc{N}_val), None => undefined }` |
 
-The `&&`-ternary rule skips when `rest` contains impure method calls (those would be lifted out of the match arm by transform, breaking binder scope) — the let-cond statement-level rule handles those. The `==>` rule walks its inner recursively so chained checks (`a !== undefined && a.b !== undefined ==> ...`) become nested someMatches in spec contexts.
+The `&&`-ternary rule skips when `rest` contains impure method calls (those would be lifted out of the match arm by transform, breaking binder scope) — the let-cond statement-level rule handles those. Both `&&`-ternary and `==>` rules walk their inner expression recursively so chained checks (`a !== undefined && a.b !== undefined ? ... : ...`, `... ==> ...`) become nested someMatches.
 
 **Scrutinee handling**
 
