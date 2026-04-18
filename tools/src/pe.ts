@@ -52,7 +52,8 @@ function parseSimpleOptionalCheck(cond: TExpr): { scrutinee: TExpr; innerTy: Ty;
 function walkExpr(e: TExpr, env: Env): TExpr {
   // Recurse into children first, then try rules at this node.
   const r = recurseExpr(e, env);
-  return ruleConditionalOptionalSimple(r) ?? r;
+  // && rule before simple rule (same reasoning as walkStmt).
+  return ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? r;
 }
 
 function recurseExpr(e: TExpr, env: Env): TExpr {
@@ -264,6 +265,58 @@ function ruleIfAndOptional(s: TStmt): TStmt | null {
     binder: check.binderHint,
     someBody: [innerIf],
     noneBody: [],
+  };
+}
+
+/** Does this expression contain a method call (impure)? Method-call results
+ *  get lifted to var bindings outside their containing expression by transform,
+ *  which is unsafe inside a match arm that introduces a binder — the lifted
+ *  binding would reference a name only valid in the arm. */
+function containsMethodCall(e: TExpr): boolean {
+  if (e.kind === "call" && e.callKind === "method") return true;
+  switch (e.kind) {
+    case "var": case "num": case "str": case "bool":
+    case "result": case "havoc":
+      return false;
+    case "binop": return containsMethodCall(e.left) || containsMethodCall(e.right);
+    case "unop": return containsMethodCall(e.expr);
+    case "call": return containsMethodCall(e.fn) || e.args.some(containsMethodCall);
+    case "index": return containsMethodCall(e.obj) || containsMethodCall(e.idx);
+    case "field": return containsMethodCall(e.obj);
+    case "record":
+      return (e.spread ? containsMethodCall(e.spread) : false) ||
+        e.fields.some(f => containsMethodCall(f.value));
+    case "arrayLiteral": return e.elems.some(containsMethodCall);
+    case "lambda": return false;  // body is its own scope
+    case "conditional":
+      return containsMethodCall(e.cond) || containsMethodCall(e.then) || containsMethodCall(e.else);
+    case "forall": case "exists": return containsMethodCall(e.body);
+    case "someMatch": return containsMethodCall(e.scrutinee) ||
+      containsMethodCall(e.someBody) || containsMethodCall(e.noneBody);
+  }
+}
+
+/** Rule (expression): `x !== undefined && rest ? a : b`.
+ *  → `someMatch x { Some(_x_val) => if rest then a else b, None => b }`.
+ *  Does NOT fire if the guard `rest` contains method calls — transform lifts
+ *  those out of the match arm, breaking the binder scope. The original
+ *  transform's let-desugar (transformStmt let-case) handles those by lifting
+ *  to a mutable var first. */
+function ruleConditionalAndOptional(e: TExpr): TExpr | null {
+  if (e.kind !== "conditional") return null;
+  const extracted = extractLeftmostOptionalCheck(e.cond);
+  if (!extracted) return null;
+  const { check, restCond } = extracted;
+  if (containsMethodCall(restCond)) return null;
+  const innerCond: TExpr = {
+    kind: "conditional",
+    cond: restCond, then: e.then, else: e.else, ty: e.ty,
+  };
+  return {
+    kind: "someMatch",
+    scrutinee: check.scrutinee, binderTy: check.innerTy,
+    binder: check.binderHint,
+    someBody: innerCond, noneBody: e.else, ty: e.ty,
   };
 }
 
