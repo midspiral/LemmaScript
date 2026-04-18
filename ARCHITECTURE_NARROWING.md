@@ -37,10 +37,14 @@ unwrapped type. Following TS semantics, resolve only narrows simple shapes:
 
 - **`env`** for simple variables. `if (x !== undefined)` extends the
   type environment with `x: T` for the then-branch.
-- **`narrowedFields`** for simple `obj.field` chains. `if (obj.field !== undefined)` adds an entry that the field resolver consults when typing
-  `obj.field` in the then-branch.
+- **`narrowedPaths`** for any pure access path (`obj.field`, `a.b.c.d`,
+  any depth). Each entry pairs a path (root var + field chain) with the
+  unwrapped type. The field resolver computes the path of each access and
+  looks it up. `&&` chains accumulate narrowings so each premise is in
+  scope for later ones, matching TS narrowing through `&&`. The same
+  applies through `==>` in spec contexts (premise narrows conclusion).
 
-Complex expressions (call results, deep chains) are **not** narrowed —
+Complex expressions (call results, index ops) are **not** narrowed —
 matching TS, which requires the user to bind first:
 `const v = m.get(k); if (v !== undefined) use(v)`. This avoids the
 soundness hazard of retyping based on structural equality of impure calls.
@@ -80,13 +84,11 @@ The single IR node that all narrowing rewrites produce:
 Both expression and statement variants exist. They lower uniformly:
 `match scrutinee { Some(binder) => someBody, None => noneBody }`.
 
-For var and simple field scrutinees, the body keeps its original
-references — transform substitutes at lowering time:
-
-| Scrutinee shape | Substitution mechanism |
-|-----------------|------------------------|
-| `var(x)` | `replaceVar` after lowering — replaces `x` with `binder` in the IR. |
-| `field(var(o), f)` | `replaceFieldsInTStmts` / `replaceFieldInTExpr` before lowering — replaces `o.f` with `binder` in the typed IR. |
+For pure access path scrutinees (var or any depth of `obj.f.g.h`), the
+body keeps its original references — transform substitutes the entire
+path with the binder at lowering time via `replacePathInTExpr` /
+`replacePathInTStmts`. The substitution walks the typed IR looking for
+TExprs whose access-path shape matches the scrutinee exactly.
 
 For complex scrutinees (only produced by the `optChain` rewrite — see
 below), pe constructs the someBody to reference the binder directly, so

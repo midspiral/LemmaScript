@@ -45,7 +45,7 @@ Type names: `Expr`, `Stmt`, `Decl`, `Module`, `FnDef`, `FnMethod`, `Inductive`, 
 
 **Extract** (`extract.ts`): ts-morph → Raw IR. Walks the TS AST, produces structured expression nodes. Only string outputs are `//@ ` annotation text.
 
-**Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedFields`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: only simple vars and `obj.field` chains narrow. **Type narrowing only** — no structural rewriting.
+**Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedPaths`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: simple vars and pure access paths (`a.b.c`, any depth) narrow. `&&` chains accumulate narrowings (each premise in scope for later ones); `==>` propagates premise narrowings into the conclusion. **Type narrowing only** — no structural rewriting.
 
 **Pe** (`pe.ts`): Typed IR → Typed IR. Owns all structural narrowing for optional checks. Detects `if (e !== undefined)`, ternary `e !== undefined ? a : b`, `&&` chains, `||` early returns, `opt ? a : b` truthiness, the let-with-impure-guard pattern, and `obj?.field` (via the `optChain` IR node). Rewrites each into a `someMatch` IR node carrying the scrutinee, binder, and arms. Narrowing rules only fire for simple vars and `obj.field` chains (following TS); `optChain` is the sole path for complex scrutinees. See [Pe rules](#pe-rules) below.
 
@@ -160,16 +160,14 @@ The walker is bottom-up over TExpr/TStmt. At each node, recurse into children, t
 | `e !== undefined ? a : b` | `someMatch e { Some(_e_val) => a, None => b }` |
 | `e !== undefined && rest ? a : b` (pure rest) | `someMatch e { Some(_e_val) => if rest then a else b, None => b }` |
 | `opt ? a : b` (truthiness; cond is optional-typed) | `someMatch opt { Some(_opt_val) => a, None => b }` |
+| `path !== undefined [&& rest] ==> B` (spec implication) | `someMatch path { Some(_p_val) => (rest ==> B), None => true }` |
 | `optChain(obj, field)` (from extract's `obj?.field`) | `someMatch obj { Some(_oc{N}_val) => _oc{N}_val.field, None => undefined }` |
 
-The `&&`-ternary rule skips when `rest` contains impure method calls (those would be lifted out of the match arm by transform, breaking binder scope) — the let-cond statement-level rule handles those.
+The `&&`-ternary rule skips when `rest` contains impure method calls (those would be lifted out of the match arm by transform, breaking binder scope) — the let-cond statement-level rule handles those. The `==>` rule walks its inner recursively so chained checks (`a !== undefined && a.b !== undefined ==> ...`) become nested someMatches in spec contexts.
 
 **Scrutinee handling**
 
-All narrowing rules above (except `optChain`) only fire when `e` is a simple var or `obj.field` chain — matching TS, which requires users to bind method-call results before narrowing. The rules build `someMatch` with the body still referencing the scrutinee; transform substitutes at lowering time:
-
-- Var (`x`) — binder is `_${x}_val`. `replaceVar` after lowering.
-- Simple field chain (`obj.field`) — binder is `_${obj}_${field}_val`. `replaceFieldsInTStmts` before lowering.
+All narrowing rules above (except `optChain`) accept any pure access path (`var(x)`, `field(var(o), f)`, or any depth of `field(field(...), name)`) — matching TS, which narrows access paths but not method-call results. The rules build `someMatch` with the body still referencing the scrutinee; transform substitutes via `replacePathInTExpr` / `replacePathInTStmts` at lowering time. Binder name joins the path: `_root_val` for a bare var, `_root_f1_f2_val` for `root.f1.f2`.
 
 The `optChain` rule is the exception: its scrutinee can be any expression (call result, deep chain, etc.), and pe constructs the someBody to reference the binder directly — so transform's lowering skips substitution for complex scrutinees.
 

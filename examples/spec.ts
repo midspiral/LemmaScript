@@ -277,3 +277,23 @@ function clampedMidpoint(a: number, b: number): number {
   let mid = midpoint(a, b);  // mutable → non-pure → full method body
   return clampTernary(mid, a, b);
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Optional narrowing — TS-faithful: vars, obj.field, and deep paths
+// ═══════════════════════════════════════════════════════════════
+
+interface Leaf { value: number }
+interface Middle { leaf: Leaf | undefined }
+interface Tree { middle: Middle | undefined }
+
+// Deep-path narrowing: `&&` chain of `t.middle !== undefined` then
+// `t.middle.leaf !== undefined` narrows both paths in the then-branch,
+// so `t.middle.leaf.value` typechecks as `number`. Lowers to nested matches.
+function deepAccess(t: Tree): number {
+  //@ ensures t.middle !== undefined && t.middle.leaf !== undefined ==> \result === t.middle.leaf.value
+  //@ ensures t.middle === undefined ==> \result === 0
+  if (t.middle !== undefined && t.middle.leaf !== undefined) {
+    return t.middle.leaf.value;
+  }
+  return 0;
+}

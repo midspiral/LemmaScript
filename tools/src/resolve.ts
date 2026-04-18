@@ -153,6 +153,26 @@ function collectEarlyReturnNarrowings(cond: RawExpr, ctx: Ctx): { varName: strin
   return [];
 }
 
+/** Walk an `&&` chain of `e !== undefined` checks, returning a Ctx with all
+ *  narrowings applied. Earlier checks are in scope for later checks (so the
+ *  right side of `&&` sees the left side's narrowings). */
+function collectAndChainNarrowings(cond: RawExpr, ctx: Ctx): Ctx {
+  if (cond.kind === "binop" && cond.op === "&&") {
+    const leftCtx = collectAndChainNarrowings(cond.left, ctx);
+    return collectAndChainNarrowings(cond.right, leftCtx);
+  }
+  const n = detectOptionalCheck(cond, ctx);
+  if (!n || !n.inThen) return ctx;
+  if (!n.fieldExpr) {
+    return withEnv(ctx, extend(ctx.env, n.varName, n.innerTy));
+  }
+  const path = asRawAccessPath(n.fieldExpr);
+  if (path) {
+    return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: n.innerTy }] };
+  }
+  return ctx;
+}
+
 /** TS reference types that become value types in Dafny/Lean — const bindings need mutable var. */
 function isRefMutableInTS(ty: Ty): boolean {
   return ty.kind === "array" || ty.kind === "map" || ty.kind === "set";
@@ -353,22 +373,12 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "binop": {
       let left = resolveExpr(e.left, ctx);
-      // && narrowing: if left is "x !== undefined", narrow x for right side.
-      // Simple vars extend env; pure access paths extend narrowedPaths.
+      // && and ==> narrowing: left-side optional checks narrow the right side.
+      // (For ==>, the premise is assumed in the conclusion — same principle.)
       let rightCtx = ctx;
       let rawRight = e.right;
-      if (e.op === "&&") {
-        const narrowed = detectOptionalCheck(e.left, ctx);
-        if (narrowed && narrowed.inThen) {
-          if (!narrowed.fieldExpr) {
-            rightCtx = withEnv(ctx, extend(ctx.env, narrowed.varName, narrowed.innerTy));
-          } else {
-            const path = asRawAccessPath(narrowed.fieldExpr);
-            if (path) {
-              rightCtx = { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: narrowed.innerTy }] };
-            }
-          }
-        }
+      if (e.op === "&&" || e.op === "==>") {
+        rightCtx = collectAndChainNarrowings(e.left, ctx);
       }
       let right = resolveExpr(rawRight, rightCtx);
       if (e.op === "===" || e.op === "!==") {
@@ -543,39 +553,25 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     case "conditional": {
       const cond = resolveExpr(e.cond, ctx);
 
-      // Type narrowing for the then/else branches. Resolve carries narrowing
-      // info (env + narrowedPaths) so the body's expressions resolve to
-      // non-Optional inner types. Pe handles all structural narrowing (match
-      // generation, binding) on the typed IR. Following TS, we narrow simple
-      // vars and any pure access path (`a.b.c.d`) — but not expressions with
-      // method calls or index ops, which require bind-first.
-      let thenCtx = ctx;
+      // Type narrowing for the then/else branches. Following TS, we narrow
+      // simple vars and any pure access path (`a.b.c.d`) — but not expressions
+      // with method calls or index ops (bind-first required).
+      // For &&-chains, all positive checks narrow the then-branch; earlier
+      // checks are in scope when resolving later ones.
+      let thenCtx = collectAndChainNarrowings(e.cond, ctx);
       let elseCtx = ctx;
 
       // Truthiness — cond itself is optional (`opt ? a : b`), only for simple vars.
       if (cond.ty.kind === "optional" && e.cond.kind === "var") {
-        thenCtx = withEnv(ctx, extend(ctx.env, e.cond.name, cond.ty.inner));
+        thenCtx = withEnv(thenCtx, extend(thenCtx.env, e.cond.name, cond.ty.inner));
       }
 
-      // Explicit check (`v !== undefined`, possibly inside `&&`).
-      const narrowed = detectOptionalCheck(e.cond, ctx)
-        ?? (e.cond.kind === "binop" && e.cond.op === "&&" ? detectOptionalCheck(e.cond.left, ctx) : null);
-      if (narrowed && narrowed.inThen) {
-        if (!narrowed.fieldExpr) {
-          // Simple var
-          thenCtx = withEnv(thenCtx, extend(thenCtx.env, narrowed.varName, narrowed.innerTy));
-        } else {
-          // Pure access path (single-level or deep)
-          const path = asRawAccessPath(narrowed.fieldExpr);
-          if (path) {
-            thenCtx = { ...thenCtx, narrowedPaths: [...thenCtx.narrowedPaths, { path, narrowedTy: narrowed.innerTy }] };
-          }
-          // Else: not a pure path — no narrowing (TS-faithful).
-        }
-      } else if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
-        elseCtx = withEnv(elseCtx, extend(elseCtx.env, narrowed.varName, narrowed.innerTy));
+      // Single === undefined check narrows the else-branch.
+      const single = detectOptionalCheck(e.cond, ctx);
+      if (single && !single.inThen && !single.fieldExpr) {
+        elseCtx = withEnv(elseCtx, extend(elseCtx.env, single.varName, single.innerTy));
       }
-      if (!narrowed && e.cond.kind === "binop" && e.cond.op === "||") {
+      if (!single && e.cond.kind === "binop" && e.cond.op === "||") {
         for (const n of collectEarlyReturnNarrowings(e.cond, ctx)) {
           elseCtx = withEnv(elseCtx, extend(elseCtx.env, n.varName, n.innerTy));
         }
@@ -691,22 +687,14 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
 
     case "if": {
       // Narrow optional<T> → T when checking !== undefined or undefined !==.
-      // Also checks left side of && conditions: if (x !== undefined && ...) { ... }
-      // Simple vars extend the env; pure access paths (`a.b.c`) extend narrowedPaths.
-      let thenCtx = ctx, elseCtx = ctx;
-      const narrowed = detectOptionalCheck(s.cond, ctx)
-        ?? (s.cond.kind === "binop" && s.cond.op === "&&" ? detectOptionalCheck(s.cond.left, ctx) : null);
-      if (narrowed) {
-        if (!narrowed.fieldExpr) {
-          const env = extend(ctx.env, narrowed.varName, narrowed.innerTy);
-          if (narrowed.inThen) thenCtx = withEnv(ctx, env);
-          else elseCtx = withEnv(ctx, env);
-        } else if (narrowed.inThen) {
-          const path = asRawAccessPath(narrowed.fieldExpr);
-          if (path) {
-            thenCtx = { ...thenCtx, narrowedPaths: [...thenCtx.narrowedPaths, { path, narrowedTy: narrowed.innerTy }] };
-          }
-        }
+      // For &&-chains, all positive optional checks narrow the then-branch;
+      // earlier checks are in scope when resolving later ones.
+      // Single-check === undefined narrows the else-branch.
+      let thenCtx = collectAndChainNarrowings(s.cond, ctx);
+      let elseCtx = ctx;
+      const single = detectOptionalCheck(s.cond, ctx);
+      if (single && !single.inThen && !single.fieldExpr) {
+        elseCtx = withEnv(ctx, extend(ctx.env, single.varName, single.innerTy));
       }
       return [{ kind: "if", cond: resolveExpr(s.cond, ctx), then: resolveBlock(s.then, thenCtx), else: resolveBlock(s.else, elseCtx) }, ctx.env];
     }

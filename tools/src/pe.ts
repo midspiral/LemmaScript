@@ -85,7 +85,7 @@ const parseSimpleOptionalCheck = parseOptionalCheck;
 
 function walkExpr(e: TExpr, env: Env): TExpr {
   const r = recurseExpr(e, env);
-  return ruleOptChain(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
+  return ruleOptChain(r) ?? ruleImplOptional(r, env) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
 }
 
 function recurseExpr(e: TExpr, env: Env): TExpr {
@@ -117,7 +117,7 @@ function walkStmt(s: TStmt, env: Env): TStmt {
   // && rule fires before simple rule because it produces nested ifs whose
   // inner shape doesn't match simple rule directly. someMatch result needs
   // no further rewriting at this level.
-  return ruleIfAndOptional(r) ?? ruleIfOptionalSimple(r) ?? r;
+  return ruleIfAndOptional(r, env) ?? ruleIfOptionalSimple(r) ?? r;
 }
 
 function walkStmts(stmts: TStmt[], env: Env): TStmt[] {
@@ -269,6 +269,37 @@ function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
   };
 }
 
+/** Rule (expression): `(path !== undefined [&& rest]) ==> B` — premise narrowing
+ *  for spec implications (ensures/requires). The premise's optional checks
+ *  bind narrowed values that the conclusion can use.
+ *  → `someMatch path { Some(_p_val) => (rest ==> B), None => true }`.
+ *  Walks the inner ==> recursively so chained checks (`a !== undefined && a.b !== undefined ==> ...`) become nested someMatches. */
+function ruleImplOptional(e: TExpr, env: Env): TExpr | null {
+  if (e.kind !== "binop" || e.op !== "==>") return null;
+  let check: NonNullable<ReturnType<typeof parseSimpleOptionalCheck>>;
+  let restCond: TExpr | null = null;
+  const extracted = extractLeftmostOptionalCheck(e.left);
+  if (extracted) {
+    check = extracted.check;
+    restCond = extracted.restCond;
+  } else {
+    const c = parseSimpleOptionalCheck(e.left);
+    if (!c || c.negated) return null;
+    check = c;
+  }
+  const innerBody: TExpr = restCond
+    ? { kind: "binop", op: "==>", left: restCond, right: e.right, ty: { kind: "bool" } }
+    : e.right;
+  return {
+    kind: "someMatch",
+    scrutinee: check.scrutinee, binderTy: check.innerTy,
+    binder: check.binderHint,
+    someBody: walkExpr(innerBody, env),
+    noneBody: { kind: "bool", value: true, ty: { kind: "bool" } },
+    ty: { kind: "bool" },
+  };
+}
+
 /** Rule (expression): `obj?.field` — single-eval optional chain.
  *  → `someMatch obj { Some(_oc{N}_val) => _oc{N}_val.field, None => undefined }`.
  *  The someBody references the binder directly, so transform doesn't substitute.
@@ -323,12 +354,12 @@ function extractLeftmostOptionalCheck(cond: TExpr): {
   return null;
 }
 
-/** Rule: `if (x !== undefined && rest) then` (no else) where x is a simple
- *  optional var or `obj.field` chain.
+/** Rule: `if (x !== undefined && rest) then` (no else) where x is a pure
+ *  access path.
  *  → `someMatch x { Some(_x_val) => if rest then then; , None => {} }`.
- *  The substitution of x→_x_val happens during transform via the someMatch
- *  handler, so the inner `if rest then` automatically gets x narrowed. */
-function ruleIfAndOptional(s: TStmt): TStmt | null {
+ *  Walks the inner if back through pe so that nested optional checks in rest
+ *  (`a !== undefined && a.b !== undefined && ...`) also become someMatches. */
+function ruleIfAndOptional(s: TStmt, env: Env): TStmt | null {
   if (s.kind !== "if") return null;
   if (s.else.length !== 0) return null;
   const extracted = extractLeftmostOptionalCheck(s.cond);
@@ -339,7 +370,7 @@ function ruleIfAndOptional(s: TStmt): TStmt | null {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
     binder: check.binderHint,
-    someBody: [innerIf],
+    someBody: [walkStmt(innerIf, env)],
     noneBody: [],
   };
 }
