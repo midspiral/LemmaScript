@@ -11,6 +11,7 @@ import path from "path";
 import { extractModule } from "./extract.js";
 import { resolveModule } from "./resolve.js";
 import { transformModuleLean, transformModuleDafny } from "./transform.js";
+import { peepholeModule } from "./peephole.js";
 import { emitLeanFile } from "./lean-emit.js";
 import { emitDafnyFile } from "./dafny-emit.js";
 import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-commands.js";
@@ -97,7 +98,9 @@ function main() {
 
   // ── Dafny backend ─────────────────────────────────────────
   if (backend === "dafny") {
-    const { typesFile, defFile } = transformModuleDafny(typed);
+    let { typesFile, defFile } = transformModuleDafny(typed);
+    if (typesFile) typesFile = peepholeModule(typesFile, "dafny");
+    defFile = peepholeModule(defFile, "dafny");
     const allDecls = [...(typesFile?.decls ?? []), ...defFile.decls];
     const merged = { ...defFile, decls: allDecls };
     const text = emitDafnyFile(merged, path.basename(filePath));
@@ -125,7 +128,9 @@ function main() {
   // ── Lean backend ──────────────────────────────────────────
   const specPath = path.join(dir, `${base}.spec.lean`);
   const specImport = existsSync(specPath) ? `«${base}.spec»` : undefined;
-  const { typesFile, defFile } = transformModuleLean(typed, specImport);
+  let { typesFile, defFile } = transformModuleLean(typed, specImport);
+  if (typesFile) typesFile = peepholeModule(typesFile, "lean");
+  defFile = peepholeModule(defFile, "lean");
 
   const typesPath = typesFile ? path.join(dir, `${base}.types.lean`) : null;
   const typesText = typesFile ? emitLeanFile(typesFile) : null;

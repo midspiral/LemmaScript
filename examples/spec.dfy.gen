@@ -71,10 +71,7 @@ lemma evalSwitch_ensures(e: Expr)
 
 function isHighPriority(p: Priority): bool
 {
-  if p.high? then
-    true
-  else
-    false
+  p.high?
 }
 
 lemma isHighPriority_ensures(p: Priority)

@@ -551,6 +551,47 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 **Optional truthiness in conditionals:** `opt ? f(opt) : undefined` where `opt` has optional type generates a match expression. The resolve phase introduces a synthetic variable for the unwrapped value, substitutes it in the then-branch, and narrows its type to the inner type. The transform generates `match opt { case Some(v) => Some(f(v)) case None => None }`. For field-access conditions like `entry.decision ? ... : undefined`, the synthetic variable replaces the entire field-access chain in the then-branch.
 
+**Peephole simplification of `Map.get` ceremony.** The transform produces verbose-looking output for common `Map.get` consumer patterns — the call lowers to `(if k in m then Some(m[k]) else None)` followed by a match. A peephole pass between transform and emit collapses these into idiomatic backend code. See [TOOLS.md](TOOLS.md#peephole-rules) for the full rule list.
+
+The pass takes the target backend as input. The Map.get rules apply to both backends. Boolean-simplification rules (collapsing `if c then b else false → c && b` etc.) are applied only for Dafny — they emit `∧`/`∨` in the IR which renders as Bool short-circuit operators in Dafny but as Prop disjunction in Lean, breaking structural-termination analysis for recursive functions. For Lean we keep the original if-then-else, which preserves the conditional that the termination checker needs.
+
+The user-visible effect:
+```typescript
+// TS source
+if (m.get(k) === 0) { ... }
+```
+```dafny
+// Without peephole
+if (match (if k in m then Some(m[k]) else None) {
+      case Some(v) => v == 0
+      case None => false
+    }) { ... }
+
+// With peephole (current behavior)
+if (k in m && m[k] == 0) { ... }
+```
+
+The let-collapse rules apply when the partial result is bound to a local that's only used as the match scrutinee:
+```typescript
+// TS source
+const lane = m.tasks[listId];
+if (lane === undefined) return false;
+return process(lane);
+```
+```dafny
+// Output (peephole'd)
+if (listId in m.tasks) {
+  var lane := m.tasks[listId];
+  return process(lane);
+} else {
+  return false;
+}
+```
+
+The unwrapped value is bound once via a `var` (or `let` expression in pure contexts), preserving the source binding's name and capture semantics. Substituting `m.tasks[listId]` at every use would re-evaluate the access — incorrect if the body mutates `m`.
+
+When the bound variable IS used after the match, the `let` is preserved and the `Option` value remains; only the inline match-on-`get` form is simplified.
+
 **Quantifier type inference:** When a quantifier variable is used as a collection key or element (e.g., `forall(k, map.has(k) ==> ...)`, `forall(v, arr.includes(v) ==> ...)`), the variable type is inferred from the collection's key/element type instead of defaulting to `Int`.
 
 **Set iteration:** `for (const x of s)` where `s` is a `Set<T>` converts the set to an array first (Lean: `.toArray`, Dafny: `SetToSeq` helper), then iterates with a standard indexed loop.
