@@ -3,14 +3,29 @@
  *
  * Pipeline: resolve → pe → transform → emit.
  *
- * Operates on the typed IR (TExpr/TStmt) with an environment threaded
- * through the walk. Currently a no-op identity rewrite — the walker shape
- * is in place so future rules slot in without restructuring.
+ * Owns all structural narrowing for optional checks. Detects each of:
+ *   - `if (e !== undefined) S`               (statement, simple-var/field/complex)
+ *   - `if (e === undefined) terminate; rest` (early-return + rest consumption)
+ *   - `if (e !== undefined && rest) S`        (&& in if; no else)
+ *   - `if (a === undefined || b === undefined) terminate; rest`  (|| chain)
+ *   - `let x = (e_opt && rest) ? a : b`       (statement, impure-OK guard)
+ *   - `e !== undefined ? a : b`               (ternary)
+ *   - `e !== undefined && rest ? a : b`       (&& in ternary; pure rest)
+ *   - `opt ? a : b`                            (truthiness)
+ * and rewrites each to a `someMatch` TExpr/TStmt carrying the scrutinee,
+ * binder, unwrapped type, and arms. Transform lowers `someMatch` to IR
+ * `match` Some/None.
  *
- * The intent is to consolidate narrowing emulation here. Each pattern
- * (`if (x !== undefined) ...`, `x ? a : b`, `&&`, `||`, early return) gets
- * a rule in pe; the corresponding handling in resolve and transform gets
- * removed in lockstep.
+ * Resolve runs before pe and handles type narrowing only (env extension,
+ * `narrowedFields`, `narrowedExprs`). Pe doesn't substitute on raw IR —
+ * the body keeps its original expressions; transform's someMatch handler
+ * does the substitution at lowering time (var, field-chain, or
+ * TExpr-equality for complex scrutinees).
+ *
+ * Walker shape: bottom-up over TExpr/TStmt. At each node, recurse children
+ * via the *Recurse* helpers, then try the rules in order. List-level rules
+ * (early-return, let-cond) run in `walkStmts` so they can consume the rest
+ * of the block.
  */
 
 import type { TModule, TFunction, TStmt, TExpr, Ty } from "./typedir.js";
