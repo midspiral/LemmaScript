@@ -93,7 +93,7 @@ function main() {
 
   // Resolve: Raw IR → Typed IR
   const resolved = resolveModule(raw);
-  // PE: Typed IR → Typed IR (narrowing emulation; currently no-op)
+  // PE: Typed IR → Typed IR (narrowing emulation)
   const typed = peModule(resolved);
 
   const dir = path.dirname(absPath);
