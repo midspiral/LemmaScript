@@ -52,8 +52,8 @@ function parseSimpleOptionalCheck(cond: TExpr): { scrutinee: TExpr; innerTy: Ty;
 function walkExpr(e: TExpr, env: Env): TExpr {
   // Recurse into children first, then try rules at this node.
   const r = recurseExpr(e, env);
-  // && rule before simple rule (same reasoning as walkStmt).
-  return ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? r;
+  // && rule before simple rule. Truthiness rule last (most permissive).
+  return ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
 }
 
 function recurseExpr(e: TExpr, env: Env): TExpr {
@@ -228,6 +228,36 @@ function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
     binder: check.binderHint,
     someBody, noneBody,
     ty: e.ty,
+  };
+}
+
+/** Read the scrutinee shape from an optional-typed expression directly used as
+ *  a truthiness check. Returns null for non-var/non-field shapes. */
+function scrutineeOfOptional(e: TExpr): { scrutinee: TExpr; innerTy: Ty; binderHint: string } | null {
+  if (e.ty.kind !== "optional") return null;
+  if (e.kind === "var") {
+    return { scrutinee: e, innerTy: e.ty.inner, binderHint: `_${e.name}_val` };
+  }
+  if (e.kind === "field" && e.obj.kind === "var") {
+    return { scrutinee: e, innerTy: e.ty.inner, binderHint: `_${e.obj.name}_${e.field}_val` };
+  }
+  return null;
+}
+
+/** Rule (expression): `opt ? a : b` (truthiness check, no explicit !==).
+ *  → `someMatch opt { Some(_opt_val) => a, None => b }`.
+ *  Treats truthiness as definedness: for an optional `T | undefined`, the
+ *  TS truthy path runs when defined. (Matches the behaviour of resolve's
+ *  former Phase-1 truthiness handling.) */
+function ruleConditionalOptionalTruthy(e: TExpr): TExpr | null {
+  if (e.kind !== "conditional") return null;
+  const sc = scrutineeOfOptional(e.cond);
+  if (!sc) return null;
+  return {
+    kind: "someMatch",
+    scrutinee: sc.scrutinee, binderTy: sc.innerTy,
+    binder: sc.binderHint,
+    someBody: e.then, noneBody: e.else, ty: e.ty,
   };
 }
 
