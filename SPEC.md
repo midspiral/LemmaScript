@@ -560,7 +560,7 @@ The narrow pass (`narrow.ts`) detects these on the typed IR and rewrites them in
 
 Following TS, the equality/truthiness/`&&`/`||`/`==>` patterns fire only for pure access paths (`x`, `obj.field`, `a.b.c.d`); method-call results must be bound first (`const v = m.get(k); if (v !== undefined) ...`). The `obj?.<chain>` and `x ?? d` forms are exceptions: extract emits dedicated single-evaluation IR nodes (`optChain`, `nullish`), so any expression on the left is allowed.
 
-**Discriminated-union narrowing.** `if (e.kind === "lit") use(e.val)`, `if ('field' in x) use(x.field)`, and `if (x.kind !== "v") return; rest` all lower to `match` constructs that destructure variant-specific fields. Switch on a discriminator works similarly. Currently handled in `transform.ts` rather than `narrow.ts` (see ARCHITECTURE_NARROWING.md for the architectural note).
+**Discriminated-union narrowing.** `if (e.kind === "lit") use(e.val)`, `if ('field' in x) use(x.field)`, and `if (x.kind !== "v") return; rest` all lower to `match` constructs that destructure variant-specific fields. Switch on a discriminator works similarly. Detection lives in `narrow.ts` alongside optional-narrowing rules (rewrites to a `tagMatch` IR node); the lowering to backend `match` lives in `transform.ts`.
 
 See [TOOLS.md](TOOLS.md#narrow-rules) for the full rule list.
 

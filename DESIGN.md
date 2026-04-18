@@ -65,7 +65,7 @@ Both backends share the same TypeScript source, `//@ ` annotations, and pipeline
        │         │
        │         └──→ resolve   (types + type-narrowing)
        │                   │
-       │                   └──→ narrow  (structural narrowing → someMatch)
+       │                   └──→ narrow  (structural narrowing → someMatch / tagMatch)
        │                             │
        │                             └──→ transform (Typed IR → IR)
        │                                       │
