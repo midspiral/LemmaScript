@@ -89,6 +89,7 @@ function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
       chain: e.chain.map(s => s.kind === "call" ? { ...s, args: s.args.map(r) }
         : s.kind === "index" ? { ...s, idx: r(s.idx) }
         : s) };
+    case "nullish": return { ...e, left: r(e.left), right: r(e.right) };
     case "someMatch": return { ...e, scrutinee: r(e.scrutinee), someBody: r(e.someBody), noneBody: r(e.noneBody) };
     case "forall": return { ...e, body: r(e.body) };
     case "exists": return { ...e, body: r(e.body) };
@@ -203,9 +204,13 @@ function transformExpr(e: TExpr): Expr { return lowerExpr(e, null); }
 /** Wrap an expression in Some/None for optional-typed conditionals.
  *  If the raw TExpr is `undefined`, emit `.none`; otherwise wrap in `Some`. */
 function wrapOptionalBranch(expr: Expr, raw: TExpr): Expr {
-  if (raw.kind === "var" && raw.name === "undefined") return { kind: "constructor", name: "none" };
+  // Set type: "Option" so Lean emits `Option.some`/`Option.none` (qualified).
+  // The dotted form `.some`/`.none` would be ambiguous in expression positions
+  // like the scrutinee of an outer match. Dafny treats `Option.Some` and bare
+  // `Some` equivalently — the qualification is harmless there.
+  if (raw.kind === "var" && raw.name === "undefined") return { kind: "constructor", name: "none", type: "Option" };
   if (raw.ty.kind === "optional") return expr;  // already Option<T>, don't double-wrap
-  return { kind: "constructor", name: "some", args: [expr] };
+  return { kind: "constructor", name: "some", type: "Option", args: [expr] };
 }
 
 function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
@@ -561,8 +566,12 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     }
 
     case "optChain":
-      // Pe should have rewritten optChain to someMatch.
+      // Narrow should have rewritten optChain to someMatch.
       throw new Error(`optChain reached transform — narrow should have rewritten it`);
+
+    case "nullish":
+      // Narrow should have rewritten nullish to someMatch.
+      throw new Error(`nullish reached transform — narrow should have rewritten it`);
 
     case "havoc":
       // Dafny's * only works in var/assign positions — lift to own declaration

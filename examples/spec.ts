@@ -324,3 +324,17 @@ function ocMethodCall(s: Set<string> | undefined, k: string): boolean | undefine
 function ocIndex(m: Record<string, string> | undefined, k: string): string | undefined {
   return m?.[k];
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Nullish coalescing `a ?? b` — single-eval; defaults if a is undefined
+// ═══════════════════════════════════════════════════════════════
+
+// Optional var with default
+function nullishVar(o: Inner | undefined, fallback: number): number {
+  return o?.val ?? fallback;
+}
+
+// Map.get + ?? — peephole collapses to `if k in m then m[k] else fallback`
+function nullishMapGet(m: Map<string, number>, k: string, fallback: number): number {
+  return m.get(k) ?? fallback;
+}

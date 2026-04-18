@@ -332,9 +332,9 @@ function getTask(m: Model, taskId: TaskId): Option<Task>
   if (taskId in m.taskData) then
     var i_t_val := m.taskData[taskId];
     if i_t_val.deleted then
-      None
+      Option.None
     else
-      Some(i_t_val)
+      Option.Some(i_t_val)
   else
     None
 }
@@ -358,9 +358,9 @@ function getTagName(m: Model, tagId: TagId): Option<string>
 {
   if (tagId in m.tags) then
     var i_oc0_val := m.tags[tagId];
-    Some(i_oc0_val.name)
+    Option.Some(i_oc0_val.name)
   else
-    None
+    Option.None
 }
 
 const INITIAL_OWNER: string := "__initial__"

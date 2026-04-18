@@ -155,6 +155,10 @@ function extractExpr(node: Expression): RawExpr {
       // This is an assignment expression; extract as binop for now
       return { kind: "binop", op: "=", left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
     }
+    // Nullish coalescing: a ?? b — single-eval, narrow rewrites to someMatch
+    if (op === "??") {
+      return { kind: "nullish", left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
+    }
     return { kind: "binop", op, left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
   }
 

@@ -77,7 +77,7 @@ const parseSimpleOptionalCheck = parseOptionalCheck;
 
 function walkExpr(e: TExpr): TExpr {
   const r = recurseExpr(e);
-  return ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
+  return ruleNullish(r) ?? ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
 }
 
 function recurseExpr(e: TExpr): TExpr {
@@ -100,6 +100,7 @@ function recurseExpr(e: TExpr): TExpr {
       chain: e.chain.map(s => s.kind === "call" ? { ...s, args: s.args.map(re) }
         : s.kind === "index" ? { ...s, idx: re(s.idx) }
         : s) };
+    case "nullish": return { ...e, left: re(e.left), right: re(e.right) };
     case "forall": return { ...e, body: re(e.body) };
     case "exists": return { ...e, body: re(e.body) };
     case "someMatch": return { ...e, someBody: re(e.someBody), noneBody: re(e.noneBody) };
@@ -295,6 +296,23 @@ function ruleImplOptional(e: TExpr): TExpr | null {
   };
 }
 
+/** Rule (expression): `left ?? right` — nullish coalescing.
+ *  → `someMatch left { Some(_v) => _v, None => right }`.
+ *  Single-evaluation: scrutinee may be any expression. */
+function ruleNullish(e: TExpr): TExpr | null {
+  if (e.kind !== "nullish") return null;
+  if (e.left.ty.kind !== "optional") return null;
+  const innerTy = e.left.ty.inner;
+  const binder = `_oc${_ocCounter++}_val`;
+  return {
+    kind: "someMatch",
+    scrutinee: e.left, binder, binderTy: innerTy,
+    someBody: { kind: "var", name: binder, ty: innerTy },
+    noneBody: e.right,
+    ty: e.ty,
+  };
+}
+
 /** Rule (expression): `obj?.<chain>` — single-eval optional chain.
  *  → `someMatch obj { Some(_oc{N}_val) => apply(chain, _oc{N}_val), None => undefined }`.
  *  The someBody applies the chain to the binder directly (field/call/index),
@@ -431,6 +449,7 @@ function containsMethodCall(e: TExpr): boolean {
     case "conditional":
       return containsMethodCall(e.cond) || containsMethodCall(e.then) || containsMethodCall(e.else);
     case "optChain": return containsMethodCall(e.obj);
+    case "nullish": return containsMethodCall(e.left) || containsMethodCall(e.right);
     case "forall": case "exists": return containsMethodCall(e.body);
     case "someMatch": return containsMethodCall(e.scrutinee) ||
       containsMethodCall(e.someBody) || containsMethodCall(e.noneBody);

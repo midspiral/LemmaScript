@@ -68,7 +68,7 @@ def evalSwitch (e : Expr) : Int :=
     0 - _e_inner
 
 def isHighPriority (p : Priority) : Bool :=
-  if p = .high then
+  if p = Priority.high then
     true
   else
     false
@@ -92,10 +92,10 @@ def demoteOnFail (p : Priority) (ok : Bool) : Priority :=
   if ok then
     p
   else
-    .low
+    Priority.low
 
 def makeHighItem (v : Int) : PriorityItem :=
-  { level := .high, value := v }
+  { level := Priority.high, value := v }
 
 def midpoint (lo : Int) (hi : Int) : Int :=
   (lo + hi) / 2
@@ -158,27 +158,41 @@ def ocField (o : Option Outer) : Option Inner :=
   | .some _oc0_val =>
     _oc0_val.inner
   | .none =>
-    .none
+    Option.none
 
 def ocChain (o : Option Outer) : Option Int :=
-  match (match o with | .some _oc1_val => _oc1_val.inner | .none => .none) with
+  match (match o with | .some _oc1_val => _oc1_val.inner | .none => Option.none) with
   | .some _oc2_val =>
-    .some _oc2_val.val
+    Option.some _oc2_val.val
   | .none =>
-    .none
+    Option.none
 
 def ocMethodCall (s : Option (Std.HashSet String)) (k : String) : Option Bool :=
   match s with
   | .some _oc3_val =>
-    .some (_oc3_val.contains k)
+    Option.some (_oc3_val.contains k)
   | .none =>
-    .none
+    Option.none
 
 def ocIndex (m : Option (Std.HashMap String String)) (k : String) : Option String :=
   match m with
   | .some _oc4_val =>
     _oc4_val.get? k
   | .none =>
-    .none
+    Option.none
+
+def nullishVar (o : Option Inner) (fallback : Int) : Int :=
+  match (match o with | .some _oc5_val => Option.some _oc5_val.val | .none => Option.none) with
+  | .some _oc6_val =>
+    _oc6_val
+  | .none =>
+    fallback
+
+def nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) : Int :=
+  if m.contains k then
+    let _oc7_val := m[k]!
+    _oc7_val
+  else
+    fallback
 
 end Pure

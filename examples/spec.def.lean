@@ -21,8 +21,8 @@ method evalSwitch (e : Expr) return (res : Int)
     return Pure.evalSwitch e
 
 method isHighPriority (p : Priority) return (res : Bool)
-  ensures p = .high → res = true
-  ensures p ≠ .high → res = false
+  ensures p = Priority.high → res = true
+  ensures p ≠ Priority.high → res = false
   do
     return Pure.isHighPriority p
 
@@ -184,11 +184,11 @@ method forOfContains (arr : Array Int) (target : Int) return (res : Bool)
     return found
 
 method clampedItem (x : Int) return (res : PriorityItem)
-  ensures res.level = .high
+  ensures res.level = Priority.high
   do
     let mut tmp : Int := x
     let _t2 ← clampTernary tmp 0 100
-    return { level := .high, value := _t2 }
+    return { level := Priority.high, value := _t2 }
 
 method clampedMidpoint (a : Int) (b : Int) return (res : Int)
   require a ≤ b
@@ -221,3 +221,11 @@ method ocMethodCall (s : Option (Std.HashSet String)) (k : String) return (res :
 method ocIndex (m : Option (Std.HashMap String String)) (k : String) return (res : Option String)
   do
     return Pure.ocIndex m k
+
+method nullishVar (o : Option Inner) (fallback : Int) return (res : Int)
+  do
+    return Pure.nullishVar o fallback
+
+method nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) return (res : Int)
+  do
+    return Pure.nullishMapGet m k fallback

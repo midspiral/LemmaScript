@@ -34,6 +34,7 @@ export type RawExpr =
   | { kind: "lambda"; params: { name: string; tsType?: string }[]; body: RawExpr | RawStmt[] }
   | { kind: "conditional"; cond: RawExpr; then: RawExpr; else: RawExpr }  // ternary ? :
   | { kind: "optChain"; obj: RawExpr; chain: RawChainStep[] }   // obj?.field, obj?.foo(), obj?.[i], obj?.foo.bar — single-eval
+  | { kind: "nullish"; left: RawExpr; right: RawExpr }   // a ?? b — single-eval; narrow rewrites to someMatch
   | { kind: "emptyCollection"; collectionType: "Map" | "Set"; tsType: string; initElems?: RawExpr[] }  // new Map<K,V>() / new Set<T>()
   | { kind: "nonNull"; expr: RawExpr }   // expr! (non-null assertion)
   // Spec-only (from //@ annotations, produced by specparser):

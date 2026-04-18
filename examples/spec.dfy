@@ -283,17 +283,17 @@ function ocField(o: Option<Outer>): Option<Inner>
     case Some(i_oc0_val) =>
       i_oc0_val.inner
     case None =>
-      None
+      Option.None
   }
 }
 
 function ocChain(o: Option<Outer>): Option<int>
 {
-  match (match o { case Some(i_oc1_val) => i_oc1_val.inner case None => None }) {
+  match (match o { case Some(i_oc1_val) => i_oc1_val.inner case None => Option.None }) {
     case Some(i_oc2_val) =>
-      Some(i_oc2_val.val)
+      Option.Some(i_oc2_val.val)
     case None =>
-      None
+      Option.None
   }
 }
 
@@ -301,9 +301,9 @@ function ocMethodCall(s: Option<set<string>>, k: string): Option<bool>
 {
   match s {
     case Some(i_oc3_val) =>
-      Some((k in i_oc3_val))
+      Option.Some((k in i_oc3_val))
     case None =>
-      None
+      Option.None
   }
 }
 
@@ -313,8 +313,27 @@ function ocIndex(m: Option<map<string, string>>, k: string): Option<string>
     case Some(i_oc4_val) =>
       (if k in i_oc4_val then Some(i_oc4_val[k]) else None)
     case None =>
-      None
+      Option.None
   }
+}
+
+function nullishVar(o: Option<Inner>, fallback: int): int
+{
+  match (match o { case Some(i_oc5_val) => Option.Some(i_oc5_val.val) case None => Option.None }) {
+    case Some(i_oc6_val) =>
+      i_oc6_val
+    case None =>
+      fallback
+  }
+}
+
+function nullishMapGet(m: map<string, int>, k: string, fallback: int): int
+{
+  if (k in m) then
+    var i_oc7_val := m[k];
+    i_oc7_val
+  else
+    fallback
 }
 
 method countAbove(arr: seq<int>, threshold: int) returns (res: int)

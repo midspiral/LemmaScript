@@ -114,7 +114,11 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 
     case "constructor": {
-      const head = `.${e.name}`;
+      // With type: emit `Type.name` (unambiguous; needed in expression positions
+      // like `match ... | .none => Type.some x` where elaboration can't infer).
+      // Without type: emit `.name` (dotted form; works in pattern positions
+      // and where the expected type is clear from context).
+      const head = e.type ? `${e.type}.${e.name}` : `.${e.name}`;
       if (!e.args || e.args.length === 0) return head;
       const args = e.args.map(a =>
         (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall") ? `(${emitExpr(a)})` : emitExpr(a)

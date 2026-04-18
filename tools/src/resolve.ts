@@ -465,6 +465,15 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       return { kind: "field", obj, field: e.field, ty, isDiscriminant };
     }
 
+    case "nullish": {
+      // left ?? right — result type is left's inner (when left is optional)
+      // or just left's type, unified with right's type.
+      const left = resolveExpr(e.left, ctx);
+      const right = resolveExpr(e.right, ctx);
+      const ty: Ty = left.ty.kind === "optional" ? left.ty.inner : left.ty;
+      return { kind: "nullish", left, right, ty };
+    }
+
     case "optChain": {
       // obj?.<chain> — obj has type Option<T>; we walk the chain stepping
       // through types from T. The final result is Option<finalStepTy>
