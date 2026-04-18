@@ -157,6 +157,13 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       return `(-${emitExpr(e.expr)})`;
 
     case "binop": {
+      // `k in m` (map/set membership) → `m.contains k` in Lean. Dafny has
+      // native `in`; Lean uses the method form for HashMap/HashSet.
+      if (e.op === "in") {
+        const recv = emitExpr(e.right);
+        const wrap = e.right.kind === "binop" || e.right.kind === "app" || e.right.kind === "methodCall";
+        return `${wrap ? `(${recv})` : recv}.contains ${emitExpr(e.left)}`;
+      }
       const op = e.op === "arrayConcat" ? "++" : e.op;
       const s = `${emitExpr(e.left, prec(e.op))} ${op} ${emitExpr(e.right, prec(e.op))}`;
       return (parentPrec !== undefined && prec(e.op) < parentPrec) ? `(${s})` : s;

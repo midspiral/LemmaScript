@@ -108,3 +108,34 @@ prove_correct negField by
 
 prove_correct truthyVar by
   unfold Pure.truthyVar; loom_solve
+
+-- Nullish coalescing
+prove_correct nullishVar by
+  unfold Pure.nullishVar; loom_solve
+
+prove_correct nullishMapGet by
+  unfold Pure.nullishMapGet; loom_solve
+
+-- Chained && of optional checks in ternary
+prove_correct nestedAndTernary by
+  unfold Pure.nestedAndTernary; loom_solve
+
+-- Discriminated-union narrowing
+prove_correct area by
+  unfold Pure.area; loom_solve
+
+prove_correct describeIfCircle by
+  unfold Pure.describeIfCircle; loom_solve
+
+-- Optional chaining
+prove_correct ocField by
+  unfold Pure.ocField; loom_solve
+
+prove_correct ocChain by
+  unfold Pure.ocChain; loom_solve
+
+prove_correct ocMethodCall by
+  unfold Pure.ocMethodCall; loom_solve
+
+prove_correct ocIndex by
+  unfold Pure.ocIndex; loom_solve

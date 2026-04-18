@@ -307,21 +307,30 @@ interface Outer { inner: Inner | undefined }
 
 // `?.field`: simple property access — single short-circuit
 function ocField(o: Outer | undefined): Inner | undefined {
+  //@ ensures o === undefined ==> \result === undefined
+  //@ ensures o !== undefined ==> \result === o.inner
   return o?.inner;
 }
 
 // `?.field.field`: ?. then non-? continuation — short-circuit only at first ?
 function ocChain(o: Outer | undefined): number | undefined {
+  //@ ensures o === undefined ==> \result === undefined
+  //@ ensures o !== undefined && o.inner === undefined ==> \result === undefined
+  //@ ensures o !== undefined && o.inner !== undefined ==> \result === o.inner.val
   return o?.inner?.val;
 }
 
 // `?.foo()`: method call after ?. — peephole collapses set.has to `in`
 function ocMethodCall(s: Set<string> | undefined, k: string): boolean | undefined {
+  //@ ensures s === undefined ==> \result === undefined
+  //@ ensures s !== undefined ==> \result === s.has(k)
   return s?.has(k);
 }
 
 // `?.[k]`: index access via ?.[ ] — Record indexes return Option<value>
 function ocIndex(m: Record<string, string> | undefined, k: string): string | undefined {
+  //@ ensures m === undefined ==> \result === undefined
+  //@ ensures m !== undefined ==> \result === m[k]
   return m?.[k];
 }
 
@@ -331,11 +340,15 @@ function ocIndex(m: Record<string, string> | undefined, k: string): string | und
 
 // Optional var with default
 function nullishVar(o: Inner | undefined, fallback: number): number {
+  //@ ensures o === undefined ==> \result === fallback
+  //@ ensures o !== undefined ==> \result === o.val
   return o?.val ?? fallback;
 }
 
 // Map.get + ?? — peephole collapses to `if k in m then m[k] else fallback`
 function nullishMapGet(m: Map<string, number>, k: string, fallback: number): number {
+  //@ ensures !(k in m) ==> \result === fallback
+  //@ ensures k in m ==> \result === m.get(k)
   return m.get(k) ?? fallback;
 }
 
@@ -371,6 +384,9 @@ function truthyVar(o: Inner | undefined, fallback: number): number {
 // Tests that ruleConditionalAndOptional walks its inner conditional so
 // nested optional checks become nested someMatches.
 function nestedAndTernary(o: Outer | undefined, fallback: number): number {
+  //@ ensures o === undefined ==> \result === fallback
+  //@ ensures o !== undefined && o.inner === undefined ==> \result === fallback
+  //@ ensures o !== undefined && o.inner !== undefined ==> \result === o.inner.val
   return o !== undefined && o.inner !== undefined ? o.inner.val : fallback;
 }
 
@@ -384,6 +400,8 @@ type Shape =
 
 // `'radius' in s` narrows s to the variant containing 'radius' (circle).
 function area(s: Shape): number {
+  //@ ensures s.kind === 'circle' ==> \result === s.radius * s.radius
+  //@ ensures s.kind === 'square' ==> \result === s.side * s.side
   if ('radius' in s) return s.radius * s.radius;
   return s.side * s.side;
 }
@@ -391,6 +409,8 @@ function area(s: Shape): number {
 // Negative discriminant + early return: `s.kind !== "circle"` narrows s to
 // circle in the rest of the block.
 function describeIfCircle(s: Shape, fallback: number): number {
+  //@ ensures s.kind === 'circle' ==> \result === s.radius * s.radius
+  //@ ensures s.kind === 'square' ==> \result === fallback
   if (s.kind !== 'circle') return fallback;
   return s.radius * s.radius;
 }

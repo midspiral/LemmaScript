@@ -289,6 +289,12 @@ function ocField(o: Option<Outer>): Option<Inner>
   }
 }
 
+lemma ocField_ensures(o: Option<Outer>)
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (match ocField(o) { case Some(i_) => false case None => true }))
+  ensures (match o { case Some(i_o_val) => (ocField(o) == i_o_val.inner) case None => true })
+{
+}
+
 function ocChain(o: Option<Outer>): Option<int>
 {
   match (match o { case Some(i_oc1_val) => i_oc1_val.inner case None => Option.None }) {
@@ -297,6 +303,13 @@ function ocChain(o: Option<Outer>): Option<int>
     case None =>
       Option.None
   }
+}
+
+lemma ocChain_ensures(o: Option<Outer>)
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (match ocChain(o) { case Some(i_) => false case None => true }))
+  ensures (match o { case Some(i_o_val) => ((match i_o_val.inner { case Some(i_) => false case None => true }) ==> (match ocChain(o) { case Some(i_) => false case None => true })) case None => true })
+  ensures (match o { case Some(i_o_val) => (match i_o_val.inner { case Some(i_o_inner_val) => (match ocChain(o) { case Some(i_value) => (i_value == i_o_inner_val.val) case None => false }) case None => true }) case None => true })
+{
 }
 
 function ocMethodCall(s: Option<set<string>>, k: string): Option<bool>
@@ -309,6 +322,12 @@ function ocMethodCall(s: Option<set<string>>, k: string): Option<bool>
   }
 }
 
+lemma ocMethodCall_ensures(s: Option<set<string>>, k: string)
+  ensures ((match s { case Some(i_) => false case None => true }) ==> (match ocMethodCall(s, k) { case Some(i_) => false case None => true }))
+  ensures (match s { case Some(i_s_val) => (match ocMethodCall(s, k) { case Some(i_value) => (i_value == (k in i_s_val)) case None => false }) case None => true })
+{
+}
+
 function ocIndex(m: Option<map<string, string>>, k: string): Option<string>
 {
   match m {
@@ -317,6 +336,12 @@ function ocIndex(m: Option<map<string, string>>, k: string): Option<string>
     case None =>
       Option.None
   }
+}
+
+lemma ocIndex_ensures(m: Option<map<string, string>>, k: string)
+  ensures ((match m { case Some(i_) => false case None => true }) ==> (match ocIndex(m, k) { case Some(i_) => false case None => true }))
+  ensures (match m { case Some(i_m_val) => (ocIndex(m, k) == (if k in i_m_val then Some(i_m_val[k]) else None)) case None => true })
+{
 }
 
 function nullishVar(o: Option<Inner>, fallback: int): int
@@ -329,6 +354,12 @@ function nullishVar(o: Option<Inner>, fallback: int): int
   }
 }
 
+lemma nullishVar_ensures(o: Option<Inner>, fallback: int)
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (nullishVar(o, fallback) == fallback))
+  ensures (match o { case Some(i_o_val) => (nullishVar(o, fallback) == i_o_val.val) case None => true })
+{
+}
+
 function nullishMapGet(m: map<string, int>, k: string, fallback: int): int
 {
   if (k in m) then
@@ -336,6 +367,12 @@ function nullishMapGet(m: map<string, int>, k: string, fallback: int): int
     i_oc7_val
   else
     fallback
+}
+
+lemma nullishMapGet_ensures(m: map<string, int>, k: string, fallback: int)
+  ensures (!((k in m)) ==> (nullishMapGet(m, k, fallback) == fallback))
+  ensures ((k in m) ==> (nullishMapGet(m, k, fallback) == m[k]))
+{
 }
 
 function negVar(o: Option<Inner>, fallback: int): int
@@ -401,6 +438,13 @@ function nestedAndTernary(o: Option<Outer>, fallback: int): int
   }
 }
 
+lemma nestedAndTernary_ensures(o: Option<Outer>, fallback: int)
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (nestedAndTernary(o, fallback) == fallback))
+  ensures (match o { case Some(i_o_val) => ((match i_o_val.inner { case Some(i_) => false case None => true }) ==> (nestedAndTernary(o, fallback) == fallback)) case None => true })
+  ensures (match o { case Some(i_o_val) => (match i_o_val.inner { case Some(i_o_inner_val) => (nestedAndTernary(o, fallback) == i_o_inner_val.val) case None => true }) case None => true })
+{
+}
+
 function area(s: Shape): int
 {
   match s {
@@ -411,6 +455,12 @@ function area(s: Shape): int
   }
 }
 
+lemma area_ensures(s: Shape)
+  ensures (s.circle? ==> (area(s) == (s.radius * s.radius)))
+  ensures (s.square? ==> (area(s) == (s.side * s.side)))
+{
+}
+
 function describeIfCircle(s: Shape, fallback: int): int
 {
   match s {
@@ -419,6 +469,12 @@ function describeIfCircle(s: Shape, fallback: int): int
     case square(i_s_side) =>
       fallback
   }
+}
+
+lemma describeIfCircle_ensures(s: Shape, fallback: int)
+  ensures (s.circle? ==> (describeIfCircle(s, fallback) == (s.radius * s.radius)))
+  ensures (s.square? ==> (describeIfCircle(s, fallback) == fallback))
+{
 }
 
 method countAbove(arr: seq<int>, threshold: int) returns (res: int)
