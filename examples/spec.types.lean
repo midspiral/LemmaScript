@@ -214,6 +214,13 @@ def negField (o : Outer) (fallback : Int) : Int :=
   | .none =>
     fallback
 
+def truthyVar (o : Option Inner) (fallback : Int) : Int :=
+  match o with
+  | .some _o_val =>
+    _o_val.val
+  | .none =>
+    fallback
+
 def nestedAndTernary (o : Option Outer) (fallback : Int) : Int :=
   match o with
   | .some _o_val =>
