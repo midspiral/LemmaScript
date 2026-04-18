@@ -106,6 +106,7 @@ function mapTStmt(s: TStmt, f: (e: TExpr) => TExpr | null): TStmt {
     case "ghostLet": return { ...s, init: r(s.init) };
     case "ghostAssign": return { ...s, value: r(s.value) };
     case "assert": return { ...s, expr: r(s.expr) };
+    case "someMatch": return { ...s, someBody: s.someBody.map(t => mapTStmt(t, f)), noneBody: s.noneBody.map(t => mapTStmt(t, f)) };
   }
 }
 
@@ -989,6 +990,22 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
 
     case "assert":
       return [{ kind: "assert", expr: transformExpr(s.expr) }];
+
+    case "someMatch": {
+      // Produced by pe.ts. Lower to IR match Some/None, substituting the
+      // match-bound name for occurrences of the narrowed variable in someBody.
+      const someTransformed = transformStmts(s.someBody, typeDecls);
+      const someBody = someTransformed.map(stmt =>
+        mapStmtExprs(stmt, e => replaceVar(e, s.varName, { kind: "var", name: s.binder }, true)));
+      const noneBody = transformStmts(s.noneBody, typeDecls);
+      return [{
+        kind: "match", scrutinee: s.varName,
+        arms: [
+          { pattern: `.some ${s.binder}`, body: someBody },
+          { pattern: ".none", body: noneBody },
+        ],
+      }];
+    }
   }
 }
 

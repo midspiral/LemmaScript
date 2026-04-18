@@ -73,6 +73,10 @@ export type TStmt =
   | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
   | { kind: "ghostAssign"; target: string; value: TExpr }
   | { kind: "assert"; expr: TExpr }
+  // Produced by pe.ts from `if (x !== undefined) use(x)` patterns.
+  // `binder` shadows `varName` over `someBody` with the unwrapped type.
+  | { kind: "someMatch"; varName: string; varTy: Ty;     // varTy is the inner (non-Optional) type
+      binder: string; someBody: TStmt[]; noneBody: TStmt[] }
 
 // ── Top-level ────────────────────────────────────────────────
 
