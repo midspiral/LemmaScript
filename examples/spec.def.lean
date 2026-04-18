@@ -237,3 +237,7 @@ method negVar (o : Option Inner) (fallback : Int) return (res : Int)
 method negField (o : Outer) (fallback : Int) return (res : Int)
   do
     return Pure.negField o fallback
+
+method nestedAndTernary (o : Option Outer) (fallback : Int) return (res : Int)
+  do
+    return Pure.nestedAndTernary o fallback

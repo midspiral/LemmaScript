@@ -354,3 +354,10 @@ function negField(o: Outer, fallback: number): number {
   if (!o.inner) return fallback;
   return o.inner.val;
 }
+
+// Chained `&&` of optional checks in a ternary — both checks narrow.
+// Tests that ruleConditionalAndOptional walks its inner conditional so
+// nested optional checks become nested someMatches.
+function nestedAndTernary(o: Outer | undefined, fallback: number): number {
+  return o !== undefined && o.inner !== undefined ? o.inner.val : fallback;
+}

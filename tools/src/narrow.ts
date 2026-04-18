@@ -463,6 +463,9 @@ function containsMethodCall(e: TExpr): boolean {
 
 /** Rule (expression): `x !== undefined && rest ? a : b`.
  *  → `someMatch x { Some(_x_val) => if rest then a else b, None => b }`.
+ *  Walks the inner conditional back through narrow so chained checks
+ *  (`a !== undefined && a.b !== undefined ? ... : ...`) become nested
+ *  someMatches rather than leaving inner optional checks as raw conditionals.
  *  Does NOT fire if the guard `rest` contains method calls — transform lifts
  *  those out of the match arm, breaking the binder scope. The original
  *  transform's let-desugar (transformStmt let-case) handles those by lifting
@@ -481,7 +484,7 @@ function ruleConditionalAndOptional(e: TExpr): TExpr | null {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
     binder: check.binderHint,
-    someBody: innerCond, noneBody: e.else, ty: e.ty,
+    someBody: walkExpr(innerCond), noneBody: e.else, ty: e.ty,
   };
 }
 

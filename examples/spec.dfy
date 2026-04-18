@@ -356,6 +356,21 @@ function negField(o: Outer, fallback: int): int
   }
 }
 
+function nestedAndTernary(o: Option<Outer>, fallback: int): int
+{
+  match o {
+    case Some(i_o_val) =>
+      match i_o_val.inner {
+        case Some(i_o_inner_val) =>
+          i_o_inner_val.val
+        case None =>
+          fallback
+      }
+    case None =>
+      fallback
+  }
+}
+
 method countAbove(arr: seq<int>, threshold: int) returns (res: int)
   ensures (res <= |arr|)
 {
