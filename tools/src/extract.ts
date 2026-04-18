@@ -99,17 +99,14 @@ function extractExpr(node: Expression): RawExpr {
   if (Node.isPropertyAccessExpression(node)) {
     const obj = extractExpr(node.getExpression());
     const field = node.getName();
-    // Optional chaining on data access: x?.foo → x !== undefined ? x.foo : undefined
-    // Skip if this is a method call (parent is CallExpression) — handled differently.
+    // Optional chaining on data access: x?.foo → optChain(x, foo) — single-eval
+    // form lowered to someMatch by pe. Skip if this is a method call (parent is
+    // CallExpression) — handled differently.
     if (node.hasQuestionDotToken()) {
       const parent = node.getParent();
       const isMethodCall = parent && Node.isCallExpression(parent) && parent.getExpression() === node;
       if (!isMethodCall) {
-        return { kind: "conditional",
-          cond: { kind: "binop", op: "!==", left: obj, right: { kind: "var", name: "undefined" } },
-          then: { kind: "field", obj, field },
-          else: { kind: "var", name: "undefined" },
-        };
+        return { kind: "optChain", obj, field };
       }
     }
     return { kind: "field", obj, field };

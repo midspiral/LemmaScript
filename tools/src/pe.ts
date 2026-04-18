@@ -4,7 +4,7 @@
  * Pipeline: resolve → pe → transform → emit.
  *
  * Owns all structural narrowing for optional checks. Detects each of:
- *   - `if (e !== undefined) S`               (statement, simple-var/field/complex)
+ *   - `if (e !== undefined) S`               (statement)
  *   - `if (e === undefined) terminate; rest` (early-return + rest consumption)
  *   - `if (e !== undefined && rest) S`        (&& in if; no else)
  *   - `if (a === undefined || b === undefined) terminate; rest`  (|| chain)
@@ -12,15 +12,19 @@
  *   - `e !== undefined ? a : b`               (ternary)
  *   - `e !== undefined && rest ? a : b`       (&& in ternary; pure rest)
  *   - `opt ? a : b`                            (truthiness)
- * and rewrites each to a `someMatch` TExpr/TStmt carrying the scrutinee,
- * binder, unwrapped type, and arms. Transform lowers `someMatch` to IR
- * `match` Some/None.
+ *
+ * Following TS semantics, only simple var (`x`) and simple `obj.field` chains
+ * narrow. Complex scrutinees (call results, deep chains) are left alone — the
+ * user must bind first: `const v = m.get(k); if (v !== undefined) ...`.
+ *
+ * Each detected pattern rewrites to a `someMatch` TExpr/TStmt carrying the
+ * scrutinee, binder, unwrapped type, and arms. Transform lowers `someMatch`
+ * to IR `match` Some/None.
  *
  * Resolve runs before pe and handles type narrowing only (env extension,
- * `narrowedFields`, `narrowedExprs`). Pe doesn't substitute on raw IR —
- * the body keeps its original expressions; transform's someMatch handler
- * does the substitution at lowering time (var, field-chain, or
- * TExpr-equality for complex scrutinees).
+ * `narrowedFields`). Pe doesn't substitute on raw IR — the body keeps its
+ * original expressions; transform's someMatch handler does the substitution
+ * at lowering time (var via replaceVar, field-chain via replaceFieldsInTStmts).
  *
  * Walker shape: bottom-up over TExpr/TStmt. At each node, recurse children
  * via the *Recurse* helpers, then try the rules in order. List-level rules
@@ -43,28 +47,30 @@ const emptyEnv: Env = {};
 
 // ── Optional-check detection ────────────────────────────────
 
-/** Counter for naming complex-scrutinee binders. Reset per module. */
-let _optCounter = 0;
+/** Counter for naming optChain binders. Reset per module. */
+let _ocCounter = 0;
 
-/** Detect `e !== undefined` or `undefined !== e` for any optional-typed e.
+/** Detect `e !== undefined` or `undefined !== e` for a simple optional-typed e.
+ *  Following TS, only simple vars and simple `obj.field` chains narrow.
+ *  Complex scrutinees return null — user must bind first.
  *  - Simple var: binder is `_${name}_val`, scrutinee handled via replaceVar
  *  - Simple `obj.field` chain: binder is `_${obj}_${field}_val`, scrutinee
- *    handled via replaceFieldsInTStmts
- *  - Anything else (call, deep field chain, etc.): binder is `_opt${N}_val`,
- *    scrutinee handled via TExpr-equality substitution (see substTExpr*) */
+ *    handled via replaceFieldsInTStmts */
 function parseOptionalCheck(cond: TExpr): { scrutinee: TExpr; innerTy: Ty; negated: boolean; binderHint: string } | null {
   if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) return null;
   let e: TExpr | null = null;
   if (cond.right.kind === "var" && cond.right.name === "undefined") e = cond.left;
   if (cond.left.kind === "var" && cond.left.name === "undefined") e = cond.right;
   if (!e || e.ty.kind !== "optional") return null;
-  return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binderHint: binderHintFor(e) };
+  const hint = binderHintFor(e);
+  if (hint === null) return null;
+  return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binderHint: hint };
 }
 
-function binderHintFor(e: TExpr): string {
+function binderHintFor(e: TExpr): string | null {
   if (e.kind === "var") return `_${e.name}_val`;
   if (e.kind === "field" && e.obj.kind === "var") return `_${e.obj.name}_${e.field}_val`;
-  return `_opt${_optCounter++}_val`;
+  return null;
 }
 
 // Aliased for code that historically called the simpler check.
@@ -74,7 +80,7 @@ const parseSimpleOptionalCheck = parseOptionalCheck;
 
 function walkExpr(e: TExpr, env: Env): TExpr {
   const r = recurseExpr(e, env);
-  return ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
+  return ruleOptChain(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
 }
 
 function recurseExpr(e: TExpr, env: Env): TExpr {
@@ -93,6 +99,7 @@ function recurseExpr(e: TExpr, env: Env): TExpr {
     case "arrayLiteral": return { ...e, elems: e.elems.map(re) };
     case "lambda": return { ...e, body: walkStmts(e.body, env) };
     case "conditional": return { ...e, cond: re(e.cond), then: re(e.then), else: re(e.else) };
+    case "optChain": return { ...e, obj: re(e.obj) };
     case "forall": return { ...e, body: re(e.body) };
     case "exists": return { ...e, body: re(e.body) };
     case "someMatch": return { ...e, someBody: re(e.someBody), noneBody: re(e.noneBody) };
@@ -257,14 +264,40 @@ function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
   };
 }
 
-/** Rule (expression): `opt ? a : b` (truthiness — cond itself is optional). */
+/** Rule (expression): `obj?.field` — single-eval optional chain.
+ *  → `someMatch obj { Some(_oc{N}_val) => _oc{N}_val.field, None => undefined }`.
+ *  The someBody references the binder directly, so transform doesn't substitute.
+ *  This is the one case where someMatch may have a complex (call/index) scrutinee. */
+function ruleOptChain(e: TExpr): TExpr | null {
+  if (e.kind !== "optChain") return null;
+  if (e.obj.ty.kind !== "optional") return null;
+  const innerTy = e.obj.ty.inner;
+  const fieldTy = e.ty.kind === "optional" ? e.ty.inner : e.ty;
+  const binder = `_oc${_ocCounter++}_val`;
+  const someBody: TExpr = {
+    kind: "field",
+    obj: { kind: "var", name: binder, ty: innerTy },
+    field: e.field, ty: fieldTy,
+  };
+  const noneBody: TExpr = { kind: "var", name: "undefined", ty: { kind: "void" } };
+  return {
+    kind: "someMatch",
+    scrutinee: e.obj, binder, binderTy: innerTy,
+    someBody, noneBody, ty: e.ty,
+  };
+}
+
+/** Rule (expression): `opt ? a : b` (truthiness — cond itself is optional).
+ *  Only fires for simple var or simple `obj.field` cond. */
 function ruleConditionalOptionalTruthy(e: TExpr): TExpr | null {
   if (e.kind !== "conditional") return null;
   if (e.cond.ty.kind !== "optional") return null;
+  const binder = binderHintFor(e.cond);
+  if (binder === null) return null;
   return {
     kind: "someMatch",
     scrutinee: e.cond, binderTy: e.cond.ty.inner,
-    binder: binderHintFor(e.cond),
+    binder,
     someBody: e.then, noneBody: e.else, ty: e.ty,
   };
 }
@@ -362,6 +395,7 @@ function containsMethodCall(e: TExpr): boolean {
     case "lambda": return false;  // body is its own scope
     case "conditional":
       return containsMethodCall(e.cond) || containsMethodCall(e.then) || containsMethodCall(e.else);
+    case "optChain": return containsMethodCall(e.obj);
     case "forall": case "exists": return containsMethodCall(e.body);
     case "someMatch": return containsMethodCall(e.scrutinee) ||
       containsMethodCall(e.someBody) || containsMethodCall(e.noneBody);
@@ -405,7 +439,7 @@ function peFunction(fn: TFunction): TFunction {
 }
 
 export function peModule(mod: TModule): TModule {
-  _optCounter = 0;
+  _ocCounter = 0;
   return {
     ...mod,
     constants: mod.constants.map(c => ({ ...c, value: walkExpr(c.value, emptyEnv) })),

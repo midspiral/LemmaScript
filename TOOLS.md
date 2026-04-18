@@ -45,11 +45,11 @@ Type names: `Expr`, `Stmt`, `Decl`, `Module`, `FnDef`, `FnMethod`, `Inductive`, 
 
 **Extract** (`extract.ts`): ts-morph → Raw IR. Walks the TS AST, produces structured expression nodes. Only string outputs are `//@ ` annotation text.
 
-**Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedFields`, `narrowedExprs`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type. **Type narrowing only** — no structural rewriting.
+**Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedFields`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: only simple vars and `obj.field` chains narrow. **Type narrowing only** — no structural rewriting.
 
-**Pe** (`pe.ts`): Typed IR → Typed IR. Owns all structural narrowing for optional checks. Detects `if (e !== undefined)`, ternary `e !== undefined ? a : b`, `&&` chains, `||` early returns, `opt ? a : b` truthiness, and the let-with-impure-guard pattern. Rewrites each into a `someMatch` IR node carrying the scrutinee, binder, and arms. Works uniformly for var, `obj.field`, and complex expressions (call results, deep chains). See [Pe rules](#pe-rules) below.
+**Pe** (`pe.ts`): Typed IR → Typed IR. Owns all structural narrowing for optional checks. Detects `if (e !== undefined)`, ternary `e !== undefined ? a : b`, `&&` chains, `||` early returns, `opt ? a : b` truthiness, the let-with-impure-guard pattern, and `obj?.field` (via the `optChain` IR node). Rewrites each into a `someMatch` IR node carrying the scrutinee, binder, and arms. Narrowing rules only fire for simple vars and `obj.field` chains (following TS); `optChain` is the sole path for complex scrutinees. See [Pe rules](#pe-rules) below.
 
-**Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None with the appropriate substitution (var, field-chain, or TExpr-equality for complex). No optional-narrowing logic of its own.
+**Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None — substituting the binder for `var(x)` or `field(var(o),f)` scrutinees, or lowering naively when the scrutinee is complex (pe pre-bound the someBody). No optional-narrowing logic of its own.
 
 **Peephole** (`peephole.ts`): IR → IR. Local rewrite rules applied bottom-up to fixed point. Eliminates wrap-then-unwrap ceremony around partial-access expressions like `m.get(k)` (which is internally lowered to `methodCall(map, "get", [k])` and emits as `(if k in m then Some(m[k]) else None)`). See [Peephole rules](#peephole-rules) below.
 
@@ -139,9 +139,9 @@ Each TS source produces two Dafny files:
 
 ## Pe Rules
 
-`pe.ts` (partial-evaluation pass for narrowing) takes typed IR and rewrites optional-narrowing patterns into a single `someMatch` IR node. The someMatch carries the scrutinee (a TExpr — var, field chain, or arbitrary expression), a binder name, the unwrapped type, and the some/none arms.
+`pe.ts` (partial-evaluation pass for narrowing) takes typed IR and rewrites optional-narrowing patterns into a single `someMatch` IR node. The someMatch carries the scrutinee (a TExpr — var, simple `obj.field` chain, or for `optChain` rewrites, any expression), a binder name, the unwrapped type, and the some/none arms.
 
-The walker is bottom-up over TExpr/TStmt with a small environment (currently only used for `_optCounter` naming). At each node, recurse into children, then try the rules in order.
+The walker is bottom-up over TExpr/TStmt. At each node, recurse into children, then try the rules in order.
 
 **Statement-level rules**
 
@@ -160,15 +160,18 @@ The walker is bottom-up over TExpr/TStmt with a small environment (currently onl
 | `e !== undefined ? a : b` | `someMatch e { Some(_e_val) => a, None => b }` |
 | `e !== undefined && rest ? a : b` (pure rest) | `someMatch e { Some(_e_val) => if rest then a else b, None => b }` |
 | `opt ? a : b` (truthiness; cond is optional-typed) | `someMatch opt { Some(_opt_val) => a, None => b }` |
+| `optChain(obj, field)` (from extract's `obj?.field`) | `someMatch obj { Some(_oc{N}_val) => _oc{N}_val.field, None => undefined }` |
 
 The `&&`-ternary rule skips when `rest` contains impure method calls (those would be lifted out of the match arm by transform, breaking binder scope) — the let-cond statement-level rule handles those.
 
-**Scrutinee handling** is uniform across rules:
-- Var (`x`) — binder is `_${x}_val`. Substitution in the body via `replaceVar` after lowering.
-- Simple field chain (`obj.field`) — binder is `_${obj}_${field}_val`. Substitution in the TStmt before lowering via `replaceFieldsInTStmts` (or TExpr equivalent).
-- Complex (call result, deep chain, etc.) — binder is `_opt${N}_val`. TExpr-equality substitution (`substTExprIn{TStmts,TExpr}`) walks the body looking for structural matches of the scrutinee.
+**Scrutinee handling**
 
-The `someMatch` IR node, the `narrowedExprs` ctx in resolve (which sets the body's expressions to use the narrowed type for complex scrutinees), and the substitution helpers in transform together form a closed system: pe never invents synthetic vars, transform never re-detects optional patterns.
+All narrowing rules above (except `optChain`) only fire when `e` is a simple var or `obj.field` chain — matching TS, which requires users to bind method-call results before narrowing. The rules build `someMatch` with the body still referencing the scrutinee; transform substitutes at lowering time:
+
+- Var (`x`) — binder is `_${x}_val`. `replaceVar` after lowering.
+- Simple field chain (`obj.field`) — binder is `_${obj}_${field}_val`. `replaceFieldsInTStmts` before lowering.
+
+The `optChain` rule is the exception: its scrutinee can be any expression (call result, deep chain, etc.), and pe constructs the someBody to reference the binder directly — so transform's lowering skips substitution for complex scrutinees.
 
 ## Peephole Rules
 

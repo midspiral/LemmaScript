@@ -40,6 +40,7 @@ export type TExpr =
   | { kind: "arrayLiteral"; elems: TExpr[]; ty: Ty }
   | { kind: "lambda"; params: { name: string; ty: Ty }[]; body: TStmt[]; ty: Ty }
   | { kind: "conditional"; cond: TExpr; then: TExpr; else: TExpr; ty: Ty }
+  | { kind: "optChain"; obj: TExpr; field: string; ty: Ty }
   | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
       someBody: TExpr; noneBody: TExpr; ty: Ty }
   // Spec-only (from //@ annotations):

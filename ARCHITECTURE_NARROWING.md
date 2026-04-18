@@ -33,17 +33,17 @@ The current design splits the problem along a clean boundary.
 ## The Split
 
 **Resolve owns type narrowing.** When the type checker walks `if (e !== undefined) use(e)`, the body's `use(e)` needs to typecheck with `e` of the
-unwrapped type. Resolve carries narrowing information through three
-mechanisms:
+unwrapped type. Following TS semantics, resolve only narrows simple shapes:
 
 - **`env`** for simple variables. `if (x !== undefined)` extends the
   type environment with `x: T` for the then-branch.
 - **`narrowedFields`** for simple `obj.field` chains. `if (obj.field !== undefined)` adds an entry that the field resolver consults when typing
   `obj.field` in the then-branch.
-- **`narrowedExprs`** for arbitrary expressions (call results, deep field
-  chains, etc.). `if (m.tags.get(tagId) !== undefined)` adds an entry
-  matched structurally (via `rawExprEquals`) at the top of `resolveExpr`,
-  overriding the type to the unwrapped inner.
+
+Complex expressions (call results, deep chains) are **not** narrowed —
+matching TS, which requires the user to bind first:
+`const v = m.get(k); if (v !== undefined) use(v)`. This avoids the
+soundness hazard of retyping based on structural equality of impure calls.
 
 Resolve does **no structural rewriting**. It does not substitute, does not
 introduce synthetic vars, does not generate `match` constructs.
@@ -51,15 +51,15 @@ introduce synthetic vars, does not generate `match` constructs.
 **Pe owns structural narrowing.** A separate pass between resolve and
 transform takes typed IR and rewrites optional-narrowing patterns into a
 single IR primitive: `someMatch`. Each TS pattern (`if !== undefined`,
-ternary, `&&`, `||`, early return, truthiness, let-with-impure-guard) is
-detected by a focused rule and rewritten compositionally. See
-[TOOLS.md#pe-rules](TOOLS.md#pe-rules) for the full list.
+ternary, `&&`, `||`, early return, truthiness, let-with-impure-guard,
+optional chain `?.`) is detected by a focused rule and rewritten
+compositionally. See [TOOLS.md#pe-rules](TOOLS.md#pe-rules) for the
+full list.
 
 **Transform owns lowering.** It receives typed IR with `someMatch` nodes
-and lowers them to backend-IR `match Some/None`, performing the
-appropriate substitution at lowering time (var, simple field, or
-TExpr-equality for complex scrutinees). It has no optional-detection
-logic of its own.
+and lowers them to backend-IR `match Some/None`, performing a light
+substitution for var/simple-field scrutinees (see the table below). It
+has no optional-detection logic of its own.
 
 ---
 
@@ -80,20 +80,17 @@ The single IR node that all narrowing rewrites produce:
 Both expression and statement variants exist. They lower uniformly:
 `match scrutinee { Some(binder) => someBody, None => noneBody }`.
 
-The body keeps its original references to the scrutinee — pe never
-substitutes on the typed IR. Substitution happens once during transform's
-lowering, dispatched on the scrutinee shape:
+For var and simple field scrutinees, the body keeps its original
+references — transform substitutes at lowering time:
 
 | Scrutinee shape | Substitution mechanism |
 |-----------------|------------------------|
 | `var(x)` | `replaceVar` after lowering — replaces `x` with `binder` in the IR. |
 | `field(var(o), f)` | `replaceFieldsInTStmts` / `replaceFieldInTExpr` before lowering — replaces `o.f` with `binder` in the typed IR. |
-| Complex (call, deep chain, ...) | `substTExprIn{TStmts,TExpr}` before lowering — TExpr-equality walks the body looking for structural matches. |
 
-The three paths exist because each substitution mechanism naturally fits
-its scrutinee shape. They could be unified into one TExpr-equality
-substitution, but the simpler mechanisms produce smaller, cleaner output
-when applicable.
+For complex scrutinees (only produced by the `optChain` rewrite — see
+below), pe constructs the someBody to reference the binder directly, so
+transform skips substitution and lowers naively.
 
 ---
 
@@ -139,6 +136,26 @@ is a `Map.get` call.
 
 ---
 
+## Optional Chaining (`?.`)
+
+TS's `obj?.field` reads the field once, yielding `field's type | undefined`
+if `obj` is defined. Extract emits an `optChain { obj, field }` IR node —
+a first-class single-evaluation form. Pe's `ruleOptChain` rewrites it to:
+
+```
+someMatch obj { Some(_oc{N}_val) => _oc{N}_val.field, None => undefined }
+```
+
+The someBody references the binder directly (not the original `obj`), so
+transform skips substitution. This is the one case where `someMatch` is
+allowed to carry a complex scrutinee (e.g. `m.get(k)`).
+
+The pattern `if (e !== undefined) use(e)` with a complex `e` is *not*
+narrowed — per TS semantics, the user must bind: `const v = e; if (v !== undefined) use(v)`. Only `?.` gets special treatment, and only because
+extract emits a single-evaluation IR node for it.
+
+---
+
 ## What Pe Does NOT Cover
 
 - **Discriminated-union narrowing.** `if (e.kind === "lit") use(e.val)` —
@@ -149,7 +166,7 @@ is a `Map.get` call.
 - **Cross-function narrowing.** TS narrows across function calls if the
   callee is a type predicate (`function isString(x): x is string`).
   LemmaScript doesn't currently support type predicates.
+- **Complex-expression narrowing.** `if (m.get(k) !== undefined) use(m.get(k))` is rejected (TS-faithful). Users must bind first.
 - **Map.get ceremony elimination.** That's the peephole's job, not pe's.
-  Pe rewrites `if (m.get(k) !== undefined) use(m.get(k))` to a `someMatch`
-  with `m.get(k)` as the scrutinee; peephole then collapses the resulting
-  `match m.get(k)` shape into `if k in m { ... m[k] ... }`.
+  Once narrowing lowers to `match m.get(k) { ... }`, peephole collapses
+  the shape into `if k in m { ... m[k] ... }`.

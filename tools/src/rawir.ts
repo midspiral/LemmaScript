@@ -24,6 +24,7 @@ export type RawExpr =
   | { kind: "arrayLiteral"; elems: RawExpr[] }
   | { kind: "lambda"; params: { name: string; tsType?: string }[]; body: RawExpr | RawStmt[] }
   | { kind: "conditional"; cond: RawExpr; then: RawExpr; else: RawExpr }  // ternary ? :
+  | { kind: "optChain"; obj: RawExpr; field: string }   // obj?.field — single-eval optional chain
   | { kind: "emptyCollection"; collectionType: "Map" | "Set"; tsType: string; initElems?: RawExpr[] }  // new Map<K,V>() / new Set<T>()
   | { kind: "nonNull"; expr: RawExpr }   // expr! (non-null assertion)
   // Spec-only (from //@ annotations, produced by specparser):
