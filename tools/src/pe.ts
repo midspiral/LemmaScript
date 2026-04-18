@@ -58,11 +58,8 @@ const parseSimpleOptionalCheck = parseOptionalCheck;
 // ── Walkers ──────────────────────────────────────────────────
 
 function walkExpr(e: TExpr, env: Env): TExpr {
-  // Recurse into children first, then try rules at this node.
   const r = recurseExpr(e, env);
-  // narrowed rule consumes resolve's narrowedVar/narrowedExpr; other rules
-  // skip when narrowedVar is set, so order among the rest is fine.
-  return ruleConditionalNarrowed(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
+  return ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
 }
 
 function recurseExpr(e: TExpr, env: Env): TExpr {
@@ -232,8 +229,7 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[]): TStmt | null {
 /** Rule (expression): `e !== undefined ? a : b`. */
 function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
   if (e.kind !== "conditional") return null;
-  if (e.narrowedVar) return null;  // ruleConditionalNarrowed handles these
-  const check = parseSimpleOptionalCheck(e.cond);
+  const check = parseOptionalCheck(e.cond);
   if (!check) return null;
   const someBody = check.negated ? e.else : e.then;
   const noneBody = check.negated ? e.then : e.else;
@@ -246,66 +242,14 @@ function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
   };
 }
 
-/** Rule (expression): consume resolve's `narrowedVar`/`narrowedExpr` for the
- *  Phase 1 (truthiness) and Phase 2/3 (complex expression) cases.
- *  - narrowedExpr set: complex expression check (`m.get(k) !== undefined ? ...`).
- *    Scrutinee is `narrowedExpr`. Body already has `narrowedVar` refs from
- *    resolve's substitution.
- *  - narrowedExpr unset, cond optional: truthiness (`opt ? a : b`).
- *    Scrutinee is `cond`. Body has `narrowedVar` refs (substituted) or `var`
- *    refs (Phase 1 var case, narrowedVar = var.name).
- *  Binder = narrowedVar so the body's references match without further
- *  rewriting (transform's someMatch handler does TExpr-equality substitution
- *  for the complex case, which is a no-op since the original expression isn't
- *  in the body anymore). */
-function ruleConditionalNarrowed(e: TExpr): TExpr | null {
-  if (e.kind !== "conditional") return null;
-  if (!e.narrowedVar) return null;
-  let scrutinee: TExpr;
-  let binderTy: Ty;
-  if (e.narrowedExpr) {
-    scrutinee = e.narrowedExpr;
-    binderTy = e.narrowedExpr.ty.kind === "optional" ? e.narrowedExpr.ty.inner : e.narrowedExpr.ty;
-  } else if (e.cond.ty.kind === "optional") {
-    scrutinee = e.cond;
-    binderTy = e.cond.ty.inner;
-  } else {
-    return null;
-  }
-  return {
-    kind: "someMatch",
-    scrutinee, binder: e.narrowedVar, binderTy,
-    someBody: e.then, noneBody: e.else, ty: e.ty,
-  };
-}
-
-/** Read the scrutinee shape from an optional-typed expression directly used as
- *  a truthiness check. Returns null for non-var/non-field shapes. */
-function scrutineeOfOptional(e: TExpr): { scrutinee: TExpr; innerTy: Ty; binderHint: string } | null {
-  if (e.ty.kind !== "optional") return null;
-  if (e.kind === "var") {
-    return { scrutinee: e, innerTy: e.ty.inner, binderHint: `_${e.name}_val` };
-  }
-  if (e.kind === "field" && e.obj.kind === "var") {
-    return { scrutinee: e, innerTy: e.ty.inner, binderHint: `_${e.obj.name}_${e.field}_val` };
-  }
-  return null;
-}
-
-/** Rule (expression): `opt ? a : b` (truthiness check, no explicit !==).
- *  → `someMatch opt { Some(_opt_val) => a, None => b }`.
- *  Treats truthiness as definedness: for an optional `T | undefined`, the
- *  TS truthy path runs when defined. (Matches the behaviour of resolve's
- *  former Phase-1 truthiness handling.) */
+/** Rule (expression): `opt ? a : b` (truthiness — cond itself is optional). */
 function ruleConditionalOptionalTruthy(e: TExpr): TExpr | null {
   if (e.kind !== "conditional") return null;
-  if (e.narrowedVar) return null;  // ruleConditionalNarrowed handles these
-  const sc = scrutineeOfOptional(e.cond);
-  if (!sc) return null;
+  if (e.cond.ty.kind !== "optional") return null;
   return {
     kind: "someMatch",
-    scrutinee: sc.scrutinee, binderTy: sc.innerTy,
-    binder: sc.binderHint,
+    scrutinee: e.cond, binderTy: e.cond.ty.inner,
+    binder: binderHintFor(e.cond),
     someBody: e.then, noneBody: e.else, ty: e.ty,
   };
 }
@@ -417,7 +361,6 @@ function containsMethodCall(e: TExpr): boolean {
  *  to a mutable var first. */
 function ruleConditionalAndOptional(e: TExpr): TExpr | null {
   if (e.kind !== "conditional") return null;
-  if (e.narrowedVar) return null;  // ruleConditionalNarrowed handles these
   const extracted = extractLeftmostOptionalCheck(e.cond);
   if (!extracted) return null;
   const { check, restCond } = extracted;
