@@ -320,7 +320,7 @@ function ocMethodCall(s: Set<string> | undefined, k: string): boolean | undefine
   return s?.has(k);
 }
 
-// `?.[k]`: index access via ?.[ ] — Map[k] returns Option<value>
-function ocIndex(m: Map<string, string> | undefined, k: string): string | undefined {
+// `?.[k]`: index access via ?.[ ] — Record indexes return Option<value>
+function ocIndex(m: Record<string, string> | undefined, k: string): string | undefined {
   return m?.[k];
 }
