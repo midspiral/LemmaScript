@@ -53,7 +53,19 @@ function walkStmt(s: TStmt, env: Env): TStmt {
 }
 
 function walkStmts(stmts: TStmt[], env: Env): TStmt[] {
-  return stmts.map(s => walkStmt(s, env));
+  const result: TStmt[] = [];
+  for (let i = 0; i < stmts.length; i++) {
+    const s = stmts[i];
+    const rest = stmts.slice(i + 1);
+    // Early-return rule consumes the rest of the block, so try it before per-stmt walk.
+    const consumed = ruleEarlyReturnConsume(s, rest);
+    if (consumed) {
+      result.push(walkStmt(consumed, env));
+      return result;  // rest is now inside someBody
+    }
+    result.push(walkStmt(s, env));
+  }
+  return result;
 }
 
 function recurseStmt(s: TStmt, env: Env): TStmt {
@@ -88,10 +100,8 @@ function recurseStmt(s: TStmt, env: Env): TStmt {
 // ── Rules ───────────────────────────────────────────────────
 
 /** Rule: `if (x !== undefined) then else` where x is a simple optional var
- *  → `someMatch x { Some(_x_val) => then, None => else }`.
- *  Only fires when the Some branch is non-empty. Early-return shapes like
- *  `if (x === undefined) return; rest` have an empty Some branch and are
- *  left for transform's `prepareOptionalMatch` (which consumes `rest`). */
+ *  and the Some branch is non-empty.
+ *  → `someMatch x { Some(_x_val) => then, None => else }`. */
 function ruleIfOptionalSimple(s: TStmt): TStmt | null {
   if (s.kind !== "if") return null;
   const check = parseSimpleOptionalCheck(s.cond);
@@ -104,6 +114,27 @@ function ruleIfOptionalSimple(s: TStmt): TStmt | null {
     varName: check.varName, varTy: check.innerTy,
     binder: `_${check.varName}_val`,
     someBody, noneBody,
+  };
+}
+
+/** Rule: `if (x === undefined) terminate; rest` (early return / throw / break).
+ *  → `someMatch x { Some(_x_val) => rest, None => terminate }`.
+ *  Fires when the Some branch is empty AND there's a non-empty rest of the
+ *  block — pulling the continuation into the narrowed scope. */
+function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[]): TStmt | null {
+  if (s.kind !== "if") return null;
+  if (rest.length === 0) return null;
+  const check = parseSimpleOptionalCheck(s.cond);
+  if (!check) return null;
+  const someBranch = check.negated ? s.else : s.then;
+  const noneBranch = check.negated ? s.then : s.else;
+  if (someBranch.length !== 0) return null;
+  return {
+    kind: "someMatch",
+    varName: check.varName, varTy: check.innerTy,
+    binder: `_${check.varName}_val`,
+    someBody: rest,
+    noneBody: noneBranch,
   };
 }
 

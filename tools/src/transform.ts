@@ -1441,6 +1441,23 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
         return { kind: "if", cond: transformExpr(s.cond), then: thenExpr, else: elseExpr };
       }
       case "switch": return transformPureSwitch(s, typeDecls);
+      case "someMatch": {
+        // Produced by pe.ts. Lower to expression-form match Some/None.
+        // Append rest to both arms so a non-terminating arm falls through to
+        // the rest of the block (matches the if-case treatment above).
+        const someExpr = transformPureBody([...s.someBody, ...rest], typeDecls);
+        if (!someExpr) return null;
+        const noneExpr = transformPureBody([...s.noneBody, ...rest], typeDecls);
+        if (!noneExpr) return null;
+        const someReplaced = replaceVar(someExpr, s.varName, { kind: "var", name: s.binder }, true);
+        return {
+          kind: "match", scrutinee: s.varName,
+          arms: [
+            { pattern: `.some ${s.binder}`, body: someReplaced },
+            { pattern: ".none", body: noneExpr },
+          ],
+        };
+      }
       default: return null;
     }
   }
