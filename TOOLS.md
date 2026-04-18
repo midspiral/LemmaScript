@@ -135,7 +135,9 @@ Each TS source produces two Dafny files:
 
 Local IR-to-IR rewrites applied bottom-up to fixed point at each node, in `peephole.ts`. They eliminate Some/None ceremony that comes from `Map.get(k)` and `Record<K,V>` index access (both lowered to `methodCall(map, "get", [k])`, which `dafny-emit` renders as `(if k in m then Some(m[k]) else None)`).
 
-Each rule is local and semantics-preserving. They are always on (no flag).
+Each rule is local and semantics-preserving. The pass takes a `backend` parameter — some rules are Dafny-only (see below).
+
+### Map.get rules (both backends)
 
 **Expression rules**
 
@@ -143,10 +145,6 @@ Each rule is local and semantics-preserving. They are always on (no flag).
 |---------|-------------|
 | `match m.get(k) { Some(v) => sb, None => nb }` | `if k in m then (let v = m[k] in sb) else nb` |
 | `let x = m.get(k) in match x { Some(v) => sb, None => nb }` (when `x` not used in arms) | `if k in m then (let v = m[k] in sb) else nb` |
-| `if c then false else true` | `¬c` |
-| `if c then true else false` | `c` |
-| `if c then b else false` | `c && b` |
-| `if c then true else b` | `c || b` |
 
 **Statement rules**
 
@@ -158,6 +156,25 @@ Each rule is local and semantics-preserving. They are always on (no flag).
 The let-collapse rules require the bound variable to not be referenced after the match (conservative use-count check, no shadowing analysis). When the variable is referenced elsewhere, the `let` is preserved and only the inline `match` rule fires.
 
 The bound value `m[k]` is captured once via `let` (expression form) or `var` (statement form). Substitution would re-evaluate `m[k]` at every use, which changes semantics if the body mutates `m`.
+
+### Boolean simplification rules (Dafny only)
+
+| Pattern | Rewrites to |
+|---------|-------------|
+| `if c then false else true` | `¬c` |
+| `if c then true else false` | `c` |
+| `if c then b else false` | `c && b` |
+| `if c then true else b` | `c \|\| b` |
+
+These apply only for the Dafny backend. They emit `∧`/`∨` in the IR, which:
+- Dafny renders as `&&`/`||` — short-circuit Bool, sound for termination analysis when the right operand contains a recursive call.
+- Lean renders as `∧`/`∨` — Prop conjunction/disjunction, which evaluate both arguments. For recursive functions like `if n = 0 then true else f(n - 1) ∧ ...`, the recursive call appears unconditionally in the term and Lean's structural-termination check fails.
+
+For Lean we keep the original `if-then-else` form, which preserves the conditional structure and lets Lean see that the recursive branch is reachable only when the guard holds.
+
+### Emitter precedence
+
+The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in parentheses (alongside `match`). Without the parens, an outer `arr[idx]` post-fix would parse into the else branch — e.g., `if c then a else []` followed by `[i]` becomes `... else [][i]` which type-checks against the `[]` rather than the whole if. Always wrapping is verbose but safe.
 
 ## Current State
 

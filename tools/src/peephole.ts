@@ -165,14 +165,24 @@ function isBool(e: Expr, v: boolean): boolean {
   return e.kind === "bool" && e.value === v;
 }
 
-const EXPR_RULES = [
+// Boolean-simplification rules (rules 2-5) collapse `if c then b else false` into
+// `c && b` etc.  These are sound in Dafny because `&&`/`||` are short-circuit, but
+// in Lean they produce `∧`/`∨` (Prop ops) which evaluate both arguments — breaking
+// structural-termination checks for recursive functions like:
+//   `if n = 0 then true else ... allExpensesValid expenses (n - 1) ...`
+// where the recursive call needs the if-condition to bound `n > 0`.
+// So they're applied only for Dafny.
+const MAP_GET_RULES = [
   ruleMatchOnMapGetExpr,
   ruleLetMatchOnMapGetExpr,
+];
+const BOOL_RULES = [
   ruleIfFalseElseTrue,
   ruleIfIdentity,
   ruleIfThenFalse,
   ruleIfTrueElse,
 ];
+let EXPR_RULES: ((e: Expr) => Expr | null)[] = [...MAP_GET_RULES, ...BOOL_RULES];
 
 // ── Statement rewrite rules ──────────────────────────────────
 
@@ -396,7 +406,8 @@ function rewriteChildrenStmt(s: Stmt): Stmt {
 
 // ── Module entry ────────────────────────────────────────────
 
-export function peepholeModule(mod: Module): Module {
+export function peepholeModule(mod: Module, backend: "lean" | "dafny" = "dafny"): Module {
+  EXPR_RULES = backend === "dafny" ? [...MAP_GET_RULES, ...BOOL_RULES] : MAP_GET_RULES;
   return { ...mod, decls: mod.decls.map(peepholeDecl) };
 }
 

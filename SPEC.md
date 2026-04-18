@@ -551,7 +551,9 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 **Optional truthiness in conditionals:** `opt ? f(opt) : undefined` where `opt` has optional type generates a match expression. The resolve phase introduces a synthetic variable for the unwrapped value, substitutes it in the then-branch, and narrows its type to the inner type. The transform generates `match opt { case Some(v) => Some(f(v)) case None => None }`. For field-access conditions like `entry.decision ? ... : undefined`, the synthetic variable replaces the entire field-access chain in the then-branch.
 
-**Peephole simplification of `Map.get` ceremony.** The transform produces verbose-looking output for common `Map.get` consumer patterns — the call lowers to `(if k in m then Some(m[k]) else None)` followed by a match. A peephole pass between transform and emit collapses these into idiomatic Dafny. See [TOOLS.md](TOOLS.md#peephole-rules) for the full rule list.
+**Peephole simplification of `Map.get` ceremony.** The transform produces verbose-looking output for common `Map.get` consumer patterns — the call lowers to `(if k in m then Some(m[k]) else None)` followed by a match. A peephole pass between transform and emit collapses these into idiomatic backend code. See [TOOLS.md](TOOLS.md#peephole-rules) for the full rule list.
+
+The pass takes the target backend as input. The Map.get rules apply to both backends. Boolean-simplification rules (collapsing `if c then b else false → c && b` etc.) are applied only for Dafny — they emit `∧`/`∨` in the IR which renders as Bool short-circuit operators in Dafny but as Prop disjunction in Lean, breaking structural-termination analysis for recursive functions. For Lean we keep the original if-then-else, which preserves the conditional that the termination checker needs.
 
 The user-visible effect:
 ```typescript
