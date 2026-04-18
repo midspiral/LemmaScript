@@ -23,6 +23,12 @@ export type Ty =
 
 export type CallKind = "pure" | "method" | "spec-pure" | "unknown"
 
+/** Typed counterpart of RawChainStep. Carries the result-type at this step. */
+export type TChainStep =
+  | { kind: "field"; name: string; ty: Ty }
+  | { kind: "call"; args: TExpr[]; ty: Ty; callKind: CallKind }
+  | { kind: "index"; idx: TExpr; ty: Ty };
+
 // ── Expressions ──────────────────────────────────────────────
 
 export type TExpr =
@@ -39,9 +45,11 @@ export type TExpr =
   | { kind: "record"; spread: TExpr | null; fields: { name: string; value: TExpr }[]; ty: Ty }
   | { kind: "arrayLiteral"; elems: TExpr[]; ty: Ty }
   | { kind: "lambda"; params: { name: string; ty: Ty }[]; body: TStmt[]; ty: Ty }
-  | { kind: "conditional"; cond: TExpr; then: TExpr; else: TExpr; ty: Ty;
-      narrowedVar?: string;   // set when cond is optional (truthiness) or complex expression check — then-branch uses this var for the unwrapped value
-      narrowedExpr?: TExpr }  // the original optional expression to match on (for complex expressions like call results, not for simple vars or field chains)
+  | { kind: "conditional"; cond: TExpr; then: TExpr; else: TExpr; ty: Ty }
+  | { kind: "optChain"; obj: TExpr; chain: TChainStep[]; ty: Ty }
+  | { kind: "nullish"; left: TExpr; right: TExpr; ty: Ty }
+  | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
+      someBody: TExpr; noneBody: TExpr; ty: Ty }
   // Spec-only (from //@ annotations):
   | { kind: "result"; ty: Ty }
   | { kind: "forall"; var: string; varTy: Ty; body: TExpr; ty: Ty }
@@ -73,6 +81,8 @@ export type TStmt =
   | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
   | { kind: "ghostAssign"; target: string; value: TExpr }
   | { kind: "assert"; expr: TExpr }
+  | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
+      someBody: TStmt[]; noneBody: TStmt[] }
 
 // ── Top-level ────────────────────────────────────────────────
 

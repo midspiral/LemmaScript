@@ -277,3 +277,140 @@ function clampedMidpoint(a: number, b: number): number {
   let mid = midpoint(a, b);  // mutable → non-pure → full method body
   return clampTernary(mid, a, b);
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Optional narrowing — TS-faithful: vars, obj.field, and deep paths
+// ═══════════════════════════════════════════════════════════════
+
+interface Leaf { value: number }
+interface Middle { leaf: Leaf | undefined }
+interface Tree { middle: Middle | undefined }
+
+// Deep-path narrowing: `&&` chain of `t.middle !== undefined` then
+// `t.middle.leaf !== undefined` narrows both paths in the then-branch,
+// so `t.middle.leaf.value` typechecks as `number`. Lowers to nested matches.
+function deepAccess(t: Tree): number {
+  //@ ensures t.middle !== undefined && t.middle.leaf !== undefined ==> \result === t.middle.leaf.value
+  //@ ensures t.middle === undefined ==> \result === 0
+  if (t.middle !== undefined && t.middle.leaf !== undefined) {
+    return t.middle.leaf.value;
+  }
+  return 0;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Optional chaining `?.` — all flavors: field, method call, index, chained
+// ═══════════════════════════════════════════════════════════════
+
+interface Inner { val: number }
+interface Outer { inner: Inner | undefined }
+
+// `?.field`: simple property access — single short-circuit
+function ocField(o: Outer | undefined): Inner | undefined {
+  //@ ensures o === undefined ==> \result === undefined
+  //@ ensures o !== undefined ==> \result === o.inner
+  return o?.inner;
+}
+
+// `?.field.field`: ?. then non-? continuation — short-circuit only at first ?
+function ocChain(o: Outer | undefined): number | undefined {
+  //@ ensures o === undefined ==> \result === undefined
+  //@ ensures o !== undefined && o.inner === undefined ==> \result === undefined
+  //@ ensures o !== undefined && o.inner !== undefined ==> \result === o.inner.val
+  return o?.inner?.val;
+}
+
+// `?.foo()`: method call after ?. — peephole collapses set.has to `in`
+function ocMethodCall(s: Set<string> | undefined, k: string): boolean | undefined {
+  //@ ensures s === undefined ==> \result === undefined
+  //@ ensures s !== undefined ==> \result === s.has(k)
+  return s?.has(k);
+}
+
+// `?.[k]`: index access via ?.[ ] — Record indexes return Option<value>
+function ocIndex(m: Record<string, string> | undefined, k: string): string | undefined {
+  //@ ensures m === undefined ==> \result === undefined
+  //@ ensures m !== undefined ==> \result === m[k]
+  return m?.[k];
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Nullish coalescing `a ?? b` — single-eval; defaults if a is undefined
+// ═══════════════════════════════════════════════════════════════
+
+// Optional var with default
+function nullishVar(o: Inner | undefined, fallback: number): number {
+  //@ ensures o === undefined ==> \result === fallback
+  //@ ensures o !== undefined ==> \result === o.val
+  return o?.val ?? fallback;
+}
+
+// Map.get + ?? — peephole collapses to `if k in m then m[k] else fallback`
+function nullishMapGet(m: Map<string, number>, k: string, fallback: number): number {
+  //@ ensures !(k in m) ==> \result === fallback
+  //@ ensures k in m ==> \result === m.get(k)
+  return m.get(k) ?? fallback;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Negative truthiness `if (!x)` — equivalent to `x === undefined`
+// ═══════════════════════════════════════════════════════════════
+
+// Var early-return: !o narrows o to Inner after the if
+function negVar(o: Inner | undefined, fallback: number): number {
+  //@ ensures o === undefined ==> \result === fallback
+  //@ ensures o !== undefined ==> \result === o.val
+  if (!o) return fallback;
+  return o.val;
+}
+
+// Field-chain early-return: !o.inner narrows o.inner to Inner after the if
+function negField(o: Outer, fallback: number): number {
+  //@ ensures o.inner === undefined ==> \result === fallback
+  //@ ensures o.inner !== undefined ==> \result === o.inner.val
+  if (!o.inner) return fallback;
+  return o.inner.val;
+}
+
+// Bare optional truthiness: `if (o)` is the same as `if (o !== undefined)`.
+function truthyVar(o: Inner | undefined, fallback: number): number {
+  //@ ensures o !== undefined ==> \result === o.val
+  //@ ensures o === undefined ==> \result === fallback
+  if (o) return o.val;
+  return fallback;
+}
+
+// Chained `&&` of optional checks in a ternary — both checks narrow.
+// Tests that ruleConditionalAndOptional walks its inner conditional so
+// nested optional checks become nested someMatches.
+function nestedAndTernary(o: Outer | undefined, fallback: number): number {
+  //@ ensures o === undefined ==> \result === fallback
+  //@ ensures o !== undefined && o.inner === undefined ==> \result === fallback
+  //@ ensures o !== undefined && o.inner !== undefined ==> \result === o.inner.val
+  return o !== undefined && o.inner !== undefined ? o.inner.val : fallback;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// `'key' in obj` narrowing — discriminate by field presence
+// ═══════════════════════════════════════════════════════════════
+
+type Shape =
+  | { kind: 'circle'; radius: number }
+  | { kind: 'square'; side: number }
+
+// `'radius' in s` narrows s to the variant containing 'radius' (circle).
+function area(s: Shape): number {
+  //@ ensures s.kind === 'circle' ==> \result === s.radius * s.radius
+  //@ ensures s.kind === 'square' ==> \result === s.side * s.side
+  if ('radius' in s) return s.radius * s.radius;
+  return s.side * s.side;
+}
+
+// Negative discriminant + early return: `s.kind !== "circle"` narrows s to
+// circle in the rest of the block.
+function describeIfCircle(s: Shape, fallback: number): number {
+  //@ ensures s.kind === 'circle' ==> \result === s.radius * s.radius
+  //@ ensures s.kind === 'square' ==> \result === fallback
+  if (s.kind !== 'circle') return fallback;
+  return s.radius * s.radius;
+}

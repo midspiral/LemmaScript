@@ -10,6 +10,7 @@ import { existsSync } from "fs";
 import path from "path";
 import { extractModule } from "./extract.js";
 import { resolveModule } from "./resolve.js";
+import { narrowModule } from "./narrow.js";
 import { transformModuleLean, transformModuleDafny } from "./transform.js";
 import { peepholeModule } from "./peephole.js";
 import { emitLeanFile } from "./lean-emit.js";
@@ -91,7 +92,9 @@ function main() {
   }
 
   // Resolve: Raw IR → Typed IR
-  const typed = resolveModule(raw);
+  const resolved = resolveModule(raw);
+  // Narrow: Typed IR → Typed IR (rewrites optional-narrowing patterns to someMatch)
+  const typed = narrowModule(resolved);
 
   const dir = path.dirname(absPath);
   const base = path.basename(filePath, ".ts");

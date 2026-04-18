@@ -27,6 +27,31 @@ structure PriorityItem where
   value : Int
 deriving Repr, Inhabited, DecidableEq
 
+structure Leaf where
+  value : Int
+deriving Repr, Inhabited, DecidableEq
+
+structure Middle where
+  leaf : Option Leaf
+deriving Repr, Inhabited, DecidableEq
+
+structure Tree where
+  middle : Option Middle
+deriving Repr, Inhabited, DecidableEq
+
+structure Inner where
+  val : Int
+deriving Repr, Inhabited, DecidableEq
+
+structure Outer where
+  inner : Option Inner
+deriving Repr, Inhabited, DecidableEq
+
+inductive Shape where
+  | circle (radius : Int) : Shape
+  | square (side : Int) : Shape
+deriving Repr, Inhabited
+
 namespace Pure
 
 def evalPartial (e : Expr) : Int :=
@@ -35,7 +60,7 @@ def evalPartial (e : Expr) : Int :=
     _e_val
   | .add _e_a _e_b =>
     _e_a + _e_b
-  | _ =>
+  | .neg _e_inner =>
     0
 
 def evalSwitch (e : Expr) : Int :=
@@ -48,7 +73,7 @@ def evalSwitch (e : Expr) : Int :=
     0 - _e_inner
 
 def isHighPriority (p : Priority) : Bool :=
-  if p = .high then
+  if p = Priority.high then
     true
   else
     false
@@ -72,10 +97,10 @@ def demoteOnFail (p : Priority) (ok : Bool) : Priority :=
   if ok then
     p
   else
-    .low
+    Priority.low
 
 def makeHighItem (v : Int) : PriorityItem :=
-  { level := .high, value := v }
+  { level := Priority.high, value := v }
 
 def midpoint (lo : Int) (hi : Int) : Int :=
   (lo + hi) / 2
@@ -121,5 +146,104 @@ def findSubstr (s : String) (sub : String) : Int :=
 
 def getSlice (s : String) (start : Nat) («end» : Nat) : String :=
   JSString.slice s start «end»
+
+def deepAccess (t : Tree) : Int :=
+  match t.middle with
+  | .some _t_middle_val =>
+    match _t_middle_val.leaf with
+    | .some _t_middle_leaf_val =>
+      _t_middle_leaf_val.value
+    | .none =>
+      0
+  | .none =>
+    0
+
+def ocField (o : Option Outer) : Option Inner :=
+  match o with
+  | .some _oc0_val =>
+    _oc0_val.inner
+  | .none =>
+    Option.none
+
+def ocChain (o : Option Outer) : Option Int :=
+  match (match o with | .some _oc1_val => _oc1_val.inner | .none => Option.none) with
+  | .some _oc2_val =>
+    Option.some _oc2_val.val
+  | .none =>
+    Option.none
+
+def ocMethodCall (s : Option (Std.HashSet String)) (k : String) : Option Bool :=
+  match s with
+  | .some _oc3_val =>
+    Option.some (_oc3_val.contains k)
+  | .none =>
+    Option.none
+
+def ocIndex (m : Option (Std.HashMap String String)) (k : String) : Option String :=
+  match m with
+  | .some _oc4_val =>
+    _oc4_val.get? k
+  | .none =>
+    Option.none
+
+def nullishVar (o : Option Inner) (fallback : Int) : Int :=
+  match (match o with | .some _oc5_val => Option.some _oc5_val.val | .none => Option.none) with
+  | .some _oc6_val =>
+    _oc6_val
+  | .none =>
+    fallback
+
+def nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) : Int :=
+  if m.contains k then
+    let _oc7_val := m[k]!
+    _oc7_val
+  else
+    fallback
+
+def negVar (o : Option Inner) (fallback : Int) : Int :=
+  match o with
+  | .some _o_val =>
+    _o_val.val
+  | .none =>
+    fallback
+
+def negField (o : Outer) (fallback : Int) : Int :=
+  match o.inner with
+  | .some _o_inner_val =>
+    _o_inner_val.val
+  | .none =>
+    fallback
+
+def truthyVar (o : Option Inner) (fallback : Int) : Int :=
+  match o with
+  | .some _o_val =>
+    _o_val.val
+  | .none =>
+    fallback
+
+def nestedAndTernary (o : Option Outer) (fallback : Int) : Int :=
+  match o with
+  | .some _o_val =>
+    match _o_val.inner with
+    | .some _o_inner_val =>
+      _o_inner_val.val
+    | .none =>
+      fallback
+  | .none =>
+    fallback
+
+def area (s : Shape) : Int :=
+  match s with
+  | .circle _s_radius =>
+    _s_radius * _s_radius
+  | .square _s_side =>
+    _s_side * _s_side
+
+def describeIfCircle (s : Shape) (fallback : Int) : Int :=
+  match s with
+  | .circle _s_radius =>
+    _s_radius * _s_radius
+  | .square _s_side =>
+    fallback
 
 end Pure

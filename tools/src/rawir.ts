@@ -10,6 +10,15 @@
 
 // ── Expressions ──────────────────────────────────────────────
 
+/** A step in an optional chain — what to do with the binder after `?.`.
+ *  field: `?.foo` or `.foo` after `?.`.
+ *  call:  `?.foo()` or `.foo()` / `()` after `?.`.
+ *  index: `?.[i]` or `[i]` after `?.`. */
+export type RawChainStep =
+  | { kind: "field"; name: string }
+  | { kind: "call"; args: RawExpr[] }
+  | { kind: "index"; idx: RawExpr };
+
 export type RawExpr =
   | { kind: "var"; name: string }
   | { kind: "num"; value: number }
@@ -24,6 +33,8 @@ export type RawExpr =
   | { kind: "arrayLiteral"; elems: RawExpr[] }
   | { kind: "lambda"; params: { name: string; tsType?: string }[]; body: RawExpr | RawStmt[] }
   | { kind: "conditional"; cond: RawExpr; then: RawExpr; else: RawExpr }  // ternary ? :
+  | { kind: "optChain"; obj: RawExpr; chain: RawChainStep[] }   // obj?.field, obj?.foo(), obj?.[i], obj?.foo.bar — single-eval
+  | { kind: "nullish"; left: RawExpr; right: RawExpr }   // a ?? b — single-eval; narrow rewrites to someMatch
   | { kind: "emptyCollection"; collectionType: "Map" | "Set"; tsType: string; initElems?: RawExpr[] }  // new Map<K,V>() / new Set<T>()
   | { kind: "nonNull"; expr: RawExpr }   // expr! (non-null assertion)
   // Spec-only (from //@ annotations, produced by specparser):

@@ -20,7 +20,7 @@ def nextSeq (state : Int) (pkt : Packet) : Int :=
     state
   | .data _pkt_seq _pkt_len =>
     state + _pkt_len
-  | _ =>
+  | .fin =>
     state
 
 end Pure

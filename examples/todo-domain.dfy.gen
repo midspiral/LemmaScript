@@ -187,8 +187,8 @@ function degradeIfAnchorMoved(movedId: TaskId, p: Place): Place
         Place.AtEnd
       else
         p
-    case _ =>
-      if (p.anchor == movedId) then
+    case After(i_p_anchor) =>
+      if (i_p_anchor == movedId) then
         Place.AtEnd
       else
         p
@@ -332,9 +332,9 @@ function getTask(m: Model, taskId: TaskId): Option<Task>
   if (taskId in m.taskData) then
     var i_t_val := m.taskData[taskId];
     if i_t_val.deleted then
-      None
+      Option.None
     else
-      Some(i_t_val)
+      Option.Some(i_t_val)
   else
     None
 }
@@ -357,10 +357,10 @@ function getLists(m: Model): seq<ListId>
 function getTagName(m: Model, tagId: TagId): Option<string>
 {
   if (tagId in m.tags) then
-    var i__opt4 := m.tags[tagId];
-    Some(i__opt4.name)
+    var i_oc0_val := m.tags[tagId];
+    Option.Some(i_oc0_val.name)
   else
-    None
+    Option.None
 }
 
 const INITIAL_OWNER: string := "__initial__"
@@ -406,8 +406,8 @@ method posFromPlace(lane: seq<TaskId>, p: Place) returns (res: int)
       var i_t0 := indexOf(lane, i_p_anchor);
       var idx := i_t0;
       return (if (idx < 0) then -1 else idx);
-    case _ =>
-      var i_t1 := indexOf(lane, p.anchor);
+    case After(i_p_anchor) =>
+      var i_t1 := indexOf(lane, i_p_anchor);
       var idx := i_t1;
       return (if (idx < 0) then -1 else (idx + 1));
   }
@@ -422,8 +422,8 @@ method posFromListPlace(lists: seq<ListId>, p: ListPlace) returns (res: int)
       var i_t2 := indexOf(lists, i_p_anchor);
       var idx := i_t2;
       return (if (idx < 0) then -1 else idx);
-    case _ =>
-      var i_t3 := indexOf(lists, p.anchor);
+    case ListAfter(i_p_anchor) =>
+      var i_t3 := indexOf(lists, i_p_anchor);
       var idx := i_t3;
       return (if (idx < 0) then -1 else (idx + 1));
   }
@@ -854,8 +854,8 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
           return i_t72;
         }
         match i_a_dueDate {
-          case Some(i__a_dueDate_val) =>
-            var i_t73 := validDate(i__a_dueDate_val);
+          case Some(i_a_dueDate_val) =>
+            var i_t73 := validDate(i_a_dueDate_val);
             if !(i_t73) {
               var i_t74 := err(Err.InvalidDate);
               return i_t74;

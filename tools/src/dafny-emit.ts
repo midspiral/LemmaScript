@@ -89,7 +89,11 @@ function emitExpr(e: Expr): string {
     case "bool": return e.value ? "true" : "false";
     case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 
-    case "constructor": return qualifyCtor(e.name, e.type);
+    case "constructor": {
+      const head = qualifyCtor(e.name, e.type);
+      if (!e.args || e.args.length === 0) return head;
+      return `${head}(${e.args.map(emitExpr).join(", ")})`;
+    }
 
     case "arrayLiteral":
       if (e.elems.length === 0) return `[]`;

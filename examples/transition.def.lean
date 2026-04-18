@@ -8,17 +8,17 @@ set_option loom.semantics.termination "total"
 set_option loom.semantics.choice "demonic"
 
 method transition (state : State) (event : Event) return (res : State)
-  ensures event = .timeout → res = .idle
+  ensures event = Event.timeout → res = State.idle
   do
     return Pure.transition state event
 
 method runSession (events : Array Event) return (res : State)
   do
-    let mut state : State := .idle
+    let mut state : State := State.idle
     let mut i : Nat := 0
     while i < events.size
       invariant i ≤ events.size
-      invariant i > 0 → events[i - 1]! = .timeout → state = .idle
+      invariant i > 0 → events[i - 1]! = Event.timeout → state = State.idle
       decreasing events.size - i
     do
       state ← transition state events[i]!

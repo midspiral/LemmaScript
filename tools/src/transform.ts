@@ -22,7 +22,8 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
   if (hit) return hit;
   const r = (x: Expr) => mapExpr(x, f);
   switch (e.kind) {
-    case "var": case "num": case "bool": case "str": case "constructor": case "emptyMap": case "emptySet": case "havoc": return e;
+    case "var": case "num": case "bool": case "str": case "emptyMap": case "emptySet": case "havoc": return e;
+    case "constructor": return e.args ? { ...e, args: e.args.map(r) } : e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
     case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };
@@ -84,6 +85,12 @@ function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
     case "conditional": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
+    case "optChain": return { ...e, obj: r(e.obj),
+      chain: e.chain.map(s => s.kind === "call" ? { ...s, args: s.args.map(r) }
+        : s.kind === "index" ? { ...s, idx: r(s.idx) }
+        : s) };
+    case "nullish": return { ...e, left: r(e.left), right: r(e.right) };
+    case "someMatch": return { ...e, scrutinee: r(e.scrutinee), someBody: r(e.someBody), noneBody: r(e.noneBody) };
     case "forall": return { ...e, body: r(e.body) };
     case "exists": return { ...e, body: r(e.body) };
     case "lambda": return e;
@@ -106,6 +113,7 @@ function mapTStmt(s: TStmt, f: (e: TExpr) => TExpr | null): TStmt {
     case "ghostLet": return { ...s, init: r(s.init) };
     case "ghostAssign": return { ...s, value: r(s.value) };
     case "assert": return { ...s, expr: r(s.expr) };
+    case "someMatch": return { ...s, scrutinee: r(s.scrutinee), someBody: s.someBody.map(t => mapTStmt(t, f)), noneBody: s.noneBody.map(t => mapTStmt(t, f)) };
   }
 }
 
@@ -196,19 +204,25 @@ function transformExpr(e: TExpr): Expr { return lowerExpr(e, null); }
 /** Wrap an expression in Some/None for optional-typed conditionals.
  *  If the raw TExpr is `undefined`, emit `.none`; otherwise wrap in `Some`. */
 function wrapOptionalBranch(expr: Expr, raw: TExpr): Expr {
-  return (raw.kind === "var" && raw.name === "undefined")
-    ? { kind: "constructor", name: ".none" }
-    : { kind: "app", fn: "Some", args: [expr] };
+  // Set type: "Option" so Lean emits `Option.some`/`Option.none` (qualified).
+  // The dotted form `.some`/`.none` would be ambiguous in expression positions
+  // like the scrutinee of an outer match. Dafny treats `Option.Some` and bare
+  // `Some` equivalently — the qualification is harmless there.
+  if (raw.kind === "var" && raw.name === "undefined") return { kind: "constructor", name: "none", type: "Option" };
+  if (raw.ty.kind === "optional") return expr;  // already Option<T>, don't double-wrap
+  return { kind: "constructor", name: "some", type: "Option", args: [expr] };
 }
 
 function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
-  // Monadic lifting: extract embedded method calls to let-binds
-  // Pass binds through to args so nested method calls are also lifted
-  if (binds && e.kind === "call" && e.callKind === "method") {
+  // Monadic lifting: extract embedded method calls to let-binds.
+  // `callKind: "method"` means a global var-fn call (classifyCall returns
+  // "method" only for `fn.kind === "var"`). Receiver method calls have
+  // callKind "unknown" and fall through to the regular case below where
+  // they become `methodCall`.
+  if (binds && e.kind === "call" && e.callKind === "method" && e.fn.kind === "var") {
     const name = `_t${_liftCounter++}`;
-    const fn = e.fn.kind === "var" ? e.fn.name : `${lowerExpr(e.fn, binds)}`;
     const args = e.args.map(a => lowerExpr(a, binds));
-    binds.push({ kind: "let-bind", name, value: { kind: "app", fn, args } });
+    binds.push({ kind: "let-bind", name, value: { kind: "app", fn: e.fn.name, args } });
     return { kind: "var", name };
   }
 
@@ -541,69 +555,6 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "exists", var: e.var, type: e.varTy, body: transformExpr(e.body) };
 
     case "conditional": {
-      // Phase 0: Complex expression check (call results, etc.) — resolve substituted
-      // and set narrowedVar + narrowedExpr because transform can't detect these.
-      if (e.narrowedVar && e.narrowedExpr) {
-        const scrutinee = lowerExpr(e.narrowedExpr, binds);
-        const bound = matchBinder(e.narrowedVar);
-        let thenExpr = lowerExpr(e.then, binds);
-        let elseExpr = lowerExpr(e.else, binds);
-        if (bound !== e.narrowedVar) {
-          thenExpr = replaceVar(thenExpr, e.narrowedVar, { kind: "var", name: bound });
-        }
-        if (e.ty.kind === "optional") {
-          thenExpr = wrapOptionalBranch(thenExpr, e.then);
-          elseExpr = wrapOptionalBranch(elseExpr, e.else);
-        }
-        return {
-          kind: "match", scrutinee,
-          arms: [
-            { pattern: `.some ${bound}`, body: thenExpr },
-            { pattern: ".none", body: elseExpr },
-          ],
-        };
-      }
-
-      // Phase 1: Truthiness — cond itself is optional (e.g. opt ? X : Y)
-      // Uses narrowedVar set by resolve's Phase 1 (unchanged).
-      if (e.narrowedVar && e.cond.ty.kind === "optional") {
-        const cond = lowerExpr(e.cond, binds);
-        let thenExpr = lowerExpr(e.then, binds);
-        let elseExpr = lowerExpr(e.else, binds);
-        const bound = matchBinder(e.narrowedVar);
-        if (bound !== e.narrowedVar) {
-          thenExpr = replaceVar(thenExpr, e.narrowedVar, { kind: "var", name: bound });
-        }
-        thenExpr = wrapOptionalBranch(thenExpr, e.then);
-        elseExpr = wrapOptionalBranch(elseExpr, e.else);
-        return {
-          kind: "match", scrutinee: cond,
-          arms: [
-            { pattern: `.some ${bound}`, body: thenExpr },
-            { pattern: ".none", body: elseExpr },
-          ],
-        };
-      }
-
-      // Phase 2: Explicit check — x !== undefined ? A : B
-      // Transform detects the pattern itself (no narrowedVar/narrowedExpr from resolve).
-      const check = parseOptionalCheck(e.cond);
-      if (check && !check.negated) {
-        return lowerOptionalConditional(e, check, null, binds);
-      }
-
-      // Phase 3: && with optional check — x !== undefined && guard(x) ? A : B
-      if (e.cond.kind === "binop" && e.cond.op === "&&") {
-        const extracted = extractLeftmostOptional(e.cond);
-        if (extracted) {
-          const innerCheck = parseOptionalCheck(extracted.optCond);
-          if (innerCheck && !innerCheck.negated) {
-            return lowerOptionalConditional(e, innerCheck, extracted.rest, binds);
-          }
-        }
-      }
-
-      // Phase 4: Regular conditional (no optional narrowing)
       const cond = lowerExpr(e.cond, binds);
       let thenExpr = lowerExpr(e.then, binds);
       let elseExpr = lowerExpr(e.else, binds);
@@ -614,6 +565,14 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "if", cond, then: thenExpr, else: elseExpr };
     }
 
+    case "optChain":
+      // Narrow should have rewritten optChain to someMatch.
+      throw new Error(`optChain reached transform — narrow should have rewritten it`);
+
+    case "nullish":
+      // Narrow should have rewritten nullish to someMatch.
+      throw new Error(`nullish reached transform — narrow should have rewritten it`);
+
     case "havoc":
       // Dafny's * only works in var/assign positions — lift to own declaration
       if (binds) {
@@ -622,6 +581,36 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         return { kind: "var", name };
       }
       return { kind: "havoc", type: e.ty };
+
+    case "someMatch": {
+      let someBody: Expr;
+      let scrutinee: Expr | string;
+      const path = asTAccessPath(e.scrutinee);
+      if (path) {
+        // Pure access path (var or any depth of obj.f.g.h) — substitute the
+        // path with the binder pre-lowering.
+        const replaced = replacePathInTExpr(e.someBody, path, e.binder, e.binderTy);
+        someBody = lowerExpr(replaced, binds);
+        scrutinee = path.fields.length === 0 ? path.rootVar : lowerExpr(e.scrutinee, binds);
+      } else {
+        // Complex scrutinee — narrow pre-bound the someBody to use the binder directly,
+        // so no substitution needed. Used by optChain rewrites.
+        someBody = lowerExpr(e.someBody, binds);
+        scrutinee = lowerExpr(e.scrutinee, binds);
+      }
+      let noneBody = lowerExpr(e.noneBody, binds);
+      if (e.ty.kind === "optional") {
+        someBody = wrapOptionalBranch(someBody, e.someBody);
+        noneBody = wrapOptionalBranch(noneBody, e.noneBody);
+      }
+      return {
+        kind: "match", scrutinee,
+        arms: [
+          { pattern: `.some ${e.binder}`, body: someBody },
+          { pattern: ".none", body: noneBody },
+        ],
+      };
+    }
   }
 }
 
@@ -686,23 +675,17 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
     const s = stmts[i];
     // Detect discriminant if-chain → match
     if (s.kind === "if") {
-      const chain = detectDiscriminantChain(stmts.slice(i));
+      const chain = detectDiscriminantChain(stmts.slice(i), typeDecls);
       if (chain) {
         result.push(emitMatchStmt(chain.chain, typeDecls));
         i += chain.consumed;
         continue;
       }
-      // Detect optional check → match on Some/None
-      const optMatch = prepareOptionalMatch(s, stmts.slice(i + 1));
-      if (optMatch) {
-        result.push(emitOptionalMatch(optMatch.check.varName, optMatch.check.negated, s, typeDecls,
-          stmts.slice(i + 1), optMatch.check.fieldExpr));
-        // If rest was consumed into the Some branch, skip remaining
-        const origSome = optMatch.check.negated ? s.else : s.then;
-        if (origSome.length === 0 && i + 1 < stmts.length) {
-          return result;
-        }
-        i++;
+      // `if (x.kind !== "variant") terminate; rest` → match x { variant => rest, _ => terminate }
+      const negEarly = detectNegativeDiscriminantEarlyReturn(stmts.slice(i), typeDecls);
+      if (negEarly) {
+        result.push(emitMatchStmt(negEarly.chain, typeDecls));
+        i += negEarly.consumed;
         continue;
       }
     }
@@ -876,21 +859,6 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           return stmts;
         }
       }
-      // Desugar: const x = optCheck && guard ? A : B
-      // → var x := B; if (optCheck && guard) { x := A; }
-      // This avoids putting method calls (from guard) inside a match expression,
-      // which Dafny doesn't allow.  The if-case in transformStmt handles the &&
-      // via extractLeftmostOptional → emitOptionalMatch (statement-level match).
-      if (s.init.kind === "conditional" && s.init.cond.kind === "binop" && s.init.cond.op === "&&") {
-        const extracted = extractLeftmostOptional(s.init.cond);
-        if (extracted) {
-          const desugared: TStmt[] = [
-            { kind: "let", name: s.name, ty: s.ty, mutable: true, init: s.init.else },
-            { kind: "if", cond: s.init.cond, then: [{ kind: "assign", target: s.name, value: s.init.then }], else: [] },
-          ];
-          return desugared.flatMap(ds => transformStmt(ds, typeDecls));
-        }
-      }
       const { binds, expr } = liftMethodCalls(s.init);
       return [...binds, { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: expr }];
     }
@@ -923,15 +891,19 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
         const { binds, expr } = liftMethodCalls(s.expr);
         return [...binds, { kind: "assign", target: receiver, value: expr }];
       }
-      // Optional chaining on map.get: m.get(k)?.push(v) → if k in m { m[k] := m[k] + [v] }
-      if (s.expr.kind === "call" && s.expr.fn.kind === "field" &&
-          s.expr.fn.obj.kind === "call" && s.expr.fn.obj.fn.kind === "field" &&
-          s.expr.fn.obj.fn.obj.ty.kind === "map" && s.expr.fn.obj.fn.field === "get" &&
-          s.expr.fn.field === "push") {
-        const mapExpr = s.expr.fn.obj.fn.obj;
+      // Optional chaining on map.get at statement level: m.get(k)?.push(v)
+      // → if k in m { m[k] := m[k] + [v] } (actual mutation, not value-discard).
+      // Narrow rewrote this to a someMatch — destructure to find the underlying
+      // m.get(k) scrutinee and the .push(v) body call.
+      if (s.expr.kind === "someMatch" &&
+          s.expr.scrutinee.kind === "call" && s.expr.scrutinee.fn.kind === "field" &&
+          s.expr.scrutinee.fn.field === "get" && s.expr.scrutinee.fn.obj.ty.kind === "map" &&
+          s.expr.someBody.kind === "call" && s.expr.someBody.fn.kind === "field" &&
+          s.expr.someBody.fn.field === "push") {
+        const mapExpr = s.expr.scrutinee.fn.obj;
         const mapName = mapExpr.kind === "var" ? mapExpr.name : undefined;
-        const keyExpr = lowerExpr(s.expr.fn.obj.args[0], null);
-        const pushArg = lowerExpr(s.expr.args[0], null);
+        const keyExpr = lowerExpr(s.expr.scrutinee.args[0], null);
+        const pushArg = lowerExpr(s.expr.someBody.args[0], null);
         if (mapName) {
           const mapVar: Expr = { kind: "var", name: mapName };
           const directGet: Expr = { kind: "methodCall", obj: mapVar, objTy: mapExpr.ty, method: "getDirect", args: [keyExpr], monadic: false };
@@ -946,18 +918,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     }
 
     case "if": {
-      // Restructure && with optional check: extract the leftmost optional check
-      // from a && chain and nest the rest inside. Handles left-associative chains:
-      // if ((x !== undefined && b) && c) → if (x !== undefined) { if (b && c) { ... } }
-      if (s.cond.kind === "binop" && s.cond.op === "&&" && s.else.length === 0) {
-        const extracted = extractLeftmostOptional(s.cond);
-        if (extracted) {
-          const innerIf: TStmt = { kind: "if", cond: extracted.rest, then: s.then, else: [] };
-          const outerIf: TStmt = { kind: "if", cond: extracted.optCond, then: [innerIf], else: [] };
-          return transformStmts([outerIf], typeDecls);
-        }
-      }
-      // Lift from condition only (Lean rule: don't lift from branches)
+      // Lift from condition only (Lean rule: don't lift from branches).
       const { binds, expr: cond } = liftMethodCalls(s.cond);
       return [...binds, { kind: "if", cond, then: transformStmts(s.then, typeDecls), else: transformStmts(s.else, typeDecls) }];
     }
@@ -989,6 +950,24 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
 
     case "assert":
       return [{ kind: "assert", expr: transformExpr(s.expr) }];
+
+    case "someMatch": {
+      const path = asTAccessPath(s.scrutinee);
+      if (path) {
+        const replaced = replacePathInTStmts(s.someBody, path, s.binder, s.binderTy);
+        const someBody = transformStmts(replaced, typeDecls);
+        const noneBody = transformStmts(s.noneBody, typeDecls);
+        const scrutinee: Expr | string = path.fields.length === 0 ? path.rootVar : transformExpr(s.scrutinee);
+        return [{
+          kind: "match", scrutinee,
+          arms: [
+            { pattern: `.some ${s.binder}`, body: someBody },
+            { pattern: ".none", body: noneBody },
+          ],
+        }];
+      }
+      throw new Error(`someMatch stmt scrutinee must be a pure access path, got ${s.scrutinee.kind}`);
+    }
   }
 }
 
@@ -1001,17 +980,17 @@ interface Chain {
   fallthrough: TStmt[];
 }
 
-function detectDiscriminantChain(stmts: TStmt[]): { chain: Chain; consumed: number } | null {
+function detectDiscriminantChain(stmts: TStmt[], typeDecls: TypeDeclInfo[]): { chain: Chain; consumed: number } | null {
   if (stmts.length === 0 || stmts[0].kind !== "if") return null;
 
-  const first = parseDiscriminantCond(stmts[0].cond);
+  const first = parseDiscriminantCond(stmts[0].cond, typeDecls);
   if (!first) return null;
 
   const cases: { variant: string; body: TStmt[] }[] = [];
 
   // Follow else branches within one if-else-if tree
   function collectElse(s: TStmt & { kind: "if" }): TStmt[] {
-    const p = parseDiscriminantCond(s.cond);
+    const p = parseDiscriminantCond(s.cond, typeDecls);
     if (!p || p.varName !== first!.varName) return [s];
     cases.push({ variant: p.variant, body: s.then });
     if (s.else.length === 0) return [];
@@ -1024,7 +1003,7 @@ function detectDiscriminantChain(stmts: TStmt[]): { chain: Chain; consumed: numb
   for (let i = 0; i < stmts.length; i++) {
     const s = stmts[i];
     if (s.kind !== "if") break;
-    const p = parseDiscriminantCond(s.cond);
+    const p = parseDiscriminantCond(s.cond, typeDecls);
     if (!p || p.varName !== first.varName) break;
     cases.push({ variant: p.variant, body: s.then });
     consumed = i + 1;
@@ -1038,133 +1017,72 @@ function detectDiscriminantChain(stmts: TStmt[]): { chain: Chain; consumed: numb
   return { chain: { ...first, cases, fallthrough: stmts.slice(consumed) }, consumed: stmts.length };
 }
 
-function parseDiscriminantCond(cond: TExpr): { varName: string; typeName: string; variant: string } | null {
-  // Pattern: x.discriminant === "variant"
-  if (cond.kind !== "binop" || cond.op !== "===" || cond.right.kind !== "str") return null;
-  if (cond.left.kind !== "field" || !cond.left.isDiscriminant) return null;
-  if (cond.left.obj.kind !== "var" || cond.left.obj.ty.kind !== "user") return null;
-  return { varName: cond.left.obj.name, typeName: cond.left.obj.ty.name, variant: cond.right.value };
+/** Detect `if (x.kind !== "variant") terminate; rest`. Returns a Chain that
+ *  emitMatchStmt can lower: cases = [{ variant, body: rest }], fallthrough
+ *  = the terminating then-branch. Equivalent to `if (x.kind === "variant") { rest }
+ *  else { terminate }` with body order swapped. */
+function detectNegativeDiscriminantEarlyReturn(stmts: TStmt[], typeDecls: TypeDeclInfo[]): { chain: Chain; consumed: number } | null {
+  if (stmts.length < 2) return null;
+  const first = stmts[0];
+  if (first.kind !== "if" || first.else.length > 0) return null;
+  if (!isTerminating(first.then)) return null;
+  const cond = parseNegativeDiscriminantCond(first.cond);
+  if (!cond) return null;
+  const rest = stmts.slice(1);
+  return {
+    chain: {
+      varName: cond.varName, typeName: cond.typeName,
+      cases: [{ variant: cond.variant, body: rest }],
+      fallthrough: first.then,
+    },
+    consumed: stmts.length,
+  };
 }
 
-function emitOptionalMatch(varName: string, negated: boolean, s: TStmt & { kind: "if" }, typeDecls: TypeDeclInfo[], restStmts?: TStmt[], fieldExpr?: TExpr): Stmt {
-  let someBranch = negated ? s.else : s.then;
-  const noneBranch = negated ? s.then : s.else;
-  // Early-return pattern: if (x === undefined) { return ... } — Some branch is empty,
-  // so include remaining statements as the Some body
-  if (someBranch.length === 0 && restStmts && restStmts.length > 0) {
-    someBranch = restStmts;
+function parseNegativeDiscriminantCond(cond: TExpr): { varName: string; typeName: string; variant: string } | null {
+  if (cond.kind === "binop" && cond.op === "!==" && cond.right.kind === "str" &&
+      cond.left.kind === "field" && cond.left.isDiscriminant &&
+      cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
+    return { varName: cond.left.obj.name, typeName: cond.left.obj.ty.name, variant: cond.right.value };
   }
-  const sanitized = varName.replace(/\./g, "_");
-  const bound = matchBinder(`${sanitized}_val`);
-  // Replace the narrowed variable/field in the Some branch body.
-  // Field chains: replace in TStmt before transform (so downstream narrowing sees simple vars).
-  // Simple vars: replace in IR after transform (the original mechanism).
-  let someBody: Stmt[];
-  if (fieldExpr && fieldExpr.kind === "field" && fieldExpr.obj.kind === "var") {
-    const innerTy = fieldExpr.ty.kind === "optional" ? fieldExpr.ty.inner : fieldExpr.ty;
-    const replaced = replaceFieldsInTStmts(someBranch, fieldExpr.obj.name, [
-      { fieldName: fieldExpr.field, newName: bound, fallbackTy: innerTy },
-    ]);
-    someBody = transformStmts(replaced, typeDecls);
-  } else {
-    const transformed = transformStmts(someBranch, typeDecls);
-    someBody = transformed.map(stmt => mapStmtExprs(stmt, e => replaceVar(e, varName, { kind: "var", name: bound }, true)));
+  return null;
+}
+
+/** Does the statement list end in a control-flow terminator (return, throw, break, continue)? */
+function isTerminating(stmts: TStmt[]): boolean {
+  if (stmts.length === 0) return false;
+  const last = stmts[stmts.length - 1];
+  return last.kind === "return" || last.kind === "throw" || last.kind === "break" || last.kind === "continue";
+}
+
+function parseDiscriminantCond(cond: TExpr, typeDecls: TypeDeclInfo[]): { varName: string; typeName: string; variant: string } | null {
+  // Pattern: x.discriminant === "variant"
+  if (cond.kind === "binop" && cond.op === "===" && cond.right.kind === "str" &&
+      cond.left.kind === "field" && cond.left.isDiscriminant &&
+      cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
+    return { varName: cond.left.obj.name, typeName: cond.left.obj.ty.name, variant: cond.right.value };
   }
-  // For field chains, use an Expr scrutinee so outer match replaceVar can
-  // substitute the object variable (e.g. task → i_task_val in task.deletedFromList).
-  // String scrutinees are opaque to replaceVar/mapExpr.
-  const scrutinee: Expr | string = fieldExpr ? transformExpr(fieldExpr) : varName;
-  return {
-    kind: "match", scrutinee,
-    arms: [
-      { pattern: `.some ${bound}`, body: someBody },
-      { pattern: ".none", body: noneBranch.length > 0 ? transformStmts(noneBranch, typeDecls) : [] },
-    ],
-  };
+  // Pattern: 'key' in x  — narrows x to the unique variant containing `key`.
+  if (cond.kind === "binop" && cond.op === "in" &&
+      cond.left.kind === "str" && cond.right.kind === "var" &&
+      cond.right.ty.kind === "user") {
+    const key = cond.left.value;
+    const typeName = cond.right.ty.name;
+    const baseTyName = typeName.includes("<") ? typeName.slice(0, typeName.indexOf("<")) : typeName;
+    const decl = typeDecls.find(d => d.name === baseTyName);
+    if (decl?.kind === "discriminated-union" && decl.variants) {
+      const matches = decl.variants.filter(v => v.fields.some(f => f.name === key));
+      if (matches.length === 1) {
+        return { varName: cond.right.name, typeName, variant: matches[0].name };
+      }
+    }
+  }
+  return null;
 }
 
 /** Apply an expression transform to all expressions in a statement (convenience wrapper). */
 function mapStmtExprs(s: Stmt, r: (e: Expr) => Expr): Stmt {
   return mapStmt(s, e => r(e));
-}
-
-// ── Optional narrowing helpers ──────────────────────────────
-//
-// Optional narrowing converts TS `if (x === undefined)` / `x !== undefined ? a : b`
-// patterns to `match x { Some(val) => ..., None => ... }`.
-//
-// The resolve phase (resolve.ts) handles TYPE narrowing only:
-//   - Flow narrowing: after `if (x === undefined) return`, x is non-optional
-//   - && narrowing: in `x !== undefined && f(x)`, f(x) sees x as non-optional
-//   - Conditional type narrowing: extends env (simple vars) or narrowedFields context
-//     (field chains) so the then-branch resolves with the unwrapped type
-//
-// The transform phase (here) handles ALL structural narrowing:
-//   - Statement-level: `transformStmts` detects optional checks → `emitOptionalMatch`
-//   - Expression-level: `lowerExpr` detects optional checks via `parseOptionalCheck`
-//     and `extractLeftmostOptional` → `lowerOptionalConditional`
-//   - && restructuring: `extractLeftmostOptional` splits `&&` chains, generating
-//     match with guard: `match x { Some(val) => if guard then A else B, None => B }`
-
-/** Shared logic for optional match in both imperative and pure function paths.
- *  Detects optional check, selects branches, handles early-return consumption.
- *  Returns null if the condition is not an optional check. */
-function prepareOptionalMatch(s: TStmt & { kind: "if" }, restStmts: TStmt[]): {
-  check: { varName: string; negated: boolean; fieldExpr?: TExpr };
-  someBranch: TStmt[]; noneBranch: TStmt[]; bound: string;
-} | null {
-  const check = parseOptionalCheck(s.cond);
-  if (!check) return null;
-  let someBranch = check.negated ? s.else : s.then;
-  const noneBranch = check.negated ? s.then : (s.else.length > 0 ? s.else : restStmts);
-  // Early-return pattern: Some branch is empty → consume rest of block
-  if (someBranch.length === 0 && restStmts.length > 0) someBranch = restStmts;
-  const sanitized = check.varName.replace(/\./g, "_");
-  const bound = matchBinder(`${sanitized}_val`);
-  return { check, someBranch, noneBranch, bound };
-}
-
-/** Extract the leftmost optional check from a && chain, returning the check and the rest.
- *  (x !== undefined && b) && c → { optCond: x !== undefined, rest: b && c } */
-function extractLeftmostOptional(cond: TExpr): { optCond: TExpr; rest: TExpr } | null {
-  if (cond.kind !== "binop" || cond.op !== "&&") return null;
-  const check = parseOptionalCheck(cond.left);
-  if (check && !check.negated) return { optCond: cond.left, rest: cond.right };
-  if (cond.left.kind === "binop" && cond.left.op === "&&") {
-    const inner = extractLeftmostOptional(cond.left);
-    if (inner) return { optCond: inner.optCond, rest: { ...cond, left: inner.rest } as TExpr };
-  }
-  return null;
-}
-
-/** Detect `v !== undefined` or `undefined !== v` where v has optional type.
- *  Also handles field access chains like `obj.field !== undefined`.
- *  When `fieldExpr` is returned, callers must use field-aware replacement. */
-function parseOptionalCheck(cond: TExpr): { varName: string; negated: boolean; fieldExpr?: TExpr } | null {
-  if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) return null;
-  let varExpr: TExpr | null = null;
-  if (cond.right.kind === "var" && cond.right.name === "undefined") varExpr = cond.left;
-  if (cond.left.kind === "var" && cond.left.name === "undefined") varExpr = cond.right;
-  if (!varExpr) return null;
-  if (varExpr.kind === "var" && varExpr.ty.kind === "optional") {
-    return { varName: varExpr.name, negated: cond.op === "===" };
-  }
-  if (varExpr.kind === "field" && varExpr.ty.kind === "optional") {
-    // Serialize field chain as a dotted name for use as match scrutinee
-    const chain = serializeFieldChain(varExpr);
-    if (chain) return { varName: chain, negated: cond.op === "===", fieldExpr: varExpr };
-  }
-  return null;
-}
-
-/** Serialize a field access chain to a dotted variable path, or null if not a simple chain. */
-function serializeFieldChain(e: TExpr): string | null {
-  if (e.kind === "var") return e.name;
-  if (e.kind === "field") {
-    const parent = serializeFieldChain(e.obj);
-    return parent ? `${parent}.${e.field}` : null;
-  }
-  return null;
 }
 
 /** Build match arms from variant cases — shared by imperative and pure paths.
@@ -1193,8 +1111,29 @@ function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): Stmt {
   const cases = chain.cases.map(c => ({ name: c.variant, body: c.body }));
   const arms = buildMatchArms(cases, chain.varName, chain.typeName, typeDecls,
     (body, vn, fields) => transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls))!;
-  if (chain.fallthrough.length > 0) arms.push({ pattern: "_", body: transformStmts(chain.fallthrough, typeDecls) });
+  if (chain.fallthrough.length > 0) {
+    const remaining = remainingVariant(chain, typeDecls);
+    if (remaining) {
+      // Exactly one variant left — destructure so the fallthrough body can
+      // access variant-specific fields (Lean requires this; Dafny tolerates `_`).
+      const pattern = buildMatchPattern(remaining.name, remaining.fields, chain.varName);
+      const body = transformStmts(replaceFieldAccessInTStmts(chain.fallthrough, chain.varName, remaining.fields), typeDecls);
+      arms.push({ pattern, body });
+    } else {
+      arms.push({ pattern: "_", body: transformStmts(chain.fallthrough, typeDecls) });
+    }
+  }
   return { kind: "match", scrutinee: chain.varName, arms };
+}
+
+/** If the chain has matched all variants but one, return that remaining variant. */
+function remainingVariant(chain: Chain, typeDecls: TypeDeclInfo[]): { name: string; fields: { name: string; tsType: string; type?: Ty }[] } | null {
+  const decl = typeDecls.find(d => d.name === chain.typeName);
+  if (!decl?.variants) return null;
+  const matched = new Set(chain.cases.map(c => c.variant));
+  const remaining = decl.variants.filter(v => !matched.has(v.name));
+  if (remaining.length !== 1) return null;
+  return remaining[0];
 }
 
 function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Stmt {
@@ -1207,10 +1146,7 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
   return { kind: "match", scrutinee: varName, arms };
 }
 
-/** Replace obj.field → replacement var in typed IR (before transform).
- *  Used by discriminant match/switch and optional match to rewrite field accesses
- *  into simple variables before the transform phase, so downstream narrowing
- *  (parseOptionalCheck, extractLeftmostOptional) sees simple variable references.
+/** Replace obj.field → replacement var in typed IR.
  *  Uses the TExpr's resolved type when available, falling back to `fallbackTy`. */
 function replaceFieldsInTStmts(
   stmts: TStmt[], objName: string,
@@ -1258,6 +1194,44 @@ function replaceFieldInTExpr(
   });
 }
 
+/** A pure access path — chain of field accesses rooted at a var. */
+interface AccessPath { rootVar: string; fields: string[] }
+
+function asTAccessPath(e: TExpr): AccessPath | null {
+  if (e.kind === "var") return { rootVar: e.name, fields: [] };
+  if (e.kind === "field") {
+    const inner = asTAccessPath(e.obj);
+    if (!inner) return null;
+    return { rootVar: inner.rootVar, fields: [...inner.fields, e.field] };
+  }
+  return null;
+}
+
+/** Does TExpr `e` match the given access path exactly? */
+function matchesAccessPath(e: TExpr, path: AccessPath): boolean {
+  const collected: string[] = [];
+  let cur = e;
+  while (cur.kind === "field") { collected.unshift(cur.field); cur = cur.obj; }
+  if (cur.kind !== "var" || cur.name !== path.rootVar) return false;
+  if (collected.length !== path.fields.length) return false;
+  return collected.every((f, i) => f === path.fields[i]);
+}
+
+/** Replace every TExpr matching `path` with `var(binder, binderTy)`. */
+function replacePathInTExpr(expr: TExpr, path: AccessPath, binder: string, binderTy: Ty): TExpr {
+  return mapTExpr(expr, e =>
+    matchesAccessPath(e, path)
+      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
+  );
+}
+
+function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, binderTy: Ty): TStmt[] {
+  return stmts.map(s => mapTStmt(s, e =>
+    matchesAccessPath(e, path)
+      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
+  ));
+}
+
 /** Unwrap optional type on match-bound variables in TExpr.
  *  After replaceFieldInTExpr, the replaced variable carries the original optional
  *  type from the field declaration. The match binding unwraps it to the inner type. */
@@ -1268,96 +1242,16 @@ function fixBoundType(expr: TExpr, boundName: string): TExpr {
   );
 }
 
-/** Lower a conditional with an optional check (Phase 2: explicit, Phase 3: && with guard).
- *  Generates: match scrutinee { Some(val) => [if guard then] A [else B], None => B }
- *  For field chains, replaces field accesses in TExpr before lowering.
- *  For simple vars, replaces variable names in Expr after lowering. */
-function lowerOptionalConditional(
-  e: TExpr & { kind: "conditional" },
-  check: { varName: string; negated: boolean; fieldExpr?: TExpr },
-  guard: TExpr | null,
-  binds: Stmt[] | null
-): Expr {
-  const sanitized = check.varName.replace(/\./g, "_");
-  const bound = matchBinder(`${sanitized}_val`);
-  const isFieldChain = check.fieldExpr && check.fieldExpr.kind === "field" &&
-    (check.fieldExpr as TExpr & { kind: "field" }).obj.kind === "var";
-
-  // Determine which branch is Some (unwrapped) vs None
-  let thenTExpr = e.then;
-  let guardTExpr = guard;
-
-  // For field chains: replace field access with bound var in TExpr before lowering
-  if (isFieldChain) {
-    const fe = check.fieldExpr as TExpr & { kind: "field"; obj: TExpr & { kind: "var" } };
-    const innerTy = fe.ty.kind === "optional" ? fe.ty.inner : fe.ty;
-    const replacements = [{ fieldName: fe.field, newName: bound, fallbackTy: innerTy }];
-    thenTExpr = fixBoundType(replaceFieldInTExpr(thenTExpr, fe.obj.name, replacements), bound);
-    if (guardTExpr) {
-      guardTExpr = fixBoundType(replaceFieldInTExpr(guardTExpr, fe.obj.name, replacements), bound);
-    }
-  }
-
-  let thenExpr = lowerExpr(thenTExpr, binds);
-  let elseExpr = lowerExpr(e.else, binds);
-
-  // For simple vars: replace after lowering
-  if (!isFieldChain) {
-    thenExpr = replaceVar(thenExpr, check.varName, { kind: "var", name: bound }, true);
-  }
-
-  // Optional wrapping: check if either branch is undefined (produces optional result)
-  const isOptionalResult =
-    (e.then.kind === "var" && e.then.name === "undefined") ||
-    (e.else.kind === "var" && e.else.name === "undefined");
-  if (isOptionalResult) {
-    thenExpr = wrapOptionalBranch(thenExpr, e.then);
-    elseExpr = wrapOptionalBranch(elseExpr, e.else);
-  }
-
-  // Build Some arm body — add guard for && patterns
-  // Note: if the guard has method calls, the impure path desugars the let to a
-  // statement-level if+match in transformStmt, so this expression-level path only
-  // runs for pure guards. Use null for binds to avoid escaping the match scope.
-  let someBody: Expr;
-  if (guard) {
-    let guardExpr = lowerExpr(guardTExpr!, null);
-    if (!isFieldChain) {
-      guardExpr = replaceVar(guardExpr, check.varName, { kind: "var", name: bound }, true);
-    }
-    // Guard-else gets the same expression as None arm
-    let guardElse = lowerExpr(e.else, null);
-    if (isOptionalResult) {
-      guardElse = wrapOptionalBranch(guardElse, e.else);
-    }
-    someBody = { kind: "if", cond: guardExpr, then: thenExpr, else: guardElse };
-  } else {
-    someBody = thenExpr;
-  }
-
-  // Build scrutinee
-  const scrutinee: Expr | string = isFieldChain
-    ? lowerExpr(check.fieldExpr!, binds)
-    : check.varName;
-
-  return {
-    kind: "match", scrutinee,
-    arms: [
-      { pattern: `.some ${bound}`, body: someBody },
-      { pattern: ".none", body: elseExpr },
-    ],
-  };
-}
-
-
 
 // ── Pure function generation ─────────────────────────────────
 
 function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | null {
   // Detect discriminant if-chain
   if (stmts.length > 0 && stmts[0].kind === "if") {
-    const chain = detectDiscriminantChain(stmts);
+    const chain = detectDiscriminantChain(stmts, typeDecls);
     if (chain) return transformPureMatch(chain.chain, typeDecls);
+    const negEarly = detectNegativeDiscriminantEarlyReturn(stmts, typeDecls);
+    if (negEarly) return transformPureMatch(negEarly.chain, typeDecls);
   }
 
   for (let i = 0; i < stmts.length; i++) {
@@ -1371,51 +1265,8 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
         return { kind: "let", name: s.name, value: transformExpr(s.init), body: restExpr };
       }
       case "if": {
-        // Restructure && with optional check: split into nested ifs so
-        // prepareOptionalMatch can detect the optional check and bind the unwrapped value
-        if (s.cond.kind === "binop" && s.cond.op === "&&" && s.else.length === 0) {
-          const extracted = extractLeftmostOptional(s.cond);
-          if (extracted) {
-            const innerIf: TStmt = { kind: "if", cond: extracted.rest, then: s.then, else: [] };
-            const outerIf: TStmt = { kind: "if", cond: extracted.optCond, then: [innerIf], else: [] };
-            return transformPureBody([outerIf, ...rest], typeDecls);
-          }
-        }
-        // Optional narrowing: if (x === undefined) → match x { None => ..., Some(x_val) => ... }
-        const optMatch = prepareOptionalMatch(s, rest);
-        if (optMatch) {
-          // For field chains (a.dueDate !== undefined), replace in TStmt before transform
-          let someBranch = [...optMatch.someBranch, ...rest];
-          const fe = optMatch.check.fieldExpr;
-          if (fe && fe.kind === "field" && fe.obj.kind === "var") {
-            const innerTy = fe.ty.kind === "optional" ? fe.ty.inner : fe.ty;
-            someBranch = replaceFieldsInTStmts(someBranch, fe.obj.name, [
-              { fieldName: fe.field, newName: optMatch.bound, fallbackTy: innerTy },
-            ]);
-            // The replacement keeps the original optional type, but the match binding
-            // unwraps it. Fix the type so downstream record coercion re-wraps with Some().
-            someBranch = someBranch.map(s => mapTStmt(s, e =>
-              e.kind === "var" && e.name === optMatch.bound && e.ty.kind === "optional"
-                ? { ...e, ty: e.ty.inner } as TExpr : null));
-          }
-          const someExpr = transformPureBody(someBranch, typeDecls);
-          if (!someExpr) return null;
-          const noneExpr = transformPureBody(optMatch.noneBranch, typeDecls);
-          if (!noneExpr) return null;
-          // For simple vars, replace in Expr after transform
-          const someReplaced = optMatch.check.fieldExpr
-            ? someExpr
-            : replaceVar(someExpr, optMatch.check.varName, { kind: "var", name: optMatch.bound }, true);
-          return {
-            kind: "match", scrutinee: optMatch.check.varName,
-            arms: [
-              { pattern: `.some ${optMatch.bound}`, body: someReplaced },
-              { pattern: ".none", body: noneExpr },
-            ],
-          };
-        }
         // Append rest to both branches so nested ifs that fall through
-        // can reach the continuation (e.g. early return inside then-branch)
+        // can reach the continuation (e.g. early return inside then-branch).
         const thenExpr = transformPureBody([...s.then, ...rest], typeDecls);
         if (!thenExpr) return null;
         const elseStmts = s.else.length > 0 ? [...s.else, ...rest] : rest;
@@ -1424,6 +1275,25 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
         return { kind: "if", cond: transformExpr(s.cond), then: thenExpr, else: elseExpr };
       }
       case "switch": return transformPureSwitch(s, typeDecls);
+      case "someMatch": {
+        const path = asTAccessPath(s.scrutinee);
+        if (path) {
+          const replaced = replacePathInTStmts(s.someBody, path, s.binder, s.binderTy);
+          const someExpr = transformPureBody([...replaced, ...rest], typeDecls);
+          if (!someExpr) return null;
+          const noneExpr = transformPureBody([...s.noneBody, ...rest], typeDecls);
+          if (!noneExpr) return null;
+          const scrutinee: Expr | string = path.fields.length === 0 ? path.rootVar : transformExpr(s.scrutinee);
+          return {
+            kind: "match", scrutinee,
+            arms: [
+              { pattern: `.some ${s.binder}`, body: someExpr },
+              { pattern: ".none", body: noneExpr },
+            ],
+          };
+        }
+        throw new Error(`someMatch pure-body scrutinee must be a pure access path, got ${s.scrutinee.kind}`);
+      }
       default: return null;
     }
   }
@@ -1468,9 +1338,18 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
   const decl = typeDecls.find(d => d.name === chain.typeName);
   const allCovered = decl?.variants && chain.cases.length >= decl.variants.length;
   if (chain.fallthrough.length > 0 && !allCovered) {
-    const body = transformPureBody(chain.fallthrough, typeDecls);
-    if (!body) return null;
-    arms.push({ pattern: "_", body });
+    const remaining = remainingVariant(chain, typeDecls);
+    if (remaining) {
+      // Exactly one variant left — destructure for variant-specific field access.
+      let body = transformPureBody(chain.fallthrough, typeDecls);
+      if (!body) return null;
+      if (remaining.fields.length > 0) body = replaceFieldAccess(body, chain.varName, remaining.fields);
+      arms.push({ pattern: buildMatchPattern(remaining.name, remaining.fields, chain.varName), body });
+    } else {
+      const body = transformPureBody(chain.fallthrough, typeDecls);
+      if (!body) return null;
+      arms.push({ pattern: "_", body });
+    }
   }
   return { kind: "match", scrutinee: chain.varName, arms };
 }

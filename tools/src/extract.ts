@@ -96,33 +96,37 @@ function extractExpr(node: Expression): RawExpr {
   }
 
   // Property access: x.foo or x?.foo
+  // Each `?.` is its own short-circuit point — wrap the inner in a new optChain.
+  // Non-`?` continuation of an existing optChain extends the chain (no new
+  // short-circuit, just keep evaluating after the prior `?` succeeded).
   if (Node.isPropertyAccessExpression(node)) {
     const obj = extractExpr(node.getExpression());
     const field = node.getName();
-    // Optional chaining on data access: x?.foo → x !== undefined ? x.foo : undefined
-    // Skip if this is a method call (parent is CallExpression) — handled differently.
     if (node.hasQuestionDotToken()) {
-      const parent = node.getParent();
-      const isMethodCall = parent && Node.isCallExpression(parent) && parent.getExpression() === node;
-      if (!isMethodCall) {
-        return { kind: "conditional",
-          cond: { kind: "binop", op: "!==", left: obj, right: { kind: "var", name: "undefined" } },
-          then: { kind: "field", obj, field },
-          else: { kind: "var", name: "undefined" },
-        };
-      }
+      return { kind: "optChain", obj, chain: [{ kind: "field", name: field }] };
+    }
+    if (obj.kind === "optChain") {
+      return { ...obj, chain: [...obj.chain, { kind: "field", name: field }] };
     }
     return { kind: "field", obj, field };
   }
 
-  // Element access: arr[i]
+  // Element access: arr[i] or arr?.[i]
   if (Node.isElementAccessExpression(node)) {
     const arg = node.getArgumentExpression();
     if (!arg) throw new Error(`Missing index in element access: ${node.getText()}`);
-    return { kind: "index", obj: extractExpr(node.getExpression()), idx: extractExpr(arg) };
+    const obj = extractExpr(node.getExpression());
+    const idx = extractExpr(arg);
+    if (node.hasQuestionDotToken()) {
+      return { kind: "optChain", obj, chain: [{ kind: "index", idx }] };
+    }
+    if (obj.kind === "optChain") {
+      return { ...obj, chain: [...obj.chain, { kind: "index", idx }] };
+    }
+    return { kind: "index", obj, idx };
   }
 
-  // Call expression: f(a, b)
+  // Call expression: f(a, b), x?.foo() (`?.` on the property), or x?.() (`?.` on call)
   if (Node.isCallExpression(node)) {
     // Object.fromEntries(map) → identity (Map IS Record in Dafny)
     const callee = node.getExpression();
@@ -132,11 +136,15 @@ function extractExpr(node: Expression): RawExpr {
         node.getArguments().length === 1) {
       return extractExpr(node.getArguments()[0] as Expression);
     }
-    return {
-      kind: "call",
-      fn: extractExpr(node.getExpression()),
-      args: node.getArguments().map(a => extractExpr(a as Expression)),
-    };
+    const fn = extractExpr(callee);
+    const args = node.getArguments().map(a => extractExpr(a as Expression));
+    if (node.hasQuestionDotToken()) {
+      return { kind: "optChain", obj: fn, chain: [{ kind: "call", args }] };
+    }
+    if (fn.kind === "optChain") {
+      return { ...fn, chain: [...fn.chain, { kind: "call", args }] };
+    }
+    return { kind: "call", fn, args };
   }
 
   // Binary expression: a + b, a === b, etc.
@@ -146,6 +154,10 @@ function extractExpr(node: Expression): RawExpr {
     if (op === "=") {
       // This is an assignment expression; extract as binop for now
       return { kind: "binop", op: "=", left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
+    }
+    // Nullish coalescing: a ?? b — single-eval, narrow rewrites to someMatch
+    if (op === "??") {
+      return { kind: "nullish", left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
     }
     return { kind: "binop", op, left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
   }

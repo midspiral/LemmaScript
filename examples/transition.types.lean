@@ -20,20 +20,20 @@ deriving Repr, Inhabited, DecidableEq
 namespace Pure
 
 def transition (state : State) (event : Event) : State :=
-  if state = .idle ∧ event = .connect then
-    .connecting
+  if state = State.idle ∧ event = Event.connect then
+    State.connecting
   else
-    if state = .connecting ∧ event = .ack then
-      .connected
+    if state = State.connecting ∧ event = Event.ack then
+      State.connected
     else
-      if state = .connected ∧ event = .close then
-        .closing
+      if state = State.connected ∧ event = Event.close then
+        State.closing
       else
-        if state = .closing ∧ event = .ack then
-          .idle
+        if state = State.closing ∧ event = Event.ack then
+          State.idle
         else
-          if event = .timeout then
-            .idle
+          if event = Event.timeout then
+            State.idle
           else
             state
 

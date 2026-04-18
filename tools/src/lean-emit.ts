@@ -113,7 +113,18 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "bool": return e.value ? "true" : "false";
     case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 
-    case "constructor": return `.${e.name}`;
+    case "constructor": {
+      // With type: emit `Type.name` (unambiguous; needed in expression positions
+      // like `match ... | .none => Type.some x` where elaboration can't infer).
+      // Without type: emit `.name` (dotted form; works in pattern positions
+      // and where the expected type is clear from context).
+      const head = e.type ? `${e.type}.${e.name}` : `.${e.name}`;
+      if (!e.args || e.args.length === 0) return head;
+      const args = e.args.map(a =>
+        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall") ? `(${emitExpr(a)})` : emitExpr(a)
+      );
+      return `${head} ${args.join(" ")}`;
+    }
     case "arrayLiteral":
       if (e.elems.length === 0) return `#[]`;
       return `#[${e.elems.map(el => emitExpr(el)).join(", ")}]`;
@@ -146,6 +157,13 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       return `(-${emitExpr(e.expr)})`;
 
     case "binop": {
+      // `k in m` (map/set membership) → `m.contains k` in Lean. Dafny has
+      // native `in`; Lean uses the method form for HashMap/HashSet.
+      if (e.op === "in") {
+        const recv = emitExpr(e.right);
+        const wrap = e.right.kind === "binop" || e.right.kind === "app" || e.right.kind === "methodCall";
+        return `${wrap ? `(${recv})` : recv}.contains ${emitExpr(e.left)}`;
+      }
       const op = e.op === "arrayConcat" ? "++" : e.op;
       const s = `${emitExpr(e.left, prec(e.op))} ${op} ${emitExpr(e.right, prec(e.op))}`;
       return (parentPrec !== undefined && prec(e.op) < parentPrec) ? `(${s})` : s;
@@ -192,8 +210,12 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       return `if ${emitExpr(e.cond)} then ${emitExpr(e.then)} else ${emitExpr(e.else)}`;
 
     case "match": {
+      // Always parenthesize inline matches — Lean parses alternatives greedily,
+      // so any token after an arm body (`→`, another match's `|`, etc.) would
+      // bleed into the last `.none` case without explicit bracketing.
       const arms = e.arms.map(a => `| ${a.pattern} => ${emitExpr(a.body)}`);
-      return `match ${typeof e.scrutinee === "string" ? e.scrutinee : emitExpr(e.scrutinee)} with ${arms.join(" ")}`;
+      const scrut = typeof e.scrutinee === "string" ? e.scrutinee : emitExpr(e.scrutinee);
+      return `(match ${scrut} with ${arms.join(" ")})`;
     }
 
     case "forall": return `∀ ${e.var} : ${tyToLean(e.type)}, ${emitExpr(e.body)}`;

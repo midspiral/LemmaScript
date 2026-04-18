@@ -8,21 +8,21 @@ set_option loom.semantics.termination "total"
 set_option loom.semantics.choice "demonic"
 
 method evalPartial (e : Expr) return (res : Int)
-  ensures match e with | .lit _e_val => res = _e_val | _ => true
-  ensures match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true
+  ensures (match e with | .lit _e_val => res = _e_val | _ => true)
+  ensures (match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true)
   do
     return Pure.evalPartial e
 
 method evalSwitch (e : Expr) return (res : Int)
-  ensures match e with | .lit _e_val => res = _e_val | _ => true
-  ensures match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true
-  ensures match e with | .neg _e_inner => res = 0 - _e_inner | _ => true
+  ensures (match e with | .lit _e_val => res = _e_val | _ => true)
+  ensures (match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true)
+  ensures (match e with | .neg _e_inner => res = 0 - _e_inner | _ => true)
   do
     return Pure.evalSwitch e
 
 method isHighPriority (p : Priority) return (res : Bool)
-  ensures p = .high → res = true
-  ensures p ≠ .high → res = false
+  ensures p = Priority.high → res = true
+  ensures p ≠ Priority.high → res = false
   do
     return Pure.isHighPriority p
 
@@ -184,11 +184,11 @@ method forOfContains (arr : Array Int) (target : Int) return (res : Bool)
     return found
 
 method clampedItem (x : Int) return (res : PriorityItem)
-  ensures res.level = .high
+  ensures res.level = Priority.high
   do
     let mut tmp : Int := x
     let _t2 ← clampTernary tmp 0 100
-    return { level := .high, value := _t2 }
+    return { level := Priority.high, value := _t2 }
 
 method clampedMidpoint (a : Int) (b : Int) return (res : Int)
   require a ≤ b
@@ -199,3 +199,83 @@ method clampedMidpoint (a : Int) (b : Int) return (res : Int)
     let mut mid : Int := _t3
     let _t4 ← clampTernary mid a b
     return _t4
+
+method deepAccess (t : Tree) return (res : Int)
+  ensures (match t.middle with | .some _t_middle_val => (match _t_middle_val.leaf with | .some _t_middle_leaf_val => res = _t_middle_leaf_val.value | .none => true) | .none => true)
+  ensures (match t.middle with | .some _ => false | .none => true) → res = 0
+  do
+    return Pure.deepAccess t
+
+method ocField (o : Option Outer) return (res : Option Inner)
+  ensures (match o with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true)
+  ensures (match o with | .some _o_val => res = _o_val.inner | .none => true)
+  do
+    return Pure.ocField o
+
+method ocChain (o : Option Outer) return (res : Option Int)
+  ensures (match o with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true)
+  ensures (match o with | .some _o_val => (match _o_val.inner with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) | .none => true)
+  ensures (match o with | .some _o_val => (match _o_val.inner with | .some _o_inner_val => (match res with | .some _value => _value == _o_inner_val.val | .none => false) | .none => true) | .none => true)
+  do
+    return Pure.ocChain o
+
+method ocMethodCall (s : Option (Std.HashSet String)) (k : String) return (res : Option Bool)
+  ensures (match s with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true)
+  ensures (match s with | .some _s_val => (match res with | .some _value => _value == _s_val.contains k | .none => false) | .none => true)
+  do
+    return Pure.ocMethodCall s k
+
+method ocIndex (m : Option (Std.HashMap String String)) (k : String) return (res : Option String)
+  ensures (match m with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true)
+  ensures (match m with | .some _m_val => res = _m_val.get? k | .none => true)
+  do
+    return Pure.ocIndex m k
+
+method nullishVar (o : Option Inner) (fallback : Int) return (res : Int)
+  ensures (match o with | .some _ => false | .none => true) → res = fallback
+  ensures (match o with | .some _o_val => res = _o_val.val | .none => true)
+  do
+    return Pure.nullishVar o fallback
+
+method nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) return (res : Int)
+  ensures ¬(m.contains k) → res = fallback
+  ensures m.contains k → res = m.get! k
+  do
+    return Pure.nullishMapGet m k fallback
+
+method negVar (o : Option Inner) (fallback : Int) return (res : Int)
+  ensures (match o with | .some _ => false | .none => true) → res = fallback
+  ensures (match o with | .some _o_val => res = _o_val.val | .none => true)
+  do
+    return Pure.negVar o fallback
+
+method negField (o : Outer) (fallback : Int) return (res : Int)
+  ensures (match o.inner with | .some _ => false | .none => true) → res = fallback
+  ensures (match o.inner with | .some _o_inner_val => res = _o_inner_val.val | .none => true)
+  do
+    return Pure.negField o fallback
+
+method truthyVar (o : Option Inner) (fallback : Int) return (res : Int)
+  ensures (match o with | .some _o_val => res = _o_val.val | .none => true)
+  ensures (match o with | .some _ => false | .none => true) → res = fallback
+  do
+    return Pure.truthyVar o fallback
+
+method nestedAndTernary (o : Option Outer) (fallback : Int) return (res : Int)
+  ensures (match o with | .some _ => false | .none => true) → res = fallback
+  ensures (match o with | .some _o_val => (match _o_val.inner with | .some _ => false | .none => true) → res = fallback | .none => true)
+  ensures (match o with | .some _o_val => (match _o_val.inner with | .some _o_inner_val => res = _o_inner_val.val | .none => true) | .none => true)
+  do
+    return Pure.nestedAndTernary o fallback
+
+method area (s : Shape) return (res : Int)
+  ensures (match s with | .circle _s_radius => res = _s_radius * _s_radius | _ => true)
+  ensures (match s with | .square _s_side => res = _s_side * _s_side | _ => true)
+  do
+    return Pure.area s
+
+method describeIfCircle (s : Shape) (fallback : Int) return (res : Int)
+  ensures (match s with | .circle _s_radius => res = _s_radius * _s_radius | _ => true)
+  ensures (match s with | .square _s_side => res = fallback | _ => true)
+  do
+    return Pure.describeIfCircle s fallback

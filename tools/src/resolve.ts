@@ -11,63 +11,6 @@ import { parseTsType } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 
-// ── Raw expression substitution ─────────────────────────────
-
-let _synVarCounter = 0;
-
-/**
- * Structural equality for raw field-access chains (var and field nodes only).
- * Exact within a single expression scope — raw IR has no bindings that could
- * cause name collisions (those are introduced by resolve, which runs after).
- */
-function rawExprEquals(a: RawExpr, b: RawExpr): boolean {
-  if (a.kind === "var" && b.kind === "var") return a.name === b.name;
-  if (a.kind === "field" && b.kind === "field") return a.field === b.field && rawExprEquals(a.obj, b.obj);
-  if (a.kind === "call" && b.kind === "call") return rawExprEquals(a.fn, b.fn) && a.args.length === b.args.length && a.args.every((arg, i) => rawExprEquals(arg, b.args[i]));
-  if (a.kind === "index" && b.kind === "index") return rawExprEquals(a.obj, b.obj) && rawExprEquals(a.idx, b.idx);
-  return false;
-}
-
-/** Return the root variable name of a field-access chain, or null. */
-function rawChainRoot(e: RawExpr): string | null {
-  if (e.kind === "var") return e.name;
-  if (e.kind === "field") return rawChainRoot(e.obj);
-  return null;
-}
-
-/**
- * Replace all occurrences of `target` in `expr` with `replacement`.
- * Only matches field-access chains (see rawExprEquals). Stops at lambda
- * boundaries that shadow the chain's root variable.
- */
-function substituteRawExpr(expr: RawExpr, target: RawExpr, replacement: RawExpr): RawExpr {
-  if (rawExprEquals(expr, target)) return replacement;
-  const root = rawChainRoot(target);
-  const sub = (e: RawExpr) => substituteRawExpr(e, target, replacement);
-  switch (expr.kind) {
-    case "var": case "num": case "str": case "bool": case "result":
-    case "havoc": case "emptyCollection":
-      return expr;
-    case "binop":  return { ...expr, left: sub(expr.left), right: sub(expr.right) };
-    case "unop":   return { ...expr, expr: sub(expr.expr) };
-    case "call":   return { ...expr, fn: sub(expr.fn), args: expr.args.map(sub) };
-    case "field":  return { ...expr, obj: sub(expr.obj) };
-    case "index":  return { ...expr, obj: sub(expr.obj), idx: sub(expr.idx) };
-    case "record":
-      return { ...expr, spread: expr.spread ? sub(expr.spread) : null,
-        fields: expr.fields.map(f => ({ ...f, value: sub(f.value) })) };
-    case "arrayLiteral": return { ...expr, elems: expr.elems.map(sub) };
-    case "conditional":  return { ...expr, cond: sub(expr.cond), then: sub(expr.then), else: sub(expr.else) };
-    case "nonNull":      return { ...expr, expr: sub(expr.expr) };
-    case "forall": case "exists":
-      return { ...expr, body: sub(expr.body) };
-    case "lambda":
-      // Don't cross lambda boundaries that shadow the chain's root variable
-      if (root && expr.params.some(p => p.name === root)) return expr;
-      return { ...expr, body: Array.isArray(expr.body) ? expr.body : sub(expr.body) };
-  }
-}
-
 // ── Environment ──────────────────────────────────────────────
 
 interface Env {
@@ -85,11 +28,35 @@ function extend(env: Env | null, name: string, ty: Ty): Env {
   return { name, ty, parent: env };
 }
 
+// ── Access paths ─────────────────────────────────────────────
+
+/** Pure access path — a chain of field accesses rooted at a variable.
+ *  E.g. `a.b.c` → { rootVar: "a", fields: ["b", "c"] }. Empty fields
+ *  means the path is just the var itself. */
+interface AccessPath {
+  rootVar: string;
+  fields: string[];
+}
+
+function asRawAccessPath(e: RawExpr): AccessPath | null {
+  if (e.kind === "var") return { rootVar: e.name, fields: [] };
+  if (e.kind === "field") {
+    const inner = asRawAccessPath(e.obj);
+    if (!inner) return null;
+    return { rootVar: inner.rootVar, fields: [...inner.fields, e.field] };
+  }
+  return null;
+}
+
+function accessPathsEqual(a: AccessPath, b: AccessPath): boolean {
+  return a.rootVar === b.rootVar && a.fields.length === b.fields.length &&
+    a.fields.every((f, i) => f === b.fields[i]);
+}
+
 // ── Context ──────────────────────────────────────────────────
 
-interface NarrowedField {
-  objName: string;
-  fieldName: string;
+interface NarrowedPath {
+  path: AccessPath;
   narrowedTy: Ty;
 }
 
@@ -104,7 +71,7 @@ interface Ctx {
   fnReturns: Map<string, Ty>;  // function name → return type
   inSpec: boolean;
   inLambda: boolean;
-  narrowedFields: NarrowedField[];  // field chain narrowing context for conditional then-branches
+  narrowedPaths: NarrowedPath[];  // pure access path narrowing for conditional then-branches
 }
 
 function withEnv(ctx: Ctx, env: Env | null): Ctx {
@@ -137,44 +104,48 @@ function wrapSome(value: TExpr, optionalTy: Ty): TExpr {
   };
 }
 
-/** Detect `v !== undefined` or `undefined !== v` where v: optional<T>.
- *  Handles simple variables, field access chains, and arbitrary expressions.
- *  When `fieldExpr` is returned for a simple field chain (obj.field), callers
- *  can narrow via `narrowedFields` context. For complex expressions (calls, etc.),
- *  callers should fall back to `substituteRawExpr`.
- *
- *  Does NOT recurse into `&&` — callers that need to detect optional checks
- *  inside `&&` conditions should check `cond.left` explicitly. */
+/** Detect optional checks: `v !== undefined` (positive narrows then-branch),
+ *  `v === undefined` (negative narrows else-branch), or `!v` (equivalent to
+ *  `=== undefined`).
+ *  Returns:
+ *    - simple var: `varName` set, `fieldExpr` unset
+ *    - complex (field chain or call): `fieldExpr` set, `varName` empty
+ *    - inThen: true for `!==` (truthy), false for `===` and `!v` (falsy).
+ *  Does NOT recurse into `&&`. */
 function detectOptionalCheck(cond: RawExpr, ctx: Ctx): {
   varName: string; innerTy: Ty; inThen: boolean;
-  fieldExpr?: RawExpr;       // set for field chains and complex expressions — needs substitution
-  narrowedExpr?: TExpr;      // resolved optional expression — set for non-variable checks
+  fieldExpr?: RawExpr;
 } | null {
-  if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) return null;
+  // `!v` where v is optional — same shape as `v === undefined` (inThen: false).
+  if (cond.kind === "unop" && cond.op === "!") {
+    const inner = classifyOptExpr(cond.expr, ctx);
+    return inner ? { ...inner, inThen: false } : null;
+  }
+  if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) {
+    // Bare optional truthiness: `if (v)` where v: T | undefined — same as `v !== undefined`.
+    const inner = classifyOptExpr(cond, ctx);
+    return inner ? { ...inner, inThen: true } : null;
+  }
   // Identify the expression being checked against undefined
   let optExpr: RawExpr | null = null;
   if (cond.right.kind === "var" && cond.right.name === "undefined") optExpr = cond.left;
   if (cond.left.kind === "var" && cond.left.name === "undefined") optExpr = cond.right;
   if (!optExpr) return null;
+  const inner = classifyOptExpr(optExpr, ctx);
+  return inner ? { ...inner, inThen: cond.op === "!==" } : null;
+}
 
-  // Simple variable — env lookup, no substitution needed
-  if (optExpr.kind === "var") {
-    const ty = lookup(ctx.env, optExpr.name);
+/** Classify an expression as a simple var or field-chain optional, returning
+ *  the shape needed by detectOptionalCheck (sans inThen). */
+function classifyOptExpr(e: RawExpr, ctx: Ctx): { varName: string; innerTy: Ty; fieldExpr?: RawExpr } | null {
+  if (e.kind === "var") {
+    const ty = lookup(ctx.env, e.name);
     if (!ty || ty.kind !== "optional") return null;
-    return { varName: optExpr.name, innerTy: ty.inner, inThen: cond.op === "!==" };
+    return { varName: e.name, innerTy: ty.inner };
   }
-
-  // Field access chain or arbitrary expression — resolve to check type, needs substitution
-  const resolved = resolveExpr(optExpr, ctx);
-  if (resolved.ty.kind === "optional") {
-    const synVar = optExpr.kind === "field" ? `_narr${_synVarCounter++}` : `_opt${_synVarCounter++}`;
-    return {
-      varName: synVar, innerTy: resolved.ty.inner, inThen: cond.op === "!==",
-      fieldExpr: optExpr, narrowedExpr: resolved,
-    };
-  }
-
-  return null;
+  const resolved = resolveExpr(e, ctx);
+  if (resolved.ty.kind !== "optional") return null;
+  return { varName: "", innerTy: resolved.ty.inner, fieldExpr: e };
 }
 
 /** Collect all optional narrowings from an early-return condition.
@@ -189,6 +160,26 @@ function collectEarlyReturnNarrowings(cond: RawExpr, ctx: Ctx): { varName: strin
     return [{ varName: narrowed.varName, innerTy: narrowed.innerTy }];
   }
   return [];
+}
+
+/** Walk an `&&` chain of `e !== undefined` checks, returning a Ctx with all
+ *  narrowings applied. Earlier checks are in scope for later checks (so the
+ *  right side of `&&` sees the left side's narrowings). */
+function collectAndChainNarrowings(cond: RawExpr, ctx: Ctx): Ctx {
+  if (cond.kind === "binop" && cond.op === "&&") {
+    const leftCtx = collectAndChainNarrowings(cond.left, ctx);
+    return collectAndChainNarrowings(cond.right, leftCtx);
+  }
+  const n = detectOptionalCheck(cond, ctx);
+  if (!n || !n.inThen) return ctx;
+  if (!n.fieldExpr) {
+    return withEnv(ctx, extend(ctx.env, n.varName, n.innerTy));
+  }
+  const path = asRawAccessPath(n.fieldExpr);
+  if (path) {
+    return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: n.innerTy }] };
+  }
+  return ctx;
 }
 
 /** TS reference types that become value types in Dafny/Lean — const bindings need mutable var. */
@@ -333,6 +324,33 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
   return { kind: "unknown" };
 }
 
+/** Look up the type of `field` on `objTy`. Returns `unknown` if not found. */
+function lookupFieldTy(objTy: Ty, field: string, ctx: Ctx): { ty: Ty; isDiscriminant: boolean } {
+  if (field === "length" && (objTy.kind === "array" || objTy.kind === "string")) {
+    return { ty: { kind: "nat" }, isDiscriminant: false };
+  }
+  if (field === "size" && (objTy.kind === "map" || objTy.kind === "set")) {
+    return { ty: { kind: "nat" }, isDiscriminant: false };
+  }
+  if (objTy.kind === "user") {
+    const baseTyName = objTy.name.includes("<") ? objTy.name.slice(0, objTy.name.indexOf("<")) : objTy.name;
+    const isDiscriminant = getDiscriminant(ctx, baseTyName) === field;
+    const decl = findDecl(ctx, baseTyName);
+    if (decl?.kind === "record") {
+      const f = decl.fields?.find(f => f.name === field);
+      if (f) return { ty: f.type!, isDiscriminant };
+    }
+    if (decl?.kind === "discriminated-union" && decl.variants) {
+      for (const variant of decl.variants) {
+        const f = variant.fields.find(f => f.name === field);
+        if (f) return { ty: f.type!, isDiscriminant };
+      }
+    }
+    return { ty: { kind: "unknown" }, isDiscriminant };
+  }
+  return { ty: { kind: "unknown" }, isDiscriminant: false };
+}
+
 // ── Resolve expressions ──────────────────────────────────────
 
 function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
@@ -364,16 +382,12 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "binop": {
       let left = resolveExpr(e.left, ctx);
-      // && narrowing: if left is "x !== undefined", narrow x for right side.
-      // Field chains are excluded — resolve can't substitute in sub-expressions;
-      // transform's emitOptionalMatch handles field chains in statement contexts.
+      // && and ==> narrowing: left-side optional checks narrow the right side.
+      // (For ==>, the premise is assumed in the conclusion — same principle.)
       let rightCtx = ctx;
       let rawRight = e.right;
-      if (e.op === "&&") {
-        const narrowed = detectOptionalCheck(e.left, ctx);
-        if (narrowed && narrowed.inThen && !narrowed.fieldExpr) {
-          rightCtx = withEnv(ctx, extend(ctx.env, narrowed.varName, narrowed.innerTy));
-        }
+      if (e.op === "&&" || e.op === "==>") {
+        rightCtx = collectAndChainNarrowings(e.left, ctx);
       }
       let right = resolveExpr(rawRight, rightCtx);
       if (e.op === "===" || e.op === "!==") {
@@ -440,35 +454,80 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let isDiscriminant = false;
       let ty: Ty = { kind: "unknown" };
 
-      // Check narrowed field context (from conditional optional checks on field chains)
-      if (obj.kind === "var" && ctx.narrowedFields.length > 0) {
-        const nf = ctx.narrowedFields.find(n => n.objName === obj.name && n.fieldName === e.field);
-        if (nf) ty = nf.narrowedTy;
+      // Check narrowed path context (from conditional optional checks).
+      // Applies when the current field-access forms a pure access path AND
+      // that path is in the narrowedPaths list.
+      if (ctx.narrowedPaths.length > 0) {
+        const myPath = asRawAccessPath(e);
+        if (myPath) {
+          const np = ctx.narrowedPaths.find(n => accessPathsEqual(n.path, myPath));
+          if (np) ty = np.narrowedTy;
+        }
       }
 
-      if (ty.kind === "unknown" && e.field === "length" && (obj.ty.kind === "array" || obj.ty.kind === "string")) {
-        ty = { kind: "nat" };
-      } else if (ty.kind === "unknown" && e.field === "size" && (obj.ty.kind === "map" || obj.ty.kind === "set")) {
-        ty = { kind: "nat" };
-      } else if (ty.kind === "unknown" && obj.ty.kind === "user") {
-        // Strip generic args for type lookup: "Result<Model, Err>" → "Result"
-        const baseTyName = obj.ty.name.includes("<") ? obj.ty.name.slice(0, obj.ty.name.indexOf("<")) : obj.ty.name;
-        if (getDiscriminant(ctx, baseTyName) === e.field) isDiscriminant = true;
-        const decl = findDecl(ctx, baseTyName);
-        if (decl?.kind === "record") {
-          const f = decl.fields?.find(f => f.name === e.field);
-          if (f) ty = f.type!;
-        }
-        // Also resolve fields from discriminated-union variants
-        if (ty.kind === "unknown" && decl?.kind === "discriminated-union" && decl.variants) {
-          for (const variant of decl.variants) {
-            const f = variant.fields.find(f => f.name === e.field);
-            if (f) { ty = f.type!; break; }
-          }
-        }
+      if (ty.kind === "unknown") {
+        const lookup = lookupFieldTy(obj.ty, e.field, ctx);
+        ty = lookup.ty;
+        isDiscriminant = lookup.isDiscriminant;
       }
 
       return { kind: "field", obj, field: e.field, ty, isDiscriminant };
+    }
+
+    case "nullish": {
+      // left ?? right — result type is left's inner (when left is optional)
+      // or just left's type, unified with right's type.
+      const left = resolveExpr(e.left, ctx);
+      const right = resolveExpr(e.right, ctx);
+      const ty: Ty = left.ty.kind === "optional" ? left.ty.inner : left.ty;
+      return { kind: "nullish", left, right, ty };
+    }
+
+    case "optChain": {
+      // obj?.<chain> — obj has type Option<T>; we walk the chain stepping
+      // through types from T. The final result is Option<finalStepTy>
+      // (collapsed: if finalStepTy is already optional, we don't double-wrap).
+      // Narrow rewrites this to a someMatch with the chain applied to the binder.
+      const obj = resolveExpr(e.obj, ctx);
+      let stepInTy = obj.ty.kind === "optional" ? obj.ty.inner : obj.ty;
+      const chain: import("./typedir.js").TChainStep[] = [];
+      for (const step of e.chain) {
+        if (step.kind === "field") {
+          const fieldTy = lookupFieldTy(stepInTy, step.name, ctx).ty;
+          chain.push({ kind: "field", name: step.name, ty: fieldTy });
+          stepInTy = fieldTy;
+        } else if (step.kind === "index") {
+          const idx = resolveExpr(step.idx, ctx);
+          const idxTy: Ty = stepInTy.kind === "array" ? stepInTy.elem
+            : stepInTy.kind === "map" ? { kind: "optional", inner: stepInTy.value }
+            : { kind: "unknown" };
+          chain.push({ kind: "index", idx, ty: idxTy });
+          stepInTy = idxTy;
+        } else {
+          // call: prev step yielded a callable (typically a method via field).
+          // Build a fake fn TExpr from prev steps to reuse inferMethodReturnTy.
+          const args = step.args.map(a => resolveExpr(a, ctx));
+          const lastField = chain.length > 0 && chain[chain.length - 1].kind === "field"
+            ? chain[chain.length - 1] as { kind: "field"; name: string; ty: Ty } : null;
+          let callTy: Ty = { kind: "unknown" };
+          let callKind: CallKind = "unknown";
+          if (lastField) {
+            // Build a synthetic field TExpr with the prior step's input type as obj
+            // so inferMethodReturnTy can dispatch on the receiver type.
+            const priorInTy = chain.length >= 2 ? chain[chain.length - 2].ty
+              : (obj.ty.kind === "optional" ? obj.ty.inner : obj.ty);
+            const fakeObj: TExpr = { kind: "var", name: "_chain_recv", ty: priorInTy };
+            const fakeFn: TExpr = { kind: "field", obj: fakeObj, field: lastField.name, ty: lastField.ty };
+            callTy = inferMethodReturnTy(fakeFn, args, ctx);
+            callKind = "method";
+          }
+          chain.push({ kind: "call", args, ty: callTy, callKind });
+          stepInTy = callTy;
+        }
+      }
+      const finalTy = stepInTy;
+      const ty: Ty = finalTy.kind === "optional" ? finalTy : { kind: "optional", inner: finalTy };
+      return { kind: "optChain", obj, chain, ty };
     }
 
     case "record": {
@@ -546,85 +605,41 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     case "conditional": {
       const cond = resolveExpr(e.cond, ctx);
 
-      let narrowedVar: string | undefined;
-      let thenCtx = ctx;
-      let rawThen = e.then;
-
-      // Phase 1: Optional truthiness — cond itself is optional (e.g. opt ? X : Y)
-      if (cond.ty.kind === "optional") {
-        const innerTy = cond.ty.inner;
-        if (e.cond.kind === "var") {
-          narrowedVar = e.cond.name;
-          thenCtx = withEnv(ctx, extend(ctx.env, e.cond.name, innerTy));
-        } else {
-          narrowedVar = `_opt${_synVarCounter++}`;
-          rawThen = substituteRawExpr(e.then, e.cond, { kind: "var", name: narrowedVar });
-          thenCtx = withEnv(ctx, extend(ctx.env, narrowedVar, innerTy));
-        }
-      }
-
-      // Phase 2/3: Explicit check — v !== undefined, or && with optional check.
-      // Resolve only narrows the type environment; transform handles all structural
-      // narrowing (match generation, variable binding, && splitting).
-      let narrowedExprResolved: TExpr | undefined;
+      // Type narrowing for the then/else branches. Following TS, we narrow
+      // simple vars and any pure access path (`a.b.c.d`) — but not expressions
+      // with method calls or index ops (bind-first required).
+      // For &&-chains, all positive checks narrow the then-branch; earlier
+      // checks are in scope when resolving later ones.
+      let thenCtx = collectAndChainNarrowings(e.cond, ctx);
       let elseCtx = ctx;
-      if (!narrowedVar) {
-        const narrowed = detectOptionalCheck(e.cond, ctx)
-          ?? (e.cond.kind === "binop" && e.cond.op === "&&" ? detectOptionalCheck(e.cond.left, ctx) : null);
-        if (narrowed && narrowed.inThen) {
-          if (!narrowed.fieldExpr) {
-            // Simple var: extend env only — transform will detect and generate match
-            thenCtx = withEnv(thenCtx, extend(thenCtx.env, narrowed.varName, narrowed.innerTy));
-          } else if (narrowed.fieldExpr.kind === "field" && narrowed.fieldExpr.obj.kind === "var") {
-            // Simple field chain (obj.field): narrow via field context — no substitution
-            thenCtx = {
-              ...thenCtx,
-              narrowedFields: [...thenCtx.narrowedFields, {
-                objName: (narrowed.fieldExpr.obj as { kind: "var"; name: string }).name,
-                fieldName: (narrowed.fieldExpr as { kind: "field"; field: string }).field,
-                narrowedTy: narrowed.innerTy,
-              }],
-            };
-          } else {
-            // Complex expression (call result, deep chain, etc.): transform can't detect these,
-            // so keep old behavior — substitute + narrowedVar + narrowedExpr
-            narrowedVar = narrowed.varName;
-            narrowedExprResolved = narrowed.narrowedExpr ?? resolveExpr(narrowed.fieldExpr, ctx);
-            rawThen = substituteRawExpr(e.then, narrowed.fieldExpr, { kind: "var", name: narrowed.varName });
-            thenCtx = withEnv(thenCtx, extend(thenCtx.env, narrowed.varName, narrowed.innerTy));
-          }
-        } else if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
-          // v === undefined: narrow v in the else branch
-          elseCtx = withEnv(elseCtx, extend(elseCtx.env, narrowed.varName, narrowed.innerTy));
-        }
-        // Compound || with === undefined: narrow all checked vars in else branch
-        // e.g. if (a === undefined || b === undefined) then X else Y → narrow a,b in Y
-        // TODO: resolve-time narrowing works but transform doesn't emit match unwrap
-        // for || conditions yet — decompose || into nested matches in transform.
-        // Workaround: split || into separate if guards in user code.
-        if (!narrowed && e.cond.kind === "binop" && e.cond.op === "||") {
-          for (const n of collectEarlyReturnNarrowings(e.cond, ctx)) {
-            elseCtx = withEnv(elseCtx, extend(elseCtx.env, n.varName, n.innerTy));
-          }
+
+      // Truthiness — cond itself is optional (`opt ? a : b`), only for simple vars.
+      if (cond.ty.kind === "optional" && e.cond.kind === "var") {
+        thenCtx = withEnv(thenCtx, extend(thenCtx.env, e.cond.name, cond.ty.inner));
+      }
+
+      // Single === undefined check narrows the else-branch.
+      const single = detectOptionalCheck(e.cond, ctx);
+      if (single && !single.inThen && !single.fieldExpr) {
+        elseCtx = withEnv(elseCtx, extend(elseCtx.env, single.varName, single.innerTy));
+      }
+      if (!single && e.cond.kind === "binop" && e.cond.op === "||") {
+        for (const n of collectEarlyReturnNarrowings(e.cond, ctx)) {
+          elseCtx = withEnv(elseCtx, extend(elseCtx.env, n.varName, n.innerTy));
         }
       }
 
-      let then_ = resolveExpr(rawThen, thenCtx);
+      let then_ = resolveExpr(e.then, thenCtx);
       let else_ = resolveExpr(e.else, elseCtx);
       then_ = coerceStr(then_, else_.ty);
       else_ = coerceStr(else_, then_.ty);
       let ty = then_.ty.kind !== "unknown" ? then_.ty : else_.ty;
-      // When one branch is undefined, result is optional
       if (then_.ty.kind === "void" && else_.ty.kind !== "void" && else_.ty.kind !== "unknown") {
         ty = { kind: "optional", inner: else_.ty };
       } else if (else_.ty.kind === "void" && then_.ty.kind !== "void" && then_.ty.kind !== "unknown") {
         ty = { kind: "optional", inner: then_.ty };
       }
-      // When narrowedExpr is set AND a branch is void, the match produces Optional
-      if (narrowedExprResolved && (then_.ty.kind === "void" || else_.ty.kind === "void") && ty.kind !== "optional") {
-        ty = { kind: "optional", inner: ty };
-      }
-      return { kind: "conditional", cond, then: then_, else: else_, ty, narrowedVar, narrowedExpr: narrowedExprResolved };
+      return { kind: "conditional", cond, then: then_, else: else_, ty };
     }
 
     case "emptyCollection": {
@@ -724,16 +739,14 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
 
     case "if": {
       // Narrow optional<T> → T when checking !== undefined or undefined !==.
-      // Also checks left side of && conditions: if (x !== undefined && ...) { ... }
-      // Field chains are excluded — resolve can't substitute in statement bodies;
-      // transform's emitOptionalMatch handles field chains in statement contexts.
-      let thenCtx = ctx, elseCtx = ctx;
-      const narrowed = detectOptionalCheck(s.cond, ctx)
-        ?? (s.cond.kind === "binop" && s.cond.op === "&&" ? detectOptionalCheck(s.cond.left, ctx) : null);
-      if (narrowed && !narrowed.fieldExpr) {
-        const env = extend(ctx.env, narrowed.varName, narrowed.innerTy);
-        if (narrowed.inThen) thenCtx = withEnv(ctx, env);
-        else elseCtx = withEnv(ctx, env);
+      // For &&-chains, all positive optional checks narrow the then-branch;
+      // earlier checks are in scope when resolving later ones.
+      // Single-check === undefined narrows the else-branch.
+      let thenCtx = collectAndChainNarrowings(s.cond, ctx);
+      let elseCtx = ctx;
+      const single = detectOptionalCheck(s.cond, ctx);
+      if (single && !single.inThen && !single.fieldExpr) {
+        elseCtx = withEnv(ctx, extend(ctx.env, single.varName, single.innerTy));
       }
       return [{ kind: "if", cond: resolveExpr(s.cond, ctx), then: resolveBlock(s.then, thenCtx), else: resolveBlock(s.else, elseCtx) }, ctx.env];
     }
@@ -968,7 +981,7 @@ function resolveFunction(
   if (opts?.thisBinding) env = extend(env, opts.thisBinding.name, opts.thisBinding.ty);
   for (const p of params) env = extend(env, p.name, p.ty);
 
-  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedFields: [] };
+  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedPaths: [] };
   const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
   const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
 
@@ -1017,7 +1030,6 @@ function precomputeFieldTypes(typeDecls: TypeDeclInfo[]) {
 }
 
 export function resolveModule(raw: RawModule): TModule {
-  _synVarCounter = 0;
   precomputeFieldTypes(raw.typeDecls);
   const pureFns = computePureFns(raw.functions);
   // Pre-compute function parameter and return types
@@ -1028,7 +1040,7 @@ export function resolveModule(raw: RawModule): TModule {
     fnParams.set(fn.name, fn.params.map(p => resolveTsType(p.tsType, overrides, p.name)));
     fnReturns.set(fn.name, resolveTsType(fn.returnType, overrides, "\\result"));
   }
-  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedFields: [] };
+  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedPaths: [] };
   const constants = (raw.constants ?? []).map(c => ({
     name: c.name,
     ty: parseTsType(c.tsType),

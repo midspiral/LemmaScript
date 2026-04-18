@@ -11,7 +11,7 @@ function nextSeq(state: int, pkt: Packet): int
       state
     case data(i_pkt_seq, i_pkt_len) =>
       (state + i_pkt_len)
-    case _ =>
+    case fin =>
       state
   }
 }

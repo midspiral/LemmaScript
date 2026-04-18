@@ -61,32 +61,40 @@ Both backends share the same TypeScript source, `//@ ` annotations, and pipeline
   TypeScript source (.ts)
   with //@ annotations
        │
-       ├──→ extract (ts-morph → Raw IR)
+       ├──→ extract  (ts-morph → Raw IR)
        │         │
-       │         └──→ resolve (Raw IR → Typed IR)
+       │         └──→ resolve   (types + type-narrowing)
        │                   │
-       │                   └──→ transform (Typed IR → IR)
+       │                   └──→ narrow  (structural narrowing → someMatch)
        │                             │
-       │              ┌──────────────┴──────────────┐
-       │              │                             │
-       │         lean-emit.ts                  dafny-emit.ts
-       │              │                             │
-       │      .types.lean + .def.lean          .dfy.gen
-       │         (generated)                   (generated)
-       │              │                             │
-       │      .spec.lean + .proof.lean           .dfy
-       │         (user / LLM)              (gen + user additions)
-       │              │                             │
-       │        lake build                    dafny verify
+       │                             └──→ transform (Typed IR → IR)
+       │                                       │
+       │                                       └──→ peephole (Some/None cleanup)
+       │                                                 │
+       │                          ┌──────────────────────┴──────────────────────┐
+       │                          │                                             │
+       │                     lean-emit.ts                                  dafny-emit.ts
+       │                          │                                             │
+       │                  .types.lean + .def.lean                          .dfy.gen
+       │                     (generated)                                   (generated)
+       │                          │                                             │
+       │                  .spec.lean + .proof.lean                              .dfy
+       │                     (user / LLM)                              (gen + user additions)
+       │                          │                                             │
+       │                    lake build                                    dafny verify
        │
        └──→ TypeScript IS the production output. No erasure.
 ```
+
+See [ARCHITECTURE_NARROWING.md](ARCHITECTURE_NARROWING.md) for the
+design choices in the resolve/narrow/transform split, and
+[TOOLS.md](TOOLS.md) for the implementation surface.
 
 ### Key properties
 
 **No erasure, no gap.** The TypeScript source *is* the production code. The `//@ ` annotations are comments — invisible to tsc, bundlers, and the runtime. Proof files never touch the production build.
 
-**Shared pipeline, separate emitters.** Extract, resolve, and transform are backend-agnostic. The IR uses semantic names (e.g., `arraySet`, `mapGet`) and preserves `Ty` objects — each emitter maps to its own syntax and type system.
+**Shared pipeline, separate emitters.** Extract, resolve, narrow, and transform are backend-agnostic. Peephole takes a `backend` parameter (some rewrites are Dafny-only — see [TOOLS.md](TOOLS.md#peephole-rules)). The IR uses semantic names (e.g., `arraySet`, `mapGet`) and preserves `Ty` objects — each emitter maps to its own syntax and type system.
 
 **The trust question.** Does the generated embedding faithfully model the TypeScript code? This is a one-directional question (TS → prover) validated by inspection of the code generator. The code generator is a straightforward syntactic translation — it does not optimize, reorder, or transform.
 
