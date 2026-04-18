@@ -52,13 +52,13 @@ soundness hazard of retyping based on structural equality of impure calls.
 Resolve does **no structural rewriting**. It does not substitute, does not
 introduce synthetic vars, does not generate `match` constructs.
 
-**Pe owns structural narrowing.** A separate pass between resolve and
+**Narrow owns structural narrowing.** A separate pass between resolve and
 transform takes typed IR and rewrites optional-narrowing patterns into a
 single IR primitive: `someMatch`. Each TS pattern (`if !== undefined`,
 ternary, `&&`, `||`, early return, truthiness, let-with-impure-guard,
 optional chain `?.`) is detected by a focused rule and rewritten
-compositionally. See [TOOLS.md#pe-rules](TOOLS.md#pe-rules) for the
-full list.
+compositionally. See [TOOLS.md#narrow-rules](TOOLS.md#narrow-rules) for
+the full list.
 
 **Transform owns lowering.** It receives typed IR with `someMatch` nodes
 and lowers them to backend-IR `match Some/None`, performing a light
@@ -91,51 +91,48 @@ path with the binder at lowering time via `replacePathInTExpr` /
 TExprs whose access-path shape matches the scrutinee exactly.
 
 For complex scrutinees (only produced by the `optChain` rewrite — see
-below), pe constructs the someBody to reference the binder directly, so
-transform skips substitution and lowers naively.
+below), narrow constructs the someBody to reference the binder directly,
+so transform skips substitution and lowers naively.
 
 ---
 
 ## Why a Separate Pass
 
-Pe is a separate pass mostly because the rewrites compose better in
+Narrow is a separate pass mostly because the rewrites compose better in
 isolation than they did when scattered across resolve and transform:
 
 - **Each pattern is one rule** instead of a code path in resolve plus one
-  in transform. Adding a TS narrowing pattern is one rule in pe.
-- **Pe doesn't touch unrelated work.** Method dispatch, HOF lowering,
-  loop transformation, monadic ANF — all stay in transform. Pe only
+  in transform. Adding a TS narrowing pattern is one rule in narrow.
+- **Narrow doesn't touch unrelated work.** Method dispatch, HOF lowering,
+  loop transformation, monadic ANF — all stay in transform. Narrow only
   rewrites optional-narrowing shapes.
 - **The `someMatch` primitive** is the contract between layers. Resolve
   produces conditionals (no someMatch); transform consumes someMatch
-  (lowers to match Some/None). Pe sits in between, doing the conversion.
+  (lowers to match Some/None). Narrow sits in between, doing the conversion.
 
-It's not as self-contained as "bounded responsibility" suggests, though
-— each new TS pattern still touches all three layers (resolve to type
-narrowed accesses, pe to rewrite the shape, transform to substitute the
-binder). Pe is the *structural* layer of a three-layer system, not a
-hermetic component. It's also not "partial evaluation" in any classical
-sense — it's syntax-directed pattern matching on typed IR. The name is
-historical; a more accurate one would be "narrow" or "rewriteOptionals".
+Note: each new TS pattern still touches all three layers (resolve to type
+narrowed accesses, narrow to rewrite the shape, transform to substitute the
+binder). Narrow is the *structural* layer of a three-layer system, not a
+hermetic component.
 
 ---
 
-## Pe vs Peephole
+## Narrow vs Peephole
 
 Two passes that operate on different IRs and solve different problems:
 
-- **Pe** runs on typed IR before transform. It eliminates flow-sensitive
+- **Narrow** runs on typed IR before transform. It eliminates flow-sensitive
   narrowing — rewrites `if (x !== undefined) use(x)` to `someMatch x { ... }`.
 - **Peephole** runs on backend IR after transform. It eliminates
   wrap-then-unwrap ceremony around partial-access expressions —
   rewrites `match m.get(k) { Some(v) => v == 0, None => false }` to
   `k in m && m[k] == 0`.
 
-Pe is structural; peephole is local. Pe is necessary for correctness
+Narrow is structural; peephole is local. Narrow is necessary for correctness
 (without it, the IR has no narrowing); peephole is a cleanup (without
 it, the verifier sees through the ceremony but the output is verbose).
 
-They compose: pe converts narrowing to `someMatch` → transform lowers
+They compose: narrow converts narrowing to `someMatch` → transform lowers
 `someMatch` to `match` → peephole simplifies the `match` if its scrutinee
 is a `Map.get` call.
 
@@ -145,7 +142,7 @@ is a `Map.get` call.
 
 TS's `obj?.field` reads the field once, yielding `field's type | undefined`
 if `obj` is defined. Extract emits an `optChain { obj, field }` IR node —
-a first-class single-evaluation form. Pe's `ruleOptChain` rewrites it to:
+a first-class single-evaluation form. Narrow's `ruleOptChain` rewrites it to:
 
 ```
 someMatch obj { Some(_oc{N}_val) => _oc{N}_val.field, None => undefined }
@@ -161,17 +158,17 @@ extract emits a single-evaluation IR node for it.
 
 ---
 
-## What Pe Does NOT Cover
+## What Narrow Does NOT Cover
 
 - **Discriminated-union narrowing.** `if (e.kind === "lit") use(e.val)` —
   same shape as optional narrowing (a tag check followed by access to
   variant-specific data) but currently handled by transform's
-  `detectDiscriminantChain`. Could fold into pe with a generalized
+  `detectDiscriminantChain`. Could fold into narrow with a generalized
   `someMatch`-like primitive carrying a variant name; not done yet.
 - **Cross-function narrowing.** TS narrows across function calls if the
   callee is a type predicate (`function isString(x): x is string`).
   LemmaScript doesn't currently support type predicates.
 - **Complex-expression narrowing.** `if (m.get(k) !== undefined) use(m.get(k))` is rejected (TS-faithful). Users must bind first.
-- **Map.get ceremony elimination.** That's the peephole's job, not pe's.
+- **Map.get ceremony elimination.** That's the peephole's job, not narrow's.
   Once narrowing lowers to `match m.get(k) { ... }`, peephole collapses
   the shape into `if k in m { ... m[k] ... }`.

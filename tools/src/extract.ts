@@ -100,8 +100,8 @@ function extractExpr(node: Expression): RawExpr {
     const obj = extractExpr(node.getExpression());
     const field = node.getName();
     // Optional chaining on data access: x?.foo → optChain(x, foo) — single-eval
-    // form lowered to someMatch by pe. Skip if this is a method call (parent is
-    // CallExpression) — handled differently.
+    // form lowered to someMatch by narrow. Skip if this is a method call (parent
+    // is CallExpression) — handled differently.
     if (node.hasQuestionDotToken()) {
       const parent = node.getParent();
       const isMethodCall = parent && Node.isCallExpression(parent) && parent.getExpression() === node;

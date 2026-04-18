@@ -8,7 +8,7 @@ The `lsc` toolchain translates annotated TypeScript to formal verification artif
 TS source (.ts)
   → extract    (ts-morph → Raw IR)
   → resolve    (Raw IR → Typed IR; types and type-narrowing only)
-  → pe         (Typed IR → Typed IR; structural narrowing — `someMatch` rewrites)
+  → narrow     (Typed IR → Typed IR; structural narrowing — `someMatch` rewrites)
   → transform  (Typed IR → IR, configured per backend)
   → peephole   (IR → IR, local rewrites that eliminate Some/None ceremony)
   → emit       (IR → Lean text or Dafny text)
@@ -47,9 +47,9 @@ Type names: `Expr`, `Stmt`, `Decl`, `Module`, `FnDef`, `FnMethod`, `Inductive`, 
 
 **Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedPaths`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: simple vars and pure access paths (`a.b.c`, any depth) narrow. `&&` chains accumulate narrowings (each premise in scope for later ones); `==>` propagates premise narrowings into the conclusion. **Type narrowing only** — no structural rewriting.
 
-**Pe** (`pe.ts`): Typed IR → Typed IR. Owns all structural narrowing for optional checks. Detects `if (e !== undefined)`, ternary `e !== undefined ? a : b`, `&&` chains, `||` early returns, `opt ? a : b` truthiness, the let-with-impure-guard pattern, and `obj?.field` (via the `optChain` IR node). Rewrites each into a `someMatch` IR node carrying the scrutinee, binder, and arms. Narrowing rules only fire for simple vars and `obj.field` chains (following TS); `optChain` is the sole path for complex scrutinees. See [Pe rules](#pe-rules) below.
+**Narrow** (`narrow.ts`): Typed IR → Typed IR. Owns all structural narrowing for optional checks. Detects `if (e !== undefined)`, ternary `e !== undefined ? a : b`, `&&` chains, `||` early returns, `opt ? a : b` truthiness, the let-with-impure-guard pattern, `==>` premise narrowing in specs, and `obj?.field` (via the `optChain` IR node). Rewrites each into a `someMatch` IR node carrying the scrutinee, binder, and arms. Narrowing rules fire for any pure access path (`var(x)`, `field(purePath, name)`); `optChain` is the sole path for complex scrutinees. See [Narrow rules](#narrow-rules) below.
 
-**Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None — substituting the binder for `var(x)` or `field(var(o),f)` scrutinees, or lowering naively when the scrutinee is complex (pe pre-bound the someBody). No optional-narrowing logic of its own.
+**Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None — substituting the binder for any pure access path scrutinee, or lowering naively when the scrutinee is complex (narrow pre-bound the someBody). No optional-narrowing logic of its own.
 
 **Peephole** (`peephole.ts`): IR → IR. Local rewrite rules applied bottom-up to fixed point. Eliminates wrap-then-unwrap ceremony around partial-access expressions like `m.get(k)` (which is internally lowered to `methodCall(map, "get", [k])` and emits as `(if k in m then Some(m[k]) else None)`). See [Peephole rules](#peephole-rules) below.
 
@@ -71,7 +71,7 @@ The specparser (`specparser.ts`) parses `//@ ` annotation expressions into `RawE
 
 1. **Extract**: add the TS construct to Raw IR.
 2. **Resolve**: add type resolution and classification for the new construct.
-3. **Pe** (only if it introduces a narrowing pattern): add a rule that detects the pattern and rewrites to `someMatch`.
+3. **Narrow** (only if it introduces a narrowing pattern): add a rule that detects the pattern and rewrites to `someMatch`.
 4. **Transform**: add an IR lowering rule that pattern-matches on the typed node.
 5. **Emit**: add backend-specific rendering in each emitter if the new IR node needs special syntax.
 
@@ -99,7 +99,7 @@ interface Env { name: string; ty: Ty; parent: Env | null }
 TS source (.ts)
   → extract    (ts-morph → Raw IR)
   → resolve    (Raw IR → Typed IR)
-  → pe         (Typed IR → Typed IR)
+  → narrow     (Typed IR → Typed IR)
   → transform  (Typed IR → IR, with LEAN_OPTIONS)
   → peephole   (IR → IR)
   → emit       (IR → Lean text)
@@ -118,7 +118,7 @@ TS source (.ts)
 TS source (.ts)
   → extract    (ts-morph → Raw IR)
   → resolve    (Raw IR → Typed IR)
-  → pe         (Typed IR → Typed IR)
+  → narrow     (Typed IR → Typed IR)
   → transform  (Typed IR → IR, with DAFNY_OPTIONS)
   → peephole   (IR → IR)
   → dafny-emit (IR → Dafny text)
@@ -137,9 +137,9 @@ Each TS source produces two Dafny files:
 - `lsc regen --backend=dafny foo.ts` — regenerate `.dfy.gen`, three-way merge, verify
 - `lsc check --backend=dafny foo.ts` — gen + additions-only check + `dafny verify`
 
-## Pe Rules
+## Narrow Rules
 
-`pe.ts` (partial-evaluation pass for narrowing) takes typed IR and rewrites optional-narrowing patterns into a single `someMatch` IR node. The someMatch carries the scrutinee (a TExpr — var, simple `obj.field` chain, or for `optChain` rewrites, any expression), a binder name, the unwrapped type, and the some/none arms.
+`narrow.ts` (structural-narrowing rewrite pass) takes typed IR and rewrites optional-narrowing patterns into a single `someMatch` IR node. The someMatch carries the scrutinee (a TExpr — pure access path, or for `optChain` rewrites, any expression), a binder name, the unwrapped type, and the some/none arms.
 
 The walker is bottom-up over TExpr/TStmt. At each node, recurse into children, then try the rules in order.
 
@@ -169,7 +169,7 @@ The `&&`-ternary rule skips when `rest` contains impure method calls (those woul
 
 All narrowing rules above (except `optChain`) accept any pure access path (`var(x)`, `field(var(o), f)`, or any depth of `field(field(...), name)`) — matching TS, which narrows access paths but not method-call results. The rules build `someMatch` with the body still referencing the scrutinee; transform substitutes via `replacePathInTExpr` / `replacePathInTStmts` at lowering time. Binder name joins the path: `_root_val` for a bare var, `_root_f1_f2_val` for `root.f1.f2`.
 
-The `optChain` rule is the exception: its scrutinee can be any expression (call result, deep chain, etc.), and pe constructs the someBody to reference the binder directly — so transform's lowering skips substitution for complex scrutinees.
+The `optChain` rule is the exception: its scrutinee can be any expression (call result, deep chain, etc.), and narrow constructs the someBody to reference the binder directly — so transform's lowering skips substitution for complex scrutinees.
 
 ## Peephole Rules
 
@@ -225,7 +225,7 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 | `specparser.ts` | (parser) | Parses `//@ ` annotations → RawExpr |
 | `resolve.ts` | Resolve | Raw IR → Typed IR (types and type-narrowing) |
 | `typedir.ts` | Types | Typed IR type definitions (incl. `someMatch`) |
-| `pe.ts` | Pe | Typed IR → Typed IR (structural narrowing → `someMatch`) |
+| `narrow.ts` | Narrow | Typed IR → Typed IR (structural narrowing → `someMatch`) |
 | `ir.ts` | Types | Backend-neutral IR type definitions |
 | `transform.ts` | Transform | Typed IR → IR |
 | `peephole.ts` | Peephole | IR → IR (Some/None ceremony elimination) |

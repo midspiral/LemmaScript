@@ -1,30 +1,33 @@
 /**
- * pe — Partial-evaluation pass for narrowing emulation.
+ * narrow — Structural-narrowing rewrite pass.
  *
- * Pipeline: resolve → pe → transform → emit.
+ * Pipeline: resolve → narrow → transform → emit.
  *
- * Owns all structural narrowing for optional checks. Detects each of:
- *   - `if (e !== undefined) S`               (statement)
- *   - `if (e === undefined) terminate; rest` (early-return + rest consumption)
- *   - `if (e !== undefined && rest) S`        (&& in if; no else)
+ * Syntax-directed pattern matching on typed IR. Detects optional-narrowing
+ * patterns and rewrites each into a `someMatch` IR node carrying the
+ * scrutinee, binder, unwrapped type, and arms:
+ *   - `if (e !== undefined) S`                 (statement)
+ *   - `if (e === undefined) terminate; rest`   (early-return + rest consumption)
+ *   - `if (e !== undefined && rest) S`         (&& in if; no else)
  *   - `if (a === undefined || b === undefined) terminate; rest`  (|| chain)
- *   - `let x = (e_opt && rest) ? a : b`       (statement, impure-OK guard)
- *   - `e !== undefined ? a : b`               (ternary)
- *   - `e !== undefined && rest ? a : b`       (&& in ternary; pure rest)
+ *   - `let x = (e_opt && rest) ? a : b`        (statement, impure-OK guard)
+ *   - `e !== undefined ? a : b`                (ternary)
+ *   - `e !== undefined && rest ? a : b`        (&& in ternary; pure rest)
  *   - `opt ? a : b`                            (truthiness)
+ *   - `path !== undefined [&& rest] ==> B`     (spec implication narrowing)
+ *   - `optChain(obj, field)`                   (`obj?.field` from extract)
  *
- * Following TS semantics, only simple var (`x`) and simple `obj.field` chains
- * narrow. Complex scrutinees (call results, deep chains) are left alone — the
- * user must bind first: `const v = m.get(k); if (v !== undefined) ...`.
+ * Following TS semantics, narrowing rules only fire for pure access paths
+ * (`var(x)` or `field(purePath, name)`). Complex scrutinees (call results,
+ * index ops) require bind-first: `const v = m.get(k); if (v !== undefined) ...`.
+ * The `optChain` rule is the exception: narrow constructs the someBody to use the
+ * binder directly, so any scrutinee shape is allowed.
  *
- * Each detected pattern rewrites to a `someMatch` TExpr/TStmt carrying the
- * scrutinee, binder, unwrapped type, and arms. Transform lowers `someMatch`
- * to IR `match` Some/None.
- *
- * Resolve runs before pe and handles type narrowing only (env extension,
- * `narrowedFields`). Pe doesn't substitute on raw IR — the body keeps its
- * original expressions; transform's someMatch handler does the substitution
- * at lowering time (var via replaceVar, field-chain via replaceFieldsInTStmts).
+ * Transform lowers `someMatch` to IR `match` Some/None, substituting the
+ * binder for path-shaped scrutinees via `replacePathInTExpr` /
+ * `replacePathInTStmts`. Resolve runs before narrow and handles type narrowing
+ * only (env extension, `narrowedPaths`). Narrow doesn't substitute on raw IR
+ * — the body keeps its original expressions until transform.
  *
  * Walker shape: bottom-up over TExpr/TStmt. At each node, recurse children
  * via the *Recurse* helpers, then try the rules in order. List-level rules
@@ -119,7 +122,7 @@ function walkStmts(stmts: TStmt[]): TStmt[] {
       result.push(walkStmt(consumed));
       return result;
     }
-    // walkStmt first — pe's expression rules may rewrite the let init from
+    // walkStmt first — narrow's expression rules may rewrite the let init from
     // `conditional` to `someMatch`, in which case the let-cond desugar shouldn't fire.
     const walked = walkStmt(s);
     const expanded = ruleLetCondAndOptional(walked);
@@ -346,7 +349,7 @@ function extractLeftmostOptionalCheck(cond: TExpr): {
 /** Rule: `if (x !== undefined && rest) then` (no else) where x is a pure
  *  access path.
  *  → `someMatch x { Some(_x_val) => if rest then then; , None => {} }`.
- *  Walks the inner if back through pe so that nested optional checks in rest
+ *  Walks the inner if back through narrow so that nested optional checks in rest
  *  (`a !== undefined && a.b !== undefined && ...`) also become someMatches. */
 function ruleIfAndOptional(s: TStmt): TStmt | null {
   if (s.kind !== "if") return null;
@@ -453,7 +456,7 @@ function ruleConditionalAndOptional(e: TExpr): TExpr | null {
 
 // ── Function / module entry ──────────────────────────────────
 
-function peFunction(fn: TFunction): TFunction {
+function narrowFunction(fn: TFunction): TFunction {
   return {
     ...fn,
     requires: fn.requires.map(e => walkExpr(e)),
@@ -463,15 +466,15 @@ function peFunction(fn: TFunction): TFunction {
   };
 }
 
-export function peModule(mod: TModule): TModule {
+export function narrowModule(mod: TModule): TModule {
   _ocCounter = 0;
   return {
     ...mod,
     constants: mod.constants.map(c => ({ ...c, value: walkExpr(c.value) })),
-    functions: mod.functions.map(peFunction),
+    functions: mod.functions.map(narrowFunction),
     classes: mod.classes.map(cls => ({
       ...cls,
-      methods: cls.methods.map(peFunction),
+      methods: cls.methods.map(narrowFunction),
     })),
   };
 }

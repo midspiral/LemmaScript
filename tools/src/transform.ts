@@ -556,7 +556,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
 
     case "optChain":
       // Pe should have rewritten optChain to someMatch.
-      throw new Error(`optChain reached transform — pe should have rewritten it`);
+      throw new Error(`optChain reached transform — narrow should have rewritten it`);
 
     case "havoc":
       // Dafny's * only works in var/assign positions — lift to own declaration
@@ -578,7 +578,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         someBody = lowerExpr(replaced, binds);
         scrutinee = path.fields.length === 0 ? path.rootVar : lowerExpr(e.scrutinee, binds);
       } else {
-        // Complex scrutinee — pe pre-bound the someBody to use the binder directly,
+        // Complex scrutinee — narrow pre-bound the someBody to use the binder directly,
         // so no substitution needed. Used by optChain rewrites.
         someBody = lowerExpr(e.someBody, binds);
         scrutinee = lowerExpr(e.scrutinee, binds);
