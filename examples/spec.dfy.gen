@@ -383,6 +383,16 @@ function area(s: Shape): int
   }
 }
 
+function describeIfCircle(s: Shape, fallback: int): int
+{
+  match s {
+    case circle(i_s_radius) =>
+      (i_s_radius * i_s_radius)
+    case square(i_s_side) =>
+      fallback
+  }
+}
+
 method countAbove(arr: seq<int>, threshold: int) returns (res: int)
   ensures (res <= |arr|)
 {

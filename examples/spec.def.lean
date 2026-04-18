@@ -245,3 +245,7 @@ method nestedAndTernary (o : Option Outer) (fallback : Int) return (res : Int)
 method area (s : Shape) return (res : Int)
   do
     return Pure.area s
+
+method describeIfCircle (s : Shape) (fallback : Int) return (res : Int)
+  do
+    return Pure.describeIfCircle s fallback

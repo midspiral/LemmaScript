@@ -681,6 +681,13 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
         i += chain.consumed;
         continue;
       }
+      // `if (x.kind !== "variant") terminate; rest` → match x { variant => rest, _ => terminate }
+      const negEarly = detectNegativeDiscriminantEarlyReturn(stmts.slice(i), typeDecls);
+      if (negEarly) {
+        result.push(emitMatchStmt(negEarly.chain, typeDecls));
+        i += negEarly.consumed;
+        continue;
+      }
     }
     // Transform for-of → for-in over range
     if (s.kind === "forof") {
@@ -1010,6 +1017,44 @@ function detectDiscriminantChain(stmts: TStmt[], typeDecls: TypeDeclInfo[]): { c
   return { chain: { ...first, cases, fallthrough: stmts.slice(consumed) }, consumed: stmts.length };
 }
 
+/** Detect `if (x.kind !== "variant") terminate; rest`. Returns a Chain that
+ *  emitMatchStmt can lower: cases = [{ variant, body: rest }], fallthrough
+ *  = the terminating then-branch. Equivalent to `if (x.kind === "variant") { rest }
+ *  else { terminate }` with body order swapped. */
+function detectNegativeDiscriminantEarlyReturn(stmts: TStmt[], typeDecls: TypeDeclInfo[]): { chain: Chain; consumed: number } | null {
+  if (stmts.length < 2) return null;
+  const first = stmts[0];
+  if (first.kind !== "if" || first.else.length > 0) return null;
+  if (!isTerminating(first.then)) return null;
+  const cond = parseNegativeDiscriminantCond(first.cond);
+  if (!cond) return null;
+  const rest = stmts.slice(1);
+  return {
+    chain: {
+      varName: cond.varName, typeName: cond.typeName,
+      cases: [{ variant: cond.variant, body: rest }],
+      fallthrough: first.then,
+    },
+    consumed: stmts.length,
+  };
+}
+
+function parseNegativeDiscriminantCond(cond: TExpr): { varName: string; typeName: string; variant: string } | null {
+  if (cond.kind === "binop" && cond.op === "!==" && cond.right.kind === "str" &&
+      cond.left.kind === "field" && cond.left.isDiscriminant &&
+      cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
+    return { varName: cond.left.obj.name, typeName: cond.left.obj.ty.name, variant: cond.right.value };
+  }
+  return null;
+}
+
+/** Does the statement list end in a control-flow terminator (return, throw, break, continue)? */
+function isTerminating(stmts: TStmt[]): boolean {
+  if (stmts.length === 0) return false;
+  const last = stmts[stmts.length - 1];
+  return last.kind === "return" || last.kind === "throw" || last.kind === "break" || last.kind === "continue";
+}
+
 function parseDiscriminantCond(cond: TExpr, typeDecls: TypeDeclInfo[]): { varName: string; typeName: string; variant: string } | null {
   // Pattern: x.discriminant === "variant"
   if (cond.kind === "binop" && cond.op === "===" && cond.right.kind === "str" &&
@@ -1205,6 +1250,8 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
   if (stmts.length > 0 && stmts[0].kind === "if") {
     const chain = detectDiscriminantChain(stmts, typeDecls);
     if (chain) return transformPureMatch(chain.chain, typeDecls);
+    const negEarly = detectNegativeDiscriminantEarlyReturn(stmts, typeDecls);
+    if (negEarly) return transformPureMatch(negEarly.chain, typeDecls);
   }
 
   for (let i = 0; i < stmts.length; i++) {

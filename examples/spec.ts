@@ -375,3 +375,10 @@ function area(s: Shape): number {
   if ('radius' in s) return s.radius * s.radius;
   return s.side * s.side;
 }
+
+// Negative discriminant + early return: `s.kind !== "circle"` narrows s to
+// circle in the rest of the block.
+function describeIfCircle(s: Shape, fallback: number): number {
+  if (s.kind !== 'circle') return fallback;
+  return s.radius * s.radius;
+}

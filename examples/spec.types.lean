@@ -232,4 +232,11 @@ def area (s : Shape) : Int :=
   | .square _s_side =>
     _s_side * _s_side
 
+def describeIfCircle (s : Shape) (fallback : Int) : Int :=
+  match s with
+  | .circle _s_radius =>
+    _s_radius * _s_radius
+  | .square _s_side =>
+    fallback
+
 end Pure
