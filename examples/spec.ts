@@ -345,18 +345,24 @@ function nullishMapGet(m: Map<string, number>, k: string, fallback: number): num
 
 // Var early-return: !o narrows o to Inner after the if
 function negVar(o: Inner | undefined, fallback: number): number {
+  //@ ensures o === undefined ==> \result === fallback
+  //@ ensures o !== undefined ==> \result === o.val
   if (!o) return fallback;
   return o.val;
 }
 
 // Field-chain early-return: !o.inner narrows o.inner to Inner after the if
 function negField(o: Outer, fallback: number): number {
+  //@ ensures o.inner === undefined ==> \result === fallback
+  //@ ensures o.inner !== undefined ==> \result === o.inner.val
   if (!o.inner) return fallback;
   return o.inner.val;
 }
 
 // Bare optional truthiness: `if (o)` is the same as `if (o !== undefined)`.
 function truthyVar(o: Inner | undefined, fallback: number): number {
+  //@ ensures o !== undefined ==> \result === o.val
+  //@ ensures o === undefined ==> \result === fallback
   if (o) return o.val;
   return fallback;
 }

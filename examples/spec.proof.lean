@@ -98,3 +98,13 @@ prove_correct clampedMidpoint by loom_solve
 -- Deep-path narrowing: body and ensures both use nested Some/None matches
 prove_correct deepAccess by
   unfold Pure.deepAccess; loom_solve
+
+-- Negative truthiness `!x` and bare optional truthiness `if (x)`
+prove_correct negVar by
+  unfold Pure.negVar; loom_solve
+
+prove_correct negField by
+  unfold Pure.negField; loom_solve
+
+prove_correct truthyVar by
+  unfold Pure.truthyVar; loom_solve

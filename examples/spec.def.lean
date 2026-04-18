@@ -231,14 +231,20 @@ method nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) 
     return Pure.nullishMapGet m k fallback
 
 method negVar (o : Option Inner) (fallback : Int) return (res : Int)
+  ensures (match o with | .some _ => false | .none => true) → res = fallback
+  ensures (match o with | .some _o_val => res = _o_val.val | .none => true)
   do
     return Pure.negVar o fallback
 
 method negField (o : Outer) (fallback : Int) return (res : Int)
+  ensures (match o.inner with | .some _ => false | .none => true) → res = fallback
+  ensures (match o.inner with | .some _o_inner_val => res = _o_inner_val.val | .none => true)
   do
     return Pure.negField o fallback
 
 method truthyVar (o : Option Inner) (fallback : Int) return (res : Int)
+  ensures (match o with | .some _o_val => res = _o_val.val | .none => true)
+  ensures (match o with | .some _ => false | .none => true) → res = fallback
   do
     return Pure.truthyVar o fallback
 

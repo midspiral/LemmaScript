@@ -348,6 +348,12 @@ function negVar(o: Option<Inner>, fallback: int): int
   }
 }
 
+lemma negVar_ensures(o: Option<Inner>, fallback: int)
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (negVar(o, fallback) == fallback))
+  ensures (match o { case Some(i_o_val) => (negVar(o, fallback) == i_o_val.val) case None => true })
+{
+}
+
 function negField(o: Outer, fallback: int): int
 {
   match o.inner {
@@ -358,6 +364,12 @@ function negField(o: Outer, fallback: int): int
   }
 }
 
+lemma negField_ensures(o: Outer, fallback: int)
+  ensures ((match o.inner { case Some(i_) => false case None => true }) ==> (negField(o, fallback) == fallback))
+  ensures (match o.inner { case Some(i_o_inner_val) => (negField(o, fallback) == i_o_inner_val.val) case None => true })
+{
+}
+
 function truthyVar(o: Option<Inner>, fallback: int): int
 {
   match o {
@@ -366,6 +378,12 @@ function truthyVar(o: Option<Inner>, fallback: int): int
     case None =>
       fallback
   }
+}
+
+lemma truthyVar_ensures(o: Option<Inner>, fallback: int)
+  ensures (match o { case Some(i_o_val) => (truthyVar(o, fallback) == i_o_val.val) case None => true })
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (truthyVar(o, fallback) == fallback))
+{
 }
 
 function nestedAndTernary(o: Option<Outer>, fallback: int): int
