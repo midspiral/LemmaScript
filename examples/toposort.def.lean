@@ -57,8 +57,8 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
       invariant ∀ k : String, enqueued.contains k → nodeIdSet.contains k
     do
       let id := nodeIds[_id_idx3]!
-      if inDegree.contains id ∧ let _value := inDegree[id]!
-_value == 0 then
+      if if inDegree.contains id then let _value := inDegree[id]!
+_value == 0 else false then
         assertGadget (¬(enqueued.contains id))
         queue := queue ++ #[id]
         enqueued := enqueued.insert id
