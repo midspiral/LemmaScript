@@ -209,13 +209,15 @@ function wrapOptionalBranch(expr: Expr, raw: TExpr): Expr {
 }
 
 function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
-  // Monadic lifting: extract embedded method calls to let-binds
-  // Pass binds through to args so nested method calls are also lifted
-  if (binds && e.kind === "call" && e.callKind === "method") {
+  // Monadic lifting: extract embedded method calls to let-binds.
+  // `callKind: "method"` means a global var-fn call (classifyCall returns
+  // "method" only for `fn.kind === "var"`). Receiver method calls have
+  // callKind "unknown" and fall through to the regular case below where
+  // they become `methodCall`.
+  if (binds && e.kind === "call" && e.callKind === "method" && e.fn.kind === "var") {
     const name = `_t${_liftCounter++}`;
-    const fn = e.fn.kind === "var" ? e.fn.name : `${lowerExpr(e.fn, binds)}`;
     const args = e.args.map(a => lowerExpr(a, binds));
-    binds.push({ kind: "let-bind", name, value: { kind: "app", fn, args } });
+    binds.push({ kind: "let-bind", name, value: { kind: "app", fn: e.fn.name, args } });
     return { kind: "var", name };
   }
 
@@ -873,15 +875,19 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
         const { binds, expr } = liftMethodCalls(s.expr);
         return [...binds, { kind: "assign", target: receiver, value: expr }];
       }
-      // Optional chaining on map.get: m.get(k)?.push(v) → if k in m { m[k] := m[k] + [v] }
-      if (s.expr.kind === "call" && s.expr.fn.kind === "field" &&
-          s.expr.fn.obj.kind === "call" && s.expr.fn.obj.fn.kind === "field" &&
-          s.expr.fn.obj.fn.obj.ty.kind === "map" && s.expr.fn.obj.fn.field === "get" &&
-          s.expr.fn.field === "push") {
-        const mapExpr = s.expr.fn.obj.fn.obj;
+      // Optional chaining on map.get at statement level: m.get(k)?.push(v)
+      // → if k in m { m[k] := m[k] + [v] } (actual mutation, not value-discard).
+      // Narrow rewrote this to a someMatch — destructure to find the underlying
+      // m.get(k) scrutinee and the .push(v) body call.
+      if (s.expr.kind === "someMatch" &&
+          s.expr.scrutinee.kind === "call" && s.expr.scrutinee.fn.kind === "field" &&
+          s.expr.scrutinee.fn.field === "get" && s.expr.scrutinee.fn.obj.ty.kind === "map" &&
+          s.expr.someBody.kind === "call" && s.expr.someBody.fn.kind === "field" &&
+          s.expr.someBody.fn.field === "push") {
+        const mapExpr = s.expr.scrutinee.fn.obj;
         const mapName = mapExpr.kind === "var" ? mapExpr.name : undefined;
-        const keyExpr = lowerExpr(s.expr.fn.obj.args[0], null);
-        const pushArg = lowerExpr(s.expr.args[0], null);
+        const keyExpr = lowerExpr(s.expr.scrutinee.args[0], null);
+        const pushArg = lowerExpr(s.expr.someBody.args[0], null);
         if (mapName) {
           const mapVar: Expr = { kind: "var", name: mapName };
           const directGet: Expr = { kind: "methodCall", obj: mapVar, objTy: mapExpr.ty, method: "getDirect", args: [keyExpr], monadic: false };
