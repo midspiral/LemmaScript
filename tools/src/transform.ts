@@ -643,7 +643,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         someBody = lowerExpr(replaced, binds);
         scrutinee = lowerExpr(e.scrutinee, binds);
       } else {
-        throw new Error(`someMatch (expr): unsupported scrutinee kind ${e.scrutinee.kind}`);
+        // Complex scrutinee (call result, deep field chain, etc.)
+        const replaced = substTExprInTExpr(e.someBody, e.scrutinee, e.binder, e.binderTy);
+        someBody = lowerExpr(replaced, binds);
+        scrutinee = lowerExpr(e.scrutinee, binds);
       }
       let noneBody = lowerExpr(e.noneBody, binds);
       if (e.ty.kind === "optional") {
@@ -1064,7 +1067,19 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           ],
         }];
       }
-      throw new Error(`someMatch: unsupported scrutinee kind ${s.scrutinee.kind}`);
+      // Complex scrutinee (call result, deep field chain, etc.): TExpr-equality
+      // substitution in the someBody.
+      const replaced = substTExprInTStmts(s.someBody, s.scrutinee, s.binder, s.binderTy);
+      const someBody = transformStmts(replaced, typeDecls);
+      const noneBody = transformStmts(s.noneBody, typeDecls);
+      const scrutinee = transformExpr(s.scrutinee);
+      return [{
+        kind: "match", scrutinee,
+        arms: [
+          { pattern: `.some ${s.binder}`, body: someBody },
+          { pattern: ".none", body: noneBody },
+        ],
+      }];
     }
   }
 }
@@ -1306,6 +1321,66 @@ function replaceFieldsInTStmts(
   }));
 }
 
+/** Structural equality on TExpr (ignoring `ty` annotations).
+ *  Used to substitute occurrences of a complex scrutinee (like a call result)
+ *  with a binder name in a someMatch arm. */
+function texprEquals(a: TExpr, b: TExpr): boolean {
+  if (a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "var":  return a.name === (b as typeof a).name;
+    case "num":  return a.value === (b as typeof a).value;
+    case "str":  return a.value === (b as typeof a).value;
+    case "bool": return a.value === (b as typeof a).value;
+    case "result": case "havoc": return true;
+    case "binop": {
+      const bb = b as typeof a;
+      return a.op === bb.op && texprEquals(a.left, bb.left) && texprEquals(a.right, bb.right);
+    }
+    case "unop": {
+      const bb = b as typeof a;
+      return a.op === bb.op && texprEquals(a.expr, bb.expr);
+    }
+    case "call": {
+      const bb = b as typeof a;
+      return texprEquals(a.fn, bb.fn) && a.args.length === bb.args.length &&
+        a.args.every((arg, i) => texprEquals(arg, bb.args[i]));
+    }
+    case "field": {
+      const bb = b as typeof a;
+      return a.field === bb.field && texprEquals(a.obj, bb.obj);
+    }
+    case "index": {
+      const bb = b as typeof a;
+      return texprEquals(a.obj, bb.obj) && texprEquals(a.idx, bb.idx);
+    }
+    // record / arrayLiteral / lambda / conditional / forall / exists / someMatch:
+    // not commonly used as scrutinees of optional checks; reject conservatively.
+    default: return false;
+  }
+}
+
+/** Substitute every TExpr structurally-equal to `target` with a `var(binder, binderTy)`
+ *  reference, walking the given TStmt[]. Used by someMatch lowering when the
+ *  scrutinee is a complex expression (call result, deep field chain, etc.). */
+function substTExprInTStmts(stmts: TStmt[], target: TExpr, binder: string, binderTy: Ty): TStmt[] {
+  return stmts.map(s => mapTStmt(s, e => {
+    if (texprEquals(e, target)) {
+      return { kind: "var", name: binder, ty: binderTy } as TExpr;
+    }
+    return null;
+  }));
+}
+
+/** TExpr version of `substTExprInTStmts`. */
+function substTExprInTExpr(expr: TExpr, target: TExpr, binder: string, binderTy: Ty): TExpr {
+  return mapTExpr(expr, e => {
+    if (texprEquals(e, target)) {
+      return { kind: "var", name: binder, ty: binderTy } as TExpr;
+    }
+    return null;
+  });
+}
+
 /** Replace all variant fields of obj → match binder vars in typed IR.
  *  Thin wrapper around replaceFieldsInTStmts for discriminant match/switch. */
 function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { name: string; tsType: string; type?: Ty }[]): TStmt[] {
@@ -1536,7 +1611,20 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
             ],
           };
         }
-        return null;
+        // Complex scrutinee
+        const replaced = substTExprInTStmts(s.someBody, s.scrutinee, s.binder, s.binderTy);
+        const someExpr = transformPureBody([...replaced, ...rest], typeDecls);
+        if (!someExpr) return null;
+        const noneExpr = transformPureBody([...s.noneBody, ...rest], typeDecls);
+        if (!noneExpr) return null;
+        const scrutinee = transformExpr(s.scrutinee);
+        return {
+          kind: "match", scrutinee,
+          arms: [
+            { pattern: `.some ${s.binder}`, body: someExpr },
+            { pattern: ".none", body: noneExpr },
+          ],
+        };
       }
       default: return null;
     }

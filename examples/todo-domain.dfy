@@ -357,8 +357,8 @@ function getLists(m: Model): seq<ListId>
 function getTagName(m: Model, tagId: TagId): Option<string>
 {
   if (tagId in m.tags) then
-    var i__opt4 := m.tags[tagId];
-    Some(i__opt4.name)
+    var i_opt4 := m.tags[tagId];
+    Some(i_opt4.name)
   else
     None
 }

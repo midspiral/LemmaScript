@@ -28,32 +28,41 @@ const emptyEnv: Env = {};
 
 // ── Optional-check detection ────────────────────────────────
 
-/** Detect `e !== undefined` or `undefined !== e` where e is either:
- *  - a simple variable of optional type, or
- *  - a simple `obj.field` chain where obj is a var and the field has optional type.
- *  Returns the scrutinee expression + unwrapped inner type. */
-function parseSimpleOptionalCheck(cond: TExpr): { scrutinee: TExpr; innerTy: Ty; negated: boolean; binderHint: string } | null {
+/** Counter for naming complex-scrutinee binders. Reset per module. */
+let _optCounter = 0;
+
+/** Detect `e !== undefined` or `undefined !== e` for any optional-typed e.
+ *  - Simple var: binder is `_${name}_val`, scrutinee handled via replaceVar
+ *  - Simple `obj.field` chain: binder is `_${obj}_${field}_val`, scrutinee
+ *    handled via replaceFieldsInTStmts
+ *  - Anything else (call, deep field chain, etc.): binder is `_opt${N}_val`,
+ *    scrutinee handled via TExpr-equality substitution (see substTExpr*) */
+function parseOptionalCheck(cond: TExpr): { scrutinee: TExpr; innerTy: Ty; negated: boolean; binderHint: string } | null {
   if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) return null;
   let e: TExpr | null = null;
   if (cond.right.kind === "var" && cond.right.name === "undefined") e = cond.left;
   if (cond.left.kind === "var" && cond.left.name === "undefined") e = cond.right;
   if (!e || e.ty.kind !== "optional") return null;
-  if (e.kind === "var") {
-    return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binderHint: `_${e.name}_val` };
-  }
-  if (e.kind === "field" && e.obj.kind === "var") {
-    return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binderHint: `_${e.obj.name}_${e.field}_val` };
-  }
-  return null;
+  return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binderHint: binderHintFor(e) };
 }
+
+function binderHintFor(e: TExpr): string {
+  if (e.kind === "var") return `_${e.name}_val`;
+  if (e.kind === "field" && e.obj.kind === "var") return `_${e.obj.name}_${e.field}_val`;
+  return `_opt${_optCounter++}_val`;
+}
+
+// Aliased for code that historically called the simpler check.
+const parseSimpleOptionalCheck = parseOptionalCheck;
 
 // ── Walkers ──────────────────────────────────────────────────
 
 function walkExpr(e: TExpr, env: Env): TExpr {
   // Recurse into children first, then try rules at this node.
   const r = recurseExpr(e, env);
-  // && rule before simple rule. Truthiness rule last (most permissive).
-  return ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
+  // narrowed rule consumes resolve's narrowedVar/narrowedExpr; other rules
+  // skip when narrowedVar is set, so order among the rest is fine.
+  return ruleConditionalNarrowed(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
 }
 
 function recurseExpr(e: TExpr, env: Env): TExpr {
@@ -213,11 +222,10 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[]): TStmt | null {
   return inner[0];
 }
 
-/** Rule (expression): `e !== undefined ? a : b` where e is a simple optional
- *  var or `obj.field` chain.
- *  → `someMatch e { Some(_e_val) => a, None => b }` (TExpr form). */
+/** Rule (expression): `e !== undefined ? a : b`. */
 function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
   if (e.kind !== "conditional") return null;
+  if (e.narrowedVar) return null;  // ruleConditionalNarrowed handles these
   const check = parseSimpleOptionalCheck(e.cond);
   if (!check) return null;
   const someBody = check.negated ? e.else : e.then;
@@ -228,6 +236,39 @@ function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
     binder: check.binderHint,
     someBody, noneBody,
     ty: e.ty,
+  };
+}
+
+/** Rule (expression): consume resolve's `narrowedVar`/`narrowedExpr` for the
+ *  Phase 1 (truthiness) and Phase 2/3 (complex expression) cases.
+ *  - narrowedExpr set: complex expression check (`m.get(k) !== undefined ? ...`).
+ *    Scrutinee is `narrowedExpr`. Body already has `narrowedVar` refs from
+ *    resolve's substitution.
+ *  - narrowedExpr unset, cond optional: truthiness (`opt ? a : b`).
+ *    Scrutinee is `cond`. Body has `narrowedVar` refs (substituted) or `var`
+ *    refs (Phase 1 var case, narrowedVar = var.name).
+ *  Binder = narrowedVar so the body's references match without further
+ *  rewriting (transform's someMatch handler does TExpr-equality substitution
+ *  for the complex case, which is a no-op since the original expression isn't
+ *  in the body anymore). */
+function ruleConditionalNarrowed(e: TExpr): TExpr | null {
+  if (e.kind !== "conditional") return null;
+  if (!e.narrowedVar) return null;
+  let scrutinee: TExpr;
+  let binderTy: Ty;
+  if (e.narrowedExpr) {
+    scrutinee = e.narrowedExpr;
+    binderTy = e.narrowedExpr.ty.kind === "optional" ? e.narrowedExpr.ty.inner : e.narrowedExpr.ty;
+  } else if (e.cond.ty.kind === "optional") {
+    scrutinee = e.cond;
+    binderTy = e.cond.ty.inner;
+  } else {
+    return null;
+  }
+  return {
+    kind: "someMatch",
+    scrutinee, binder: e.narrowedVar, binderTy,
+    someBody: e.then, noneBody: e.else, ty: e.ty,
   };
 }
 
@@ -251,6 +292,7 @@ function scrutineeOfOptional(e: TExpr): { scrutinee: TExpr; innerTy: Ty; binderH
  *  former Phase-1 truthiness handling.) */
 function ruleConditionalOptionalTruthy(e: TExpr): TExpr | null {
   if (e.kind !== "conditional") return null;
+  if (e.narrowedVar) return null;  // ruleConditionalNarrowed handles these
   const sc = scrutineeOfOptional(e.cond);
   if (!sc) return null;
   return {
@@ -334,6 +376,7 @@ function containsMethodCall(e: TExpr): boolean {
  *  to a mutable var first. */
 function ruleConditionalAndOptional(e: TExpr): TExpr | null {
   if (e.kind !== "conditional") return null;
+  if (e.narrowedVar) return null;  // ruleConditionalNarrowed handles these
   const extracted = extractLeftmostOptionalCheck(e.cond);
   if (!extracted) return null;
   const { check, restCond } = extracted;
@@ -363,6 +406,7 @@ function peFunction(fn: TFunction): TFunction {
 }
 
 export function peModule(mod: TModule): TModule {
+  _optCounter = 0;
   return {
     ...mod,
     constants: mod.constants.map(c => ({ ...c, value: walkExpr(c.value, emptyEnv) })),
