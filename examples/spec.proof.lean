@@ -94,3 +94,7 @@ prove_correct forOfContains by
 -- Monadic lifting in records and nested args
 prove_correct clampedItem by loom_solve
 prove_correct clampedMidpoint by loom_solve
+
+-- Deep-path narrowing: body and ensures both use nested Some/None matches
+prove_correct deepAccess by
+  unfold Pure.deepAccess; loom_solve

@@ -8,8 +8,8 @@ set_option loom.semantics.termination "total"
 set_option loom.semantics.choice "demonic"
 
 method nextSeq (state : Int) (pkt : Packet) return (res : Int)
-  ensures match pkt with | .syn _pkt_seq => res = _pkt_seq | _ => true
-  ensures match pkt with | .data _pkt_seq _pkt_len => res = state + _pkt_len | _ => true
-  ensures match pkt with | .fin => res = state | _ => true
+  ensures (match pkt with | .syn _pkt_seq => res = _pkt_seq | _ => true)
+  ensures (match pkt with | .data _pkt_seq _pkt_len => res = state + _pkt_len | _ => true)
+  ensures (match pkt with | .fin => res = state | _ => true)
   do
     return Pure.nextSeq state pkt

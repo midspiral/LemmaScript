@@ -192,8 +192,12 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       return `if ${emitExpr(e.cond)} then ${emitExpr(e.then)} else ${emitExpr(e.else)}`;
 
     case "match": {
+      // Always parenthesize inline matches — Lean parses alternatives greedily,
+      // so any token after an arm body (`→`, another match's `|`, etc.) would
+      // bleed into the last `.none` case without explicit bracketing.
       const arms = e.arms.map(a => `| ${a.pattern} => ${emitExpr(a.body)}`);
-      return `match ${typeof e.scrutinee === "string" ? e.scrutinee : emitExpr(e.scrutinee)} with ${arms.join(" ")}`;
+      const scrut = typeof e.scrutinee === "string" ? e.scrutinee : emitExpr(e.scrutinee);
+      return `(match ${scrut} with ${arms.join(" ")})`;
     }
 
     case "forall": return `∀ ${e.var} : ${tyToLean(e.type)}, ${emitExpr(e.body)}`;

@@ -8,15 +8,15 @@ set_option loom.semantics.termination "total"
 set_option loom.semantics.choice "demonic"
 
 method evalPartial (e : Expr) return (res : Int)
-  ensures match e with | .lit _e_val => res = _e_val | _ => true
-  ensures match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true
+  ensures (match e with | .lit _e_val => res = _e_val | _ => true)
+  ensures (match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true)
   do
     return Pure.evalPartial e
 
 method evalSwitch (e : Expr) return (res : Int)
-  ensures match e with | .lit _e_val => res = _e_val | _ => true
-  ensures match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true
-  ensures match e with | .neg _e_inner => res = 0 - _e_inner | _ => true
+  ensures (match e with | .lit _e_val => res = _e_val | _ => true)
+  ensures (match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true)
+  ensures (match e with | .neg _e_inner => res = 0 - _e_inner | _ => true)
   do
     return Pure.evalSwitch e
 
@@ -199,3 +199,9 @@ method clampedMidpoint (a : Int) (b : Int) return (res : Int)
     let mut mid : Int := _t3
     let _t4 ← clampTernary mid a b
     return _t4
+
+method deepAccess (t : Tree) return (res : Int)
+  ensures (match t.middle with | .some _t_middle_val => (match _t_middle_val.leaf with | .some _t_middle_leaf_val => res = _t_middle_leaf_val.value | .none => true) | .none => true)
+  ensures (match t.middle with | .some _ => false | .none => true) → res = 0
+  do
+    return Pure.deepAccess t

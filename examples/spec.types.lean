@@ -27,6 +27,18 @@ structure PriorityItem where
   value : Int
 deriving Repr, Inhabited, DecidableEq
 
+structure Leaf where
+  value : Int
+deriving Repr, Inhabited, DecidableEq
+
+structure Middle where
+  leaf : Option Leaf
+deriving Repr, Inhabited, DecidableEq
+
+structure Tree where
+  middle : Option Middle
+deriving Repr, Inhabited, DecidableEq
+
 namespace Pure
 
 def evalPartial (e : Expr) : Int :=
@@ -121,5 +133,16 @@ def findSubstr (s : String) (sub : String) : Int :=
 
 def getSlice (s : String) (start : Nat) («end» : Nat) : String :=
   JSString.slice s start «end»
+
+def deepAccess (t : Tree) : Int :=
+  match t.middle with
+  | .some _t_middle_val =>
+    match _t_middle_val.leaf with
+    | .some _t_middle_leaf_val =>
+      _t_middle_leaf_val.value
+    | .none =>
+      0
+  | .none =>
+    0
 
 end Pure
