@@ -675,7 +675,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
     const s = stmts[i];
     // Detect discriminant if-chain → match
     if (s.kind === "if") {
-      const chain = detectDiscriminantChain(stmts.slice(i));
+      const chain = detectDiscriminantChain(stmts.slice(i), typeDecls);
       if (chain) {
         result.push(emitMatchStmt(chain.chain, typeDecls));
         i += chain.consumed;
@@ -973,17 +973,17 @@ interface Chain {
   fallthrough: TStmt[];
 }
 
-function detectDiscriminantChain(stmts: TStmt[]): { chain: Chain; consumed: number } | null {
+function detectDiscriminantChain(stmts: TStmt[], typeDecls: TypeDeclInfo[]): { chain: Chain; consumed: number } | null {
   if (stmts.length === 0 || stmts[0].kind !== "if") return null;
 
-  const first = parseDiscriminantCond(stmts[0].cond);
+  const first = parseDiscriminantCond(stmts[0].cond, typeDecls);
   if (!first) return null;
 
   const cases: { variant: string; body: TStmt[] }[] = [];
 
   // Follow else branches within one if-else-if tree
   function collectElse(s: TStmt & { kind: "if" }): TStmt[] {
-    const p = parseDiscriminantCond(s.cond);
+    const p = parseDiscriminantCond(s.cond, typeDecls);
     if (!p || p.varName !== first!.varName) return [s];
     cases.push({ variant: p.variant, body: s.then });
     if (s.else.length === 0) return [];
@@ -996,7 +996,7 @@ function detectDiscriminantChain(stmts: TStmt[]): { chain: Chain; consumed: numb
   for (let i = 0; i < stmts.length; i++) {
     const s = stmts[i];
     if (s.kind !== "if") break;
-    const p = parseDiscriminantCond(s.cond);
+    const p = parseDiscriminantCond(s.cond, typeDecls);
     if (!p || p.varName !== first.varName) break;
     cases.push({ variant: p.variant, body: s.then });
     consumed = i + 1;
@@ -1010,12 +1010,29 @@ function detectDiscriminantChain(stmts: TStmt[]): { chain: Chain; consumed: numb
   return { chain: { ...first, cases, fallthrough: stmts.slice(consumed) }, consumed: stmts.length };
 }
 
-function parseDiscriminantCond(cond: TExpr): { varName: string; typeName: string; variant: string } | null {
+function parseDiscriminantCond(cond: TExpr, typeDecls: TypeDeclInfo[]): { varName: string; typeName: string; variant: string } | null {
   // Pattern: x.discriminant === "variant"
-  if (cond.kind !== "binop" || cond.op !== "===" || cond.right.kind !== "str") return null;
-  if (cond.left.kind !== "field" || !cond.left.isDiscriminant) return null;
-  if (cond.left.obj.kind !== "var" || cond.left.obj.ty.kind !== "user") return null;
-  return { varName: cond.left.obj.name, typeName: cond.left.obj.ty.name, variant: cond.right.value };
+  if (cond.kind === "binop" && cond.op === "===" && cond.right.kind === "str" &&
+      cond.left.kind === "field" && cond.left.isDiscriminant &&
+      cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
+    return { varName: cond.left.obj.name, typeName: cond.left.obj.ty.name, variant: cond.right.value };
+  }
+  // Pattern: 'key' in x  — narrows x to the unique variant containing `key`.
+  if (cond.kind === "binop" && cond.op === "in" &&
+      cond.left.kind === "str" && cond.right.kind === "var" &&
+      cond.right.ty.kind === "user") {
+    const key = cond.left.value;
+    const typeName = cond.right.ty.name;
+    const baseTyName = typeName.includes("<") ? typeName.slice(0, typeName.indexOf("<")) : typeName;
+    const decl = typeDecls.find(d => d.name === baseTyName);
+    if (decl?.kind === "discriminated-union" && decl.variants) {
+      const matches = decl.variants.filter(v => v.fields.some(f => f.name === key));
+      if (matches.length === 1) {
+        return { varName: cond.right.name, typeName, variant: matches[0].name };
+      }
+    }
+  }
+  return null;
 }
 
 /** Apply an expression transform to all expressions in a statement (convenience wrapper). */
@@ -1049,8 +1066,29 @@ function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): Stmt {
   const cases = chain.cases.map(c => ({ name: c.variant, body: c.body }));
   const arms = buildMatchArms(cases, chain.varName, chain.typeName, typeDecls,
     (body, vn, fields) => transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls))!;
-  if (chain.fallthrough.length > 0) arms.push({ pattern: "_", body: transformStmts(chain.fallthrough, typeDecls) });
+  if (chain.fallthrough.length > 0) {
+    const remaining = remainingVariant(chain, typeDecls);
+    if (remaining) {
+      // Exactly one variant left — destructure so the fallthrough body can
+      // access variant-specific fields (Lean requires this; Dafny tolerates `_`).
+      const pattern = buildMatchPattern(remaining.name, remaining.fields, chain.varName);
+      const body = transformStmts(replaceFieldAccessInTStmts(chain.fallthrough, chain.varName, remaining.fields), typeDecls);
+      arms.push({ pattern, body });
+    } else {
+      arms.push({ pattern: "_", body: transformStmts(chain.fallthrough, typeDecls) });
+    }
+  }
   return { kind: "match", scrutinee: chain.varName, arms };
+}
+
+/** If the chain has matched all variants but one, return that remaining variant. */
+function remainingVariant(chain: Chain, typeDecls: TypeDeclInfo[]): { name: string; fields: { name: string; tsType: string; type?: Ty }[] } | null {
+  const decl = typeDecls.find(d => d.name === chain.typeName);
+  if (!decl?.variants) return null;
+  const matched = new Set(chain.cases.map(c => c.variant));
+  const remaining = decl.variants.filter(v => !matched.has(v.name));
+  if (remaining.length !== 1) return null;
+  return remaining[0];
 }
 
 function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Stmt {
@@ -1165,7 +1203,7 @@ function fixBoundType(expr: TExpr, boundName: string): TExpr {
 function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | null {
   // Detect discriminant if-chain
   if (stmts.length > 0 && stmts[0].kind === "if") {
-    const chain = detectDiscriminantChain(stmts);
+    const chain = detectDiscriminantChain(stmts, typeDecls);
     if (chain) return transformPureMatch(chain.chain, typeDecls);
   }
 
@@ -1253,9 +1291,18 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
   const decl = typeDecls.find(d => d.name === chain.typeName);
   const allCovered = decl?.variants && chain.cases.length >= decl.variants.length;
   if (chain.fallthrough.length > 0 && !allCovered) {
-    const body = transformPureBody(chain.fallthrough, typeDecls);
-    if (!body) return null;
-    arms.push({ pattern: "_", body });
+    const remaining = remainingVariant(chain, typeDecls);
+    if (remaining) {
+      // Exactly one variant left — destructure for variant-specific field access.
+      let body = transformPureBody(chain.fallthrough, typeDecls);
+      if (!body) return null;
+      if (remaining.fields.length > 0) body = replaceFieldAccess(body, chain.varName, remaining.fields);
+      arms.push({ pattern: buildMatchPattern(remaining.name, remaining.fields, chain.varName), body });
+    } else {
+      const body = transformPureBody(chain.fallthrough, typeDecls);
+      if (!body) return null;
+      arms.push({ pattern: "_", body });
+    }
   }
   return { kind: "match", scrutinee: chain.varName, arms };
 }

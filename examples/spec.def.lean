@@ -241,3 +241,7 @@ method negField (o : Outer) (fallback : Int) return (res : Int)
 method nestedAndTernary (o : Option Outer) (fallback : Int) return (res : Int)
   do
     return Pure.nestedAndTernary o fallback
+
+method area (s : Shape) return (res : Int)
+  do
+    return Pure.area s

@@ -44,6 +44,8 @@ datatype Inner = Inner(val: int)
 
 datatype Outer = Outer(inner: Option<Inner>)
 
+datatype Shape = circle(radius: int) | square(side: int)
+
 function evalPartial(e: Expr): int
 {
   match e {
@@ -51,7 +53,7 @@ function evalPartial(e: Expr): int
       i_e_val
     case add(i_e_a, i_e_b) =>
       (i_e_a + i_e_b)
-    case _ =>
+    case neg(i_e_inner) =>
       0
   }
 }
@@ -368,6 +370,16 @@ function nestedAndTernary(o: Option<Outer>, fallback: int): int
       }
     case None =>
       fallback
+  }
+}
+
+function area(s: Shape): int
+{
+  match s {
+    case circle(i_s_radius) =>
+      (i_s_radius * i_s_radius)
+    case square(i_s_side) =>
+      (i_s_side * i_s_side)
   }
 }
 

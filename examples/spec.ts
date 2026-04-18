@@ -361,3 +361,17 @@ function negField(o: Outer, fallback: number): number {
 function nestedAndTernary(o: Outer | undefined, fallback: number): number {
   return o !== undefined && o.inner !== undefined ? o.inner.val : fallback;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// `'key' in obj` narrowing — discriminate by field presence
+// ═══════════════════════════════════════════════════════════════
+
+type Shape =
+  | { kind: 'circle'; radius: number }
+  | { kind: 'square'; side: number }
+
+// `'radius' in s` narrows s to the variant containing 'radius' (circle).
+function area(s: Shape): number {
+  if ('radius' in s) return s.radius * s.radius;
+  return s.side * s.side;
+}

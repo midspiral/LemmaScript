@@ -47,6 +47,11 @@ structure Outer where
   inner : Option Inner
 deriving Repr, Inhabited, DecidableEq
 
+inductive Shape where
+  | circle (radius : Int) : Shape
+  | square (side : Int) : Shape
+deriving Repr, Inhabited
+
 namespace Pure
 
 def evalPartial (e : Expr) : Int :=
@@ -55,7 +60,7 @@ def evalPartial (e : Expr) : Int :=
     _e_val
   | .add _e_a _e_b =>
     _e_a + _e_b
-  | _ =>
+  | .neg _e_inner =>
     0
 
 def evalSwitch (e : Expr) : Int :=
@@ -219,5 +224,12 @@ def nestedAndTernary (o : Option Outer) (fallback : Int) : Int :=
       fallback
   | .none =>
     fallback
+
+def area (s : Shape) : Int :=
+  match s with
+  | .circle _s_radius =>
+    _s_radius * _s_radius
+  | .square _s_side =>
+    _s_side * _s_side
 
 end Pure

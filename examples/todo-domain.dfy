@@ -187,8 +187,8 @@ function degradeIfAnchorMoved(movedId: TaskId, p: Place): Place
         Place.AtEnd
       else
         p
-    case _ =>
-      if (p.anchor == movedId) then
+    case After(i_p_anchor) =>
+      if (i_p_anchor == movedId) then
         Place.AtEnd
       else
         p
@@ -406,8 +406,8 @@ method posFromPlace(lane: seq<TaskId>, p: Place) returns (res: int)
       var i_t0 := indexOf(lane, i_p_anchor);
       var idx := i_t0;
       return (if (idx < 0) then -1 else idx);
-    case _ =>
-      var i_t1 := indexOf(lane, p.anchor);
+    case After(i_p_anchor) =>
+      var i_t1 := indexOf(lane, i_p_anchor);
       var idx := i_t1;
       return (if (idx < 0) then -1 else (idx + 1));
   }
@@ -422,8 +422,8 @@ method posFromListPlace(lists: seq<ListId>, p: ListPlace) returns (res: int)
       var i_t2 := indexOf(lists, i_p_anchor);
       var idx := i_t2;
       return (if (idx < 0) then -1 else idx);
-    case _ =>
-      var i_t3 := indexOf(lists, p.anchor);
+    case ListAfter(i_p_anchor) =>
+      var i_t3 := indexOf(lists, i_p_anchor);
       var idx := i_t3;
       return (if (idx < 0) then -1 else (idx + 1));
   }
