@@ -7,7 +7,8 @@ The `lsc` toolchain translates annotated TypeScript to formal verification artif
 ```
 TS source (.ts)
   → extract    (ts-morph → Raw IR)
-  → resolve    (Raw IR → Typed IR)
+  → resolve    (Raw IR → Typed IR; types and type-narrowing only)
+  → pe         (Typed IR → Typed IR; structural narrowing — `someMatch` rewrites)
   → transform  (Typed IR → IR, configured per backend)
   → peephole   (IR → IR, local rewrites that eliminate Some/None ceremony)
   → emit       (IR → Lean text or Dafny text)
@@ -44,9 +45,11 @@ Type names: `Expr`, `Stmt`, `Decl`, `Module`, `FnDef`, `FnMethod`, `Inductive`, 
 
 **Extract** (`extract.ts`): ts-morph → Raw IR. Walks the TS AST, produces structured expression nodes. Only string outputs are `//@ ` annotation text.
 
-**Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser.
+**Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedFields`, `narrowedExprs`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type. **Type narrowing only** — no structural rewriting.
 
-**Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). No type lookups, no string parsing.
+**Pe** (`pe.ts`): Typed IR → Typed IR. Owns all structural narrowing for optional checks. Detects `if (e !== undefined)`, ternary `e !== undefined ? a : b`, `&&` chains, `||` early returns, `opt ? a : b` truthiness, and the let-with-impure-guard pattern. Rewrites each into a `someMatch` IR node carrying the scrutinee, binder, and arms. Works uniformly for var, `obj.field`, and complex expressions (call results, deep chains). See [Pe rules](#pe-rules) below.
+
+**Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None with the appropriate substitution (var, field-chain, or TExpr-equality for complex). No optional-narrowing logic of its own.
 
 **Peephole** (`peephole.ts`): IR → IR. Local rewrite rules applied bottom-up to fixed point. Eliminates wrap-then-unwrap ceremony around partial-access expressions like `m.get(k)` (which is internally lowered to `methodCall(map, "get", [k])` and emits as `(if k in m then Some(m[k]) else None)`). See [Peephole rules](#peephole-rules) below.
 
@@ -68,8 +71,9 @@ The specparser (`specparser.ts`) parses `//@ ` annotation expressions into `RawE
 
 1. **Extract**: add the TS construct to Raw IR.
 2. **Resolve**: add type resolution and classification for the new construct.
-3. **Transform**: add an IR lowering rule that pattern-matches on the typed node.
-4. **Emit**: add backend-specific rendering in each emitter if the new IR node needs special syntax.
+3. **Pe** (only if it introduces a narrowing pattern): add a rule that detects the pattern and rewrites to `someMatch`.
+4. **Transform**: add an IR lowering rule that pattern-matches on the typed node.
+5. **Emit**: add backend-specific rendering in each emitter if the new IR node needs special syntax.
 
 ## Scoping
 
@@ -95,6 +99,7 @@ interface Env { name: string; ty: Ty; parent: Env | null }
 TS source (.ts)
   → extract    (ts-morph → Raw IR)
   → resolve    (Raw IR → Typed IR)
+  → pe         (Typed IR → Typed IR)
   → transform  (Typed IR → IR, with LEAN_OPTIONS)
   → peephole   (IR → IR)
   → emit       (IR → Lean text)
@@ -113,6 +118,7 @@ TS source (.ts)
 TS source (.ts)
   → extract    (ts-morph → Raw IR)
   → resolve    (Raw IR → Typed IR)
+  → pe         (Typed IR → Typed IR)
   → transform  (Typed IR → IR, with DAFNY_OPTIONS)
   → peephole   (IR → IR)
   → dafny-emit (IR → Dafny text)
@@ -130,6 +136,39 @@ Each TS source produces two Dafny files:
 - `lsc gen --backend=dafny foo.ts` — generate `.dfy.gen` + seed `.dfy`
 - `lsc regen --backend=dafny foo.ts` — regenerate `.dfy.gen`, three-way merge, verify
 - `lsc check --backend=dafny foo.ts` — gen + additions-only check + `dafny verify`
+
+## Pe Rules
+
+`pe.ts` (partial-evaluation pass for narrowing) takes typed IR and rewrites optional-narrowing patterns into a single `someMatch` IR node. The someMatch carries the scrutinee (a TExpr — var, field chain, or arbitrary expression), a binder name, the unwrapped type, and the some/none arms.
+
+The walker is bottom-up over TExpr/TStmt with a small environment (currently only used for `_optCounter` naming). At each node, recurse into children, then try the rules in order.
+
+**Statement-level rules**
+
+| Pattern | Rewrites to |
+|---------|-------------|
+| `if (e !== undefined) S` (some-branch non-empty) | `someMatch e { Some(_e_val) => S, None => {} }` |
+| `if (e === undefined) terminate; rest` (some-branch empty + rest) | `someMatch e { Some(_e_val) => rest, None => terminate }` |
+| `if (e !== undefined && rest) S` (no else) | `someMatch e { Some(_e_val) => if rest S, None => {} }` |
+| `if (a === undefined \|\| b === undefined \|\| ...) terminate; rest` | nested `someMatch` for each var, deepest body is rest |
+| `let x = (e_opt && rest) ? a : b` (statement, impure-OK guard) | `var x := b; someMatch e_opt { Some(_v) => { if rest { x := a } } }` |
+
+**Expression-level rules**
+
+| Pattern | Rewrites to |
+|---------|-------------|
+| `e !== undefined ? a : b` | `someMatch e { Some(_e_val) => a, None => b }` |
+| `e !== undefined && rest ? a : b` (pure rest) | `someMatch e { Some(_e_val) => if rest then a else b, None => b }` |
+| `opt ? a : b` (truthiness; cond is optional-typed) | `someMatch opt { Some(_opt_val) => a, None => b }` |
+
+The `&&`-ternary rule skips when `rest` contains impure method calls (those would be lifted out of the match arm by transform, breaking binder scope) — the let-cond statement-level rule handles those.
+
+**Scrutinee handling** is uniform across rules:
+- Var (`x`) — binder is `_${x}_val`. Substitution in the body via `replaceVar` after lowering.
+- Simple field chain (`obj.field`) — binder is `_${obj}_${field}_val`. Substitution in the TStmt before lowering via `replaceFieldsInTStmts` (or TExpr equivalent).
+- Complex (call result, deep chain, etc.) — binder is `_opt${N}_val`. TExpr-equality substitution (`substTExprIn{TStmts,TExpr}`) walks the body looking for structural matches of the scrutinee.
+
+The `someMatch` IR node, the `narrowedExprs` ctx in resolve (which sets the body's expressions to use the narrowed type for complex scrutinees), and the substitution helpers in transform together form a closed system: pe never invents synthetic vars, transform never re-detects optional patterns.
 
 ## Peephole Rules
 
@@ -183,8 +222,9 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 | `rawir.ts` | Types | Raw IR type definitions |
 | `extract.ts` | Extract | ts-morph → Raw IR |
 | `specparser.ts` | (parser) | Parses `//@ ` annotations → RawExpr |
-| `resolve.ts` | Resolve | Raw IR → Typed IR |
-| `typedir.ts` | Types | Typed IR type definitions |
+| `resolve.ts` | Resolve | Raw IR → Typed IR (types and type-narrowing) |
+| `typedir.ts` | Types | Typed IR type definitions (incl. `someMatch`) |
+| `pe.ts` | Pe | Typed IR → Typed IR (structural narrowing → `someMatch`) |
 | `ir.ts` | Types | Backend-neutral IR type definitions |
 | `transform.ts` | Transform | Typed IR → IR |
 | `peephole.ts` | Peephole | IR → IR (Some/None ceremony elimination) |

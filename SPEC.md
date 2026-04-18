@@ -547,9 +547,7 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 **`Map.get` returns `Option`** in code context (since the key may not exist). In spec context (annotations), `map.get(k)` emits direct access without an Option wrapper, matching how specs reason about map contents.
 
-**Optional narrowing:** `v !== undefined` where `v : T | undefined` emits a pattern match on Some/None, binding the unwrapped value in the then-branch. Optional comparisons like `opt === 0` emit a match on `Some`/`None`.
-
-**Optional truthiness in conditionals:** `opt ? f(opt) : undefined` where `opt` has optional type generates a match expression. The resolve phase introduces a synthetic variable for the unwrapped value, substitutes it in the then-branch, and narrows its type to the inner type. The transform generates `match opt { case Some(v) => Some(f(v)) case None => None }`. For field-access conditions like `entry.decision ? ... : undefined`, the synthetic variable replaces the entire field-access chain in the then-branch.
+**Optional narrowing.** Patterns of the form `v !== undefined`, `v === undefined` (early return), `v && rest`, `a === undefined || b === undefined`, and truthiness `opt ? a : b` all narrow the optional to its inner type in the appropriate scope. The pe pass (`pe.ts`) detects these patterns on the typed IR and rewrites them into a single `someMatch` IR node with a fresh binder. Transform lowers `someMatch` into Dafny `match` Some/None (or `if .Some? { ... .value ... }` after the peephole pass). The same machinery handles simple variables, `obj.field` chains, and complex expressions like `m.tags.get(tagId)` uniformly. See [TOOLS.md](TOOLS.md#pe-rules) for the full rule list.
 
 **Peephole simplification of `Map.get` ceremony.** The transform produces verbose-looking output for common `Map.get` consumer patterns — the call lowers to `(if k in m then Some(m[k]) else None)` followed by a match. A peephole pass between transform and emit collapses these into idiomatic backend code. See [TOOLS.md](TOOLS.md#peephole-rules) for the full rule list.
 
