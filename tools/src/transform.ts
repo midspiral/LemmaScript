@@ -570,16 +570,13 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     case "someMatch": {
       let someBody: Expr;
       let scrutinee: Expr | string;
-      if (e.scrutinee.kind === "var") {
-        someBody = lowerExpr(e.someBody, binds);
-        someBody = replaceVar(someBody, e.scrutinee.name, { kind: "var", name: e.binder }, true);
-        scrutinee = e.scrutinee.name;
-      } else if (e.scrutinee.kind === "field" && e.scrutinee.obj.kind === "var") {
-        const replaced = fixBoundType(replaceFieldInTExpr(e.someBody, e.scrutinee.obj.name, [
-          { fieldName: e.scrutinee.field, newName: e.binder, fallbackTy: e.binderTy }
-        ]), e.binder);
+      const path = asTAccessPath(e.scrutinee);
+      if (path) {
+        // Pure access path (var or any depth of obj.f.g.h) — substitute the
+        // path with the binder pre-lowering.
+        const replaced = replacePathInTExpr(e.someBody, path, e.binder, e.binderTy);
         someBody = lowerExpr(replaced, binds);
-        scrutinee = lowerExpr(e.scrutinee, binds);
+        scrutinee = path.fields.length === 0 ? path.rootVar : lowerExpr(e.scrutinee, binds);
       } else {
         // Complex scrutinee — pe pre-bound the someBody to use the binder directly,
         // so no substitution needed. Used by optChain rewrites.
@@ -929,29 +926,12 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       return [{ kind: "assert", expr: transformExpr(s.expr) }];
 
     case "someMatch": {
-      if (s.scrutinee.kind === "var") {
-        const someTransformed = transformStmts(s.someBody, typeDecls);
-        const someBody = someTransformed.map(stmt =>
-          mapStmtExprs(stmt, e => replaceVar(e, (s.scrutinee as TExpr & { kind: "var" }).name,
-            { kind: "var", name: s.binder }, true)));
-        const noneBody = transformStmts(s.noneBody, typeDecls);
-        return [{
-          kind: "match", scrutinee: s.scrutinee.name,
-          arms: [
-            { pattern: `.some ${s.binder}`, body: someBody },
-            { pattern: ".none", body: noneBody },
-          ],
-        }];
-      }
-      if (s.scrutinee.kind === "field" && s.scrutinee.obj.kind === "var") {
-        const objName = s.scrutinee.obj.name;
-        const fieldName = s.scrutinee.field;
-        const replaced = replaceFieldsInTStmts(s.someBody, objName, [
-          { fieldName, newName: s.binder, fallbackTy: s.binderTy }
-        ]);
+      const path = asTAccessPath(s.scrutinee);
+      if (path) {
+        const replaced = replacePathInTStmts(s.someBody, path, s.binder, s.binderTy);
         const someBody = transformStmts(replaced, typeDecls);
         const noneBody = transformStmts(s.noneBody, typeDecls);
-        const scrutinee = transformExpr(s.scrutinee);
+        const scrutinee: Expr | string = path.fields.length === 0 ? path.rootVar : transformExpr(s.scrutinee);
         return [{
           kind: "match", scrutinee,
           arms: [
@@ -960,7 +940,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           ],
         }];
       }
-      throw new Error(`someMatch scrutinee must be var or simple obj.field, got ${s.scrutinee.kind}`);
+      throw new Error(`someMatch stmt scrutinee must be a pure access path, got ${s.scrutinee.kind}`);
     }
   }
 }
@@ -1112,6 +1092,44 @@ function replaceFieldInTExpr(
   });
 }
 
+/** A pure access path — chain of field accesses rooted at a var. */
+interface AccessPath { rootVar: string; fields: string[] }
+
+function asTAccessPath(e: TExpr): AccessPath | null {
+  if (e.kind === "var") return { rootVar: e.name, fields: [] };
+  if (e.kind === "field") {
+    const inner = asTAccessPath(e.obj);
+    if (!inner) return null;
+    return { rootVar: inner.rootVar, fields: [...inner.fields, e.field] };
+  }
+  return null;
+}
+
+/** Does TExpr `e` match the given access path exactly? */
+function matchesAccessPath(e: TExpr, path: AccessPath): boolean {
+  const collected: string[] = [];
+  let cur = e;
+  while (cur.kind === "field") { collected.unshift(cur.field); cur = cur.obj; }
+  if (cur.kind !== "var" || cur.name !== path.rootVar) return false;
+  if (collected.length !== path.fields.length) return false;
+  return collected.every((f, i) => f === path.fields[i]);
+}
+
+/** Replace every TExpr matching `path` with `var(binder, binderTy)`. */
+function replacePathInTExpr(expr: TExpr, path: AccessPath, binder: string, binderTy: Ty): TExpr {
+  return mapTExpr(expr, e =>
+    matchesAccessPath(e, path)
+      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
+  );
+}
+
+function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, binderTy: Ty): TStmt[] {
+  return stmts.map(s => mapTStmt(s, e =>
+    matchesAccessPath(e, path)
+      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
+  ));
+}
+
 /** Unwrap optional type on match-bound variables in TExpr.
  *  After replaceFieldInTExpr, the replaced variable carries the original optional
  *  type from the field declaration. The match binding unwraps it to the inner type. */
@@ -1154,29 +1172,14 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
       }
       case "switch": return transformPureSwitch(s, typeDecls);
       case "someMatch": {
-        if (s.scrutinee.kind === "var") {
-          const someExpr = transformPureBody([...s.someBody, ...rest], typeDecls);
-          if (!someExpr) return null;
-          const noneExpr = transformPureBody([...s.noneBody, ...rest], typeDecls);
-          if (!noneExpr) return null;
-          const someReplaced = replaceVar(someExpr, s.scrutinee.name, { kind: "var", name: s.binder }, true);
-          return {
-            kind: "match", scrutinee: s.scrutinee.name,
-            arms: [
-              { pattern: `.some ${s.binder}`, body: someReplaced },
-              { pattern: ".none", body: noneExpr },
-            ],
-          };
-        }
-        if (s.scrutinee.kind === "field" && s.scrutinee.obj.kind === "var") {
-          const replaced = replaceFieldsInTStmts(s.someBody, s.scrutinee.obj.name, [
-            { fieldName: s.scrutinee.field, newName: s.binder, fallbackTy: s.binderTy }
-          ]);
+        const path = asTAccessPath(s.scrutinee);
+        if (path) {
+          const replaced = replacePathInTStmts(s.someBody, path, s.binder, s.binderTy);
           const someExpr = transformPureBody([...replaced, ...rest], typeDecls);
           if (!someExpr) return null;
           const noneExpr = transformPureBody([...s.noneBody, ...rest], typeDecls);
           if (!noneExpr) return null;
-          const scrutinee = transformExpr(s.scrutinee);
+          const scrutinee: Expr | string = path.fields.length === 0 ? path.rootVar : transformExpr(s.scrutinee);
           return {
             kind: "match", scrutinee,
             arms: [
@@ -1185,7 +1188,7 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
             ],
           };
         }
-        throw new Error(`someMatch scrutinee must be var or simple obj.field, got ${s.scrutinee.kind}`);
+        throw new Error(`someMatch pure-body scrutinee must be a pure access path, got ${s.scrutinee.kind}`);
       }
       default: return null;
     }

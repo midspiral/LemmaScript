@@ -28,11 +28,35 @@ function extend(env: Env | null, name: string, ty: Ty): Env {
   return { name, ty, parent: env };
 }
 
+// ── Access paths ─────────────────────────────────────────────
+
+/** Pure access path — a chain of field accesses rooted at a variable.
+ *  E.g. `a.b.c` → { rootVar: "a", fields: ["b", "c"] }. Empty fields
+ *  means the path is just the var itself. */
+interface AccessPath {
+  rootVar: string;
+  fields: string[];
+}
+
+function asRawAccessPath(e: RawExpr): AccessPath | null {
+  if (e.kind === "var") return { rootVar: e.name, fields: [] };
+  if (e.kind === "field") {
+    const inner = asRawAccessPath(e.obj);
+    if (!inner) return null;
+    return { rootVar: inner.rootVar, fields: [...inner.fields, e.field] };
+  }
+  return null;
+}
+
+function accessPathsEqual(a: AccessPath, b: AccessPath): boolean {
+  return a.rootVar === b.rootVar && a.fields.length === b.fields.length &&
+    a.fields.every((f, i) => f === b.fields[i]);
+}
+
 // ── Context ──────────────────────────────────────────────────
 
-interface NarrowedField {
-  objName: string;
-  fieldName: string;
+interface NarrowedPath {
+  path: AccessPath;
   narrowedTy: Ty;
 }
 
@@ -47,7 +71,7 @@ interface Ctx {
   fnReturns: Map<string, Ty>;  // function name → return type
   inSpec: boolean;
   inLambda: boolean;
-  narrowedFields: NarrowedField[];  // field chain narrowing context for conditional then-branches
+  narrowedPaths: NarrowedPath[];  // pure access path narrowing for conditional then-branches
 }
 
 function withEnv(ctx: Ctx, env: Env | null): Ctx {
@@ -330,14 +354,20 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     case "binop": {
       let left = resolveExpr(e.left, ctx);
       // && narrowing: if left is "x !== undefined", narrow x for right side.
-      // Field chains are excluded — resolve can't substitute in sub-expressions;
-      // transform's emitOptionalMatch handles field chains in statement contexts.
+      // Simple vars extend env; pure access paths extend narrowedPaths.
       let rightCtx = ctx;
       let rawRight = e.right;
       if (e.op === "&&") {
         const narrowed = detectOptionalCheck(e.left, ctx);
-        if (narrowed && narrowed.inThen && !narrowed.fieldExpr) {
-          rightCtx = withEnv(ctx, extend(ctx.env, narrowed.varName, narrowed.innerTy));
+        if (narrowed && narrowed.inThen) {
+          if (!narrowed.fieldExpr) {
+            rightCtx = withEnv(ctx, extend(ctx.env, narrowed.varName, narrowed.innerTy));
+          } else {
+            const path = asRawAccessPath(narrowed.fieldExpr);
+            if (path) {
+              rightCtx = { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: narrowed.innerTy }] };
+            }
+          }
         }
       }
       let right = resolveExpr(rawRight, rightCtx);
@@ -405,10 +435,15 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let isDiscriminant = false;
       let ty: Ty = { kind: "unknown" };
 
-      // Check narrowed field context (from conditional optional checks on field chains)
-      if (obj.kind === "var" && ctx.narrowedFields.length > 0) {
-        const nf = ctx.narrowedFields.find(n => n.objName === obj.name && n.fieldName === e.field);
-        if (nf) ty = nf.narrowedTy;
+      // Check narrowed path context (from conditional optional checks).
+      // Applies when the current field-access forms a pure access path AND
+      // that path is in the narrowedPaths list.
+      if (ctx.narrowedPaths.length > 0) {
+        const myPath = asRawAccessPath(e);
+        if (myPath) {
+          const np = ctx.narrowedPaths.find(n => accessPathsEqual(n.path, myPath));
+          if (np) ty = np.narrowedTy;
+        }
       }
 
       if (ty.kind === "unknown") {
@@ -509,11 +544,11 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       const cond = resolveExpr(e.cond, ctx);
 
       // Type narrowing for the then/else branches. Resolve carries narrowing
-      // info (env extension + narrowedFields) so the body's expressions resolve
-      // to non-Optional inner types. Pe handles all structural narrowing (match
-      // generation, binding) on the typed IR. Following TS, we only narrow
-      // simple vars and simple `obj.field` chains — complex expressions (call
-      // results, deep chains) require the user to bind first.
+      // info (env + narrowedPaths) so the body's expressions resolve to
+      // non-Optional inner types. Pe handles all structural narrowing (match
+      // generation, binding) on the typed IR. Following TS, we narrow simple
+      // vars and any pure access path (`a.b.c.d`) — but not expressions with
+      // method calls or index ops, which require bind-first.
       let thenCtx = ctx;
       let elseCtx = ctx;
 
@@ -529,18 +564,14 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         if (!narrowed.fieldExpr) {
           // Simple var
           thenCtx = withEnv(thenCtx, extend(thenCtx.env, narrowed.varName, narrowed.innerTy));
-        } else if (narrowed.fieldExpr.kind === "field" && narrowed.fieldExpr.obj.kind === "var") {
-          // Simple obj.field chain
-          thenCtx = {
-            ...thenCtx,
-            narrowedFields: [...thenCtx.narrowedFields, {
-              objName: narrowed.fieldExpr.obj.name,
-              fieldName: narrowed.fieldExpr.field,
-              narrowedTy: narrowed.innerTy,
-            }],
-          };
+        } else {
+          // Pure access path (single-level or deep)
+          const path = asRawAccessPath(narrowed.fieldExpr);
+          if (path) {
+            thenCtx = { ...thenCtx, narrowedPaths: [...thenCtx.narrowedPaths, { path, narrowedTy: narrowed.innerTy }] };
+          }
+          // Else: not a pure path — no narrowing (TS-faithful).
         }
-        // Complex expressions: no narrowing — user must bind first (TS semantics).
       } else if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
         elseCtx = withEnv(elseCtx, extend(elseCtx.env, narrowed.varName, narrowed.innerTy));
       }
@@ -661,15 +692,21 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     case "if": {
       // Narrow optional<T> → T when checking !== undefined or undefined !==.
       // Also checks left side of && conditions: if (x !== undefined && ...) { ... }
-      // Field chains are excluded — resolve can't substitute in statement bodies;
-      // transform's emitOptionalMatch handles field chains in statement contexts.
+      // Simple vars extend the env; pure access paths (`a.b.c`) extend narrowedPaths.
       let thenCtx = ctx, elseCtx = ctx;
       const narrowed = detectOptionalCheck(s.cond, ctx)
         ?? (s.cond.kind === "binop" && s.cond.op === "&&" ? detectOptionalCheck(s.cond.left, ctx) : null);
-      if (narrowed && !narrowed.fieldExpr) {
-        const env = extend(ctx.env, narrowed.varName, narrowed.innerTy);
-        if (narrowed.inThen) thenCtx = withEnv(ctx, env);
-        else elseCtx = withEnv(ctx, env);
+      if (narrowed) {
+        if (!narrowed.fieldExpr) {
+          const env = extend(ctx.env, narrowed.varName, narrowed.innerTy);
+          if (narrowed.inThen) thenCtx = withEnv(ctx, env);
+          else elseCtx = withEnv(ctx, env);
+        } else if (narrowed.inThen) {
+          const path = asRawAccessPath(narrowed.fieldExpr);
+          if (path) {
+            thenCtx = { ...thenCtx, narrowedPaths: [...thenCtx.narrowedPaths, { path, narrowedTy: narrowed.innerTy }] };
+          }
+        }
       }
       return [{ kind: "if", cond: resolveExpr(s.cond, ctx), then: resolveBlock(s.then, thenCtx), else: resolveBlock(s.else, elseCtx) }, ctx.env];
     }
@@ -904,7 +941,7 @@ function resolveFunction(
   if (opts?.thisBinding) env = extend(env, opts.thisBinding.name, opts.thisBinding.ty);
   for (const p of params) env = extend(env, p.name, p.ty);
 
-  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedFields: [] };
+  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedPaths: [] };
   const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
   const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
 
@@ -963,7 +1000,7 @@ export function resolveModule(raw: RawModule): TModule {
     fnParams.set(fn.name, fn.params.map(p => resolveTsType(p.tsType, overrides, p.name)));
     fnReturns.set(fn.name, resolveTsType(fn.returnType, overrides, "\\result"));
   }
-  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedFields: [] };
+  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedPaths: [] };
   const constants = (raw.constants ?? []).map(c => ({
     name: c.name,
     ty: parseTsType(c.tsType),

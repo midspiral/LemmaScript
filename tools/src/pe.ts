@@ -68,9 +68,14 @@ function parseOptionalCheck(cond: TExpr): { scrutinee: TExpr; innerTy: Ty; negat
 }
 
 function binderHintFor(e: TExpr): string | null {
-  if (e.kind === "var") return `_${e.name}_val`;
-  if (e.kind === "field" && e.obj.kind === "var") return `_${e.obj.name}_${e.field}_val`;
-  return null;
+  // Pure access paths: var(x) or field(purePath, name).
+  // Walks down to the var root, collecting field names. Returns
+  // `_root_field1_field2_..._val` (or `_root_val` for a bare var).
+  const fields: string[] = [];
+  let cur = e;
+  while (cur.kind === "field") { fields.unshift(cur.field); cur = cur.obj; }
+  if (cur.kind !== "var") return null;
+  return fields.length === 0 ? `_${cur.name}_val` : `_${cur.name}_${fields.join("_")}_val`;
 }
 
 // Aliased for code that historically called the simpler check.
