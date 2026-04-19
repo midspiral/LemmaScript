@@ -58,11 +58,8 @@ function tokenize(input: string): Token[] {
       continue;
     }
 
-    // Identifier. `#` is a valid first character to accept ES private
-    // field references (e.g., `this.#size`); subsequent characters follow
-    // the usual identifier rules.
-    if (/[a-zA-Z_#]/.test(input[i])) {
-      let id = input[i++];
+    if (/[a-zA-Z_]/.test(input[i])) {
+      let id = "";
       while (i < input.length && /[a-zA-Z_0-9]/.test(input[i])) id += input[i++];
       tokens.push({ type: "ident", value: id });
       continue;
