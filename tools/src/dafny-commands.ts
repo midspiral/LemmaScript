@@ -3,7 +3,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, copyFileSync, unlinkSync } from "fs";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import path from "path";
 
 function writeGen(genPath: string, text: string) {
@@ -21,15 +21,23 @@ export function dafnyGen(genPath: string, dfyPath: string, text: string) {
 
 export function dafnyCheckDiff(genPath: string, dfyPath: string): boolean {
   if (!existsSync(dfyPath)) return true;
+  let diff = "";
   try {
-    const diff = execSync(`git diff --no-index -- "${genPath}" "${dfyPath}" 2>/dev/null || true`, { encoding: "utf-8" });
-    const deletions = diff.split("\n").filter(l => l.startsWith("-") && !l.startsWith("---"));
-    if (deletions.length > 0) {
-      console.error(`WARNING: ${path.basename(dfyPath)} has modifications to generated lines (not additions-only):`);
-      for (const d of deletions.slice(0, 5)) console.error("  " + d);
-      return false;
+    diff = execFileSync("git", ["diff", "--no-index", "--", genPath, dfyPath], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch (e: any) {
+    // git diff exits 1 when files differ; stdout still holds the diff
+    if (e && e.stdout != null) {
+      diff = typeof e.stdout === "string" ? e.stdout : e.stdout.toString("utf-8");
+    } else {
+      return true;
     }
-  } catch { /* diff not available */ }
+  }
+  const deletions = diff.split("\n").filter(l => l.startsWith("-") && !l.startsWith("---"));
+  if (deletions.length > 0) {
+    console.error(`WARNING: ${path.basename(dfyPath)} has modifications to generated lines (not additions-only):`);
+    for (const d of deletions.slice(0, 5)) console.error("  " + d);
+    return false;
+  }
   return true;
 }
 
@@ -37,10 +45,14 @@ export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number, ex
   console.log("Running dafny verify...");
   try {
     const content = readFileSync(dfyPath, "utf-8");
-    const stdLibFlag = content.includes("Std.") ? " --standard-libraries" : "";
-    const timeLimitFlag = timeLimit ? ` --verification-time-limit ${timeLimit}` : "";
-    const extra = extraFlags ? ` ${extraFlags}` : "";
-    execSync(`dafny verify${stdLibFlag}${timeLimitFlag}${extra} "${dfyPath}"`, { cwd: dir, stdio: "inherit" });
+    const args: string[] = ["verify"];
+    if (content.includes("Std.")) args.push("--standard-libraries");
+    if (timeLimit) args.push("--verification-time-limit", String(timeLimit));
+    if (extraFlags) {
+      for (const tok of extraFlags.split(/\s+/)) if (tok) args.push(tok);
+    }
+    args.push(dfyPath);
+    execFileSync("dafny", args, { cwd: dir, stdio: "inherit" });
     return true;
   } catch {
     return false;
@@ -75,7 +87,7 @@ export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, t
     const mergedPath = dfyPath + ".merged";
     console.log("Gen changed. Three-way merging...");
     try {
-      execSync(`git merge-file "${dfyPath}" "${basePath}" "${genPath}"`, { stdio: "pipe" });
+      execFileSync("git", ["merge-file", dfyPath, basePath, genPath], { stdio: "pipe" });
       console.log(`Merged: ${path.basename(dfyPath)}`);
     } catch (e: any) {
       if (e.status > 0) {
