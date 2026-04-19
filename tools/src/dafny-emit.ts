@@ -52,6 +52,14 @@ function paramList(params: { name: string; type: Ty }[]): string {
   return params.map(p => `${escapeName(p.name)}: ${tyToDafny(p.type)}`).join(", ");
 }
 
+/** Format a method signature header, omitting `returns` for void methods.
+ *  Dafny's definite-assignment rule rejects unassigned out-parameters, so a
+ *  `returns (res: ())` on a void method fails verification. */
+function methodHeader(prefix: string, params: { name: string; type: Ty }[], returnType: Ty): string {
+  const sig = `${prefix}(${paramList(params)})`;
+  return returnType.kind === "void" ? sig : `${sig} returns (res: ${tyToDafny(returnType)})`;
+}
+
 // ── Lean op → Dafny op ─────────────────────────────────────
 
 const OP_MAP: Record<string, string> = {
@@ -485,7 +493,7 @@ function emitDecl(d: Decl): string {
 
     case "method": {
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
-      const lines = [`method ${d.name}${tp}(${paramList(d.params)}) returns (res: ${tyToDafny(d.returnType)})`];
+      const lines = [methodHeader(`method ${d.name}${tp}`, d.params, d.returnType)];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
       lines.push(`{`);
@@ -501,7 +509,7 @@ function emitDecl(d: Decl): string {
       }
       if (d.fields.length > 0 && d.methods.length > 0) lines.push("");
       for (const m of d.methods) {
-        lines.push(`  method ${m.name}(${paramList(m.params)}) returns (res: ${tyToDafny(m.returnType)})`);
+        lines.push(`  ${methodHeader(`method ${m.name}`, m.params, m.returnType)}`);
         for (const r of m.requires) lines.push(`    requires ${emitExpr(r)}`);
         for (const e of m.ensures) lines.push(`    ensures ${emitExpr(e)}`);
         lines.push(`  {`);
