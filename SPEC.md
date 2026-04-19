@@ -38,7 +38,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `ghost let x = e` | Before any statement | Ghost variable (proof-only, not runtime). See §2.3. |
 | `ghost x = e` | Before any statement | Ghost variable reassignment. |
 | `assert e` | Before any statement | Assertion (`assertGadget` in Lean, `assert` in Dafny). |
-| `pure` | Before function declaration | Force function to be pure — Dafny: `function by method` if body can't auto-convert (see §5.1). |
+| `pure` | Before function declaration | Force function to be pure — required to call from another function's `requires`/`ensures`. Dafny: `function by method` if body can't auto-convert (see §5.1). |
 | `havoc` | Before a variable declaration | Nondeterministic value — skip init expression (see §2.9). |
 | `havoc <key>` | Before a variable declaration | Nondeterministic subexpression — replace calls matching `<key>` (see §2.10). |
 | `declare-type N { f: T, ... }` | Before any statement | Declare a record type for cross-file types (see §2.5). |
@@ -121,6 +121,8 @@ This emits `method linearSearch<T(==)>(...)` in Dafny. Without it, Dafny rejects
 Note: `arr.includes(x)` and `arr.indexOf(x)` are supported natively — no manual helpers needed. The compiler emits `(x in arr)` and `SeqIndexOf(arr, x)` respectively.
 
 User-defined types (string literal unions, discriminated unions) are generated automatically with the same name as the TS type. No annotation needed or supported for these.
+
+String-literal union members are emitted verbatim as backend constructor names — they must be valid identifiers in the target backend. Avoid operator characters like `"+"` or `"-"` (which Dafny rejects); use word names such as `"Add"`, `"Sub"` instead.
 
 When a variable is Nat-typed:
 - Lean: `arr[i]!` instead of `arr[i.toNat]!`
@@ -784,7 +786,7 @@ by method {
 }
 ```
 
-The empty `{ }` block is the spec body placeholder. The user completes it in the `.dfy` file:
+The empty `{ }` block is the spec body placeholder — **Dafny will reject the file as a parse error until it is filled in**. Complete it in the `.dfy` file *before* running verify:
 
 ```dafny
 function tagNameExists(m: Model, name: string, excludeTag: Option<TagId>): bool
