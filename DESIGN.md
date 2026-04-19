@@ -128,7 +128,7 @@ LemmaScript verifies a subset of TypeScript chosen for clean, well-defined seman
 
 - Variables: `let`, `const`
 - Types: `number` (→ `Int`/`int` or `Nat`/`nat`), `boolean`, `string`
-- Arrays: `T[]`, `Array<T>` — access, length, `with`, `map`, `filter`, `every`, `some`, `includes`, `find`, `push`
+- Arrays: `T[]`, `Array<T>` — access, index assignment (`arr[i] = v`, desugared to `arr.with(i, v)`), length, `with`, `map`, `filter`, `every`, `some`, `includes`, `find`, `push`
 - Maps: `Map<K,V>` — `get`, `set`, `has`, `size`
 - Sets: `Set<T>` — `has`, `add`, `size`, iteration via `for-of`
 - Control flow: `if`/`else`, `while` (with `break`), `for-of`, `return`, `switch`
@@ -141,7 +141,6 @@ LemmaScript verifies a subset of TypeScript chosen for clean, well-defined seman
 
 ### Not yet supported
 
-- Array index assignment (`arr[i] = v`)
 - Compound pattern matching (nested match on multiple discriminated unions)
 - Cross-file type imports
 - `async`/`await`

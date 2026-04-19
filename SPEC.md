@@ -217,6 +217,8 @@ class Counter {
 
 **`modifies this` / `reads this`:** Not generated automatically. Add as proof-level additions in the `.dfy` file. Dafny will report an error if they're missing.
 
+**Array-field mutation — length-preservation ensures:** When a method mutates an array-typed field via `this.arr[i] = v` (desugared to `this.arr = this.arr.with(i, v)`, emitted in Dafny as `this.arr := this.arr[i := v]`), `ensures` clauses that index into the field (e.g., `ensures this.arr[i] == v`) will fail Dafny's index-range check, because Dafny cannot automatically prove that the length was preserved across the modification. Add `ensures |this.arr| == old(|this.arr|)` to the `.dfy` file for each array field mutated this way. (An automated emission is not yet supported.)
+
 **`old()` in ensures:** For mutating methods, `this.field` in `ensures` refers to the post-state. Use `old(this.field)` in the `.dfy` file to refer to the pre-state. (A `//@ old` spec expression is not yet supported.)
 
 **Lean:** Class support is Dafny-only. Use `//@ backend dafny` on files with classes.
@@ -622,6 +624,7 @@ When the bound variable IS used after the match, the `let` is preserved and the 
 | `let x = e` | `let mut x : T := e'` | `var x := e';` |
 | `const x = e` | `let x := e'` | `var x := e';` |
 | `x = e` | `x := e'` | `x := e';` |
+| `arr[i] = v` (desugared to `arr = arr.with(i, v)`) | `arr := arr.set! i v` | `arr := arr[i := v];` |
 | `x += e`, `x -= e`, etc. | `x := x + e'` | `x := x + e';` |
 | `i++`, `++i`, `i--`, `--i` | `i := i + 1` / `i := i - 1` | `i := i + 1;` / `i := i - 1;` |
 | `return e` | `return e'` | `return e';` |
@@ -1136,7 +1139,6 @@ extract (ts-morph → Raw IR) → resolve (→ Typed IR) → transform (→ IR) 
 
 The following TS features are not yet handled by the toolchain:
 
-- Array index assignment (`arr[i] = v`)
 - Compound pattern matching (nested match on multiple discriminated unions)
 - async/await
 - Error reporting (mapping prover errors to TS source locations)
