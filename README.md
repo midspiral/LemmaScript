@@ -60,7 +60,7 @@ The Dafny backend generates two files per TS source: `foo.dfy.gen` (always regen
 ### Lean backend
 
 ```sh
-npx lsc gen src/myModule.ts
+npx lsc gen --backend=lean src/myModule.ts
 lake build
 ```
 
