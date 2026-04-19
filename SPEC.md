@@ -374,7 +374,8 @@ No normalization of operators. Both backends handle all comparison directions.
 | `[a, b, c]` | `#[a, b, c]` | `[a, b, c]` |
 | `[...arr, e]` | `Array.push arr e` | `(arr + [e])` |
 | `[a, ...b, c]` | `[a] + b + [c]` | `([a] + b + [c])` (general spread) |
-| `arr.concat(e)` | — | `(arr + [e])` |
+| `arr.concat(other)` (T[] arg) | `arr ++ other` | `(arr + other)` |
+| `arr.concat(elem)` (T arg) | `Array.push arr elem` | `(arr + [elem])` |
 | `{ ...obj, f: v }` | `{ obj with f := v }` | `obj.(f := v)` |
 | `{ ...map, [k]: v }` | — | `map[k := v]` (desugared to `.set()` in extract) |
 | `{ [k]: v }` | — | `map[][k := v]` (desugared to `{}.set()` in extract) |

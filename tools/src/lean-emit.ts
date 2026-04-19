@@ -81,6 +81,7 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
     if (method === "find")     return `${obj}.find? ${args[0]}`;
     if (method === "with")     return `${obj}.set! ${args[0]} ${args[1]}`;
     if (method === "push")     return `Array.push ${obj} ${args[0]}`;
+    if (method === "concat")   return `Array.push ${obj} ${args[0]}`;
   }
   // String methods
   if (tyKind === "string") {

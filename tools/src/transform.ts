@@ -445,6 +445,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             return { kind: "toNat" as const, expr: lowered };
           return lowered;
         });
+        // arr.concat(otherArr): array argument → real concatenation, not push
+        if (method === "concat" && e.fn.obj.ty.kind === "array" && e.args.length === 1 && e.args[0].ty.kind === "array") {
+          return { kind: "binop", op: "arrayConcat", left: recv, right: args[0] };
+        }
         // Spec-context map get: result type is non-optional → direct access
         if (method === "get" && e.fn.obj.ty.kind === "map" && e.ty.kind !== "optional") {
           method = "getDirect";
