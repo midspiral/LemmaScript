@@ -1096,7 +1096,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     }
     return false;
   }
-  const hasVerifyDirective = allFns.some(hasVerify);
+  const hasVerifyDirective = sourceFile.getFullText().includes('//@ verify');
   const fnsToExtract = hasVerifyDirective ? allFns.filter(hasVerify) : allFns;
 
   const functions = fnsToExtract.map(f => {
