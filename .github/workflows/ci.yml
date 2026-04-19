@@ -96,6 +96,8 @@ jobs:
             branch: lemma
           - repo: midspiral/xyflow-lemmascript
             branch: lemmascript
+          - repo: midspiral/equality-game-lemmascript
+            branch: main
     steps:
       - uses: actions/checkout@v4
 
