@@ -95,7 +95,7 @@ const parseSimpleOptionalCheck = parseOptionalCheck;
 
 function walkExpr(e: TExpr): TExpr {
   const r = recurseExpr(e);
-  return ruleNullish(r) ?? ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
+  return ruleNullish(r) ?? ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalInMap(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
 }
 
 function recurseExpr(e: TExpr): TExpr {
@@ -368,6 +368,62 @@ function ruleOptChain(e: TExpr): TExpr | null {
     kind: "someMatch",
     scrutinee: e.obj, binder, binderTy: innerTy,
     someBody: body, noneBody, ty: e.ty,
+  };
+}
+
+/** Minimal structural equality on the IR shapes we narrow against: var, field
+ *  chain, and index (with pure key). Enough to recognize `m[k]` on both sides
+ *  of a `k in m ? m[k] : default` ternary. */
+function exprEqual(a: TExpr, b: TExpr): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "var" && b.kind === "var") return a.name === b.name;
+  if (a.kind === "field" && b.kind === "field")
+    return a.field === b.field && exprEqual(a.obj, b.obj);
+  if (a.kind === "index" && b.kind === "index")
+    return exprEqual(a.obj, b.obj) && exprEqual(a.idx, b.idx);
+  return false;
+}
+
+/** Produce a reader-friendly binder hint for `m[k]` when both m and k are
+ *  access-path shaped (var / field chain). Falls back to a generic counter
+ *  name for computed keys. */
+function binderHintForMapAccess(m: TExpr, k: TExpr): string {
+  const mHint = binderHintFor(m);
+  const kHint = binderHintFor(k);
+  if (mHint && kHint) {
+    // mHint is `_m_val`, kHint is `_k_val` — stitch into `_m_k_val`.
+    const mStem = mHint.replace(/_val$/, "");
+    const kStem = kHint.replace(/^_/, "").replace(/_val$/, "");
+    return `${mStem}_${kStem}_val`;
+  }
+  return `_oc${_ocCounter++}_val`;
+}
+
+/** Rule (expression): `k in m ? m[k] : default` where m is map-typed.
+ *  The then-branch must be exactly `m[k]` (same obj, same key). This mirrors
+ *  the discriminant-`in` path (line 438) but gated on `map` instead of `user`.
+ *  → `someMatch m[k] { Some(_m_k_val) => _m_k_val, None => default }`.
+ *  The existing Dafny peephole collapses the result to
+ *  `if k in m then m[k] else default`. */
+function ruleConditionalInMap(e: TExpr): TExpr | null {
+  if (e.kind !== "conditional") return null;
+  if (e.cond.kind !== "binop" || e.cond.op !== "in") return null;
+  const m = e.cond.right;
+  const k = e.cond.left;
+  if (m.ty.kind !== "map") return null;
+  // Then-branch must be exactly m[k].
+  if (e.then.kind !== "index") return null;
+  if (!exprEqual(e.then.obj, m) || !exprEqual(e.then.idx, k)) return null;
+  // Only narrow when the else branch has a concrete non-optional type — otherwise
+  // the overall ternary could legitimately be Option<V> (e.g., `k in m ? m[k] : undefined`).
+  if (e.else.ty.kind === "optional" || e.else.ty.kind === "void") return null;
+  const innerTy = m.ty.value;
+  const binder = binderHintForMapAccess(m, k);
+  return {
+    kind: "someMatch",
+    scrutinee: e.then, binder, binderTy: innerTy,
+    someBody: { kind: "var", name: binder, ty: innerTy },
+    noneBody: e.else, ty: innerTy,
   };
 }
 

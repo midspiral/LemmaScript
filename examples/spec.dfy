@@ -375,6 +375,21 @@ lemma nullishMapGet_ensures(m: map<string, int>, k: string, fallback: int)
 {
 }
 
+function inCheckRecordGet(m: map<string, int>, k: string, fallback: int): int
+{
+  if (k in m) then
+    var i_m_k_val := m[k];
+    i_m_k_val
+  else
+    fallback
+}
+
+lemma inCheckRecordGet_ensures(m: map<string, int>, k: string, fallback: int)
+  ensures (!((k in m)) ==> (inCheckRecordGet(m, k, fallback) == fallback))
+  ensures ((k in m) ==> ((k in m) && (var i_value := m[k]; (i_value == inCheckRecordGet(m, k, fallback)))))
+{
+}
+
 function negVar(o: Option<Inner>, fallback: int): int
 {
   match o {

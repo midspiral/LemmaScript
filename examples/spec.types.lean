@@ -200,6 +200,13 @@ def nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) : I
   else
     fallback
 
+def inCheckRecordGet (m : Std.HashMap String Int) (k : String) (fallback : Int) : Int :=
+  if m.contains k then
+    let _m_k_val := m[k]!
+    _m_k_val
+  else
+    fallback
+
 def negVar (o : Option Inner) (fallback : Int) : Int :=
   match o with
   | .some _o_val =>
