@@ -98,6 +98,8 @@ jobs:
             branch: lemmascript
           - repo: midspiral/equality-game-lemmascript
             branch: main
+          - repo: midspiral/github-star-checker-lemmascript
+            branch: main
     steps:
       - uses: actions/checkout@v4
 
