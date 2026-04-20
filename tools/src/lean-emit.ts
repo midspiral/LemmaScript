@@ -227,6 +227,25 @@ function emitExpr(e: Expr, parentPrec?: number): string {
   }
 }
 
+/** True if the IR expression emits to a Prop-valued Lean term. `transformExpr`
+ *  routes TS comparisons/logicals through `OP_MAP` (`===`→`=`, `&&`→`∧`, `!`→`¬`)
+ *  so these top-level ops land in Prop. `in` stays Bool (emits `.contains`), and
+ *  bare method calls / vars / field accesses remain at their declared type. */
+function isPropValued(e: Expr): boolean {
+  switch (e.kind) {
+    case "binop":
+      return ["=", "≠", "≥", "≤", ">", "<", "∧", "∨"].includes(e.op);
+    case "unop":
+      return e.op === "¬";
+    case "implies":
+    case "forall":
+    case "exists":
+      return true;
+    default:
+      return false;
+  }
+}
+
 // ── Statement emission ──────────────────────────────────────
 
 function emitStmts(stmts: Stmt[], indent: number): string {
@@ -245,7 +264,16 @@ function emitStmt(s: Stmt, indent: number): string {
     case "ghostLet":
       return `${pad}let mut ${escapeName(s.name)} : ${tyToLean(s.type)} := ${emitExpr(s.value)}`;
     case "ghostAssign": return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)}`;
-    case "assert": return `${pad}assertGadget (${emitExpr(s.expr)})`;
+    case "assert": {
+      // WPGen.assert needs a Prop; bare Bool expressions (`k in m` → `.contains`,
+      // method calls, vars) lack a matching WPGen instance and silently fall back
+      // to WPGen.default, which drops the assertion. Coerce to Prop via `= true`.
+      // Top-level Prop constructs (`=`, `<`, `∧`, `¬`, `∀`, `∃`, `→`) already
+      // land in Prop — Lean auto-coerces inner Bools there.
+      const inner = emitExpr(s.expr);
+      const wrapped = isPropValued(s.expr) ? inner : `(${inner}) = true`;
+      return `${pad}assertGadget (${wrapped})`;
+    }
     case "bind": return `${pad}${escapeName(s.target)} ← ${emitExpr(s.value)}`;
     case "let-bind": return `${pad}let ${s.name} ← ${emitExpr(s.value)}`;
     case "return": return `${pad}return ${emitExpr(s.value)}`;

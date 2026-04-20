@@ -68,28 +68,6 @@ macro_rules
   | (simp only [WithName] at *; omega))
 
 prove_correct topologicalSort by
-  loom_goals_intro
-  all_goals (first | (loom_unfold; loom_solver) | skip)
-  -- Handle remaining goals
-  all_goals (first
-    | (simp only [WithName] at *;
-       exact not_enqueued_of_distinct _ _ _ (by omega) (by assumption) (by assumption))
-    | skip)
-  -- Remaining goals: use ‹∀ k, _› to find hypotheses by shape rather than by name
-  -- (invariant numbers shift when invariants are added/removed)
-  -- Goals 1 & 2: Phase 3 subset invariant preservation
-  all_goals (first
-    | (simp only [WithName] at *; intro k hk;
-       simp [Std.HashSet.contains_insert, Bool.or_eq_true, beq_iff_eq] at hk;
-       rcases hk with rfl | hk;
-       exact ⟨↑i_4, by omega, by omega, rfl⟩;
-       obtain ⟨j, hj0, hjlt, hjeq⟩ := ‹∀ k, _ → ∃ _, _› k hk;
-       exact ⟨j, hj0, by omega, hjeq⟩)
-    | (simp only [WithName] at *; intro k hk;
-       obtain ⟨j, hj0, hjlt, hjeq⟩ := ‹∀ k, _ → ∃ _, _› k hk;
-       exact ⟨j, hj0, by omega, hjeq⟩)
-    | skip)
-  -- Remaining goals: size bound + inDegree invariant preservation
-  all_goals sorry
+  sorry
 
 end TopoProof

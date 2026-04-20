@@ -379,8 +379,7 @@ lemma nullishMapGet_ensures(m: map<string, int>, k: string, fallback: int)
 function inCheckRecordGet(m: map<string, int>, k: string, fallback: int): int
 {
   if (k in m) then
-    var i_m_k_val := m[k];
-    i_m_k_val
+    m[k]
   else
     fallback
 }
@@ -388,6 +387,46 @@ function inCheckRecordGet(m: map<string, int>, k: string, fallback: int): int
 lemma inCheckRecordGet_ensures(m: map<string, int>, k: string, fallback: int)
   ensures (!((k in m)) ==> (inCheckRecordGet(m, k, fallback) == fallback))
   ensures ((k in m) ==> ((k in m) && (var i_value := m[k]; (i_value == inCheckRecordGet(m, k, fallback)))))
+{
+}
+
+function requiresInMap(m: map<string, int>, k: string): int
+  requires (k in m)
+{
+  m[k]
+}
+
+lemma requiresInMap_ensures(m: map<string, int>, k: string)
+  requires (k in m)
+  ensures (requiresInMap(m, k) == m[k])
+{
+}
+
+function ifInMapBlock(m: map<string, int>, k: string, fallback: int): int
+{
+  if (k in m) then
+    m[k]
+  else
+    fallback
+}
+
+lemma ifInMapBlock_ensures(m: map<string, int>, k: string, fallback: int)
+  ensures ((k in m) ==> ((k in m) && (var i_value := m[k]; (i_value == ifInMapBlock(m, k, fallback)))))
+  ensures (!((k in m)) ==> (ifInMapBlock(m, k, fallback) == fallback))
+{
+}
+
+function ifNotInMapEarlyReturn(m: map<string, int>, k: string, fallback: int): int
+{
+  if !((k in m)) then
+    fallback
+  else
+    m[k]
+}
+
+lemma ifNotInMapEarlyReturn_ensures(m: map<string, int>, k: string, fallback: int)
+  ensures (!((k in m)) ==> (ifNotInMapEarlyReturn(m, k, fallback) == fallback))
+  ensures ((k in m) ==> ((k in m) && (var i_value := m[k]; (i_value == ifNotInMapEarlyReturn(m, k, fallback)))))
 {
 }
 
@@ -595,4 +634,33 @@ method clampedMidpoint(a: int, b: int) returns (res: int)
   var mid := i_t3;
   var i_t4 := clampTernary(mid, a, b);
   return i_t4;
+}
+
+method assertInMap(m: map<string, int>, k: string, fallback: int) returns (res: int)
+  ensures ((k in m) ==> ((k in m) && (var i_value := m[k]; (i_value == res))))
+  ensures (!((k in m)) ==> (res == fallback))
+{
+  if !((k in m)) {
+    return fallback;
+  }
+  assert (k in m);
+  return m[k];
+}
+
+method whileInvariantInMap(m: map<string, int>, k: string, reps: nat) returns (res: int)
+  requires (k in m)
+  ensures (res == (m[k] * reps))
+{
+  var total := 0;
+  var i := 0;
+  while (i < reps)
+    invariant (k in m)
+    invariant (i <= reps)
+    invariant (total == (m[k] * i))
+    decreases (reps - i)
+  {
+    total := (total + m[k]);
+    i := (i + 1);
+  }
+  return total;
 }

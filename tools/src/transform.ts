@@ -402,7 +402,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     case "index": {
       const idx = transformExpr(e.idx);
       if (e.obj.ty.kind === "map") {
-        return { kind: "methodCall", obj: transformExpr(e.obj), objTy: e.obj.ty, method: "get", args: [idx], monadic: false };
+        // Mirrors the .get() → .getDirect switch at line ~453: when resolve has
+        // narrowed the index type to non-optional (via `k in m` atoms in scope),
+        // emit direct access; otherwise keep the Option-producing `get`.
+        const method = e.ty.kind !== "optional" ? "getDirect" : "get";
+        return { kind: "methodCall", obj: transformExpr(e.obj), objTy: e.obj.ty, method, args: [idx], monadic: false };
       }
       const wrappedIdx = isArray(e.obj.ty) && !isNat(e.idx.ty) ? { kind: "toNat" as const, expr: idx } : idx;
       return { kind: "index", arr: transformExpr(e.obj), idx: wrappedIdx };

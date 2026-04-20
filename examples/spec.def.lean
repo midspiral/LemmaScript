@@ -251,6 +251,52 @@ _value == res else false
   do
     return Pure.inCheckRecordGet m k fallback
 
+method requiresInMap (m : Std.HashMap String Int) (k : String) return (res : Int)
+  require m.contains k
+  ensures res = m.get! k
+  do
+    return Pure.requiresInMap m k
+
+method ifInMapBlock (m : Std.HashMap String Int) (k : String) (fallback : Int) return (res : Int)
+  ensures m.contains k → if m.contains k then let _value := m[k]!
+_value == res else false
+  ensures ¬(m.contains k) → res = fallback
+  do
+    return Pure.ifInMapBlock m k fallback
+
+method ifNotInMapEarlyReturn (m : Std.HashMap String Int) (k : String) (fallback : Int) return (res : Int)
+  ensures ¬(m.contains k) → res = fallback
+  ensures m.contains k → if m.contains k then let _value := m[k]!
+_value == res else false
+  do
+    return Pure.ifNotInMapEarlyReturn m k fallback
+
+method assertInMap (m : Std.HashMap String Int) (k : String) (fallback : Int) return (res : Int)
+  ensures m.contains k → if m.contains k then let _value := m[k]!
+_value == res else false
+  ensures ¬(m.contains k) → res = fallback
+  do
+    if ¬(m.contains k) then
+      return fallback
+    assertGadget ((m.contains k) = true)
+    return m.get! k
+
+method whileInvariantInMap (m : Std.HashMap String Int) (k : String) (reps : Nat) return (res : Int)
+  require m.contains k
+  ensures res = m.get! k * reps
+  do
+    let mut total : Int := 0
+    let mut i : Nat := 0
+    while i < reps
+      invariant m.contains k
+      invariant i ≤ reps
+      invariant total = m.get! k * i
+      decreasing reps - i
+    do
+      total := total + m.get! k
+      i := i + 1
+    return total
+
 method negVar (o : Option Inner) (fallback : Int) return (res : Int)
   ensures (match o with | .some _ => false | .none => true) → res = fallback
   ensures (match o with | .some _o_val => res = _o_val.val | .none => true)
