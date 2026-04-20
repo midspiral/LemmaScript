@@ -60,6 +60,17 @@ interface NarrowedPath {
   narrowedTy: Ty;
 }
 
+/** A `k in m` atom known to hold in the current scope. Both sides are pure
+ *  access paths (var or field chain) so we can compare by path equality.
+ *  Produced by scanning function requires, enclosing `if (k in m)` branches,
+ *  `//@ assert k in m` statements, and while-loop invariants. Consumed in
+ *  the index case (resolve.ts:~447) to return `obj.ty.value` (non-optional)
+ *  instead of `Option<V>` when the access is provably safe. */
+interface NarrowedIndex {
+  obj: AccessPath;
+  idx: AccessPath;
+}
+
 interface Ctx {
   env: Env | null;
   typeDecls: TypeDeclInfo[];
@@ -72,6 +83,7 @@ interface Ctx {
   inSpec: boolean;
   inLambda: boolean;
   narrowedPaths: NarrowedPath[];  // pure access path narrowing for conditional then-branches
+  narrowedIndices: NarrowedIndex[];  // `k in m` atoms known-true in this scope
 }
 
 function withEnv(ctx: Ctx, env: Env | null): Ctx {
@@ -160,6 +172,60 @@ function collectEarlyReturnNarrowings(cond: RawExpr, ctx: Ctx): { varName: strin
     return [{ varName: narrowed.varName, innerTy: narrowed.innerTy }];
   }
   return [];
+}
+
+/** TExpr → AccessPath. Counterpart to `asRawAccessPath` for resolved trees.
+ *  Used by `extractInAtoms` when pulling atoms out of typed spec expressions. */
+function asTExprAccessPath(e: TExpr): AccessPath | null {
+  if (e.kind === "var") return { rootVar: e.name, fields: [] };
+  if (e.kind === "field") {
+    const inner = asTExprAccessPath(e.obj);
+    if (!inner) return null;
+    return { rootVar: inner.rootVar, fields: [...inner.fields, e.field] };
+  }
+  return null;
+}
+
+/** Walk `e` collecting top-level `k in m` atoms where both sides are pure
+ *  access paths and the right side is map-typed. Descends through `&&` only.
+ *  Does NOT descend into `==>`, `||`, negation, `forall`, or `exists` — in
+ *  those positions an atom is only conditionally known (or a premise, not a
+ *  conclusion), so treating it as always-true in the enclosing scope would
+ *  be unsound. */
+function extractInAtoms(e: TExpr): NarrowedIndex[] {
+  if (e.kind === "binop" && e.op === "in" && e.right.ty.kind === "map") {
+    const obj = asTExprAccessPath(e.right);
+    const idx = asTExprAccessPath(e.left);
+    if (obj && idx) return [{ obj, idx }];
+    return [];
+  }
+  if (e.kind === "binop" && e.op === "&&") {
+    return [...extractInAtoms(e.left), ...extractInAtoms(e.right)];
+  }
+  return [];
+}
+
+/** Extract `k in m` atoms that hold when `e` is *false*. Currently only
+ *  strips an outer `!` and hands the inner to `extractInAtoms`; that covers
+ *  `if (!(k in m)) ...` for the else-branch and early-return patterns.
+ *  De Morgan over `||` / nested `!(a && b)` not handled yet. */
+function extractInAtomsNegated(e: TExpr): NarrowedIndex[] {
+  if (e.kind === "unop" && e.op === "!") return extractInAtoms(e.expr);
+  return [];
+}
+
+/** Extend a Ctx with `k in m` atoms. Deduplicates against existing atoms. */
+function withInAtoms(ctx: Ctx, atoms: NarrowedIndex[]): Ctx {
+  if (atoms.length === 0) return ctx;
+  const existing = ctx.narrowedIndices;
+  const added: NarrowedIndex[] = [];
+  for (const a of atoms) {
+    if (!existing.some(e => accessPathsEqual(e.obj, a.obj) && accessPathsEqual(e.idx, a.idx))) {
+      added.push(a);
+    }
+  }
+  if (added.length === 0) return ctx;
+  return { ...ctx, narrowedIndices: [...existing, ...added] };
 }
 
 /** Walk an `&&` chain of `e !== undefined` checks, returning a Ctx with all
@@ -443,9 +509,23 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     case "index": {
       const obj = resolveExpr(e.obj, ctx);
       const idx = resolveExpr(e.idx, ctx);
-      const idxTy = obj.ty.kind === "array" ? obj.ty.elem
-        : obj.ty.kind === "map" ? { kind: "optional" as const, inner: obj.ty.value }
-        : { kind: "unknown" as const };
+      // Map bracket access: default to Option<V>. But if the enclosing scope has a
+      // known `k in m` atom matching (obj, idx) — from requires, assert, an enclosing
+      // `if (k in m)`, or a loop invariant — narrow to V. Parallels how `narrowedPaths`
+      // narrows `obj.field.field` under optional-undefined checks.
+      let idxTy: Ty;
+      if (obj.ty.kind === "array") {
+        idxTy = obj.ty.elem;
+      } else if (obj.ty.kind === "map") {
+        const objPath = asTExprAccessPath(obj);
+        const idxPath = asTExprAccessPath(idx);
+        const narrowed = objPath && idxPath && ctx.narrowedIndices.some(
+          n => accessPathsEqual(n.obj, objPath) && accessPathsEqual(n.idx, idxPath)
+        );
+        idxTy = narrowed ? obj.ty.value : { kind: "optional" as const, inner: obj.ty.value };
+      } else {
+        idxTy = { kind: "unknown" as const };
+      }
       return { kind: "index", obj, idx, ty: idxTy };
     }
 
@@ -628,6 +708,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           elseCtx = withEnv(elseCtx, extend(elseCtx.env, n.varName, n.innerTy));
         }
       }
+      // Map-index narrowing: `k in m` in the cond narrows the then-branch; `!(k in m)`
+      // narrows the else-branch. Parallel to the if-statement hook in resolveStmt.
+      thenCtx = withInAtoms(thenCtx, extractInAtoms(cond));
+      elseCtx = withInAtoms(elseCtx, extractInAtomsNegated(cond));
 
       let then_ = resolveExpr(e.then, thenCtx);
       let else_ = resolveExpr(e.else, elseCtx);
@@ -679,8 +763,10 @@ function splitConj(e: RawExpr): RawExpr[] {
 function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
   const result: TStmt[] = [];
   let env = ctx.env;
+  let narrowedIndices = ctx.narrowedIndices;
   for (const s of stmts) {
-    const [typed, nextEnv] = resolveStmt(s, withEnv(ctx, env));
+    const currentCtx = { ...ctx, env, narrowedIndices };
+    const [typed, nextEnv] = resolveStmt(s, currentCtx);
     result.push(typed);
     env = nextEnv;
     // Flow narrowing: if (x === undefined) { return } narrows x for rest of block.
@@ -691,6 +777,20 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
       const narrowings = collectEarlyReturnNarrowings(s.cond, withEnv(ctx, env));
       for (const n of narrowings) {
         env = extend(env, n.varName, n.innerTy);
+      }
+      // Map-index narrowing: `if (!(k in m)) return;` means `k in m` holds in rest.
+      if (typed.kind === "if") {
+        const addedAtoms = extractInAtomsNegated(typed.cond);
+        if (addedAtoms.length > 0) {
+          narrowedIndices = withInAtoms({ ...ctx, narrowedIndices }, addedAtoms).narrowedIndices;
+        }
+      }
+    }
+    // Assert narrowing: `//@ assert k in m` adds atoms for the rest of the block.
+    if (typed.kind === "assert") {
+      const addedAtoms = extractInAtoms(typed.expr);
+      if (addedAtoms.length > 0) {
+        narrowedIndices = withInAtoms({ ...ctx, narrowedIndices }, addedAtoms).narrowedIndices;
       }
     }
   }
@@ -748,18 +848,28 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       if (single && !single.inThen && !single.fieldExpr) {
         elseCtx = withEnv(ctx, extend(ctx.env, single.varName, single.innerTy));
       }
-      return [{ kind: "if", cond: resolveExpr(s.cond, ctx), then: resolveBlock(s.then, thenCtx), else: resolveBlock(s.else, elseCtx) }, ctx.env];
+      // Narrow map index access across `k in m` / `!(k in m)` in the cond:
+      // positive atoms (from `k in m` or &&-chains containing it) → then-branch;
+      // negated atoms (from `!(k in m)`) → else-branch.
+      const resolvedCond = resolveExpr(s.cond, ctx);
+      thenCtx = withInAtoms(thenCtx, extractInAtoms(resolvedCond));
+      elseCtx = withInAtoms(elseCtx, extractInAtomsNegated(resolvedCond));
+      return [{ kind: "if", cond: resolvedCond, then: resolveBlock(s.then, thenCtx), else: resolveBlock(s.else, elseCtx) }, ctx.env];
     }
 
     case "while": {
       const whileSpecCtx = { ...ctx, inSpec: true };
+      const resolvedInvariants = resolveSpecs(s.invariants, whileSpecCtx);
+      // Invariants hold at the top of the body, so any `k in m` atoms among them
+      // narrow map index access in the body.
+      const bodyCtx = withInAtoms(ctx, resolvedInvariants.flatMap(extractInAtoms));
       return [{
         kind: "while",
         cond: resolveExpr(s.cond, ctx),
-        invariants: resolveSpecs(s.invariants, whileSpecCtx),
+        invariants: resolvedInvariants,
         decreases: s.decreases ? resolveSpec(s.decreases, whileSpecCtx) : null,
         doneWith: s.doneWith ? resolveSpec(s.doneWith, whileSpecCtx) : null,
-        body: resolveBlock(s.body, ctx),
+        body: resolveBlock(s.body, bodyCtx),
       }, ctx.env];
     }
 
@@ -981,7 +1091,7 @@ function resolveFunction(
   if (opts?.thisBinding) env = extend(env, opts.thisBinding.name, opts.thisBinding.ty);
   for (const p of params) env = extend(env, p.name, p.ty);
 
-  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedPaths: [] };
+  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
   const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
   const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
 
@@ -991,14 +1101,23 @@ function resolveFunction(
     return constraint ? `${tp}${constraint}` : tp;
   });
 
+  // Resolve requires first so we can extract any `k in m` atoms and seed them
+  // into the body context and the ensures context — they hold for the whole
+  // body (pure fns) and for post-state references in the ensures (map params
+  // aren't mutated through their binding in the Dafny translation).
+  const resolvedRequires = resolveSpecs(fn.requires, requiresCtx);
+  const requiresAtoms = resolvedRequires.flatMap(extractInAtoms);
+  const bodyCtx = withInAtoms(baseCtx, requiresAtoms);
+  const ensuresCtxNarrowed = withInAtoms(ensuresCtx, requiresAtoms);
+
   return {
     name: fn.name, typeParams, params, returnTy,
-    requires: resolveSpecs(fn.requires, requiresCtx),
-    ensures: resolveSpecs(fn.ensures, ensuresCtx),
+    requires: resolvedRequires,
+    ensures: resolveSpecs(fn.ensures, ensuresCtxNarrowed),
     decreases: fn.decreases ? resolveSpec(fn.decreases, requiresCtx) : null,
     isPure: opts?.forcePure !== undefined ? opts.forcePure : pureFns.has(fn.name),
     forcePure: fn.pure,
-    body: resolveBlock(fn.body, baseCtx),
+    body: resolveBlock(fn.body, bodyCtx),
   };
 }
 
@@ -1040,7 +1159,7 @@ export function resolveModule(raw: RawModule): TModule {
     fnParams.set(fn.name, fn.params.map(p => resolveTsType(p.tsType, overrides, p.name)));
     fnReturns.set(fn.name, resolveTsType(fn.returnType, overrides, "\\result"));
   }
-  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedPaths: [] };
+  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
   const constants = (raw.constants ?? []).map(c => ({
     name: c.name,
     ty: parseTsType(c.tsType),

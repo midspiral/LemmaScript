@@ -417,6 +417,10 @@ function ruleConditionalInMap(e: TExpr): TExpr | null {
   // Only narrow when the else branch has a concrete non-optional type — otherwise
   // the overall ternary could legitimately be Option<V> (e.g., `k in m ? m[k] : undefined`).
   if (e.else.ty.kind === "optional" || e.else.ty.kind === "void") return null;
+  // Dormant backup: when resolve's in-atom narrowing has already fired, e.then.ty is V,
+  // not Option<V>. The `someMatch` scrutinee would then have the wrong shape. Skip —
+  // the enclosing expression is already a plain if-then-else of the correct type.
+  if (e.then.ty.kind !== "optional") return null;
   const innerTy = m.ty.value;
   const binder = binderHintForMapAccess(m, k);
   return {

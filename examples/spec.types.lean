@@ -202,10 +202,24 @@ def nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) : I
 
 def inCheckRecordGet (m : Std.HashMap String Int) (k : String) (fallback : Int) : Int :=
   if m.contains k then
-    let _m_k_val := m[k]!
-    _m_k_val
+    m.get! k
   else
     fallback
+
+def requiresInMap (m : Std.HashMap String Int) (k : String) : Int :=
+  m.get! k
+
+def ifInMapBlock (m : Std.HashMap String Int) (k : String) (fallback : Int) : Int :=
+  if m.contains k then
+    m.get! k
+  else
+    fallback
+
+def ifNotInMapEarlyReturn (m : Std.HashMap String Int) (k : String) (fallback : Int) : Int :=
+  if ¬(m.contains k) then
+    fallback
+  else
+    m.get! k
 
 def negVar (o : Option Inner) (fallback : Int) : Int :=
   match o with

@@ -362,6 +362,57 @@ function inCheckRecordGet(m: Record<string, number>, k: string, fallback: number
   return k in m ? m[k] : fallback;
 }
 
+// `requires k in m` — atom in scope for the whole body, `m[k]` narrowed to V directly.
+function requiresInMap(m: Record<string, number>, k: string): number {
+  //@ requires k in m
+  //@ ensures \result === m[k]
+  return m[k];
+}
+
+// `if (k in m) { ... m[k] ... }` — positive check narrows the then-branch.
+function ifInMapBlock(m: Record<string, number>, k: string, fallback: number): number {
+  //@ ensures k in m ==> \result === m[k]
+  //@ ensures !(k in m) ==> \result === fallback
+  if (k in m) return m[k];
+  return fallback;
+}
+
+// `if (!(k in m)) return ...; rest` — early-return narrows the rest.
+function ifNotInMapEarlyReturn(m: Record<string, number>, k: string, fallback: number): number {
+  //@ ensures !(k in m) ==> \result === fallback
+  //@ ensures k in m ==> \result === m[k]
+  if (!(k in m)) return fallback;
+  return m[k];
+}
+
+// `//@ assert k in m` — atom from assert narrows subsequent accesses in the block.
+function assertInMap(m: Record<string, number>, k: string, fallback: number): number {
+  //@ ensures k in m ==> \result === m[k]
+  //@ ensures !(k in m) ==> \result === fallback
+  if (!(k in m)) return fallback;
+  //@ assert k in m
+  return m[k];
+}
+
+// While-loop: `invariant k in m` narrows map index access inside the loop.
+function whileInvariantInMap(m: Record<string, number>, k: string, reps: number): number {
+  //@ type reps nat
+  //@ type i nat
+  //@ requires k in m
+  //@ ensures \result === m[k] * reps
+  let total = 0;
+  let i = 0;
+  while (i < reps) {
+    //@ invariant k in m
+    //@ invariant i <= reps
+    //@ invariant total === m[k] * i
+    //@ decreases reps - i
+    total = total + m[k];
+    i = i + 1;
+  }
+  return total;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Negative truthiness `if (!x)` — equivalent to `x === undefined`
 // ═══════════════════════════════════════════════════════════════

@@ -120,6 +120,22 @@ prove_correct nullishMapGet by
 prove_correct inCheckRecordGet by
   unfold Pure.inCheckRecordGet; loom_solve
 
+-- Map-index narrowing via requires / if / assert / while invariants
+prove_correct requiresInMap by
+  unfold Pure.requiresInMap; loom_solve
+
+prove_correct ifInMapBlock by
+  unfold Pure.ifInMapBlock; loom_solve
+
+prove_correct ifNotInMapEarlyReturn by
+  unfold Pure.ifNotInMapEarlyReturn; loom_solve
+
+prove_correct assertInMap by
+  loom_solve
+
+prove_correct whileInvariantInMap by
+  loom_solve
+
 -- Chained && of optional checks in ternary
 prove_correct nestedAndTernary by
   unfold Pure.nestedAndTernary; loom_solve

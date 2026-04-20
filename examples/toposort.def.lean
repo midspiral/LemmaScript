@@ -94,7 +94,7 @@ _value == 0 else false then
           invariant nodeIdSet.size ≤ nodeIds.size
         do
           let neighbor := _neighbors_val[_neighbor_idx]!
-          assertGadget (nodeIdSet.contains neighbor)
+          assertGadget ((nodeIdSet.contains neighbor) = true)
           if inDegree.contains neighbor then
             let _deg_val := inDegree[neighbor]!
             let newDeg := _deg_val - 1
