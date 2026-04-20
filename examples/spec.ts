@@ -352,6 +352,15 @@ function nullishMapGet(m: Map<string, number>, k: string, fallback: number): num
   return m.get(k) ?? fallback;
 }
 
+// `k in m ? m[k] : default` on a Record<K,V> — narrow rule rewrites to a
+// someMatch over m[k]; the peephole then collapses to
+// `if k in m then m[k] else default`, same as the `??` form above.
+function inCheckRecordGet(m: Record<string, number>, k: string, fallback: number): number {
+  //@ ensures !(k in m) ==> \result === fallback
+  //@ ensures k in m ==> \result === m[k]
+  return k in m ? m[k] : fallback;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Negative truthiness `if (!x)` — equivalent to `x === undefined`
 // ═══════════════════════════════════════════════════════════════

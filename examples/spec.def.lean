@@ -243,6 +243,13 @@ method nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) 
   do
     return Pure.nullishMapGet m k fallback
 
+method inCheckRecordGet (m : Std.HashMap String Int) (k : String) (fallback : Int) return (res : Int)
+  ensures ¬(m.contains k) → res = fallback
+  ensures m.contains k → if m.contains k then let _value := m[k]!
+_value == res else false
+  do
+    return Pure.inCheckRecordGet m k fallback
+
 method negVar (o : Option Inner) (fallback : Int) return (res : Int)
   ensures (match o with | .some _ => false | .none => true) → res = fallback
   ensures (match o with | .some _o_val => res = _o_val.val | .none => true)

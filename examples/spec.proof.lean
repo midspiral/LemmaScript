@@ -116,6 +116,10 @@ prove_correct nullishVar by
 prove_correct nullishMapGet by
   unfold Pure.nullishMapGet; loom_solve
 
+-- `k in m ? m[k] : default` narrowing (ruleConditionalInMap)
+prove_correct inCheckRecordGet by
+  unfold Pure.inCheckRecordGet; loom_solve
+
 -- Chained && of optional checks in ternary
 prove_correct nestedAndTernary by
   unfold Pure.nestedAndTernary; loom_solve
