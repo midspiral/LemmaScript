@@ -131,6 +131,10 @@ prove_correct area by
 prove_correct describeIfCircle by
   unfold Pure.describeIfCircle; loom_solve
 
+-- Ternary in spec with optional narrowing (parallels truthyVar)
+prove_correct ternarySpecOpt by
+  unfold Pure.ternarySpecOpt; loom_solve
+
 -- Optional chaining
 prove_correct ocField by
   unfold Pure.ocField; loom_solve

@@ -70,6 +70,7 @@ function withThreshold(c: Config, t: number): Config {
 function clampTernary(x: number, lo: number, hi: number): number {
   //@ requires lo <= hi
   //@ ensures \result >= lo && \result <= hi
+  //@ ensures \result === (x < lo ? lo : x > hi ? hi : x)
   return x < lo ? lo : x > hi ? hi : x;
 }
 
@@ -422,4 +423,13 @@ function describeIfCircle(s: Shape, fallback: number): number {
   //@ ensures s.kind === 'square' ==> \result === fallback
   if (s.kind !== 'circle') return fallback;
   return s.radius * s.radius;
+}
+
+// Ternary inside a spec exercising option narrowing in the spec language
+// itself: the `o !== undefined` check must narrow `o` to `Inner` inside the
+// `then` branch so that `o.val` is well-typed.
+function ternarySpecOpt(o: Inner | undefined, fallback: number): number {
+  //@ ensures \result === (o !== undefined ? o.val : fallback)
+  if (o !== undefined) return o.val;
+  return fallback;
 }

@@ -77,7 +77,7 @@ function tokenize(input: string): Token[] {
     if (matched) continue;
 
     const ch = input[i];
-    if ("+-*/%><!".includes(ch)) {
+    if ("+-*/%><!?".includes(ch)) {
       tokens.push({ type: "op", value: ch });
     } else if ("()[],:.{}".includes(ch)) {
       tokens.push({ type: "punc", value: ch });
@@ -119,9 +119,20 @@ class Parser {
   }
 
   parseImplies(): Expr {
-    const left = this.parseOr();
+    const left = this.parseTernary();
     if (this.match("op", "==>")) return { kind: "binop", op: "==>", left, right: this.parseImplies() };
     return left;
+  }
+
+  parseTernary(): Expr {
+    const cond = this.parseOr();
+    if (this.match("op", "?")) {
+      const then_ = this.parseImplies();
+      this.expect("punc", ":");
+      const else_ = this.parseImplies();
+      return { kind: "conditional", cond, then: then_, else: else_ };
+    }
+    return cond;
   }
 
   parseOr(): Expr {

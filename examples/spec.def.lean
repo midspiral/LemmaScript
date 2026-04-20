@@ -42,6 +42,7 @@ method clampTernary (x : Int) (lo : Int) (hi : Int) return (res : Int)
   require lo ≤ hi
   ensures res ≥ lo
   ensures res ≤ hi
+  ensures res = if x < lo then lo else if x > hi then hi else x
   do
     return Pure.clampTernary x lo hi
 
@@ -286,3 +287,8 @@ method describeIfCircle (s : Shape) (fallback : Int) return (res : Int)
   ensures (match s with | .square _s_side => res = fallback | _ => true)
   do
     return Pure.describeIfCircle s fallback
+
+method ternarySpecOpt (o : Option Inner) (fallback : Int) return (res : Int)
+  ensures res = (match o with | .some _o_val => _o_val.val | .none => fallback)
+  do
+    return Pure.ternarySpecOpt o fallback

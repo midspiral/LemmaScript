@@ -253,4 +253,11 @@ def describeIfCircle (s : Shape) (fallback : Int) : Int :=
   | .square _s_side =>
     fallback
 
+def ternarySpecOpt (o : Option Inner) (fallback : Int) : Int :=
+  match o with
+  | .some _o_val =>
+    _o_val.val
+  | .none =>
+    fallback
+
 end Pure

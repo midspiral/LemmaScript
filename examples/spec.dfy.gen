@@ -132,6 +132,7 @@ lemma clampTernary_ensures(x: int, lo: int, hi: int)
   requires (lo <= hi)
   ensures (clampTernary(x, lo, hi) >= lo)
   ensures (clampTernary(x, lo, hi) <= hi)
+  ensures (clampTernary(x, lo, hi) == (if (x < lo) then lo else (if (x > hi) then hi else x)))
 {
 }
 
@@ -489,6 +490,21 @@ function describeIfCircle(s: Shape, fallback: int): int
 lemma describeIfCircle_ensures(s: Shape, fallback: int)
   ensures (s.circle? ==> (describeIfCircle(s, fallback) == (s.radius * s.radius)))
   ensures (s.square? ==> (describeIfCircle(s, fallback) == fallback))
+{
+}
+
+function ternarySpecOpt(o: Option<Inner>, fallback: int): int
+{
+  match o {
+    case Some(i_o_val) =>
+      i_o_val.val
+    case None =>
+      fallback
+  }
+}
+
+lemma ternarySpecOpt_ensures(o: Option<Inner>, fallback: int)
+  ensures (ternarySpecOpt(o, fallback) == (match o { case Some(i_o_val) => i_o_val.val case None => fallback }))
 {
 }
 
