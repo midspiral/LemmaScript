@@ -6,6 +6,8 @@ See [SPEC.md](SPEC.md) and [DESIGN.md](DESIGN.md).
 
 This is a **Tech Preview**: the core idea is there, but support, semantics, and ergonomics are still evolving.
 
+See our [blog post](https://midspiral.com/blog/lemmascript-a-verification-toolchain-for-typescript/).
+
 ## Examples and Case Studies
 
 Each example and case study is verified in Lean 4 and/or Dafny from the same annotated TypeScript source.
