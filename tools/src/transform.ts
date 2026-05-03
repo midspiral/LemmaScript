@@ -76,7 +76,7 @@ function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
   if (hit) return hit;
   const r = (x: TExpr) => mapTExpr(x, f);
   switch (e.kind) {
-    case "var": case "num": case "str": case "bool": case "result": case "havoc": return e;
+    case "var": case "num": case "str": case "bool": case "havoc": return e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
     case "call": return { ...e, fn: r(e.fn), args: e.args.map(r) };
@@ -236,7 +236,6 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     case "var": return { kind: "var", name: e.name };
     case "num": return { kind: "num", value: e.value };
     case "bool": return { kind: "bool", value: e.value };
-    case "result": return { kind: "var", name: "res" };
 
     case "str":
       if (e.ty.kind === "user") return { kind: "constructor", name: e.value, type: e.ty.name };
@@ -605,7 +604,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         // path with the binder pre-lowering.
         const replaced = replacePathInTExpr(e.someBody, path, e.binder, e.binderTy);
         someBody = lowerExpr(replaced, binds);
-        scrutinee = path.fields.length === 0 ? path.rootVar : lowerExpr(e.scrutinee, binds);
+        // Bare-var shortcut, but route \result through lowerExpr so the
+        // lemma-side replaceVar pass can substitute it with the function call.
+        scrutinee = path.fields.length === 0 && path.rootVar !== "\\result"
+          ? path.rootVar
+          : lowerExpr(e.scrutinee, binds);
       } else {
         // Complex scrutinee — narrow pre-bound the someBody to use the binder directly,
         // so no substitution needed. Used by optChain rewrites.
@@ -1400,9 +1403,9 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     if (!fn.isPure) continue;
     const body = transformPureBody(fn.body, mod.typeDecls);
     if (body) {
-      // For ensures, replace \result (→ "res") with the function call
+      // For pure-function lemmas, replace \result with the function call.
       const fnCall: Expr = { kind: "app", fn: fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) };
-      const ensures = fn.ensures.map(e => replaceVar(transformExpr(e), "res", fnCall));
+      const ensures = fn.ensures.map(e => replaceVar(transformExpr(e), "\\result", fnCall));
       pureDefs.push({
         kind: "def",
         name: fn.name,

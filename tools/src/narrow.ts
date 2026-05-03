@@ -85,7 +85,9 @@ function binderHintFor(e: TExpr): string | null {
   let cur = e;
   while (cur.kind === "field") { fields.unshift(cur.field); cur = cur.obj; }
   if (cur.kind !== "var") return null;
-  return fields.length === 0 ? `_${cur.name}_val` : `_${cur.name}_${fields.join("_")}_val`;
+  // \result is stored as the IR var name "\\result"; sanitize for a valid identifier.
+  const root = cur.name === "\\result" ? "result" : cur.name;
+  return fields.length === 0 ? `_${root}_val` : `_${root}_${fields.join("_")}_val`;
 }
 
 // Aliased for code that historically called the simpler check.
@@ -102,7 +104,7 @@ function recurseExpr(e: TExpr): TExpr {
   const re = walkExpr;
   switch (e.kind) {
     case "var": case "num": case "str": case "bool":
-    case "result": case "havoc":
+    case "havoc":
       return e;
     case "binop": return { ...e, left: re(e.left), right: re(e.right) };
     case "unop": return { ...e, expr: re(e.expr) };
@@ -623,7 +625,7 @@ function containsMethodCall(e: TExpr): boolean {
   }
   switch (e.kind) {
     case "var": case "num": case "str": case "bool":
-    case "result": case "havoc":
+    case "havoc":
       return false;
     case "binop": return containsMethodCall(e.left) || containsMethodCall(e.right);
     case "unop": return containsMethodCall(e.expr);

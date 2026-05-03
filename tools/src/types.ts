@@ -73,8 +73,8 @@ export function parseTsType(tsType: string): Ty {
       arms = arms.filter(a => !boolLits.has(a));
       arms.unshift("boolean");
     }
-    const nonUndef = arms.filter(a => a !== "undefined");
-    if (nonUndef.length === 1 && arms.length === 2) {
+    const nonUndef = arms.filter(a => a !== "undefined" && a !== "null");
+    if (nonUndef.length === 1 && arms.length >= 2) {
       return { kind: "optional", inner: parseTsType(nonUndef[0]) };
     }
   }
