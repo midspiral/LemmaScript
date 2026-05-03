@@ -53,6 +53,9 @@ const LEAN_KEYWORDS = new Set([
 ]);
 
 function escapeName(name: string): string {
+  // \result is carried through the IR as the var name "\\result"; render it
+  // as Lean's canonical return-value identifier (matches `return (res : T)`).
+  if (name === "\\result") return "res";
   return LEAN_KEYWORDS.has(name) ? `«${name}»` : name;
 }
 

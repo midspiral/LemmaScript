@@ -353,6 +353,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `s.toLowerCase()` | — | `StringToLower(s)` |
 | `s.toUpperCase()` | — | `StringToUpper(s)` |
 | `s.includes(sub)` | — | `StringIndexOf(s, sub) >= 0` |
+| `s.startsWith(p)` | — | `\|s\| >= \|p\| && s[..\|p\|] == p` |
 | `s.length` | `s.length` | `\|s\|` |
 | `arr.map((x) => e)` | `arr.map (fun x => e)` | `Seq.Map((x) => e, arr)` |
 | `arr.filter((x) => e)` | `arr.filter (fun x => e)` | `Seq.Filter((x) => e, arr)` |

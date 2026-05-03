@@ -54,7 +54,8 @@ export type TExpr =
       cases: { variant: string; body: TExpr }[];
       fallthrough: TExpr | null; ty: Ty }
   // Spec-only (from //@ annotations):
-  | { kind: "result"; ty: Ty }
+  // Note: \result is desugared by resolve.ts into a regular var named "\\result";
+  // there is no kind: "result" variant in the typed IR.
   | { kind: "forall"; var: string; varTy: Ty; body: TExpr; ty: Ty }
   | { kind: "exists"; var: string; varTy: Ty; body: TExpr; ty: Ty }
   // Havoc — nondeterministic value:

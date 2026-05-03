@@ -385,7 +385,7 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
     }
   } else if (objTy.kind === "string") {
     if (fn.field === "trim" || fn.field === "toLowerCase" || fn.field === "toUpperCase") return { kind: "string" };
-    if (fn.field === "includes") return { kind: "bool" };
+    if (fn.field === "includes" || fn.field === "startsWith") return { kind: "bool" };
   }
   return { kind: "unknown" };
 }
@@ -644,8 +644,11 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "result":
+      // \result desugars to a regular var so all the variable-narrowing
+      // machinery (env lookup, optional checks, path matching) just works.
+      // The env in ensuresCtx is pre-seeded with "\result" → returnTy.
       if (!ctx.allowResult) throw new Error("\\result is only valid in ensures");
-      return { kind: "result", ty: ctx.returnTy };
+      return { kind: "var", name: "\\result", ty: lookup(ctx.env, "\\result") ?? ctx.returnTy };
 
     case "forall": {
       const varTy: Ty = e.varType !== "int" ? parseTsType(e.varType)
@@ -1093,7 +1096,7 @@ function resolveFunction(
 
   const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
   const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
-  const ensuresCtx: Ctx = { ...baseCtx, allowResult: true, inSpec: true };
+  const ensuresCtx: Ctx = { ...baseCtx, env: extend(env, "\\result", returnTy), allowResult: true, inSpec: true };
 
   // Apply type parameter constraints from //@ type T (==) annotations
   const typeParams = fn.typeParams.map(tp => {

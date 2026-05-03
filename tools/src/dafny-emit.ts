@@ -41,6 +41,9 @@ const DAFNY_KEYWORDS = new Set([
 ]);
 
 function escapeName(name: string): string {
+  // \result is carried through the IR as the var name "\\result"; render it
+  // as Dafny's canonical return-value identifier.
+  if (name === "\\result") return "res";
   if (DAFNY_KEYWORDS.has(name)) return `${name}_`;
   // Dafny doesn't allow identifiers starting with _
   if (name.startsWith("_")) return `i${name}`;
@@ -144,6 +147,7 @@ function emitExpr(e: Expr): string {
         if (e.method === "toLowerCase") { needPreamble("StringToLower"); return `StringToLower(${obj})`; }
         if (e.method === "toUpperCase") { needPreamble("StringToUpper"); return `StringToUpper(${obj})`; }
         if (e.method === "includes") { needPreamble("StringIndexOf"); return `(StringIndexOf(${obj}, ${args[0]}) >= 0)`; }
+        if (e.method === "startsWith") return `(|${obj}| >= |${args[0]}| && ${obj}[..|${args[0]}|] == ${args[0]})`;
         if (e.method === "charCodeAt") return `(${obj}[${args[0]}] as int)`;
       }
       // Map methods
