@@ -14,6 +14,35 @@ import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawG
 /** When set, calls whose function/method name matches this key are replaced with havoc. */
 let _havocKey: string | null = null;
 
+/** Build a concat-tree from a mixed list of literal and SpreadElement nodes.
+ *  Literals collapse into arrayLiteral segments; spreads become bare expressions;
+ *  segments are joined with `arrayConcat`. Used by array-literal and Math.max/min
+ *  call-arg spread.
+ *  Precondition: at least one element. */
+function buildSpreadConcat(elems: readonly Node[]): RawExpr {
+  const segments: RawExpr[] = [];
+  let currentLiterals: RawExpr[] = [];
+  for (const e of elems) {
+    if (Node.isSpreadElement(e)) {
+      if (currentLiterals.length > 0) {
+        segments.push({ kind: "arrayLiteral", elems: currentLiterals });
+        currentLiterals = [];
+      }
+      segments.push(extractExpr(e.getExpression()));
+    } else {
+      currentLiterals.push(extractExpr(e as Expression));
+    }
+  }
+  if (currentLiterals.length > 0) {
+    segments.push({ kind: "arrayLiteral", elems: currentLiterals });
+  }
+  let result = segments[0];
+  for (let i = 1; i < segments.length; i++) {
+    result = { kind: "binop", op: "arrayConcat", left: result, right: segments[i] };
+  }
+  return result;
+}
+
 /**
  * Maps property-name fingerprints to type alias names for collapsed single-variant unions.
  * TypeScript collapses `type X = | { kind: 'A'; ... }` to the underlying object type,
@@ -136,6 +165,19 @@ function extractExpr(node: Expression): RawExpr {
         node.getArguments().length === 1) {
       return extractExpr(node.getArguments()[0] as Expression);
     }
+    // Math.max(...) / Math.min(...) with spread args → MaxOfSeq(seq) / MinOfSeq(seq)
+    // The spread is desugared at extract time; resolve and downstream passes
+    // see an ordinary function call.
+    if (Node.isPropertyAccessExpression(callee) &&
+        callee.getExpression().getText() === "Math" &&
+        (callee.getName() === "max" || callee.getName() === "min")) {
+      const argNodes = node.getArguments();
+      if (argNodes.some(a => Node.isSpreadElement(a))) {
+        const combined = buildSpreadConcat(argNodes);
+        const fnName = callee.getName() === "max" ? "MaxOfSeq" : "MinOfSeq";
+        return { kind: "call", fn: { kind: "var", name: fnName }, args: [combined] };
+      }
+    }
     const fn = extractExpr(callee);
     const args = node.getArguments().map(a => extractExpr(a as Expression));
     if (node.hasQuestionDotToken()) {
@@ -203,29 +245,8 @@ function extractExpr(node: Expression): RawExpr {
     if (!hasSpread) {
       return { kind: "arrayLiteral", elems: elems.map(e => extractExpr(e as Expression)) };
     }
-    // Build concatenation: [a, ...b, c] → [a] + b + [c]
-    // Group consecutive non-spread elements into array literals, spreads are bare
-    const segments: RawExpr[] = [];
-    let currentLiterals: RawExpr[] = [];
-    for (const e of elems) {
-      if (Node.isSpreadElement(e)) {
-        if (currentLiterals.length > 0) {
-          segments.push({ kind: "arrayLiteral", elems: currentLiterals });
-          currentLiterals = [];
-        }
-        segments.push(extractExpr(e.getExpression()));
-      } else {
-        currentLiterals.push(extractExpr(e as Expression));
-      }
-    }
-    if (currentLiterals.length > 0) {
-      segments.push({ kind: "arrayLiteral", elems: currentLiterals });
-    }
-    // Fold segments with arrayConcat
-    let result = segments[0];
-    for (let i = 1; i < segments.length; i++) {
-      result = { kind: "binop", op: "arrayConcat", left: result, right: segments[i] };
-    }
+    // [a, ...b, c] → [a] + b + [c] via shared helper
+    const result = buildSpreadConcat(elems);
     return result;
   }
 
