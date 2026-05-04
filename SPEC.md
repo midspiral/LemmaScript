@@ -355,6 +355,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `s.includes(sub)` | — | `StringIndexOf(s, sub) >= 0` |
 | `s.startsWith(p)` | — | `\|s\| >= \|p\| && s[..\|p\|] == p` |
 | `s.length` | `s.length` | `\|s\|` |
+| `Math.max(...s)` / `Math.min(...s)` | — | `MaxOfSeq(s)` / `MinOfSeq(s)` (requires `\|s\| > 0`) |
 | `arr.map((x) => e)` | `arr.map (fun x => e)` | `Seq.Map((x) => e, arr)` |
 | `arr.filter((x) => e)` | `arr.filter (fun x => e)` | `Seq.Filter((x) => e, arr)` |
 | `arr.every((x) => e)` | `arr.all (fun x => e)` | `Seq.All(arr, (x) => e)` |

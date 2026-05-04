@@ -254,6 +254,8 @@ function emitExpr(e: Expr): string {
       if (e.fn === "MathAbs") needPreamble("MathAbs");
       if (e.fn === "MathMin") needPreamble("MathMin");
       if (e.fn === "MathMax") needPreamble("MathMax");
+      if (e.fn === "MaxOfSeq") { needPreamble("MathMax"); needPreamble("MaxOfSeq"); }
+      if (e.fn === "MinOfSeq") { needPreamble("MathMin"); needPreamble("MinOfSeq"); }
       return `${escapeName(e.fn)}(${args.join(", ")})`;
     }
 
@@ -662,6 +664,55 @@ const STRING_TO_UPPER = `function StringToUpper(s: string): string
 const MATH_MIN = `function MathMin(a: int, b: int): int { if a <= b then a else b }`;
 const MATH_MAX = `function MathMax(a: int, b: int): int { if a >= b then a else b }`;
 
+const MAX_OF_SEQ = `function MaxOfSeq(s: seq<int>): int
+  requires |s| > 0
+  ensures forall i: nat :: i < |s| ==> s[i] <= MaxOfSeq(s)
+  ensures exists i: nat :: i < |s| && s[i] == MaxOfSeq(s)
+  decreases |s|
+{
+  if |s| == 1 then s[0]
+  else MathMax(s[0], MaxOfSeq(s[1..]))
+}
+
+// Helper for proofs about MaxOfSeq applied to concatenations. Users invoke
+// this in _ensures lemma bodies when Dafny doesn't automatically connect
+// indices through (a + b)[i].
+lemma MaxOfSeqConcat(a: seq<int>, b: seq<int>)
+  requires |a| + |b| > 0
+  ensures forall i: nat :: i < |a| ==> a[i] <= MaxOfSeq(a + b)
+  ensures forall i: nat :: i < |b| ==> b[i] <= MaxOfSeq(a + b)
+{
+  forall i: nat | i < |a| ensures a[i] <= MaxOfSeq(a + b) {
+    assert (a + b)[i] == a[i];
+  }
+  forall i: nat | i < |b| ensures b[i] <= MaxOfSeq(a + b) {
+    assert (a + b)[|a| + i] == b[i];
+  }
+}`;
+
+const MIN_OF_SEQ = `function MinOfSeq(s: seq<int>): int
+  requires |s| > 0
+  ensures forall i: nat :: i < |s| ==> MinOfSeq(s) <= s[i]
+  ensures exists i: nat :: i < |s| && s[i] == MinOfSeq(s)
+  decreases |s|
+{
+  if |s| == 1 then s[0]
+  else MathMin(s[0], MinOfSeq(s[1..]))
+}
+
+lemma MinOfSeqConcat(a: seq<int>, b: seq<int>)
+  requires |a| + |b| > 0
+  ensures forall i: nat :: i < |a| ==> MinOfSeq(a + b) <= a[i]
+  ensures forall i: nat :: i < |b| ==> MinOfSeq(a + b) <= b[i]
+{
+  forall i: nat | i < |a| ensures MinOfSeq(a + b) <= a[i] {
+    assert (a + b)[i] == a[i];
+  }
+  forall i: nat | i < |b| ensures MinOfSeq(a + b) <= b[i] {
+    assert (a + b)[|a| + i] == b[i];
+  }
+}`;
+
 const NAT_TO_STRING = `function NatToString(n: nat): string
   decreases n
 {
@@ -710,6 +761,8 @@ const PREAMBLE_CODE: [string, string][] = [
   ["MathAbs", MATH_ABS],
   ["MathMin", MATH_MIN],
   ["MathMax", MATH_MAX],
+  ["MaxOfSeq", MAX_OF_SEQ],
+  ["MinOfSeq", MIN_OF_SEQ],
 ];
 
 // ── Constructor and record helpers ───────────────────────────
