@@ -412,6 +412,25 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     }
 
     case "call": {
+      // Array.isArray(x) on a synth array-union (discriminant "__isArray__")
+      // → constructor predicate `x.ArrayBranch?`. Used in spec ensures and
+      // anywhere `Array.isArray` escapes the narrowing rule (narrow rewrites
+      // top-level if-cond Array.isArray uses; this catches the rest).
+      if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Array" &&
+          e.fn.field === "isArray" && e.args.length === 1) {
+        const arg = e.args[0];
+        if (arg.ty.kind === "user") {
+          const baseName = arg.ty.name.includes("<") ? arg.ty.name.slice(0, arg.ty.name.indexOf("<")) : arg.ty.name;
+          const decl = _typeDecls.find(d => d.name === baseName);
+          if (decl?.kind === "discriminated-union" && decl.discriminant === "__isArray__") {
+            return {
+              kind: "binop", op: "=",
+              left: lowerExpr(arg, binds),
+              right: { kind: "constructor", name: "ArrayBranch", type: arg.ty.name },
+            };
+          }
+        }
+      }
       // Math.abs/min/max → preamble functions
       if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math") {
         if (e.fn.field === "abs" && e.args.length === 1)
@@ -629,11 +648,33 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       };
     }
 
-    case "tagMatch":
-      // Spec/expr-position tagMatch — narrow shouldn't produce these (it only
-      // emits stmt-form tagMatch from if-chain detection on stmts). If reached,
-      // bug in narrow.
-      throw new Error(`tagMatch reached lowerExpr — narrow only emits stmt-form tagMatch`);
+    case "tagMatch": {
+      // Expression-form tagMatch — emitted by `ruleImplArrayIsArray` for spec
+      // implications like `Array.isArray(x) ==> B`. Mirrors emitMatchStmt /
+      // transformPureMatch but at expression level. Substitutes scrutinee
+      // field accesses and (for synth array-unions) bare scrutinee refs
+      // inside each arm with the variant's payload binder.
+      const scrutinee = lowerExpr(e.scrutinee, binds);
+      const decl = _typeDecls.find(d => d.name === e.typeName);
+      const isSynthArrayUnion = decl?.discriminant === "__isArray__";
+      const varName = e.scrutinee.kind === "var" ? e.scrutinee.name : undefined;
+      const arms: MatchArm[] = e.cases.map(c => {
+        const variant = decl?.variants?.find(v => v.name === c.variant);
+        const fields = variant?.fields ?? [];
+        let body = lowerExpr(c.body, binds);
+        if (varName && fields.length > 0) {
+          body = replaceFieldAccess(body, varName, fields);
+          if (isSynthArrayUnion && fields.length === 1) {
+            body = replaceVarInExpr(body, varName, matchBinder(fields[0].name, varName));
+          }
+        }
+        return { pattern: buildMatchPattern(c.variant, fields, varName), body };
+      });
+      if (e.fallthrough) {
+        arms.push({ pattern: "_", body: lowerExpr(e.fallthrough, binds) });
+      }
+      return { kind: "match", scrutinee: varName ?? scrutinee, arms };
+    }
   }
 }
 
@@ -685,6 +726,19 @@ function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; ts
     }
     // If this let shadows the matched variable, stop replacing in the body
     if (x.kind === "let" && x.name === varName) return { ...x, value: replaceFieldAccess(x.value, varName, fields) };
+    return null;
+  });
+}
+
+/** Replace bare `var(oldName)` references → `var(newName)` in lowered IR.
+ *  Used inside synth array-union match arms: the user code refers to the
+ *  scrutinee by its bare name (`content`), but in the arm body that name
+ *  must refer to the variant's sole payload binder (`i_content_arr`). */
+function replaceVarInExpr(e: Expr, oldName: string, newName: string): Expr {
+  return mapExpr(e, x => {
+    if (x.kind === "var" && x.name === oldName) return { kind: "var", name: newName };
+    // If a binding shadows the name, stop substituting inside its body.
+    if (x.kind === "let" && x.name === oldName) return { ...x, value: replaceVarInExpr(x.value, oldName, newName) };
     return null;
   });
 }
@@ -1022,21 +1076,48 @@ function buildMatchArms<T>(
 
 function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): Stmt {
   const cases = chain.cases.map(c => ({ name: c.variant, body: c.body }));
+  const decl = typeDecls.find(d => d.name === chain.typeName);
+  // Synth array-unions (discriminant "__isArray__") have single-field variants
+  // ArrayBranch(arr) / NonArrayBranch(val). The user code in the matched arm
+  // refers to the scrutinee by its bare name (`content`), not as `content.arr`
+  // — so in addition to the normal field-access substitution, substitute the
+  // bare scrutinee var with the variant's sole field binder.
+  const isSynthArrayUnion = decl?.discriminant === "__isArray__";
+  function transformArmBody(body: TStmt[], vn: string, fields: { name: string; tsType: string; type?: Ty }[]): Stmt[] {
+    let stmts = replaceFieldAccessInTStmts(body, vn, fields);
+    if (isSynthArrayUnion && fields.length === 1) {
+      const f = fields[0];
+      stmts = replaceVarInTStmts(stmts, vn, matchBinder(f.name, vn), f.type ?? parseTsType(f.tsType));
+    }
+    return transformStmts(stmts, typeDecls);
+  }
   const arms = buildMatchArms(cases, chain.varName, chain.typeName, typeDecls,
-    (body, vn, fields) => transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls))!;
+    (body, vn, fields) => transformArmBody(body, vn!, fields))!;
   if (chain.fallthrough.length > 0) {
     const remaining = remainingVariant(chain, typeDecls);
     if (remaining) {
       // Exactly one variant left — destructure so the fallthrough body can
       // access variant-specific fields (Lean requires this; Dafny tolerates `_`).
       const pattern = buildMatchPattern(remaining.name, remaining.fields, chain.varName);
-      const body = transformStmts(replaceFieldAccessInTStmts(chain.fallthrough, chain.varName, remaining.fields), typeDecls);
+      const body = transformArmBody(chain.fallthrough, chain.varName, remaining.fields);
       arms.push({ pattern, body });
     } else {
       arms.push({ pattern: "_", body: transformStmts(chain.fallthrough, typeDecls) });
     }
   }
   return { kind: "match", scrutinee: chain.varName, arms };
+}
+
+/** Replace bare `var(oldName)` references → `var(newName)` with the given type.
+ *  Used by emitMatchStmt for synth array-unions where the variant has a single
+ *  payload field and the user code refers to the scrutinee by its bare name. */
+function replaceVarInTStmts(stmts: TStmt[], oldName: string, newName: string, newTy: Ty): TStmt[] {
+  return stmts.map(s => mapTStmt(s, e => {
+    if (e.kind === "var" && e.name === oldName) {
+      return { kind: "var", name: newName, ty: newTy } as TExpr;
+    }
+    return null;
+  }));
 }
 
 /** If the chain has matched all variants but one, return that remaining variant. */
@@ -1237,18 +1318,25 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
 
 function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | null {
   const cases = chain.cases.map(c => ({ name: c.variant, body: c.body }));
+  const decl = typeDecls.find(d => d.name === chain.typeName);
+  // Synth array-unions have single-field variants and user code refers to the
+  // scrutinee by its bare name, not field-accessed. See emitMatchStmt for
+  // the statement-level counterpart of this substitution.
+  const isSynthArrayUnion = decl?.discriminant === "__isArray__";
   const arms = buildMatchArms(cases, chain.varName, chain.typeName, typeDecls,
     (body, vn, fields) => {
       let result = transformPureBody(body, typeDecls);
       if (!result) return null;
       if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields);
+      if (isSynthArrayUnion && fields.length === 1 && vn) {
+        result = replaceVarInExpr(result, vn, matchBinder(fields[0].name, vn));
+      }
       return result;
     });
   if (!arms) return null;
   // Idiomatic TS often has an unreachable fallthrough after exhaustive if-chains on
   // discriminated unions. Skip the catch-all arm when all variants are matched,
   // since Lean errors on redundant match arms.
-  const decl = typeDecls.find(d => d.name === chain.typeName);
   const allCovered = decl?.variants && chain.cases.length >= decl.variants.length;
   if (chain.fallthrough.length > 0 && !allCovered) {
     const remaining = remainingVariant(chain, typeDecls);
@@ -1257,6 +1345,9 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
       let body = transformPureBody(chain.fallthrough, typeDecls);
       if (!body) return null;
       if (remaining.fields.length > 0) body = replaceFieldAccess(body, chain.varName, remaining.fields);
+      if (isSynthArrayUnion && remaining.fields.length === 1) {
+        body = replaceVarInExpr(body, chain.varName, matchBinder(remaining.fields[0].name, chain.varName));
+      }
       arms.push({ pattern: buildMatchPattern(remaining.name, remaining.fields, chain.varName), body });
     } else {
       const body = transformPureBody(chain.fallthrough, typeDecls);
