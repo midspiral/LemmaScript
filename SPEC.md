@@ -348,6 +348,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `opt ? f(opt) : undefined` | match on Some/None | `match opt { case Some(v) => Some(f(v)) case None => None }` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
+| `s.indexOf(sub, from)` | — | `StringIndexOfFrom(s, sub, from)` (Dafny only; requires `from: nat`) |
 | `s.slice(start, end)` | `JSString.slice s start end` | `s[start..end]` |
 | `s.trim()` | — | `StringTrim(s)` |
 | `s.toLowerCase()` | — | `StringToLower(s)` |
@@ -362,6 +363,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `arr.some((x) => e)` | `arr.any (fun x => e)` | `exists x :: x in arr && e` |
 | `arr.includes(x)` | `arr.contains x` | `(x in arr)` |
 | `arr.indexOf(x)` | — | `SeqIndexOf(arr, x)` (preamble) |
+| `arr.indexOf(x, from)` | — | `SeqIndexOfFrom(arr, x, from)` (Dafny only; requires `from: nat`) |
 | `arr.find((x) => e)` | `arr.find? (fun x => e)` | — |
 | `arr.shift()` | — | `arr[0]` + `arr := arr[1..]` |
 | `arr.slice(start)` | — | `arr[start..]` |
