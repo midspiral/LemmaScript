@@ -74,6 +74,40 @@ function _synthName(elemName: string, otherName: string): string {
 }
 
 /**
+ * String-level fallback for synth detection on a `T[] | U` shape, used by
+ * declare-type field parsing (where no ts-morph TypeNode is available). The
+ * format inside declare-type is user-controlled and structurally simple, so
+ * a split-on-` | ` is acceptable in that bounded context. Returns the synth
+ * name if matched, registers a TypeDeclInfo into the accumulator, else null.
+ */
+function _synthFromTsTypeString(ts: string): string | null {
+  if (_synthArrayUnions === null) return null;
+  if (!ts.includes(" | ")) return null;
+  const arms = ts.split(" | ").map(s => s.trim());
+  if (arms.length !== 2) return null;
+  if (arms.some(a => a === "undefined" || a === "null")) return null;
+  const arrIdx = arms.findIndex(a => a.endsWith("[]"));
+  if (arrIdx === -1) return null;
+  const otherIdx = 1 - arrIdx;
+  if (arms[otherIdx].endsWith("[]")) return null;
+  const elem = arms[arrIdx].slice(0, -2);
+  const other = arms[otherIdx];
+  const synthName = _synthName(elem, other);
+  if (!_synthArrayUnions.some(d => d.name === synthName)) {
+    _synthArrayUnions.push({
+      name: synthName,
+      kind: "discriminated-union",
+      discriminant: "__isArray__",
+      variants: [
+        { name: "ArrayBranch", fields: [{ name: "arr", tsType: `${elem}[]` }] },
+        { name: "NonArrayBranch", fields: [{ name: "val", tsType: other }] },
+      ],
+    });
+  }
+  return synthName;
+}
+
+/**
  * Compute a tsType string from a syntactic union TypeNode (`T | U`), preserving
  * the member nodes' source text (so `type ListId = number` stays `ListId`,
  * which ts-morph erases when you read the resolved Type). When the union matches
@@ -1102,6 +1136,18 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
 export function extractModule(sourceFile: SourceFile): RawModule {
   const typeDecls: TypeDeclInfo[] = [];
 
+  // Activate the synthesized-array-union accumulator. typeToString registers
+  // a discriminated-union TypeDeclInfo for any `T[] | U` shape it encounters,
+  // pushing into `typeDecls` so resolve sees the synth as a regular user type.
+  // Set before declare-type parsing so declare-type field types can also synth.
+  _synthArrayUnions = typeDecls;
+
+  function parseDeclareTypeField(f: string): { name: string; tsType: string } {
+    const [fname, ftype] = f.split(":").map(s => s.trim());
+    const synth = _synthFromTsTypeString(ftype);
+    return { name: fname, tsType: synth ?? ftype };
+  }
+
   // Parse //@ declare-type directives from file comments
   for (const range of sourceFile.getLeadingCommentRanges()) {
     const text = range.getText().trim();
@@ -1110,11 +1156,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     const match = body.match(/^(\w+)\s*\{(.+)\}$/);
     if (!match) continue;
     const name = match[1];
-    const fieldsStr = match[2];
-    const fields = fieldsStr.split(",").map(f => f.trim()).filter(Boolean).map(f => {
-      const [fname, ftype] = f.split(":").map(s => s.trim());
-      return { name: fname, tsType: ftype };
-    });
+    const fields = match[2].split(",").map(f => f.trim()).filter(Boolean).map(parseDeclareTypeField);
     typeDecls.push({ name, kind: "record", fields });
   }
   // Also scan statement-level comments for declare-type
@@ -1126,18 +1168,10 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       const match = body.match(/^(\w+)\s*\{(.+)\}$/);
       if (!match) continue;
       const name = match[1];
-      const fields = match[2].split(",").map(f => f.trim()).filter(Boolean).map(f => {
-        const [fname, ftype] = f.split(":").map(s => s.trim());
-        return { name: fname, tsType: ftype };
-      });
+      const fields = match[2].split(",").map(f => f.trim()).filter(Boolean).map(parseDeclareTypeField);
       typeDecls.push({ name, kind: "record", fields });
     }
   }
-
-  // Activate the synthesized-array-union accumulator. typeToString registers
-  // a discriminated-union TypeDeclInfo for any `T[] | U` shape it encounters,
-  // pushing into `typeDecls` so resolve sees the synth as a regular user type.
-  _synthArrayUnions = typeDecls;
 
   // Pre-scan for collapsed single-variant unions so typeToString can recover alias names.
   // TypeScript collapses `type X = | { kind: 'A'; ... }` to a plain object type, losing
