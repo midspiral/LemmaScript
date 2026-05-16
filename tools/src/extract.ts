@@ -51,6 +51,107 @@ function buildSpreadConcat(elems: readonly Node[]): RawExpr {
  */
 let _collapsedUnionMap: Map<string, string> = new Map();
 
+/**
+ * Accumulator for synthesized `T[] | U` array-union datatypes.
+ *
+ * Plain TS unions like `string | Part[]` have no backend image (LemmaScript
+ * models tagged unions only). When typeToString encounters a binary union
+ * where one member is an array and the other is not array/undefined/null,
+ * it synthesizes a discriminated-union TypeDeclInfo with variants
+ * ArrayBranch(arr: T[]) and NonArrayBranch(val: U) and returns the synthetic
+ * name in place of "T[] | U". The runtime discriminator is `Array.isArray`,
+ * lowered to a tag predicate by narrow/transform.
+ *
+ * Set in extractModule to the module's typeDecls; cleared at end. When null,
+ * typeToString falls through to the existing union path.
+ */
+let _synthArrayUnions: TypeDeclInfo[] | null = null;
+
+/** Sanitize an arbitrary type-string fragment for use inside a generated identifier. */
+function _synthName(elemName: string, otherName: string): string {
+  const sanitize = (s: string) => s.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return `ArrayOf_${sanitize(elemName)}_Or_${sanitize(otherName)}`;
+}
+
+/**
+ * String-level fallback for synth detection on a `T[] | U` shape, used by
+ * declare-type field parsing (where no ts-morph TypeNode is available). The
+ * format inside declare-type is user-controlled and structurally simple, so
+ * a split-on-` | ` is acceptable in that bounded context. Returns the synth
+ * name if matched, registers a TypeDeclInfo into the accumulator, else null.
+ */
+function _synthFromTsTypeString(ts: string): string | null {
+  if (_synthArrayUnions === null) return null;
+  if (!ts.includes(" | ")) return null;
+  const arms = ts.split(" | ").map(s => s.trim());
+  if (arms.length !== 2) return null;
+  if (arms.some(a => a === "undefined" || a === "null")) return null;
+  const arrIdx = arms.findIndex(a => a.endsWith("[]"));
+  if (arrIdx === -1) return null;
+  const otherIdx = 1 - arrIdx;
+  if (arms[otherIdx].endsWith("[]")) return null;
+  const elem = arms[arrIdx].slice(0, -2);
+  const other = arms[otherIdx];
+  const synthName = _synthName(elem, other);
+  if (!_synthArrayUnions.some(d => d.name === synthName)) {
+    _synthArrayUnions.push({
+      name: synthName,
+      kind: "discriminated-union",
+      discriminant: "__isArray__",
+      variants: [
+        { name: "ArrayBranch", fields: [{ name: "arr", tsType: `${elem}[]` }] },
+        { name: "NonArrayBranch", fields: [{ name: "val", tsType: other }] },
+      ],
+    });
+  }
+  return synthName;
+}
+
+/**
+ * Compute a tsType string from a syntactic union TypeNode (`T | U`), preserving
+ * the member nodes' source text (so `type ListId = number` stays `ListId`,
+ * which ts-morph erases when you read the resolved Type). When the union matches
+ * the `T[] | U` synth shape (U not array/undefined/null), registers a synth-
+ * array-union TypeDeclInfo and returns its synthetic name. Otherwise returns
+ * the syntactic join (so `ListId | undefined` stays a recognizable union for
+ * parseTsType to wrap as Option<ListId>).
+ *
+ * This is the param/return-type counterpart of the typeToString synthesis hook,
+ * which handles record/interface field types via the Type-driven path.
+ */
+function _tsTypeFromUnionNode(tn: Node): string {
+  if (!Node.isUnionTypeNode(tn)) return tn.getText();
+  const members = tn.getTypeNodes();
+  if (_synthArrayUnions !== null && members.length === 2) {
+    const arrIdx = members.findIndex(m => m.getType().isArray());
+    if (arrIdx !== -1) {
+      const other = members[1 - arrIdx];
+      const ot = other.getType();
+      if (!ot.isArray() && !ot.isUndefined() && !ot.isNull()) {
+        const arrNode = members[arrIdx];
+        const elemName = Node.isArrayTypeNode(arrNode)
+          ? arrNode.getElementTypeNode().getText()
+          : typeToString(arrNode.getType().getArrayElementTypeOrThrow());
+        const otherName = other.getText();
+        const synthName = _synthName(elemName, otherName);
+        if (!_synthArrayUnions.some(d => d.name === synthName)) {
+          _synthArrayUnions.push({
+            name: synthName,
+            kind: "discriminated-union",
+            discriminant: "__isArray__",
+            variants: [
+              { name: "ArrayBranch", fields: [{ name: "arr", tsType: `${elemName}[]` }] },
+              { name: "NonArrayBranch", fields: [{ name: "val", tsType: otherName }] },
+            ],
+          });
+        }
+        return synthName;
+      }
+    }
+  }
+  return members.map(m => m.getText()).join(" | ");
+}
+
 /** Generic bounds erasure map — set during extractFunction, applied in extractStmts. */
 let _typeParamMap: Map<string, string> = new Map();
 function _eraseGenerics(tsType: string): string {
@@ -541,7 +642,37 @@ function typeToString(type: Type): string {
     return name;
   }
   if (type.isUnion()) {
-    const parts = [...new Set(type.getUnionTypes().map(typeToString))];
+    const unionTypes = type.getUnionTypes();
+    // `T[] | U` synthesis: exactly two members, one array, the other not
+    // array/undefined/null. Detected via ts-morph type predicates (no string
+    // parsing). Registers a discriminated-union TypeDeclInfo with variants
+    // ArrayBranch(arr: T[]) and NonArrayBranch(val: U); returns the synthetic
+    // name so all downstream tsType slots agree. `T[] | undefined` and
+    // `T[] | T[]` fall through to the existing path unchanged.
+    if (_synthArrayUnions !== null && unionTypes.length === 2) {
+      const [m0, m1] = unionTypes;
+      const arrayMember = m0.isArray() ? m0 : (m1.isArray() ? m1 : null);
+      const otherMember = arrayMember === m0 ? m1 : m0;
+      if (arrayMember && otherMember && !otherMember.isArray()
+          && !otherMember.isUndefined() && !otherMember.isNull()) {
+        const elemName = typeToString(arrayMember.getArrayElementTypeOrThrow());
+        const otherName = typeToString(otherMember);
+        const synthName = _synthName(elemName, otherName);
+        if (!_synthArrayUnions.some(d => d.name === synthName)) {
+          _synthArrayUnions.push({
+            name: synthName,
+            kind: "discriminated-union",
+            discriminant: "__isArray__",
+            variants: [
+              { name: "ArrayBranch", fields: [{ name: "arr", tsType: `${elemName}[]` }] },
+              { name: "NonArrayBranch", fields: [{ name: "val", tsType: otherName }] },
+            ],
+          });
+        }
+        return synthName;
+      }
+    }
+    const parts = [...new Set(unionTypes.map(typeToString))];
     return parts.join(" | ");
   }
   if (type.isTuple()) {
@@ -969,13 +1100,22 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
           return { name, tsType: propType ? typeToString(propType) : "unknown" };
         });
       }
-      let tsType = _eraseGenerics(p.getTypeNode()?.getText() ?? "unknown");
-      // Optional parameters (foo?: T) need | undefined in the type string
-      if (p.hasQuestionToken()) tsType = `${tsType} | undefined`;
+      const tn = p.getTypeNode();
+      // Syntactic union nodes go through _tsTypeFromUnionNode so synth fires
+      // and aliases are preserved. Non-union nodes use the syntactic text
+      // directly, plus `| undefined` for optional `?` params.
+      let tsType: string;
+      if (tn && Node.isUnionTypeNode(tn)) {
+        tsType = _eraseGenerics(_tsTypeFromUnionNode(tn));
+      } else {
+        tsType = _eraseGenerics(tn?.getText() ?? "unknown");
+        if (p.hasQuestionToken()) tsType = `${tsType} | undefined`;
+      }
       return [{ name: p.getName(), tsType }];
     }),
     returnType: (() => {
       const node = fn.getReturnTypeNode();
+      if (node && Node.isUnionTypeNode(node)) return _eraseGenerics(_tsTypeFromUnionNode(node));
       if (node) return _eraseGenerics(node.getText());
       const inferred = fn.getReturnType();
       if (inferred.isAny()) return "unknown";
@@ -996,6 +1136,18 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
 export function extractModule(sourceFile: SourceFile): RawModule {
   const typeDecls: TypeDeclInfo[] = [];
 
+  // Activate the synthesized-array-union accumulator. typeToString registers
+  // a discriminated-union TypeDeclInfo for any `T[] | U` shape it encounters,
+  // pushing into `typeDecls` so resolve sees the synth as a regular user type.
+  // Set before declare-type parsing so declare-type field types can also synth.
+  _synthArrayUnions = typeDecls;
+
+  function parseDeclareTypeField(f: string): { name: string; tsType: string } {
+    const [fname, ftype] = f.split(":").map(s => s.trim());
+    const synth = _synthFromTsTypeString(ftype);
+    return { name: fname, tsType: synth ?? ftype };
+  }
+
   // Parse //@ declare-type directives from file comments
   for (const range of sourceFile.getLeadingCommentRanges()) {
     const text = range.getText().trim();
@@ -1004,11 +1156,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     const match = body.match(/^(\w+)\s*\{(.+)\}$/);
     if (!match) continue;
     const name = match[1];
-    const fieldsStr = match[2];
-    const fields = fieldsStr.split(",").map(f => f.trim()).filter(Boolean).map(f => {
-      const [fname, ftype] = f.split(":").map(s => s.trim());
-      return { name: fname, tsType: ftype };
-    });
+    const fields = match[2].split(",").map(f => f.trim()).filter(Boolean).map(parseDeclareTypeField);
     typeDecls.push({ name, kind: "record", fields });
   }
   // Also scan statement-level comments for declare-type
@@ -1020,10 +1168,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       const match = body.match(/^(\w+)\s*\{(.+)\}$/);
       if (!match) continue;
       const name = match[1];
-      const fields = match[2].split(",").map(f => f.trim()).filter(Boolean).map(f => {
-        const [fname, ftype] = f.split(":").map(s => s.trim());
-        return { name: fname, tsType: ftype };
-      });
+      const fields = match[2].split(",").map(f => f.trim()).filter(Boolean).map(parseDeclareTypeField);
       typeDecls.push({ name, kind: "record", fields });
     }
   }
@@ -1358,6 +1503,10 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     }
     classes.push({ name: cls.getName() ?? "Anonymous", fields, methods });
   }
+
+  // Clear the synth-union accumulator so typeToString reverts to plain
+  // union stringification outside of an extractModule call.
+  _synthArrayUnions = null;
 
   return {
     file: sourceFile.getFilePath(),

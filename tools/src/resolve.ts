@@ -306,6 +306,7 @@ function inferQuantVarType(varName: string, body: RawExpr, ctx: Ctx): Ty | null 
 
 function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Math") return "pure";
+  if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Array" && fn.field === "isArray") return "pure";
   if (fn.kind === "var" && (ctx.inSpec || ctx.inLambda) && ctx.pureFns.has(fn.name)) return "spec-pure";
   if (fn.kind === "var" && ctx.inSpec) {
     // Not a known pure function — could be external (Lean-defined spec helper).
@@ -363,6 +364,11 @@ function coerceCallArgs(args: TExpr[], fn: TExpr, ctx: Ctx): TExpr[] {
 /** Infer return type for collection/string method calls. */
 function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
   if (fn.kind !== "field") return { kind: "unknown" };
+  // `Array.isArray(x)` always returns boolean. narrow.ts recognizes this call as
+  // a discriminator predicate when `x` has type of a synthesized array-union.
+  if (fn.obj.kind === "var" && fn.obj.name === "Array" && fn.field === "isArray") {
+    return { kind: "bool" };
+  }
   const objTy = fn.obj.ty;
   if (objTy.kind === "map") {
     if (fn.field === "get") return ctx.inSpec ? objTy.value : { kind: "optional", inner: objTy.value };

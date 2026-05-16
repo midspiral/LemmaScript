@@ -97,7 +97,7 @@ const parseSimpleOptionalCheck = parseOptionalCheck;
 
 function walkExpr(e: TExpr): TExpr {
   const r = recurseExpr(e);
-  return ruleNullish(r) ?? ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalInMap(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
+  return ruleNullish(r) ?? ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleImplArrayIsArray(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalInMap(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
 }
 
 function recurseExpr(e: TExpr): TExpr {
@@ -298,6 +298,30 @@ function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
   };
 }
 
+/** Rule (expression): `Array.isArray(x) ==> B` or `!Array.isArray(x) ==> B` —
+ *  premise narrowing for spec implications. Mirrors `ruleImplOptional` but for
+ *  synth array-union discriminators.
+ *  → `tagMatch x { ArrayBranch => walkExpr(B), _ => true }` (or NonArrayBranch).
+ *  The other variant becomes a vacuous-true fallthrough (the implication is
+ *  trivially satisfied when the premise is false). */
+function ruleImplArrayIsArray(e: TExpr): TExpr | null {
+  if (e.kind !== "binop" || e.op !== "==>") return null;
+  const pos = parseArrayIsArrayCall(e.left);
+  const neg = e.left.kind === "unop" && e.left.op === "!"
+    ? parseArrayIsArrayCall(e.left.expr)
+    : null;
+  const matched = pos ?? (neg ? { scrutinee: neg.scrutinee, typeName: neg.typeName, variant: "NonArrayBranch" as const } : null);
+  if (!matched) return null;
+  return {
+    kind: "tagMatch",
+    scrutinee: matched.scrutinee,
+    typeName: matched.typeName,
+    cases: [{ variant: matched.variant, body: walkExpr(e.right) }],
+    fallthrough: { kind: "bool", value: true, ty: { kind: "bool" } },
+    ty: { kind: "bool" },
+  };
+}
+
 /** Rule (expression): `(path !== undefined [&& rest]) ==> B` — premise narrowing
  *  for spec implications (ensures/requires). The premise's optional checks
  *  bind narrowed values that the conclusion can use.
@@ -487,8 +511,24 @@ function ruleIfAndOptional(s: TStmt): TStmt | null {
 
 // ── Discriminant narrowing ──────────────────────────────────
 
-/** Detect `x.kind === "variant"` or `'key' in x` as a positive discriminant
- *  check. Returns the scrutinee var (with its type), type name, and variant. */
+/** Detect `Array.isArray(x)` where x has type of a synthesized array-union
+ *  (discriminant `"__isArray__"`). Returns the variant name to narrow to. */
+function parseArrayIsArrayCall(call: TExpr): { scrutinee: TExpr & { kind: "var" }; typeName: string; variant: "ArrayBranch" } | null {
+  if (call.kind !== "call") return null;
+  if (call.fn.kind !== "field" || call.fn.field !== "isArray") return null;
+  if (call.fn.obj.kind !== "var" || call.fn.obj.name !== "Array") return null;
+  if (call.args.length !== 1) return null;
+  const arg = call.args[0];
+  if (arg.kind !== "var" || arg.ty.kind !== "user") return null;
+  const baseTyName = arg.ty.name.includes("<") ? arg.ty.name.slice(0, arg.ty.name.indexOf("<")) : arg.ty.name;
+  const decl = _typeDecls.find(d => d.name === baseTyName);
+  if (decl?.kind !== "discriminated-union" || decl.discriminant !== "__isArray__") return null;
+  return { scrutinee: arg, typeName: arg.ty.name, variant: "ArrayBranch" };
+}
+
+/** Detect `x.kind === "variant"`, `'key' in x`, or `Array.isArray(x)` (synth
+ *  array-union) as a positive discriminant check. Returns the scrutinee var
+ *  (with its type), type name, and variant. */
 function parseDiscriminantCond(cond: TExpr): { scrutinee: TExpr & { kind: "var" }; typeName: string; variant: string } | null {
   // Pattern: x.discriminant === "variant"
   if (cond.kind === "binop" && cond.op === "===" && cond.right.kind === "str" &&
@@ -511,15 +551,25 @@ function parseDiscriminantCond(cond: TExpr): { scrutinee: TExpr & { kind: "var" 
       }
     }
   }
+  // Pattern: Array.isArray(x) — narrows x to the ArrayBranch variant of a
+  // synthesized array-union (discriminant "__isArray__").
+  const arrCheck = parseArrayIsArrayCall(cond);
+  if (arrCheck) return arrCheck;
   return null;
 }
 
-/** Detect `x.kind !== "variant"` (negative discriminant check). */
+/** Detect `x.kind !== "variant"` (negative discriminant check) or
+ *  `!Array.isArray(x)` (synth array-union, narrows to NonArrayBranch). */
 function parseNegativeDiscriminantCond(cond: TExpr): { scrutinee: TExpr & { kind: "var" }; typeName: string; variant: string } | null {
   if (cond.kind === "binop" && cond.op === "!==" && cond.right.kind === "str" &&
       cond.left.kind === "field" && cond.left.isDiscriminant &&
       cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
     return { scrutinee: cond.left.obj, typeName: cond.left.obj.ty.name, variant: cond.right.value };
+  }
+  // Pattern: !Array.isArray(x) — narrows x to the NonArrayBranch variant.
+  if (cond.kind === "unop" && cond.op === "!") {
+    const arrCheck = parseArrayIsArrayCall(cond.expr);
+    if (arrCheck) return { scrutinee: arrCheck.scrutinee, typeName: arrCheck.typeName, variant: "NonArrayBranch" };
   }
   return null;
 }
