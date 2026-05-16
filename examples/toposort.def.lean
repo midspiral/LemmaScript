@@ -20,6 +20,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
       invariant ∀ k : String, inDegree.contains k → inDegree.get! k = 0
       invariant ∀ k : String, adjacency.contains k → adjacency.get! k = #[]
       invariant nodeIdSet.size ≤ _id_idx
+      invariant ∀ k : Nat, k < _id_idx → nodeIdSet.contains nodeIds[k]!
     do
       let id := nodeIds[_id_idx]!
       inDegree := inDegree.insert id 0
@@ -30,6 +31,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
       invariant ∀ k : Int, 0 ≤ k → k < nodeIds.size → inDegree.contains nodeIds[k.toNat]!
       invariant ∀ k : String, adjacency.contains k → ∀ v : String, (adjacency.get! k).contains v → nodeIdSet.contains v
       invariant ∀ k : String, inDegree.contains k → inDegree.get! k ≥ 0
+      invariant ∀ k : Nat, k < nodeIds.size → nodeIdSet.contains nodeIds[k]!
     do
       let id := nodeIds[_id_idx2]!
       if deps.contains id then
@@ -38,6 +40,8 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
         let _dep_seq := _nodeDeps_val.toArray
         for _dep_idx in [:_dep_seq.size]
           invariant _dep_idx ≤ _dep_seq.size
+          invariant nodeIdSet.contains id
+          invariant ∀ k : String, adjacency.contains k → ∀ v : String, (adjacency.get! k).contains v → nodeIdSet.contains v
         do
           let dep := _dep_seq[_dep_idx]!
           if adjacency.contains dep then
@@ -75,6 +79,7 @@ _value == 0 else false then
       invariant ∀ k : String, enqueued.contains k → inDegree.contains k ∧ inDegree.get! k ≤ 0
       invariant ∀ k : String, enqueued.contains k → nodeIdSet.contains k
       invariant nodeIdSet.size ≤ nodeIds.size
+      invariant ∀ k : String, adjacency.contains k → ∀ v : String, (adjacency.get! k).contains v → nodeIdSet.contains v
       decreasing nodeIds.size - sorted.size
     do
       let id := queue[qHead.toNat]!
@@ -92,6 +97,8 @@ _value == 0 else false then
           invariant ∀ k : String, enqueued.contains k → inDegree.contains k ∧ inDegree.get! k ≤ 0
           invariant ∀ k : String, enqueued.contains k → nodeIdSet.contains k
           invariant nodeIdSet.size ≤ nodeIds.size
+          invariant ∀ k : String, adjacency.contains k → ∀ v : String, (adjacency.get! k).contains v → nodeIdSet.contains v
+          invariant ∀ v : String, _neighbors_val.contains v → nodeIdSet.contains v
         do
           let neighbor := _neighbors_val[_neighbor_idx]!
           assertGadget ((nodeIdSet.contains neighbor) = true)
