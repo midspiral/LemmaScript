@@ -13,17 +13,17 @@ function JSFloorDiv(a: int, b: int): int
     else -((a - 1) / (-b)) - 1
 }
 
-function StringIndexOf(s: string, sub: string): int
-{
-  StringIndexOfFrom(s, sub, 0)
-}
-
 function StringIndexOfFrom(s: string, sub: string, from: nat): int
   decreases |s| - from
 {
   if from + |sub| > |s| then -1
   else if s[from..from + |sub|] == sub then from as int
   else StringIndexOfFrom(s, sub, from + 1)
+}
+
+function StringIndexOf(s: string, sub: string): int
+{
+  StringIndexOfFrom(s, sub, 0)
 }
 
 datatype Priority = low | medium | high

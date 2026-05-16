@@ -121,7 +121,8 @@ function emitExpr(e: Expr): string {
       if (ty === "array") {
         if (e.method === "with")     return `${obj}[${args[0]} := ${args[1]}]`;
         if (e.method === "includes") return `(${args[0]} in ${obj})`;
-        if (e.method === "indexOf") { needPreamble("SeqIndexOf"); return `SeqIndexOf(${obj}, ${args[0]})`; }
+        if (e.method === "indexOf" && args.length === 1) { needPreamble("SeqIndexOfFrom"); needPreamble("SeqIndexOf"); return `SeqIndexOf(${obj}, ${args[0]})`; }
+        if (e.method === "indexOf" && args.length === 2) { needPreamble("SeqIndexOfFrom"); return `SeqIndexOfFrom(${obj}, ${args[0]}, ${args[1]})`; }
         if (e.method === "push")     return `(${obj} + [${args[0]}])`;
         if (e.method === "concat")   return `(${obj} + [${args[0]}])`;
         if (e.method === "slice" && args.length === 1) return `${obj}[${args[0]}..]`;
@@ -141,12 +142,13 @@ function emitExpr(e: Expr): string {
       }
       // String methods
       if (ty === "string") {
-        if (e.method === "indexOf") { needPreamble("StringIndexOf"); return `StringIndexOf(${obj}, ${args[0]})`; }
+        if (e.method === "indexOf" && args.length === 1) { needPreamble("StringIndexOfFrom"); needPreamble("StringIndexOf"); return `StringIndexOf(${obj}, ${args[0]})`; }
+        if (e.method === "indexOf" && args.length === 2) { needPreamble("StringIndexOfFrom"); return `StringIndexOfFrom(${obj}, ${args[0]}, ${args[1]})`; }
         if (e.method === "slice")   return `${obj}[${args[0]}..${args[1]}]`;
         if (e.method === "trim")    { needPreamble("StringTrim"); return `StringTrim(${obj})`; }
         if (e.method === "toLowerCase") { needPreamble("StringToLower"); return `StringToLower(${obj})`; }
         if (e.method === "toUpperCase") { needPreamble("StringToUpper"); return `StringToUpper(${obj})`; }
-        if (e.method === "includes") { needPreamble("StringIndexOf"); return `(StringIndexOf(${obj}, ${args[0]}) >= 0)`; }
+        if (e.method === "includes") { needPreamble("StringIndexOfFrom"); needPreamble("StringIndexOf"); return `(StringIndexOf(${obj}, ${args[0]}) >= 0)`; }
         if (e.method === "startsWith") return `(|${obj}| >= |${args[0]}| && ${obj}[..|${args[0]}|] == ${args[0]})`;
         if (e.method === "charCodeAt") return `(${obj}[${args[0]}] as int)`;
       }
@@ -582,15 +584,7 @@ const CEIL_REAL = `function CeilReal(x: real): int
   else x.Floor + 1
 }`;
 
-const SEQ_INDEX_OF = `function SeqIndexOf<T(==)>(s: seq<T>, x: T): int
-  ensures -1 <= SeqIndexOf(s, x) < |s|
-  ensures SeqIndexOf(s, x) >= 0 ==> s[SeqIndexOf(s, x)] == x
-  ensures SeqIndexOf(s, x) == -1 ==> x !in s
-{
-  SeqIndexOfFrom(s, x, 0)
-}
-
-function SeqIndexOfFrom<T(==)>(s: seq<T>, x: T, from: nat): int
+const SEQ_INDEX_OF_FROM = `function SeqIndexOfFrom<T(==)>(s: seq<T>, x: T, from: nat): int
   requires from <= |s|
   ensures -1 <= SeqIndexOfFrom(s, x, from) < |s|
   ensures SeqIndexOfFrom(s, x, from) >= 0 ==> s[SeqIndexOfFrom(s, x, from)] == x
@@ -602,17 +596,25 @@ function SeqIndexOfFrom<T(==)>(s: seq<T>, x: T, from: nat): int
   else SeqIndexOfFrom(s, x, from + 1)
 }`;
 
-const STRING_INDEX_OF = `function StringIndexOf(s: string, sub: string): int
+const SEQ_INDEX_OF = `function SeqIndexOf<T(==)>(s: seq<T>, x: T): int
+  ensures -1 <= SeqIndexOf(s, x) < |s|
+  ensures SeqIndexOf(s, x) >= 0 ==> s[SeqIndexOf(s, x)] == x
+  ensures SeqIndexOf(s, x) == -1 ==> x !in s
 {
-  StringIndexOfFrom(s, sub, 0)
-}
+  SeqIndexOfFrom(s, x, 0)
+}`;
 
-function StringIndexOfFrom(s: string, sub: string, from: nat): int
+const STRING_INDEX_OF_FROM = `function StringIndexOfFrom(s: string, sub: string, from: nat): int
   decreases |s| - from
 {
   if from + |sub| > |s| then -1
   else if s[from..from + |sub|] == sub then from as int
   else StringIndexOfFrom(s, sub, from + 1)
+}`;
+
+const STRING_INDEX_OF = `function StringIndexOf(s: string, sub: string): int
+{
+  StringIndexOfFrom(s, sub, 0)
 }`;
 
 const STRING_TRIM = `function StringTrimLeft(s: string): string
@@ -752,7 +754,9 @@ const PREAMBLE_CODE: [string, string][] = [
   ["JSFloorDiv", JS_FLOOR_DIV],
   ["CeilReal", CEIL_REAL],
   ["FloorReal", FLOOR_REAL],
+  ["SeqIndexOfFrom", SEQ_INDEX_OF_FROM],
   ["SeqIndexOf", SEQ_INDEX_OF],
+  ["StringIndexOfFrom", STRING_INDEX_OF_FROM],
   ["StringIndexOf", STRING_INDEX_OF],
   ["StringTrim", STRING_TRIM],
   ["StringToLower", STRING_TO_LOWER],
