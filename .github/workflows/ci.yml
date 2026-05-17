@@ -102,6 +102,8 @@ jobs:
             branch: main
           - repo: midspiral/rallly-lemmascript
             branch: lemmascript
+          - repo: midspiral/talktimer-lemmascript
+            branch: main
     steps:
       - uses: actions/checkout@v4
 
