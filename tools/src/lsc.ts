@@ -76,12 +76,17 @@ function main() {
   const sourceFile = project.addSourceFileAtPath(absPath);
   project.resolveSourceFileDependencies();
 
+  const fullText = sourceFile.getFullText();
+
   // Check //@ backend directive — skip if backend doesn't match
-  const backendDirective = sourceFile.getFullText().match(/\/\/@ backend (\w+)/);
+  const backendDirective = fullText.match(/\/\/@ backend (\w+)/);
   if (backendDirective && backendDirective[1] !== backend) {
     console.log(`Skipped: ${path.basename(filePath)} (//@ backend ${backendDirective[1]}, current: ${backend})`);
     return;
   }
+
+  // File-level directives consumed by the Dafny emitter.
+  const safeSlice = /\/\/@ safe-slice\b/.test(fullText);
 
   // Extract: ts-morph → Raw IR
   const raw = extractModule(sourceFile);
@@ -106,7 +111,7 @@ function main() {
     defFile = peepholeModule(defFile, "dafny");
     const allDecls = [...(typesFile?.decls ?? []), ...defFile.decls];
     const merged = { ...defFile, decls: allDecls };
-    const text = emitDafnyFile(merged, path.basename(filePath));
+    const text = emitDafnyFile(merged, path.basename(filePath), { safeSlice });
     const genPath = path.join(dir, `${base}.dfy.gen`);
     const dfyPath = path.join(dir, `${base}.dfy`);
     const basePath = path.join(dir, `${base}.dfy.base`);

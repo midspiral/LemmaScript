@@ -132,8 +132,13 @@ function emitExpr(e: Expr): string {
         if (e.method === "slice" && args.length === 1) return `${obj}[${args[0]}..]`;
         if (e.method === "slice" && args.length === 2) {
           // JS slice clamps both bounds; Dafny requires `0 <= lo <= hi <= |s|`.
-          needPreamble("SafeSlice");
-          return `SafeSlice(${obj}, ${args[0]}, ${args[1]})`;
+          // Direct slice is default (matches existing case studies that wrote
+          // bounded calls). Files needing JS clamping opt in via `//@ safe-slice`.
+          if (_useSafeSlice) {
+            needPreamble("SafeSlice");
+            return `SafeSlice(${obj}, ${args[0]}, ${args[1]})`;
+          }
+          return `${obj}[${args[0]}..${args[1]}]`;
         }
         if (e.method === "map")    return `Std.Collections.Seq.Map(${args[0]}, ${obj})`;
         if (e.method === "filter") return `Std.Collections.Seq.Filter(${args[0]}, ${obj})`;
@@ -598,6 +603,12 @@ function emitDecl(d: Decl): string {
 const _neededPreambles = new Set<string>();
 function needPreamble(key: string) { _neededPreambles.add(key); }
 
+/** File-level opt-in for JS-clamp semantics on `arr.slice(lo, hi)`. Set by
+ *  `emitDafnyFile` from the `//@ safe-slice` directive; consulted by the
+ *  array-method emit. Off by default — case studies that wrote their `.slice`
+ *  calls with provable bounds get direct `s[lo..hi]` emission. */
+let _useSafeSlice = false;
+
 const POW2 = `function Pow2(n: int): int
   requires n >= 0
   decreases n
@@ -919,7 +930,8 @@ function translatePattern(pattern: string): string {
 }
 
 
-export function emitDafnyFile(file: Module, tsFileName?: string): string {
+export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSlice?: boolean }): string {
+  _useSafeSlice = !!opts?.safeSlice;
   buildRecordCtorMap(file.decls);
   _neededPreambles.clear();
 
