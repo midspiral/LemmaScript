@@ -674,7 +674,51 @@ function typeToString(type: Type): string {
 
 const COMPOUND_OPS: Record<string, string> = {
   "+=": "+", "-=": "-", "*=": "*", "/=": "/", "%=": "%",
+  "<<=": "<<", ">>=": ">>", "|=": "|", "&=": "&", "^=": "^", "**=": "**",
 };
+
+/** Desugar a statement-position side-effecting expression — `x = e`, `x += e`,
+ *  `i++`, `arr[i] = v`, etc. — into a `RawAssign`. Returns null when no shape
+ *  match (caller emits a plain `{kind: "expr"}` or errors). Called by both
+ *  `ExpressionStatement` extraction (wrapped) and the C-style for-loop
+ *  incrementor (bare Expression — same shape, no `;` wrapper). */
+function desugarStmtExpr(expr: Expression, line: number): RawStmt | null {
+  if (Node.isBinaryExpression(expr)) {
+    const opText = expr.getOperatorToken().getText();
+    const left = expr.getLeft();
+    if (opText === "=" && Node.isElementAccessExpression(left)) {
+      const obj = extractExpr(left.getExpression());
+      const idx = extractExpr(left.getArgumentExpression()!);
+      const val = extractExpr(expr.getRight());
+      const target = left.getExpression().getText();
+      const withCall: RawExpr = { kind: "call", fn: { kind: "field", obj, field: "with" }, args: [idx, val] };
+      return { kind: "assign", target, value: withCall, line };
+    }
+    if (opText === "=") {
+      return { kind: "assign", target: left.getText(), value: extractExpr(expr.getRight()), line };
+    }
+    const compound = COMPOUND_OPS[opText];
+    if (compound) {
+      const target = left.getText();
+      return {
+        kind: "assign", target,
+        value: { kind: "binop", op: compound, left: { kind: "var", name: target }, right: extractExpr(expr.getRight()) },
+        line,
+      };
+    }
+  }
+  if ((Node.isPostfixUnaryExpression(expr) || Node.isPrefixUnaryExpression(expr)) &&
+      (expr.getOperatorToken() === SyntaxKind.PlusPlusToken || expr.getOperatorToken() === SyntaxKind.MinusMinusToken)) {
+    const target = expr.getOperand().getText();
+    const op = expr.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+" : "-";
+    return {
+      kind: "assign", target,
+      value: { kind: "binop", op, left: { kind: "var", name: target }, right: { kind: "num", value: 1 } },
+      line,
+    };
+  }
+  return null;
+}
 
 // ── Statement extraction ─────────────────────────────────────
 
@@ -871,9 +915,11 @@ function extractStmts(stmts: Node[]): RawStmt[] {
     // C-style for(init; cond; update) — desugar to:
     //   init;
     //   while (cond) { body; update }
-    // The counter declared in `init` is forced mutable (the incrementor mutates
-    // it). Increment/decrement forms (`i++`, `i--`, `i += n`, `i -= n`) are
-    // rewritten to plain assignments.
+    // The init's binding is forced mutable (update mutates it). The update is
+    // a bare Expression in ts-morph (not wrapped in an ExpressionStatement),
+    // so we route it through the same `desugarStmtExpr` helper that the
+    // ExpressionStatement branch above uses — `i++` etc. end up as RawAssign
+    // exactly as they would if written as their own statement.
     if (Node.isForStatement(s)) {
       const init = s.getInitializer();
       const cond = s.getCondition();
@@ -890,8 +936,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         const initExpr = decl.getInitializer();
         if (!initExpr) throw new Error(`for(...) at line ${line}: missing initializer for ${name}`);
         result.push({
-          kind: "let",
-          name, mutable: true, tsType,
+          kind: "let", name, mutable: true, tsType,
           init: extractExpr(initExpr as Expression),
           line: decl.getStartLineNumber(),
         });
@@ -899,43 +944,10 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
       const extractedBody = extractStmts(bodyStmts);
       if (incrementor) {
-        // Rewrite increment/decrement forms to assignment.
         const incLine = incrementor.getStartLineNumber();
-        if (Node.isPostfixUnaryExpression(incrementor) || Node.isPrefixUnaryExpression(incrementor)) {
-          const op = incrementor.getOperatorToken();
-          const operand = incrementor.getOperand();
-          if (!Node.isIdentifier(operand))
-            throw new Error(`for(...) at line ${line}: ++/-- on non-identifier`);
-          const name = operand.getText();
-          const delta = (op === SyntaxKind.PlusPlusToken) ? 1 : (op === SyntaxKind.MinusMinusToken ? -1 : null);
-          if (delta === null) throw new Error(`for(...) at line ${line}: unsupported unary incrementor`);
-          extractedBody.push({
-            kind: "assign", target: name,
-            value: { kind: "binop", op: delta === 1 ? "+" : "-", left: { kind: "var", name }, right: { kind: "num", value: 1 } },
-            line: incLine,
-          });
-        } else if (Node.isBinaryExpression(incrementor)) {
-          const opTok = incrementor.getOperatorToken().getKind();
-          const lhs = incrementor.getLeft();
-          const rhs = incrementor.getRight();
-          if (!Node.isIdentifier(lhs))
-            throw new Error(`for(...) at line ${line}: compound assignment on non-identifier`);
-          const name = lhs.getText();
-          const opMap: Record<number, string> = {
-            [SyntaxKind.PlusEqualsToken]: "+",
-            [SyntaxKind.MinusEqualsToken]: "-",
-            [SyntaxKind.AsteriskEqualsToken]: "*",
-          };
-          const op = opMap[opTok];
-          if (!op) throw new Error(`for(...) at line ${line}: unsupported compound operator`);
-          extractedBody.push({
-            kind: "assign", target: name,
-            value: { kind: "binop", op, left: { kind: "var", name }, right: extractExpr(rhs as Expression) },
-            line: incLine,
-          });
-        } else {
-          throw new Error(`for(...) at line ${line}: unsupported incrementor shape`);
-        }
+        const asStmt = desugarStmtExpr(incrementor, incLine);
+        if (!asStmt) throw new Error(`for(...) at line ${line}: incrementor must be an assignment, compound assignment, or ++/--`);
+        extractedBody.push(asStmt);
       }
 
       result.push({
@@ -1027,36 +1039,8 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     if (Node.isExpressionStatement(s)) {
       const expr = s.getExpression();
-      // arr[i] = v → arr = arr.with(i, v)
-      if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getText() === "=" && Node.isElementAccessExpression(expr.getLeft())) {
-        const left = expr.getLeft() as ElementAccessExpression;
-        const obj = extractExpr(left.getExpression());
-        const idx = extractExpr(left.getArgumentExpression()!);
-        const val = extractExpr(expr.getRight());
-        const target = left.getExpression().getText();
-        const withCall: RawExpr = { kind: "call", fn: { kind: "field", obj, field: "with" }, args: [idx, val] };
-        result.push({ kind: "assign", target, value: withCall, line });
-      // x = e
-      } else if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getText() === "=") {
-        result.push({ kind: "assign", target: expr.getLeft().getText(), value: extractExpr(expr.getRight()), line });
-      // x += e, x -= e, etc.
-      } else if (Node.isBinaryExpression(expr) && COMPOUND_OPS[expr.getOperatorToken().getText()]) {
-        const op = COMPOUND_OPS[expr.getOperatorToken().getText()];
-        const target = expr.getLeft().getText();
-        result.push({ kind: "assign", target, value: { kind: "binop", op, left: { kind: "var", name: target }, right: extractExpr(expr.getRight()) }, line });
-      // i++, i--
-      } else if (Node.isPostfixUnaryExpression(expr)) {
-        const target = expr.getOperand().getText();
-        const op = expr.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+" : "-";
-        result.push({ kind: "assign", target, value: { kind: "binop", op, left: { kind: "var", name: target }, right: { kind: "num", value: 1 } }, line });
-      // ++i, --i
-      } else if (Node.isPrefixUnaryExpression(expr) && (expr.getOperatorToken() === SyntaxKind.PlusPlusToken || expr.getOperatorToken() === SyntaxKind.MinusMinusToken)) {
-        const target = expr.getOperand().getText();
-        const op = expr.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+" : "-";
-        result.push({ kind: "assign", target, value: { kind: "binop", op, left: { kind: "var", name: target }, right: { kind: "num", value: 1 } }, line });
-      } else {
-        result.push({ kind: "expr", expr: extractExpr(expr), line });
-      }
+      const asAssign = desugarStmtExpr(expr, line);
+      result.push(asAssign ?? { kind: "expr", expr: extractExpr(expr), line });
       continue;
     }
 
