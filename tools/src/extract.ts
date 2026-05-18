@@ -20,6 +20,12 @@ let _havocKey: string | null = null;
  *  Cleared at the start of every `extractModule`. */
 const _externs = new Map<string, import("./rawir.js").RawExtern>();
 let _currentSourceFile: SourceFile | null = null;
+/** True only while extracting a function body. Module-level constants that
+ *  reference cross-file callees (e.g., `BusEvent.define(...)` inside a
+ *  module-level record) would otherwise pollute the output with externs
+ *  that no verified function actually calls — and whose TS return types
+ *  often don't translate to valid Dafny. */
+let _inFunctionExtraction = false;
 
 /** Register the call's callee as a cross-file extern if applicable, then
  *  walk the source declaration's body for nested cross-file calls (so the
@@ -263,7 +269,8 @@ function extractExpr(node: Expression): RawExpr {
     // `Obj.method(...)` and bare `foo(...)` imports. Skipped for stdlib/.d.ts
     // declarations — those are either built-in methods (handled in dafny-emit)
     // or genuinely out of scope.
-    if (_currentSourceFile && (Node.isPropertyAccessExpression(callee) || Node.isIdentifier(callee))) {
+    if (_currentSourceFile && _inFunctionExtraction &&
+        (Node.isPropertyAccessExpression(callee) || Node.isIdentifier(callee))) {
       registerExternIfCrossFile(callee, _currentSourceFile);
     }
     const fn = extractExpr(callee);
@@ -1089,6 +1096,15 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 // ── Function extraction ──────────────────────────────────────
 
 function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
+  const prevInFn = _inFunctionExtraction;
+  _inFunctionExtraction = true;
+  try {
+    return extractFunctionInner(fn, parentAnnotations);
+  } finally {
+    _inFunctionExtraction = prevInFn;
+  }
+}
+function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
   // Generic bounds erasure: <T extends Base> → substitute T with Base everywhere
   // Unbounded type params are preserved as Dafny type parameters
   _typeParamMap = new Map();

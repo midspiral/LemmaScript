@@ -705,6 +705,44 @@ function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; ts
 
 // ── Transform statements ─────────────────────────────────────
 
+// `if (X) continue; rest` → `if (!X) { rest }` at the top of a loop body.
+// Dafny's lowered while-loops have the index increment at the bottom, so a
+// `continue` would skip it and loop forever; rewriting to if/else lets the
+// loop fall through normally.
+function negateExpr(e: Expr): Expr {
+  if (e.kind === "unop" && e.op === "!") return e.expr;
+  return { kind: "unop", op: "!", expr: e };
+}
+function eliminateTopLevelContinue(stmts: Stmt[]): Stmt[] {
+  const out: Stmt[] = [];
+  for (let i = 0; i < stmts.length; i++) {
+    const s = stmts[i];
+    if (s.kind === "if" && s.else.length === 0 &&
+        s.then.length === 1 && s.then[0].kind === "continue") {
+      const rest = eliminateTopLevelContinue(stmts.slice(i + 1));
+      out.push({ kind: "if", cond: negateExpr(s.cond), then: rest, else: [] });
+      return out;
+    }
+    // narrow.ts's ruleEarlyReturnConsume rewrites `if (!x) continue; rest`
+    // (when x is Optional) to a someMatch which transform.ts then emits as a
+    // `match`. A trailing `continue` inside a match arm is a no-op when the
+    // match is the last statement in the loop body — drop it.
+    if (s.kind === "match" && i === stmts.length - 1) {
+      const arms = s.arms.map(arm => {
+        const b = arm.body;
+        if (b.length > 0 && b[b.length - 1].kind === "continue") {
+          return { ...arm, body: b.slice(0, -1) };
+        }
+        return arm;
+      });
+      out.push({ ...s, arms });
+      continue;
+    }
+    out.push(s);
+  }
+  return out;
+}
+
 function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
   const result: Stmt[] = [];
   let i = 0;
@@ -730,7 +768,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
         const idxName = `_${keyName}_idx${suffix}`;
         const idx: Expr = { kind: "var", name: idxName };
         const arrSize: Expr = { kind: "field", obj: keysVar, field: "size" };
-        const bodyStmts = transformStmts(s.body, typeDecls);
+        const bodyStmts = eliminateTopLevelContinue(transformStmts(s.body, typeDecls));
         const letKey: Stmt = { kind: "let", name: keyName, type: keyTy, mutable: false, value: { kind: "index", arr: keysVar, idx } };
         const boundInv: Expr = { kind: "binop", op: "≤", left: idx, right: arrSize };
         result.push({
@@ -757,7 +795,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
         const idxName = `_${keyName}_idx${suffix}`;
         const idx: Expr = { kind: "var", name: idxName };
         const arrSize: Expr = { kind: "field", obj: keysVar, field: "size" };
-        const bodyStmts = transformStmts(s.body, typeDecls);
+        const bodyStmts = eliminateTopLevelContinue(transformStmts(s.body, typeDecls));
         const letKey: Stmt = { kind: "let", name: keyName, type: keyTy, mutable: false, value: { kind: "index", arr: keysVar, idx } };
         const letVal: Stmt = { kind: "let", name: valueName, type: valueTy, mutable: false,
           value: { kind: "methodCall", obj: iterExpr, objTy: s.iterable.ty, method: "getDirect", args: [{ kind: "var", name: keyName }], monadic: false } };
@@ -785,7 +823,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
       const idxName = `_${varName}_idx${suffix}`;
       const idx: Expr = { kind: "var", name: idxName };
       const arrSize: Expr = { kind: "field", obj: iterExpr, field: "size" };
-      const bodyStmts = transformStmts(s.body, typeDecls);
+      const bodyStmts = eliminateTopLevelContinue(transformStmts(s.body, typeDecls));
       const letElem: Stmt = { kind: "let", name: varName, type: varTy, mutable: false, value: { kind: "index", arr: iterExpr, idx } };
       // Auto-add bound invariant: idx ≤ bound (always true for range loops)
       const boundInv: Expr = { kind: "binop", op: "≤", left: idx, right: arrSize };
