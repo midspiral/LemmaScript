@@ -14,6 +14,49 @@ import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawG
 /** When set, calls whose function/method name matches this key are replaced with havoc. */
 let _havocKey: string | null = null;
 
+/** Auto-detected cross-file calls. Populated by `extractExpr` whenever it sees
+ *  a call `Obj.method(...)` or `foo(...)` whose ts-morph symbol resolves to a
+ *  different `.ts` source file. Emitted in Dafny as `function {:axiom} <flat>`.
+ *  Cleared at the start of every `extractModule`. */
+const _externs = new Map<string, import("./rawir.js").RawExtern>();
+let _currentSourceFile: SourceFile | null = null;
+
+function detectCrossFileExtern(
+  callee: import("ts-morph").PropertyAccessExpression | import("ts-morph").Identifier,
+  sourceFile: SourceFile,
+): import("./rawir.js").RawExtern | null {
+  let symbol = callee.getSymbol();
+  if (!symbol) return null;
+  // For bare imports `import { foo } from "..."`, the call-site symbol is the
+  // local ImportSpecifier — declared in the current file. Follow the alias to
+  // the original `export function` declaration.
+  const aliased = symbol.getAliasedSymbol();
+  if (aliased) symbol = aliased;
+  const decls = symbol.getDeclarations();
+  if (decls.length === 0) return null;
+  const currentPath = sourceFile.getFilePath();
+  const externalDecl = decls.find(d => d.getSourceFile().getFilePath() !== currentPath);
+  if (!externalDecl) return null;
+  // Skip stdlib / typings — those have built-in dispatch elsewhere or are
+  // genuinely out of LS's verification model.
+  if (externalDecl.getSourceFile().getFilePath().endsWith(".d.ts")) return null;
+  const sig = callee.getType().getCallSignatures()[0];
+  if (!sig) return null;
+  const params = sig.getParameters().map(p => ({
+    name: p.getName(),
+    tsType: p.getTypeAtLocation(callee).getText(),
+  }));
+  const returnType = sig.getReturnType().getText();
+  let qualified: string;
+  if (Node.isPropertyAccessExpression(callee)) {
+    qualified = `${callee.getExpression().getText()}.${callee.getName()}`;
+  } else {
+    qualified = callee.getText();
+  }
+  const flat = qualified.replace(/\./g, "_");
+  return { qualified, flat, params, returnType };
+}
+
 /** Build a concat-tree from a mixed list of literal and SpreadElement nodes.
  *  Literals collapse into arrayLiteral segments; spreads become bare expressions;
  *  segments are joined with `arrayConcat`. Used by array-literal and Math.max/min
@@ -177,6 +220,15 @@ function extractExpr(node: Expression): RawExpr {
         const fnName = callee.getName() === "max" ? "MaxOfSeq" : "MinOfSeq";
         return { kind: "call", fn: { kind: "var", name: fnName }, args: [combined] };
       }
+    }
+    // Auto-extern: if the callee resolves (via ts-morph) to a symbol declared
+    // in a different `.ts` file, register it as an opaque extern. Covers both
+    // `Obj.method(...)` and bare `foo(...)` imports. Skipped for stdlib/.d.ts
+    // declarations — those are either built-in methods (handled in dafny-emit)
+    // or genuinely out of scope.
+    if (_currentSourceFile && (Node.isPropertyAccessExpression(callee) || Node.isIdentifier(callee))) {
+      const ext = detectCrossFileExtern(callee, _currentSourceFile);
+      if (ext && !_externs.has(ext.qualified)) _externs.set(ext.qualified, ext);
     }
     const fn = extractExpr(callee);
     const args = node.getArguments().map(a => extractExpr(a as Expression));
@@ -995,25 +1047,14 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
 
 export function extractModule(sourceFile: SourceFile): RawModule {
   const typeDecls: TypeDeclInfo[] = [];
-  const externs: import("./rawir.js").RawExtern[] = [];
+  // Cross-file calls are auto-externed: ts-morph resolves the call's symbol;
+  // if it's defined in a different source file we treat the symbol as opaque
+  // and emit a body-less `function {:axiom}` in Dafny. Populated by
+  // `extractExpr` during call extraction (only symbols *actually used* end up
+  // here), deduped by qualified name.
+  _externs.clear();
 
-  // `//@ extern NS.name: (T1, T2, ...) -> R` — declares an externally-defined
-  // pure function. LS reasons about it as an uninterpreted symbol; Dafny emits
-  // `function {:axiom} NS_name(...): R`. Used so a verified file can reference
-  // imports from un-verified modules (e.g. Wildcard.match in permission code).
-  const EXTERN_RE = /^([A-Za-z_][\w.]*)\s*:\s*\(([^)]*)\)\s*->\s*(.+)$/;
-  function parseExtern(body: string) {
-    const m = body.match(EXTERN_RE);
-    if (!m) return;
-    const qualified = m[1];
-    const flat = qualified.replace(/\./g, "_");
-    const paramTypes = m[2].trim() === "" ? [] : m[2].split(",").map(s => s.trim());
-    const returnType = m[3].trim();
-    const params = paramTypes.map((tsType, i) => ({ name: `a${i}`, tsType }));
-    externs.push({ qualified, flat, params, returnType });
-  }
-
-  // Parse //@ declare-type and //@ extern directives from file-level comments
+  // Parse //@ declare-type directives from file-level comments
   for (const range of sourceFile.getLeadingCommentRanges()) {
     const text = range.getText().trim();
     if (text.startsWith("//@ declare-type ")) {
@@ -1027,11 +1068,9 @@ export function extractModule(sourceFile: SourceFile): RawModule {
         return { name: fname, tsType: ftype };
       });
       typeDecls.push({ name, kind: "record", fields });
-    } else if (text.startsWith("//@ extern ")) {
-      parseExtern(text.slice("//@ extern ".length));
     }
   }
-  // Also scan statement-level comments for declare-type and extern
+  // Also scan statement-level comments for declare-type
   for (const stmt of sourceFile.getStatements()) {
     for (const range of stmt.getLeadingCommentRanges()) {
       const text = range.getText().trim();
@@ -1045,11 +1084,10 @@ export function extractModule(sourceFile: SourceFile): RawModule {
           return { name: fname, tsType: ftype };
         });
         typeDecls.push({ name, kind: "record", fields });
-      } else if (text.startsWith("//@ extern ")) {
-        parseExtern(text.slice("//@ extern ".length));
       }
     }
   }
+  _currentSourceFile = sourceFile;
 
   // Pre-scan for collapsed single-variant unions so typeToString can recover alias names.
   // TypeScript collapses `type X = | { kind: 'A'; ... }` to a plain object type, losing
@@ -1385,7 +1423,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   return {
     file: sourceFile.getFilePath(),
     typeDecls,
-    externs,
+    externs: Array.from(_externs.values()),
     constants,
     functions,
     classes,

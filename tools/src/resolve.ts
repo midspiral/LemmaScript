@@ -1184,12 +1184,16 @@ export function resolveModule(raw: RawModule): TModule {
     fnParams.set(fn.name, fn.params.map(p => resolveTsType(p.tsType, overrides, p.name)));
     fnReturns.set(fn.name, resolveTsType(fn.returnType, overrides, "\\result"));
   }
-  // Externs: resolve param/return types once
+  // Externs: resolve param/return types once. For bare-name externs (no dot),
+  // also register in fnReturns so ordinary `foo(args)` calls get the right
+  // return type at resolution; dotted externs are handled in resolveExpr's
+  // call case via the externs map directly.
   const externs = new Map<string, { flat: string; params: Ty[]; returnTy: Ty }>();
   const tExterns = (raw.externs ?? []).map(ext => {
     const params = ext.params.map(p => parseTsType(p.tsType));
     const returnTy = parseTsType(ext.returnType);
     externs.set(ext.qualified, { flat: ext.flat, params, returnTy });
+    if (!ext.qualified.includes(".")) fnReturns.set(ext.qualified, returnTy);
     return {
       qualified: ext.qualified,
       flat: ext.flat,
