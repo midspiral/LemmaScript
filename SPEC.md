@@ -181,6 +181,8 @@ A file-level directive that restricts the file to a specific backend:
 
 When `lsc` runs with a different backend (e.g., `--backend=lean`), the file is silently skipped. This is used for features only supported in one backend, such as class methods (Dafny only).
 
+A second file-level directive, `//@ safe-slice`, opts the file into JS-clamping semantics for two-arg `arr.slice(lo, hi)`: the emitted Dafny goes through a `SafeSlice` helper that clamps both bounds to `[0, |s|]` rather than producing a direct `s[lo..hi]` (which Dafny requires `0 <= lo <= hi <= |s|`). Off by default — files that wrote `.slice` calls with provable bounds get direct emission. Files verifying production code that relies on JS's permissive slicing opt in with the directive at the top.
+
 ### 2.8 Classes
 
 Class methods can be verified with `//@ verify`. The class fields become Dafny class fields, and `this.field` references work directly.
@@ -690,6 +692,8 @@ while condition'
 **Decreasing clause:** Emitted directly as a backend expression. Both backends accept well-founded relations — `Nat`/`nat`, lexicographic tuples, etc.
 
 **`done_with` clause:** If the loop body contains `break`, the user should add a `//@ done_with` annotation specifying what is true when the loop exits. (Lean: if omitted, Velvet defaults to the negation of the loop condition, which is only correct when there is no `break`. Dafny: not needed, the verifier handles break paths automatically.)
+
+**C-style `for (init; cond; update)` loops** are desugared at extract time to the equivalent `init; while (cond) { body; update; }`. The loop variable from `init` is forced mutable so the update can mutate it. The update is a bare `Expression` in TS (not wrapped in an `ExpressionStatement`), but is routed through the same statement-position desugaring as `i++;` standalone — `i++`/`i--` become `i = i ± 1`, compound assignments become their plain-assignment equivalents. `//@ invariant` and `//@ decreases` annotations placed in the for-loop body carry through to the desugared `while`.
 
 ### 4.3 Return Inside Loops
 
