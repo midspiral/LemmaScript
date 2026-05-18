@@ -416,6 +416,11 @@ function emitDecl(d: Decl): string {
 
     case "const":
       return `def ${escapeName(d.name)} : ${tyToLean(d.type)} := ${emitExpr(d.value)}`;
+
+    case "extern":
+      // Lean: emit an opaque function declaration. The user is expected to
+      // provide an axiomatic body or a stub in the companion spec file.
+      throw new Error(`Lean extern support not yet implemented: ${d.name}`);
   }
 }
 

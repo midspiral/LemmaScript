@@ -180,9 +180,22 @@ export interface RawConst {
   value: RawExpr;
 }
 
+/** Externally-declared pure function (no body, opaque to LS).
+ *  Sourced from `//@ extern NS.name: (T1, T2) -> R` annotations.
+ *  In Dafny, emitted as `function {:axiom} NS_name(...): R`.
+ *  Used to reference symbols imported from files LS does not verify
+ *  (e.g. Wildcard.match in permission/evaluate.ts). */
+export interface RawExtern {
+  qualified: string;       // dotted source name, e.g. "Wildcard.match"
+  flat: string;            // emission name, e.g. "Wildcard_match"
+  params: RawParam[];      // typed parameter list
+  returnType: string;      // TS type string
+}
+
 export interface RawModule {
   file: string;
   typeDecls: import("./types.js").TypeDeclInfo[];
+  externs: RawExtern[];
   constants: RawConst[];
   functions: RawFunction[];
   classes: RawClass[];

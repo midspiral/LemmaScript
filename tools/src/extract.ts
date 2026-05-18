@@ -995,36 +995,59 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
 
 export function extractModule(sourceFile: SourceFile): RawModule {
   const typeDecls: TypeDeclInfo[] = [];
+  const externs: import("./rawir.js").RawExtern[] = [];
 
-  // Parse //@ declare-type directives from file comments
+  // `//@ extern NS.name: (T1, T2, ...) -> R` — declares an externally-defined
+  // pure function. LS reasons about it as an uninterpreted symbol; Dafny emits
+  // `function {:axiom} NS_name(...): R`. Used so a verified file can reference
+  // imports from un-verified modules (e.g. Wildcard.match in permission code).
+  const EXTERN_RE = /^([A-Za-z_][\w.]*)\s*:\s*\(([^)]*)\)\s*->\s*(.+)$/;
+  function parseExtern(body: string) {
+    const m = body.match(EXTERN_RE);
+    if (!m) return;
+    const qualified = m[1];
+    const flat = qualified.replace(/\./g, "_");
+    const paramTypes = m[2].trim() === "" ? [] : m[2].split(",").map(s => s.trim());
+    const returnType = m[3].trim();
+    const params = paramTypes.map((tsType, i) => ({ name: `a${i}`, tsType }));
+    externs.push({ qualified, flat, params, returnType });
+  }
+
+  // Parse //@ declare-type and //@ extern directives from file-level comments
   for (const range of sourceFile.getLeadingCommentRanges()) {
     const text = range.getText().trim();
-    if (!text.startsWith("//@ declare-type ")) continue;
-    const body = text.slice("//@ declare-type ".length);
-    const match = body.match(/^(\w+)\s*\{(.+)\}$/);
-    if (!match) continue;
-    const name = match[1];
-    const fieldsStr = match[2];
-    const fields = fieldsStr.split(",").map(f => f.trim()).filter(Boolean).map(f => {
-      const [fname, ftype] = f.split(":").map(s => s.trim());
-      return { name: fname, tsType: ftype };
-    });
-    typeDecls.push({ name, kind: "record", fields });
-  }
-  // Also scan statement-level comments for declare-type
-  for (const stmt of sourceFile.getStatements()) {
-    for (const range of stmt.getLeadingCommentRanges()) {
-      const text = range.getText().trim();
-      if (!text.startsWith("//@ declare-type ")) continue;
+    if (text.startsWith("//@ declare-type ")) {
       const body = text.slice("//@ declare-type ".length);
       const match = body.match(/^(\w+)\s*\{(.+)\}$/);
       if (!match) continue;
       const name = match[1];
-      const fields = match[2].split(",").map(f => f.trim()).filter(Boolean).map(f => {
+      const fieldsStr = match[2];
+      const fields = fieldsStr.split(",").map(f => f.trim()).filter(Boolean).map(f => {
         const [fname, ftype] = f.split(":").map(s => s.trim());
         return { name: fname, tsType: ftype };
       });
       typeDecls.push({ name, kind: "record", fields });
+    } else if (text.startsWith("//@ extern ")) {
+      parseExtern(text.slice("//@ extern ".length));
+    }
+  }
+  // Also scan statement-level comments for declare-type and extern
+  for (const stmt of sourceFile.getStatements()) {
+    for (const range of stmt.getLeadingCommentRanges()) {
+      const text = range.getText().trim();
+      if (text.startsWith("//@ declare-type ")) {
+        const body = text.slice("//@ declare-type ".length);
+        const match = body.match(/^(\w+)\s*\{(.+)\}$/);
+        if (!match) continue;
+        const name = match[1];
+        const fields = match[2].split(",").map(f => f.trim()).filter(Boolean).map(f => {
+          const [fname, ftype] = f.split(":").map(s => s.trim());
+          return { name: fname, tsType: ftype };
+        });
+        typeDecls.push({ name, kind: "record", fields });
+      } else if (text.startsWith("//@ extern ")) {
+        parseExtern(text.slice("//@ extern ".length));
+      }
     }
   }
 
@@ -1362,6 +1385,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   return {
     file: sourceFile.getFilePath(),
     typeDecls,
+    externs,
     constants,
     functions,
     classes,

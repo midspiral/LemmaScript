@@ -123,9 +123,18 @@ export interface TConst {
   value: TExpr;
 }
 
+/** Resolved counterpart of RawExtern. */
+export interface TExtern {
+  qualified: string;
+  flat: string;
+  params: TParam[];
+  returnTy: Ty;
+}
+
 export interface TModule {
   file: string;
   typeDecls: import("./types.js").TypeDeclInfo[];
+  externs: TExtern[];
   constants: TConst[];
   functions: TFunction[];
   classes: TClass[];
