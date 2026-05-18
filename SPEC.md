@@ -151,6 +151,8 @@ Each `declare-type` generates a Dafny `datatype` (or Lean `structure`) with the 
 
 Place `declare-type` annotations before the first function that uses the type. They can appear as leading comments on any statement. `declare-type` takes precedence over any type/interface of the same name in the source file, and is never filtered out by brownfield mode.
 
+An **alias form** `//@ declare-type Name = TsType` declares `Name` as an alias for a TS type expression (e.g., `Ruleset = Rule[]`). Dotted references like `Namespace.Name` resolve via last-segment fallback, so `//@ declare-type Info { ... }` matches a reference to `Agent.Info`. Aliases whose target is structural (array/map/set/optional/another user type) are expanded at use sites; primitive-targeted aliases (`type TaskId = number`) stay nominal so the generated Dafny preserves the alias name.
+
 ### 2.6 Selective Verification: `//@ verify`
 
 By default, `lsc` extracts and verifies every function in the file. In brownfield codebases where most functions are outside the supported fragment, add `//@ verify` to opt in individual functions:
