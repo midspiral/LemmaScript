@@ -14,6 +14,86 @@ import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawG
 /** When set, calls whose function/method name matches this key are replaced with havoc. */
 let _havocKey: string | null = null;
 
+/** Auto-detected cross-file calls. Populated by `extractExpr` whenever it sees
+ *  a call `Obj.method(...)` or `foo(...)` whose ts-morph symbol resolves to a
+ *  different `.ts` source file. Emitted in Dafny as `function {:axiom} <flat>`.
+ *  Cleared at the start of every `extractModule`. */
+const _externs = new Map<string, import("./rawir.js").RawExtern>();
+let _currentSourceFile: SourceFile | null = null;
+
+/** Register the call's callee as a cross-file extern if applicable, then
+ *  walk the source declaration's body for nested cross-file calls (so the
+ *  lifted `requires`/`ensures` see all the symbols they reference). Idempotent
+ *  via the `_externs` dedup. */
+function registerExternIfCrossFile(
+  callee: import("ts-morph").PropertyAccessExpression | import("ts-morph").Identifier,
+  sourceFile: SourceFile,
+): void {
+  const ext = detectCrossFileExtern(callee, sourceFile);
+  if (!ext || _externs.has(ext.qualified)) return;
+  _externs.set(ext.qualified, ext);
+  // Recurse: scan the source decl's body for nested cross-file calls so any
+  // symbol referenced by the copied spec is itself declared in the output.
+  let symbol = callee.getSymbol();
+  if (!symbol) return;
+  const aliased = symbol.getAliasedSymbol();
+  if (aliased) symbol = aliased;
+  const sourceDecl = symbol.getDeclarations().find(
+    d => d.getSourceFile().getFilePath() !== sourceFile.getFilePath(),
+  );
+  if (!sourceDecl) return;
+  const sourceSF = sourceDecl.getSourceFile();
+  const body = (sourceDecl as any).getBody?.();
+  if (!body) return;
+  for (const inner of body.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    const innerCallee = inner.getExpression();
+    if (Node.isPropertyAccessExpression(innerCallee) || Node.isIdentifier(innerCallee)) {
+      registerExternIfCrossFile(innerCallee, sourceSF);
+    }
+  }
+}
+
+function detectCrossFileExtern(
+  callee: import("ts-morph").PropertyAccessExpression | import("ts-morph").Identifier,
+  sourceFile: SourceFile,
+): import("./rawir.js").RawExtern | null {
+  let symbol = callee.getSymbol();
+  if (!symbol) return null;
+  // For bare imports `import { foo } from "..."`, the call-site symbol is the
+  // local ImportSpecifier — declared in the current file. Follow the alias to
+  // the original `export function` declaration.
+  const aliased = symbol.getAliasedSymbol();
+  if (aliased) symbol = aliased;
+  const decls = symbol.getDeclarations();
+  if (decls.length === 0) return null;
+  const currentPath = sourceFile.getFilePath();
+  const externalDecl = decls.find(d => d.getSourceFile().getFilePath() !== currentPath);
+  if (!externalDecl) return null;
+  // Skip stdlib / typings — those have built-in dispatch elsewhere or are
+  // genuinely out of LS's verification model.
+  if (externalDecl.getSourceFile().getFilePath().endsWith(".d.ts")) return null;
+  const sig = callee.getType().getCallSignatures()[0];
+  if (!sig) return null;
+  const params = sig.getParameters().map(p => ({
+    name: p.getName(),
+    tsType: p.getTypeAtLocation(callee).getText(),
+  }));
+  const returnType = sig.getReturnType().getText();
+  let qualified: string;
+  if (Node.isPropertyAccessExpression(callee)) {
+    qualified = `${callee.getExpression().getText()}.${callee.getName()}`;
+  } else {
+    qualified = callee.getText();
+  }
+  const flat = qualified.replace(/\./g, "_");
+  // Lift `//@ requires`/`//@ ensures` from the source declaration so callers
+  // reason against the source's verified contract, not an unconstrained axiom.
+  const annots = collectFunctionAnnotations(externalDecl);
+  const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
+  const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
+  return { qualified, flat, params, returnType, requires, ensures };
+}
+
 /** Build a concat-tree from a mixed list of literal and SpreadElement nodes.
  *  Literals collapse into arrayLiteral segments; spreads become bare expressions;
  *  segments are joined with `arrayConcat`. Used by array-literal and Math.max/min
@@ -177,6 +257,14 @@ function extractExpr(node: Expression): RawExpr {
         const fnName = callee.getName() === "max" ? "MaxOfSeq" : "MinOfSeq";
         return { kind: "call", fn: { kind: "var", name: fnName }, args: [combined] };
       }
+    }
+    // Auto-extern: if the callee resolves (via ts-morph) to a symbol declared
+    // in a different `.ts` file, register it as an opaque extern. Covers both
+    // `Obj.method(...)` and bare `foo(...)` imports. Skipped for stdlib/.d.ts
+    // declarations — those are either built-in methods (handled in dafny-emit)
+    // or genuinely out of scope.
+    if (_currentSourceFile && (Node.isPropertyAccessExpression(callee) || Node.isIdentifier(callee))) {
+      registerExternIfCrossFile(callee, _currentSourceFile);
     }
     const fn = extractExpr(callee);
     const args = node.getArguments().map(a => extractExpr(a as Expression));
@@ -381,6 +469,18 @@ function collectAnnotations(node: Node, body?: Node[]): Annotation[] {
   const own = parseAnnotations(node);
   if (body && body.length > 0) return [...own, ...parseAnnotations(body[0])];
   return own;
+}
+
+/** All `//@ ` annotations for a function-like node, regardless of whether its
+ *  body is a block (annotations on the first statement) or an expression-body
+ *  arrow (annotations only on the declaration). Used both for in-file function
+ *  extraction and for pulling specs off cross-file externs. */
+function collectFunctionAnnotations(fn: Node): Annotation[] {
+  const body = (fn as any).getBody?.();
+  if (body && Node.isBlock(body)) {
+    return collectAnnotations(fn, body.getStatements() as Node[]);
+  }
+  return collectAnnotations(fn);
 }
 
 /** Check for bare `//@ pure` annotation (no expression). */
@@ -938,11 +1038,10 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
   if (body && !Node.isBlock(body)) {
     const expr = extractExpr(body as Expression);
     extractedBody = [{ kind: "return", value: expr, line: body.getStartLineNumber() }];
-    annots = parentAnnotations ?? collectAnnotations(fn);
+    annots = parentAnnotations ?? collectFunctionAnnotations(fn);
   } else if (body && Node.isBlock(body)) {
-    const bodyStmts = body.getStatements();
-    extractedBody = extractStmts(bodyStmts);
-    annots = collectAnnotations(fn, bodyStmts);
+    extractedBody = extractStmts(body.getStatements());
+    annots = collectFunctionAnnotations(fn);
   } else {
     throw new Error(`${(fn as any).getName?.() ?? "arrow"}: function has no body`);
   }
@@ -995,38 +1094,43 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
 
 export function extractModule(sourceFile: SourceFile): RawModule {
   const typeDecls: TypeDeclInfo[] = [];
+  // Cross-file calls are auto-externed: ts-morph resolves the call's symbol;
+  // if it's defined in a different source file we treat the symbol as opaque
+  // and emit a body-less `function {:axiom}` in Dafny. Populated by
+  // `extractExpr` during call extraction (only symbols *actually used* end up
+  // here), deduped by qualified name.
+  _externs.clear();
 
-  // Parse //@ declare-type directives from file comments
-  for (const range of sourceFile.getLeadingCommentRanges()) {
-    const text = range.getText().trim();
-    if (!text.startsWith("//@ declare-type ")) continue;
-    const body = text.slice("//@ declare-type ".length);
-    const match = body.match(/^(\w+)\s*\{(.+)\}$/);
-    if (!match) continue;
-    const name = match[1];
-    const fieldsStr = match[2];
-    const fields = fieldsStr.split(",").map(f => f.trim()).filter(Boolean).map(f => {
-      const [fname, ftype] = f.split(":").map(s => s.trim());
-      return { name: fname, tsType: ftype };
-    });
-    typeDecls.push({ name, kind: "record", fields });
-  }
-  // Also scan statement-level comments for declare-type
-  for (const stmt of sourceFile.getStatements()) {
-    for (const range of stmt.getLeadingCommentRanges()) {
-      const text = range.getText().trim();
-      if (!text.startsWith("//@ declare-type ")) continue;
-      const body = text.slice("//@ declare-type ".length);
-      const match = body.match(/^(\w+)\s*\{(.+)\}$/);
-      if (!match) continue;
-      const name = match[1];
-      const fields = match[2].split(",").map(f => f.trim()).filter(Boolean).map(f => {
+  // `//@ declare-type Name { f1: T1, ... }` — record form.
+  // `//@ declare-type Name = TsType`         — alias form (e.g. `Ruleset = Rule[]`).
+  function parseDeclareType(body: string) {
+    const recordMatch = body.match(/^(\w+)\s*\{(.+)\}$/);
+    if (recordMatch) {
+      const name = recordMatch[1];
+      const fields = recordMatch[2].split(",").map(f => f.trim()).filter(Boolean).map(f => {
         const [fname, ftype] = f.split(":").map(s => s.trim());
         return { name: fname, tsType: ftype };
       });
       typeDecls.push({ name, kind: "record", fields });
+      return;
+    }
+    const aliasMatch = body.match(/^(\w+)\s*=\s*(.+)$/);
+    if (aliasMatch) {
+      typeDecls.push({ name: aliasMatch[1], kind: "alias", aliasOf: aliasMatch[2].trim() });
     }
   }
+
+  for (const range of sourceFile.getLeadingCommentRanges()) {
+    const text = range.getText().trim();
+    if (text.startsWith("//@ declare-type ")) parseDeclareType(text.slice("//@ declare-type ".length));
+  }
+  for (const stmt of sourceFile.getStatements()) {
+    for (const range of stmt.getLeadingCommentRanges()) {
+      const text = range.getText().trim();
+      if (text.startsWith("//@ declare-type ")) parseDeclareType(text.slice("//@ declare-type ".length));
+    }
+  }
+  _currentSourceFile = sourceFile;
 
   // Pre-scan for collapsed single-variant unions so typeToString can recover alias names.
   // TypeScript collapses `type X = | { kind: 'A'; ... }` to a plain object type, losing
@@ -1362,6 +1466,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   return {
     file: sourceFile.getFilePath(),
     typeDecls,
+    externs: Array.from(_externs.values()),
     constants,
     functions,
     classes,

@@ -129,6 +129,15 @@ function emitExpr(e: Expr): string {
         if (e.method === "map")    return `Std.Collections.Seq.Map(${args[0]}, ${obj})`;
         if (e.method === "filter") return `Std.Collections.Seq.Filter(${args[0]}, ${obj})`;
         if (e.method === "every")  return `Std.Collections.Seq.All(${obj}, ${args[0]})`;
+        if (e.method === "findLast") {
+          needPreamble("OptionType");
+          needPreamble("SeqFindLast");
+          return `SeqFindLast(${obj}, ${args[0]})`;
+        }
+        if (e.method === "flat" && args.length === 0) {
+          needPreamble("SeqFlatten");
+          return `SeqFlatten(${obj})`;
+        }
         if (e.method === "some" && e.args[0].kind === "lambda" &&
             e.args[0].body.length === 1 && e.args[0].body[0].kind === "return") {
           const lam = e.args[0];
@@ -194,6 +203,14 @@ function emitExpr(e: Expr): string {
         const pred = `${emitExpr(e.left)}.${ctorName}?`;
         return op === "!=" ? `(!${pred})` : pred;
       }
+      // Dafny's `forall`/`exists ::` extends the body as far as possible. So
+      // `(forall i :: P(i)) <op> Q` would parse as `forall i :: (P(i) <op> Q)`.
+      // Wrap a quantifier LEFT-operand in parens. A quantifier in right-operand
+      // position is fine because its body is correctly the whole right side.
+      const wrapQ = (sub: Expr): string => {
+        const inner = emitExpr(sub);
+        return (sub.kind === "forall" || sub.kind === "exists") ? `(${inner})` : inner;
+      };
       // Bitwise operators on int: translate to arithmetic
       // x >> n → x / 2^n (right shift)
       // x << n → x * 2^n (left shift)
@@ -233,11 +250,17 @@ function emitExpr(e: Expr): string {
           return `(${left} ${op} ${right})`;
         }
       }
-      return `(${emitExpr(e.left)} ${op} ${emitExpr(e.right)})`;
+      return `(${wrapQ(e.left)} ${op} ${emitExpr(e.right)})`;
     }
 
     case "implies": {
-      const parts = [...e.premises.map(emitExpr), emitExpr(e.conclusion)];
+      const wrapQI = (sub: Expr): string => {
+        const inner = emitExpr(sub);
+        return (sub.kind === "forall" || sub.kind === "exists") ? `(${inner})` : inner;
+      };
+      // Wrap quantifier premises; the conclusion's quantifier body correctly
+      // spans the rest of the implication, so no wrap needed.
+      const parts = [...e.premises.map(wrapQI), emitExpr(e.conclusion)];
       return `(${parts.join(" ==> ")})`;
     }
 
@@ -292,8 +315,9 @@ function emitExpr(e: Expr): string {
       }
       if (ctorName) {
         const structFields = _structureDecls.get(ctorName);
-        if (structFields && e.fields.length < structFields.length) {
-          // Pad missing fields: match by name, fill None for optional
+        // Always reorder by struct field name — TS object literal order ≠ Dafny
+        // positional order. Pad missing optional fields with None.
+        if (structFields) {
           const provided = new Map(e.fields.map(f => [f.name, f]));
           const vals = structFields.map(sf => {
             const f = provided.get(sf.name);
@@ -530,6 +554,16 @@ function emitDecl(d: Decl): string {
       return `const ${escapeName(d.name)}: ${tyToDafny(d.type)} := ${emitExpr(d.value)}`;
     }
 
+    case "extern": {
+      // Body-less Dafny function — `:axiom` makes Dafny accept the missing body
+      // and treats it as an uninterpreted symbol. Any `requires`/`ensures` were
+      // lifted from the source declaration's annotations.
+      const lines = [`function {:axiom} ${d.name}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
+      for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
+      for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
+      return lines.join("\n");
+    }
+
     case "namespace": {
       // Dafny doesn't need namespaces — flatten declarations
       return d.decls.map(emitDecl).join("\n\n");
@@ -600,6 +634,27 @@ function SeqIndexOfFrom<T(==)>(s: seq<T>, x: T, from: nat): int
   if from == |s| then -1
   else if s[from] == x then from as int
   else SeqIndexOfFrom(s, x, from + 1)
+}`;
+
+const SEQ_FIND_LAST = `function SeqFindLast<T>(s: seq<T>, p: T -> bool): Option<T>
+  ensures SeqFindLast(s, p).Some? ==> p(SeqFindLast(s, p).value)
+  ensures SeqFindLast(s, p).Some? ==> SeqFindLast(s, p).value in s
+  ensures SeqFindLast(s, p).Some? ==>
+    exists i: nat :: i < |s| && s[i] == SeqFindLast(s, p).value && p(s[i]) &&
+                     (forall j: nat :: i < j < |s| ==> !p(s[j]))
+  ensures SeqFindLast(s, p).None? ==> forall i :: 0 <= i < |s| ==> !p(s[i])
+  decreases |s|
+{
+  if |s| == 0 then None
+  else if p(s[|s|-1]) then Some(s[|s|-1])
+  else SeqFindLast(s[..|s|-1], p)
+}`;
+
+const SEQ_FLATTEN = `function SeqFlatten<T>(s: seq<seq<T>>): seq<T>
+  decreases |s|
+{
+  if |s| == 0 then []
+  else s[0] + SeqFlatten(s[1..])
 }`;
 
 const STRING_INDEX_OF = `function StringIndexOf(s: string, sub: string): int
@@ -753,6 +808,8 @@ const PREAMBLE_CODE: [string, string][] = [
   ["CeilReal", CEIL_REAL],
   ["FloorReal", FLOOR_REAL],
   ["SeqIndexOf", SEQ_INDEX_OF],
+  ["SeqFindLast", SEQ_FIND_LAST],
+  ["SeqFlatten", SEQ_FLATTEN],
   ["StringIndexOf", STRING_INDEX_OF],
   ["StringTrim", STRING_TRIM],
   ["StringToLower", STRING_TO_LOWER],

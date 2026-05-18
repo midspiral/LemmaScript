@@ -143,7 +143,21 @@ export interface TypeAlias {
   target: Ty;
 }
 
-export type Decl = Inductive | Structure | FnDef | FnDefByMethod | FnMethod | Namespace | ClassDecl | ConstDecl | TypeAlias;
+/** Externally-declared pure function: `function {:axiom} name(...): returnType`
+ *  in Dafny. No body — the prover treats it as an uninterpreted symbol of the
+ *  declared type. Auto-detected during extraction for cross-file calls; any
+ *  `requires`/`ensures` on the source declaration are lifted along so callers
+ *  reason against the same contract the source itself verified. */
+export interface ExternDecl {
+  kind: "extern";
+  name: string;                                 // flat name (dots → underscores)
+  params: { name: string; type: Ty }[];
+  returnType: Ty;
+  requires: Expr[];
+  ensures: Expr[];
+}
+
+export type Decl = Inductive | Structure | FnDef | FnDefByMethod | FnMethod | Namespace | ClassDecl | ConstDecl | TypeAlias | ExternDecl;
 
 export interface Module {
   comment: string;
