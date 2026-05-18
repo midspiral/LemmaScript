@@ -113,6 +113,11 @@ function emitExpr(e: Expr): string {
     case "emptyMap": return `map[]`;
     case "emptySet": return `{}`;
 
+    case "mapLiteral": {
+      const entries = e.entries.map(en => `${emitExpr(en.key)} := ${emitExpr(en.value)}`);
+      return `map[${entries.join(", ")}]`;
+    }
+
     case "methodCall": {
       const obj = emitExpr(e.obj);
       const args = e.args.map(emitExpr);
@@ -125,7 +130,16 @@ function emitExpr(e: Expr): string {
         if (e.method === "push")     return `(${obj} + [${args[0]}])`;
         if (e.method === "concat")   return `(${obj} + [${args[0]}])`;
         if (e.method === "slice" && args.length === 1) return `${obj}[${args[0]}..]`;
-        if (e.method === "slice" && args.length === 2) return `${obj}[${args[0]}..${args[1]}]`;
+        if (e.method === "slice" && args.length === 2) {
+          // JS slice clamps both bounds; Dafny requires `0 <= lo <= hi <= |s|`.
+          // Direct slice is default (matches existing case studies that wrote
+          // bounded calls). Files needing JS clamping opt in via `//@ safe-slice`.
+          if (_useSafeSlice) {
+            needPreamble("SafeSlice");
+            return `SafeSlice(${obj}, ${args[0]}, ${args[1]})`;
+          }
+          return `${obj}[${args[0]}..${args[1]}]`;
+        }
         if (e.method === "map")    return `Std.Collections.Seq.Map(${args[0]}, ${obj})`;
         if (e.method === "filter") return `Std.Collections.Seq.Filter(${args[0]}, ${obj})`;
         if (e.method === "every")  return `Std.Collections.Seq.All(${obj}, ${args[0]})`;
@@ -137,6 +151,10 @@ function emitExpr(e: Expr): string {
         if (e.method === "flat" && args.length === 0) {
           needPreamble("SeqFlatten");
           return `SeqFlatten(${obj})`;
+        }
+        if (e.method === "join") {
+          needPreamble("SeqJoin");
+          return `SeqJoin(${obj}, ${args[0]})`;
         }
         if (e.method === "some" && e.args[0].kind === "lambda" &&
             e.args[0].body.length === 1 && e.args[0].body[0].kind === "return") {
@@ -294,8 +312,14 @@ function emitExpr(e: Expr): string {
       // Dafny doesn't need toNat — just emit the inner expression
       return emitExpr(e.expr);
 
-    case "index":
-      return `${emitExpr(e.arr)}[${emitExpr(e.idx)}]`;
+    case "index": {
+      const obj = emitExpr(e.arr);
+      const idx = emitExpr(e.idx);
+      // Plain seq/map subscript. For maps where the result is meant to be
+      // `Option<V>` (the TS `Record<K,V>[k]` shape), transform should have
+      // wrapped this in an Option-coercion; here we just emit the subscript.
+      return `${obj}[${idx}]`;
+    }
 
     case "record": {
       if (e.spread) {
@@ -579,6 +603,12 @@ function emitDecl(d: Decl): string {
 const _neededPreambles = new Set<string>();
 function needPreamble(key: string) { _neededPreambles.add(key); }
 
+/** File-level opt-in for JS-clamp semantics on `arr.slice(lo, hi)`. Set by
+ *  `emitDafnyFile` from the `//@ safe-slice` directive; consulted by the
+ *  array-method emit. Off by default — case studies that wrote their `.slice`
+ *  calls with provable bounds get direct `s[lo..hi]` emission. */
+let _useSafeSlice = false;
+
 const POW2 = `function Pow2(n: int): int
   requires n >= 0
   decreases n
@@ -655,6 +685,22 @@ const SEQ_FLATTEN = `function SeqFlatten<T>(s: seq<seq<T>>): seq<T>
 {
   if |s| == 0 then []
   else s[0] + SeqFlatten(s[1..])
+}`;
+
+const SEQ_JOIN = `function SeqJoin(s: seq<string>, sep: string): string
+  decreases |s|
+{
+  if |s| == 0 then ""
+  else if |s| == 1 then s[0]
+  else s[0] + sep + SeqJoin(s[1..], sep)
+}`;
+
+const SAFE_SLICE = `function SafeSlice<T>(s: seq<T>, lo: int, hi: int): seq<T>
+  ensures |SafeSlice(s, lo, hi)| <= |s|
+{
+  var lo' := if lo < 0 then 0 else if lo > |s| as int then |s| else lo;
+  var hi' := if hi > |s| as int then |s| else if hi < lo' then lo' else hi;
+  s[lo'..hi']
 }`;
 
 const STRING_INDEX_OF = `function StringIndexOf(s: string, sub: string): int
@@ -810,6 +856,8 @@ const PREAMBLE_CODE: [string, string][] = [
   ["SeqIndexOf", SEQ_INDEX_OF],
   ["SeqFindLast", SEQ_FIND_LAST],
   ["SeqFlatten", SEQ_FLATTEN],
+  ["SeqJoin", SEQ_JOIN],
+  ["SafeSlice", SAFE_SLICE],
   ["StringIndexOf", STRING_INDEX_OF],
   ["StringTrim", STRING_TRIM],
   ["StringToLower", STRING_TO_LOWER],
@@ -882,7 +930,8 @@ function translatePattern(pattern: string): string {
 }
 
 
-export function emitDafnyFile(file: Module, tsFileName?: string): string {
+export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSlice?: boolean }): string {
+  _useSafeSlice = !!opts?.safeSlice;
   buildRecordCtorMap(file.decls);
   _neededPreambles.clear();
 

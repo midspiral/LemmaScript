@@ -23,6 +23,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
   const r = (x: Expr) => mapExpr(x, f);
   switch (e.kind) {
     case "var": case "num": case "bool": case "str": case "emptyMap": case "emptySet": case "havoc": return e;
+    case "mapLiteral": return { ...e, entries: e.entries.map(en => ({ key: r(en.key), value: r(en.value) })) };
     case "constructor": return e.args ? { ...e, args: e.args.map(r) } : e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
@@ -547,6 +548,19 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // Empty record with map type → empty map
       if (e.fields.length === 0 && !e.spread && e.ty.kind === "map") {
         return { kind: "emptyMap" };
+      }
+      // Non-empty record literal with map type — emit as a flat Dafny map
+      // literal `map[k1 := v1, k2 := v2, ...]`. (A chain of `m["k" := v]`
+      // works for a handful of entries but Dafny's type resolver stack-
+      // overflows on hundreds; the flat form is fine at any size.)
+      if (e.fields.length > 0 && !e.spread && e.ty.kind === "map") {
+        return {
+          kind: "mapLiteral",
+          entries: e.fields.map(f => ({
+            key: { kind: "str" as const, value: f.name },
+            value: lowerExpr(f.value, binds),
+          })),
+        };
       }
       return { kind: "record", spread: null, fields: e.fields.map(f => ({ name: f.name, value: lowerExpr(f.value, binds) })) };
     }

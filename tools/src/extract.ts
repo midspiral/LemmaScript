@@ -355,7 +355,10 @@ function extractExpr(node: Expression): RawExpr {
         if (init && Node.isComputedPropertyName(nameNode)) {
           computedFields.push({ key: extractExpr(nameNode.getExpression()), value: extractExpr(init) });
         } else if (init) {
-          fields.push({ name: prop.getName(), value: extractExpr(init) });
+          // String-literal keys (e.g. `"bun run": 3`) — use the unquoted literal
+          // value; otherwise `prop.getName()` may include surrounding quotes.
+          const name = Node.isStringLiteral(nameNode) ? nameNode.getLiteralValue() : prop.getName();
+          fields.push({ name, value: extractExpr(init) });
         }
       }
     }
@@ -671,7 +674,51 @@ function typeToString(type: Type): string {
 
 const COMPOUND_OPS: Record<string, string> = {
   "+=": "+", "-=": "-", "*=": "*", "/=": "/", "%=": "%",
+  "<<=": "<<", ">>=": ">>", "|=": "|", "&=": "&", "^=": "^", "**=": "**",
 };
+
+/** Desugar a statement-position side-effecting expression — `x = e`, `x += e`,
+ *  `i++`, `arr[i] = v`, etc. — into a `RawAssign`. Returns null when no shape
+ *  match (caller emits a plain `{kind: "expr"}` or errors). Called by both
+ *  `ExpressionStatement` extraction (wrapped) and the C-style for-loop
+ *  incrementor (bare Expression — same shape, no `;` wrapper). */
+function desugarStmtExpr(expr: Expression, line: number): RawStmt | null {
+  if (Node.isBinaryExpression(expr)) {
+    const opText = expr.getOperatorToken().getText();
+    const left = expr.getLeft();
+    if (opText === "=" && Node.isElementAccessExpression(left)) {
+      const obj = extractExpr(left.getExpression());
+      const idx = extractExpr(left.getArgumentExpression()!);
+      const val = extractExpr(expr.getRight());
+      const target = left.getExpression().getText();
+      const withCall: RawExpr = { kind: "call", fn: { kind: "field", obj, field: "with" }, args: [idx, val] };
+      return { kind: "assign", target, value: withCall, line };
+    }
+    if (opText === "=") {
+      return { kind: "assign", target: left.getText(), value: extractExpr(expr.getRight()), line };
+    }
+    const compound = COMPOUND_OPS[opText];
+    if (compound) {
+      const target = left.getText();
+      return {
+        kind: "assign", target,
+        value: { kind: "binop", op: compound, left: { kind: "var", name: target }, right: extractExpr(expr.getRight()) },
+        line,
+      };
+    }
+  }
+  if ((Node.isPostfixUnaryExpression(expr) || Node.isPrefixUnaryExpression(expr)) &&
+      (expr.getOperatorToken() === SyntaxKind.PlusPlusToken || expr.getOperatorToken() === SyntaxKind.MinusMinusToken)) {
+    const target = expr.getOperand().getText();
+    const op = expr.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+" : "-";
+    return {
+      kind: "assign", target,
+      value: { kind: "binop", op, left: { kind: "var", name: target }, right: { kind: "num", value: 1 } },
+      line,
+    };
+  }
+  return null;
+}
 
 // ── Statement extraction ─────────────────────────────────────
 
@@ -865,6 +912,56 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       continue;
     }
 
+    // C-style for(init; cond; update) — desugar to:
+    //   init;
+    //   while (cond) { body; update }
+    // The init's binding is forced mutable (update mutates it). The update is
+    // a bare Expression in ts-morph (not wrapped in an ExpressionStatement),
+    // so we route it through the same `desugarStmtExpr` helper that the
+    // ExpressionStatement branch above uses — `i++` etc. end up as RawAssign
+    // exactly as they would if written as their own statement.
+    if (Node.isForStatement(s)) {
+      const init = s.getInitializer();
+      const cond = s.getCondition();
+      const incrementor = s.getIncrementor();
+      const bodyNode = s.getStatement();
+      const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [bodyNode];
+      const annots = collectAnnotations(s, bodyStmts);
+
+      if (!init || !Node.isVariableDeclarationList(init))
+        throw new Error(`for(...) at line ${line}: only variable-declaration init supported`);
+      for (const decl of init.getDeclarations()) {
+        const name = decl.getName();
+        const tsType = decl.getTypeNode()?.getText() ?? typeToString(decl.getType());
+        const initExpr = decl.getInitializer();
+        if (!initExpr) throw new Error(`for(...) at line ${line}: missing initializer for ${name}`);
+        result.push({
+          kind: "let", name, mutable: true, tsType,
+          init: extractExpr(initExpr as Expression),
+          line: decl.getStartLineNumber(),
+        });
+      }
+
+      const extractedBody = extractStmts(bodyStmts);
+      if (incrementor) {
+        const incLine = incrementor.getStartLineNumber();
+        const asStmt = desugarStmtExpr(incrementor, incLine);
+        if (!asStmt) throw new Error(`for(...) at line ${line}: incrementor must be an assignment, compound assignment, or ++/--`);
+        extractedBody.push(asStmt);
+      }
+
+      result.push({
+        kind: "while",
+        cond: cond ? extractExpr(cond) : { kind: "bool", value: true },
+        invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
+        decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
+        doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
+        body: extractedBody,
+        line,
+      });
+      continue;
+    }
+
     // for...in: for (const k in obj) → treat as forof with single key name
     if (Node.isForInStatement(s)) {
       const init = s.getInitializer();
@@ -942,36 +1039,8 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     if (Node.isExpressionStatement(s)) {
       const expr = s.getExpression();
-      // arr[i] = v → arr = arr.with(i, v)
-      if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getText() === "=" && Node.isElementAccessExpression(expr.getLeft())) {
-        const left = expr.getLeft() as ElementAccessExpression;
-        const obj = extractExpr(left.getExpression());
-        const idx = extractExpr(left.getArgumentExpression()!);
-        const val = extractExpr(expr.getRight());
-        const target = left.getExpression().getText();
-        const withCall: RawExpr = { kind: "call", fn: { kind: "field", obj, field: "with" }, args: [idx, val] };
-        result.push({ kind: "assign", target, value: withCall, line });
-      // x = e
-      } else if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getText() === "=") {
-        result.push({ kind: "assign", target: expr.getLeft().getText(), value: extractExpr(expr.getRight()), line });
-      // x += e, x -= e, etc.
-      } else if (Node.isBinaryExpression(expr) && COMPOUND_OPS[expr.getOperatorToken().getText()]) {
-        const op = COMPOUND_OPS[expr.getOperatorToken().getText()];
-        const target = expr.getLeft().getText();
-        result.push({ kind: "assign", target, value: { kind: "binop", op, left: { kind: "var", name: target }, right: extractExpr(expr.getRight()) }, line });
-      // i++, i--
-      } else if (Node.isPostfixUnaryExpression(expr)) {
-        const target = expr.getOperand().getText();
-        const op = expr.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+" : "-";
-        result.push({ kind: "assign", target, value: { kind: "binop", op, left: { kind: "var", name: target }, right: { kind: "num", value: 1 } }, line });
-      // ++i, --i
-      } else if (Node.isPrefixUnaryExpression(expr) && (expr.getOperatorToken() === SyntaxKind.PlusPlusToken || expr.getOperatorToken() === SyntaxKind.MinusMinusToken)) {
-        const target = expr.getOperand().getText();
-        const op = expr.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+" : "-";
-        result.push({ kind: "assign", target, value: { kind: "binop", op, left: { kind: "var", name: target }, right: { kind: "num", value: 1 } }, line });
-      } else {
-        result.push({ kind: "expr", expr: extractExpr(expr), line });
-      }
+      const asAssign = desugarStmtExpr(expr, line);
+      result.push(asAssign ?? { kind: "expr", expr: extractExpr(expr), line });
       continue;
     }
 
