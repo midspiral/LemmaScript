@@ -759,9 +759,10 @@ function parseSpecComments(ranges: ReturnType<Node["getLeadingCommentRanges"]>, 
     if (!content.startsWith("ghost ")) continue;
     const ghostBody = content.slice(6).trim();
     // ghost let varName: type = expr  OR  ghost let varName = expr
-    const letMatch = ghostBody.match(/^let\s+(\w+)(?:\s*:\s*(\w+))?\s*=\s*(.+)$/);
+    // Type segment accepts compound forms like `number[]`, `Map<K,V>`, etc.
+    const letMatch = ghostBody.match(/^let\s+(\w+)(?:\s*:\s*([^=]+?))?\s*=\s*(.+)$/);
     if (letMatch) {
-      result.push({ kind: "ghostLet", name: letMatch[1], tsType: letMatch[2] ?? null, init: letMatch[3].trim(), line });
+      result.push({ kind: "ghostLet", name: letMatch[1], tsType: letMatch[2]?.trim() ?? null, init: letMatch[3].trim(), line });
       continue;
     }
     // ghost varName = expr
@@ -1191,9 +1192,9 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       }
       if (!content.startsWith("ghost ")) continue;
       const ghostBody = content.slice(6).trim();
-      const letMatch = ghostBody.match(/^let\s+(\w+)(?:\s*:\s*(\w+))?\s*=\s*(.+)$/);
+      const letMatch = ghostBody.match(/^let\s+(\w+)(?:\s*:\s*([^=]+?))?\s*=\s*(.+)$/);
       if (letMatch) {
-        result.push({ kind: "ghostLet", name: letMatch[1], tsType: letMatch[2] ?? null, init: letMatch[3].trim(), line });
+        result.push({ kind: "ghostLet", name: letMatch[1], tsType: letMatch[2]?.trim() ?? null, init: letMatch[3].trim(), line });
         continue;
       }
       const assignMatch = ghostBody.match(/^(\w+)\s*=\s*(.+)$/);
