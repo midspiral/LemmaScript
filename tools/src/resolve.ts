@@ -420,6 +420,8 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
     if (fn.field === "every" || fn.field === "some") return { kind: "bool" };
     if (fn.field === "find" || fn.field === "findLast") return { kind: "optional", inner: objTy.elem };
     if (fn.field === "flat" && objTy.elem.kind === "array") return { kind: "array", elem: objTy.elem.elem };
+    if (fn.field === "slice") return objTy;
+    if (fn.field === "join" && objTy.elem.kind === "string") return { kind: "string" };
     if (fn.field === "map" && args.length >= 1 && args[0].kind === "lambda") {
       const retTy = args[0].body.length > 0 && args[0].body[0].kind === "return"
         ? args[0].body[0].value.ty : { kind: "unknown" as const };
@@ -675,6 +677,14 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     case "record": {
       const spread = e.spread ? resolveExpr(e.spread, ctx) : null;
       const ty = spread ? spread.ty : { kind: "unknown" as const };
+      // Record literal in map-typed context (e.g. `const M: Record<string, V> = {a: ...}`):
+      // attach the map type so transform/emit can produce a map literal.
+      if (!spread && ctx.returnTy.kind === "map") {
+        const mapTy = ctx.returnTy;
+        const fieldCtx = { ...ctx, returnTy: mapTy.value };
+        const fields = e.fields.map(f => ({ name: f.name, value: resolveExpr(f.value, fieldCtx) }));
+        return { kind: "record", spread: null, fields, ty: mapTy };
+      }
       // Infer record type: from spread, or from return type context
       const recordTy = ty.kind === "user" ? ty : ctx.returnTy.kind === "user" ? ctx.returnTy : null;
       const decl = recordTy ? ctx.typeDecls.find(d => d.name === recordTy.name && d.kind === "record") : undefined;
@@ -1146,6 +1156,7 @@ function resolveFunction(
   fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Set<string>,
   fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map(),
   externs: Map<string, { flat: string; params: Ty[]; returnTy: Ty }> = new Map(),
+  moduleConstants: Map<string, Ty> = new Map(),
   opts?: { thisBinding?: { name: string; ty: Ty }; forcePure?: boolean }
 ): TFunction {
 
@@ -1154,6 +1165,9 @@ function resolveFunction(
   const returnTy = expandAlias(resolveTsType(fn.returnType, overrides, "\\result"), typeDecls);
 
   let env: Env | null = null;
+  // Module-level constants are in scope for every function body. Added before
+  // params so a param named the same as a const would shadow it (param wins).
+  for (const [name, ty] of moduleConstants) env = extend(env, name, ty);
   if (opts?.thisBinding) env = extend(env, opts.thisBinding.name, opts.thisBinding.ty);
   for (const p of params) env = extend(env, p.name, p.ty);
 
@@ -1187,7 +1201,7 @@ function resolveFunction(
   };
 }
 
-function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map(), externs: Map<string, { flat: string; params: Ty[]; returnTy: Ty }> = new Map()): import("./typedir.js").TClass {
+function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map(), externs: Map<string, { flat: string; params: Ty[]; returnTy: Ty }> = new Map(), moduleConstants: Map<string, Ty> = new Map()): import("./typedir.js").TClass {
   const fields = cls.fields.map(f => ({ name: f.name, ty: parseTsType(f.tsType) }));
   // Create a synthetic record type for 'this' so field access resolves
   const thisType: Ty = { kind: "user", name: cls.name };
@@ -1195,7 +1209,7 @@ function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInf
   const allTypeDecls = [...typeDecls, thisDecl];
 
   const methods = cls.methods.map(fn =>
-    resolveFunction(fn, allTypeDecls, pureFns, fnParams, fnReturns, externs, {
+    resolveFunction(fn, allTypeDecls, pureFns, fnParams, fnReturns, externs, moduleConstants, {
       thisBinding: { name: "this", ty: thisType },
       forcePure: false,  // class methods are never pure (they access this)
     })
@@ -1275,18 +1289,22 @@ export function resolveModule(raw: RawModule): TModule {
     };
   });
   const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
-  const constants = (raw.constants ?? []).map(c => ({
-    name: c.name,
-    ty: parseTsType(c.tsType),
-    value: resolveExpr(c.value, emptyCtx),
-  }));
+  const constants = (raw.constants ?? []).map(c => {
+    const ty = expandAlias(parseTsType(c.tsType), raw.typeDecls);
+    // Propagate the declared type into the value's resolution context so that
+    // record literals on map-typed constants (e.g. `Record<string, number>`)
+    // get their `ty` set to `map<...>` rather than `user("...")`.
+    const valueCtx: Ctx = { ...emptyCtx, returnTy: ty };
+    return { name: c.name, ty, value: resolveExpr(c.value, valueCtx) };
+  });
+  const moduleConstants = new Map<string, Ty>(constants.map(c => [c.name, c.ty]));
 
   return {
     file: raw.file,
     typeDecls: raw.typeDecls,
     externs: tExterns,
     constants,
-    functions: raw.functions.map(fn => resolveFunction(fn, raw.typeDecls, pureFns, fnParams, fnReturns, externs)),
-    classes: (raw.classes ?? []).map(cls => resolveClass(cls, raw.typeDecls, pureFns, fnParams, fnReturns, externs)),
+    functions: raw.functions.map(fn => resolveFunction(fn, raw.typeDecls, pureFns, fnParams, fnReturns, externs, moduleConstants)),
+    classes: (raw.classes ?? []).map(cls => resolveClass(cls, raw.typeDecls, pureFns, fnParams, fnReturns, externs, moduleConstants)),
   };
 }

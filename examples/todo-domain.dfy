@@ -22,6 +22,14 @@ method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
   }
 }
 
+function SafeSlice<T>(s: seq<T>, lo: int, hi: int): seq<T>
+  ensures |SafeSlice(s, lo, hi)| <= |s|
+{
+  var lo' := if lo < 0 then 0 else if lo > |s| as int then |s| else lo;
+  var hi' := if hi > |s| as int then |s| else if hi < lo' then lo' else hi;
+  s[lo'..hi']
+}
+
 function StringToLower(s: string): string
   ensures |StringToLower(s)| == |s|
   decreases |s|
@@ -152,7 +160,7 @@ function insertAt<T>(s: seq<T>, i: int, x: T): seq<T>
   requires (i >= 0)
   requires (i <= |s|)
 {
-  ((s[0..i] + [x]) + s[i..])
+  ((SafeSlice(s, 0, i) + [x]) + s[i..])
 }
 
 lemma insertAt_ensures<T>(s: seq<T>, i: int, x: T)

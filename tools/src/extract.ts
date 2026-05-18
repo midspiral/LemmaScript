@@ -355,7 +355,10 @@ function extractExpr(node: Expression): RawExpr {
         if (init && Node.isComputedPropertyName(nameNode)) {
           computedFields.push({ key: extractExpr(nameNode.getExpression()), value: extractExpr(init) });
         } else if (init) {
-          fields.push({ name: prop.getName(), value: extractExpr(init) });
+          // String-literal keys (e.g. `"bun run": 3`) — use the unquoted literal
+          // value; otherwise `prop.getName()` may include surrounding quotes.
+          const name = Node.isStringLiteral(nameNode) ? nameNode.getLiteralValue() : prop.getName();
+          fields.push({ name, value: extractExpr(init) });
         }
       }
     }
@@ -860,6 +863,88 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
         doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
         body: extractStmts(bodyStmts),
+        line,
+      });
+      continue;
+    }
+
+    // C-style for(init; cond; update) — desugar to:
+    //   init;
+    //   while (cond) { body; update }
+    // The counter declared in `init` is forced mutable (the incrementor mutates
+    // it). Increment/decrement forms (`i++`, `i--`, `i += n`, `i -= n`) are
+    // rewritten to plain assignments.
+    if (Node.isForStatement(s)) {
+      const init = s.getInitializer();
+      const cond = s.getCondition();
+      const incrementor = s.getIncrementor();
+      const bodyNode = s.getStatement();
+      const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [bodyNode];
+      const annots = collectAnnotations(s, bodyStmts);
+
+      if (!init || !Node.isVariableDeclarationList(init))
+        throw new Error(`for(...) at line ${line}: only variable-declaration init supported`);
+      for (const decl of init.getDeclarations()) {
+        const name = decl.getName();
+        const tsType = decl.getTypeNode()?.getText() ?? typeToString(decl.getType());
+        const initExpr = decl.getInitializer();
+        if (!initExpr) throw new Error(`for(...) at line ${line}: missing initializer for ${name}`);
+        result.push({
+          kind: "let",
+          name, mutable: true, tsType,
+          init: extractExpr(initExpr as Expression),
+          line: decl.getStartLineNumber(),
+        });
+      }
+
+      const extractedBody = extractStmts(bodyStmts);
+      if (incrementor) {
+        // Rewrite increment/decrement forms to assignment.
+        const incLine = incrementor.getStartLineNumber();
+        if (Node.isPostfixUnaryExpression(incrementor) || Node.isPrefixUnaryExpression(incrementor)) {
+          const op = incrementor.getOperatorToken();
+          const operand = incrementor.getOperand();
+          if (!Node.isIdentifier(operand))
+            throw new Error(`for(...) at line ${line}: ++/-- on non-identifier`);
+          const name = operand.getText();
+          const delta = (op === SyntaxKind.PlusPlusToken) ? 1 : (op === SyntaxKind.MinusMinusToken ? -1 : null);
+          if (delta === null) throw new Error(`for(...) at line ${line}: unsupported unary incrementor`);
+          extractedBody.push({
+            kind: "assign", target: name,
+            value: { kind: "binop", op: delta === 1 ? "+" : "-", left: { kind: "var", name }, right: { kind: "num", value: 1 } },
+            line: incLine,
+          });
+        } else if (Node.isBinaryExpression(incrementor)) {
+          const opTok = incrementor.getOperatorToken().getKind();
+          const lhs = incrementor.getLeft();
+          const rhs = incrementor.getRight();
+          if (!Node.isIdentifier(lhs))
+            throw new Error(`for(...) at line ${line}: compound assignment on non-identifier`);
+          const name = lhs.getText();
+          const opMap: Record<number, string> = {
+            [SyntaxKind.PlusEqualsToken]: "+",
+            [SyntaxKind.MinusEqualsToken]: "-",
+            [SyntaxKind.AsteriskEqualsToken]: "*",
+          };
+          const op = opMap[opTok];
+          if (!op) throw new Error(`for(...) at line ${line}: unsupported compound operator`);
+          extractedBody.push({
+            kind: "assign", target: name,
+            value: { kind: "binop", op, left: { kind: "var", name }, right: extractExpr(rhs as Expression) },
+            line: incLine,
+          });
+        } else {
+          throw new Error(`for(...) at line ${line}: unsupported incrementor shape`);
+        }
+      }
+
+      result.push({
+        kind: "while",
+        cond: cond ? extractExpr(cond) : { kind: "bool", value: true },
+        invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
+        decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
+        doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
+        body: extractedBody,
         line,
       });
       continue;
