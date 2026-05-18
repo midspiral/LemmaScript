@@ -180,16 +180,20 @@ export interface RawConst {
   value: RawExpr;
 }
 
-/** Externally-declared pure function (no body, opaque to LS).
- *  Sourced from `//@ extern NS.name: (T1, T2) -> R` annotations.
- *  In Dafny, emitted as `function {:axiom} NS_name(...): R`.
- *  Used to reference symbols imported from files LS does not verify
- *  (e.g. Wildcard.match in permission/evaluate.ts). */
+/** Externally-declared pure function — auto-detected during call extraction
+ *  when ts-morph resolves the callee to a declaration in a different `.ts`
+ *  source file. Emitted in Dafny as `function {:axiom} <flat>(...): R` with
+ *  any `requires`/`ensures` lifted from the source declaration's annotations
+ *  so callers reason against the same contract the source itself verified.
+ *  Spec strings here are unresolved — resolve.ts parses them in the extern's
+ *  own param scope. */
 export interface RawExtern {
   qualified: string;       // dotted source name, e.g. "Wildcard.match"
   flat: string;            // emission name, e.g. "Wildcard_match"
-  params: RawParam[];      // typed parameter list
+  params: RawParam[];      // typed parameter list (names + TS type strings)
   returnType: string;      // TS type string
+  requires: string[];      // copied `//@ requires` annotation strings
+  ensures: string[];       // copied `//@ ensures` annotation strings
 }
 
 export interface RawModule {

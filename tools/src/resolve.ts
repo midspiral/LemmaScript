@@ -1189,16 +1189,38 @@ export function resolveModule(raw: RawModule): TModule {
   // return type at resolution; dotted externs are handled in resolveExpr's
   // call case via the externs map directly.
   const externs = new Map<string, { flat: string; params: Ty[]; returnTy: Ty }>();
-  const tExterns = (raw.externs ?? []).map(ext => {
+  // First pass: register signatures so spec resolution (below) can reference
+  // them — including the extern referring to itself, or specs that mention
+  // sibling externs.
+  for (const ext of raw.externs ?? []) {
     const params = ext.params.map(p => parseTsType(p.tsType));
     const returnTy = parseTsType(ext.returnType);
     externs.set(ext.qualified, { flat: ext.flat, params, returnTy });
     if (!ext.qualified.includes(".")) fnReturns.set(ext.qualified, returnTy);
+  }
+  // Second pass: resolve the lifted `requires`/`ensures` strings in each
+  // extern's own param scope. `\result` is in scope under `ensures`.
+  const tExterns = (raw.externs ?? []).map(ext => {
+    const sig = externs.get(ext.qualified)!;
+    let env: Env | null = null;
+    for (let i = 0; i < ext.params.length; i++) {
+      env = extend(env, ext.params[i].name, sig.params[i]);
+    }
+    const baseCtx: Ctx = { env, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: sig.returnTy, pureFns, fnParams, fnReturns, externs, inSpec: true, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
+    const ensuresCtx: Ctx = { ...baseCtx, env: extend(env, "\\result", sig.returnTy), allowResult: true };
+    const requires = ext.requires.map(s => {
+      try { return resolveSpec(s, baseCtx); } catch { return null; }
+    }).filter((e): e is TExpr => e !== null);
+    const ensures = ext.ensures.map(s => {
+      try { return resolveSpec(s, ensuresCtx); } catch { return null; }
+    }).filter((e): e is TExpr => e !== null);
     return {
       qualified: ext.qualified,
       flat: ext.flat,
-      params: ext.params.map((p, i) => ({ name: p.name, ty: params[i] })),
-      returnTy,
+      params: ext.params.map((p, i) => ({ name: p.name, ty: sig.params[i] })),
+      returnTy: sig.returnTy,
+      requires,
+      ensures,
     };
   });
   const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };

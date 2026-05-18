@@ -21,6 +21,38 @@ let _havocKey: string | null = null;
 const _externs = new Map<string, import("./rawir.js").RawExtern>();
 let _currentSourceFile: SourceFile | null = null;
 
+/** Register the call's callee as a cross-file extern if applicable, then
+ *  walk the source declaration's body for nested cross-file calls (so the
+ *  lifted `requires`/`ensures` see all the symbols they reference). Idempotent
+ *  via the `_externs` dedup. */
+function registerExternIfCrossFile(
+  callee: import("ts-morph").PropertyAccessExpression | import("ts-morph").Identifier,
+  sourceFile: SourceFile,
+): void {
+  const ext = detectCrossFileExtern(callee, sourceFile);
+  if (!ext || _externs.has(ext.qualified)) return;
+  _externs.set(ext.qualified, ext);
+  // Recurse: scan the source decl's body for nested cross-file calls so any
+  // symbol referenced by the copied spec is itself declared in the output.
+  let symbol = callee.getSymbol();
+  if (!symbol) return;
+  const aliased = symbol.getAliasedSymbol();
+  if (aliased) symbol = aliased;
+  const sourceDecl = symbol.getDeclarations().find(
+    d => d.getSourceFile().getFilePath() !== sourceFile.getFilePath(),
+  );
+  if (!sourceDecl) return;
+  const sourceSF = sourceDecl.getSourceFile();
+  const body = (sourceDecl as any).getBody?.();
+  if (!body) return;
+  for (const inner of body.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    const innerCallee = inner.getExpression();
+    if (Node.isPropertyAccessExpression(innerCallee) || Node.isIdentifier(innerCallee)) {
+      registerExternIfCrossFile(innerCallee, sourceSF);
+    }
+  }
+}
+
 function detectCrossFileExtern(
   callee: import("ts-morph").PropertyAccessExpression | import("ts-morph").Identifier,
   sourceFile: SourceFile,
@@ -54,7 +86,12 @@ function detectCrossFileExtern(
     qualified = callee.getText();
   }
   const flat = qualified.replace(/\./g, "_");
-  return { qualified, flat, params, returnType };
+  // Lift `//@ requires`/`//@ ensures` from the source declaration so callers
+  // reason against the source's verified contract, not an unconstrained axiom.
+  const annots = collectFunctionAnnotations(externalDecl);
+  const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
+  const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
+  return { qualified, flat, params, returnType, requires, ensures };
 }
 
 /** Build a concat-tree from a mixed list of literal and SpreadElement nodes.
@@ -227,8 +264,7 @@ function extractExpr(node: Expression): RawExpr {
     // declarations — those are either built-in methods (handled in dafny-emit)
     // or genuinely out of scope.
     if (_currentSourceFile && (Node.isPropertyAccessExpression(callee) || Node.isIdentifier(callee))) {
-      const ext = detectCrossFileExtern(callee, _currentSourceFile);
-      if (ext && !_externs.has(ext.qualified)) _externs.set(ext.qualified, ext);
+      registerExternIfCrossFile(callee, _currentSourceFile);
     }
     const fn = extractExpr(callee);
     const args = node.getArguments().map(a => extractExpr(a as Expression));
@@ -433,6 +469,18 @@ function collectAnnotations(node: Node, body?: Node[]): Annotation[] {
   const own = parseAnnotations(node);
   if (body && body.length > 0) return [...own, ...parseAnnotations(body[0])];
   return own;
+}
+
+/** All `//@ ` annotations for a function-like node, regardless of whether its
+ *  body is a block (annotations on the first statement) or an expression-body
+ *  arrow (annotations only on the declaration). Used both for in-file function
+ *  extraction and for pulling specs off cross-file externs. */
+function collectFunctionAnnotations(fn: Node): Annotation[] {
+  const body = (fn as any).getBody?.();
+  if (body && Node.isBlock(body)) {
+    return collectAnnotations(fn, body.getStatements() as Node[]);
+  }
+  return collectAnnotations(fn);
 }
 
 /** Check for bare `//@ pure` annotation (no expression). */
@@ -990,11 +1038,10 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
   if (body && !Node.isBlock(body)) {
     const expr = extractExpr(body as Expression);
     extractedBody = [{ kind: "return", value: expr, line: body.getStartLineNumber() }];
-    annots = parentAnnotations ?? collectAnnotations(fn);
+    annots = parentAnnotations ?? collectFunctionAnnotations(fn);
   } else if (body && Node.isBlock(body)) {
-    const bodyStmts = body.getStatements();
-    extractedBody = extractStmts(bodyStmts);
-    annots = collectAnnotations(fn, bodyStmts);
+    extractedBody = extractStmts(body.getStatements());
+    annots = collectFunctionAnnotations(fn);
   } else {
     throw new Error(`${(fn as any).getName?.() ?? "arrow"}: function has no body`);
   }

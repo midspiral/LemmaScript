@@ -1438,14 +1438,20 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
   const base = mod.file.split("/").pop()?.replace(/\.ts$/, "") ?? "module";
 
   // Externs: emit as top-of-file `function {:axiom}` (Dafny) declarations.
-  // The opaque body lets specs reference these symbols (e.g. Wildcard.match)
-  // without the prover knowing anything about their implementation.
-  const externDecls: Decl[] = (mod.externs ?? []).map(ext => ({
-    kind: "extern" as const,
-    name: ext.flat,
-    params: ext.params.map(p => ({ name: p.name, type: p.ty })),
-    returnType: ext.returnTy,
-  }));
+  // Any `requires`/`ensures` from the source declaration come along so callers
+  // see the same spec the source itself verified. Substitute `\result` with the
+  // function call (same pattern as for in-file pure-function ensures).
+  const externDecls: Decl[] = (mod.externs ?? []).map(ext => {
+    const fnCall: Expr = { kind: "app", fn: ext.flat, args: ext.params.map(p => ({ kind: "var" as const, name: p.name })) };
+    return {
+      kind: "extern" as const,
+      name: ext.flat,
+      params: ext.params.map(p => ({ name: p.name, type: p.ty })),
+      returnType: ext.returnTy,
+      requires: ext.requires.map(transformExpr),
+      ensures: ext.ensures.map(e => replaceVar(transformExpr(e), "\\result", fnCall)),
+    };
+  });
 
   // Types file
   const typesImports: string[] = ["LemmaScript"];

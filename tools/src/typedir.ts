@@ -129,6 +129,8 @@ export interface TExtern {
   flat: string;
   params: TParam[];
   returnTy: Ty;
+  requires: TExpr[];
+  ensures: TExpr[];
 }
 
 export interface TModule {
