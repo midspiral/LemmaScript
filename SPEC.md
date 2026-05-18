@@ -225,6 +225,10 @@ class Counter {
 
 **Lean:** Class support is Dafny-only. Use `//@ backend dafny` on files with classes.
 
+### 2.9 Cross-File Calls
+
+A call to a symbol declared in another `.ts` file (resolved via ts-morph) is emitted as `function {:axiom} <flat>(...): T` — opaque, uninterpreted. Any `//@ requires` / `//@ ensures` on the source declaration are lifted onto the axiom so callers reason against the same contract the source verified; the lift is transitive through nested cross-file references. Only symbols *actually called* are externed; `.d.ts` declarations are skipped (covered by built-in dispatch, §3.8). No annotation is required.
+
 ### 2.10 Havoc: `//@ havoc`
 
 Marks a variable declaration as nondeterministic — the init expression is
