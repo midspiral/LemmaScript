@@ -1101,37 +1101,33 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // here), deduped by qualified name.
   _externs.clear();
 
-  // Parse //@ declare-type directives from file-level comments
-  for (const range of sourceFile.getLeadingCommentRanges()) {
-    const text = range.getText().trim();
-    if (text.startsWith("//@ declare-type ")) {
-      const body = text.slice("//@ declare-type ".length);
-      const match = body.match(/^(\w+)\s*\{(.+)\}$/);
-      if (!match) continue;
-      const name = match[1];
-      const fieldsStr = match[2];
-      const fields = fieldsStr.split(",").map(f => f.trim()).filter(Boolean).map(f => {
+  // `//@ declare-type Name { f1: T1, ... }` — record form.
+  // `//@ declare-type Name = TsType`         — alias form (e.g. `Ruleset = Rule[]`).
+  function parseDeclareType(body: string) {
+    const recordMatch = body.match(/^(\w+)\s*\{(.+)\}$/);
+    if (recordMatch) {
+      const name = recordMatch[1];
+      const fields = recordMatch[2].split(",").map(f => f.trim()).filter(Boolean).map(f => {
         const [fname, ftype] = f.split(":").map(s => s.trim());
         return { name: fname, tsType: ftype };
       });
       typeDecls.push({ name, kind: "record", fields });
+      return;
+    }
+    const aliasMatch = body.match(/^(\w+)\s*=\s*(.+)$/);
+    if (aliasMatch) {
+      typeDecls.push({ name: aliasMatch[1], kind: "alias", aliasOf: aliasMatch[2].trim() });
     }
   }
-  // Also scan statement-level comments for declare-type
+
+  for (const range of sourceFile.getLeadingCommentRanges()) {
+    const text = range.getText().trim();
+    if (text.startsWith("//@ declare-type ")) parseDeclareType(text.slice("//@ declare-type ".length));
+  }
   for (const stmt of sourceFile.getStatements()) {
     for (const range of stmt.getLeadingCommentRanges()) {
       const text = range.getText().trim();
-      if (text.startsWith("//@ declare-type ")) {
-        const body = text.slice("//@ declare-type ".length);
-        const match = body.match(/^(\w+)\s*\{(.+)\}$/);
-        if (!match) continue;
-        const name = match[1];
-        const fields = match[2].split(",").map(f => f.trim()).filter(Boolean).map(f => {
-          const [fname, ftype] = f.split(":").map(s => s.trim());
-          return { name: fname, tsType: ftype };
-        });
-        typeDecls.push({ name, kind: "record", fields });
-      }
+      if (text.startsWith("//@ declare-type ")) parseDeclareType(text.slice("//@ declare-type ".length));
     }
   }
   _currentSourceFile = sourceFile;

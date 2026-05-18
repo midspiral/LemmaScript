@@ -260,7 +260,41 @@ function isRefMutableInTS(ty: Ty): boolean {
 }
 
 function findDecl(ctx: Ctx, name: string): TypeDeclInfo | undefined {
-  return ctx.typeDecls.find(d => d.name === name);
+  const direct = ctx.typeDecls.find(d => d.name === name);
+  if (direct) return direct;
+  // Dotted names (e.g. `Agent.Info`, `Permission.Ruleset`): fall back to the
+  // last segment, so `//@ declare-type Info { ... }` matches a reference to
+  // `Agent.Info` without forcing the user to repeat the namespace.
+  const dotIdx = name.lastIndexOf(".");
+  if (dotIdx >= 0) return ctx.typeDecls.find(d => d.name === name.slice(dotIdx + 1));
+  return undefined;
+}
+
+/** Expand alias-kind typeDecls when the alias target is structural (array,
+ *  map, set, optional, or another user type). Primitive-typed aliases like
+ *  `type TaskId = number` stay as `user("TaskId")` so the generated Dafny
+ *  preserves the alias name. Recursive through compound types; cycle-safe. */
+function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new Set()): Ty {
+  if (ty.kind === "user") {
+    if (seen.has(ty.name)) return ty;
+    let decl = typeDecls.find(d => d.name === ty.name);
+    if (!decl && ty.name.includes(".")) {
+      const tail = ty.name.slice(ty.name.lastIndexOf(".") + 1);
+      decl = typeDecls.find(d => d.name === tail);
+    }
+    if (decl?.kind === "alias" && decl.aliasOfTy) {
+      const target = decl.aliasOfTy;
+      if (target.kind === "array" || target.kind === "map" || target.kind === "set" || target.kind === "optional" || target.kind === "user") {
+        return expandAlias(target, typeDecls, new Set([...seen, ty.name]));
+      }
+    }
+    return ty;
+  }
+  if (ty.kind === "optional") return { kind: "optional", inner: expandAlias(ty.inner, typeDecls, seen) };
+  if (ty.kind === "array") return { kind: "array", elem: expandAlias(ty.elem, typeDecls, seen) };
+  if (ty.kind === "set") return { kind: "set", elem: expandAlias(ty.elem, typeDecls, seen) };
+  if (ty.kind === "map") return { kind: "map", key: expandAlias(ty.key, typeDecls, seen), value: expandAlias(ty.value, typeDecls, seen) };
+  return ty;
 }
 
 function getDiscriminant(ctx: Ctx, typeName: string): string | undefined {
@@ -606,22 +640,29 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           stepInTy = idxTy;
         } else {
           // call: prev step yielded a callable (typically a method via field).
-          // Build a fake fn TExpr from prev steps to reuse inferMethodReturnTy.
-          const args = step.args.map(a => resolveExpr(a, ctx));
+          // Build a fake fn TExpr from prev steps to reuse inferMethodReturnTy
+          // and inferLambdaParamTypes — without the latter, a lambda arg buried
+          // inside `obj?.filter(r => ...)` gets `int`-typed params instead of
+          // the array's element type.
           const lastField = chain.length > 0 && chain[chain.length - 1].kind === "field"
             ? chain[chain.length - 1] as { kind: "field"; name: string; ty: Ty } : null;
           let callTy: Ty = { kind: "unknown" };
           let callKind: CallKind = "unknown";
+          let rawArgs = step.args;
           if (lastField) {
-            // Build a synthetic field TExpr with the prior step's input type as obj
-            // so inferMethodReturnTy can dispatch on the receiver type.
             const priorInTy = chain.length >= 2 ? chain[chain.length - 2].ty
               : (obj.ty.kind === "optional" ? obj.ty.inner : obj.ty);
             const fakeObj: TExpr = { kind: "var", name: "_chain_recv", ty: priorInTy };
             const fakeFn: TExpr = { kind: "field", obj: fakeObj, field: lastField.name, ty: lastField.ty };
+            rawArgs = inferLambdaParamTypes(fakeFn, rawArgs);
+            const args = rawArgs.map(a => resolveExpr(a, ctx));
             callTy = inferMethodReturnTy(fakeFn, args, ctx);
             callKind = "method";
+            chain.push({ kind: "call", args, ty: callTy, callKind });
+            stepInTy = callTy;
+            continue;
           }
+          const args = rawArgs.map(a => resolveExpr(a, ctx));
           chain.push({ kind: "call", args, ty: callTy, callKind });
           stepInTy = callTy;
         }
@@ -1109,8 +1150,8 @@ function resolveFunction(
 ): TFunction {
 
   const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
-  const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: resolveTsType(p.tsType, overrides, p.name) }));
-  const returnTy = resolveTsType(fn.returnType, overrides, "\\result");
+  const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: expandAlias(resolveTsType(p.tsType, overrides, p.name), typeDecls) }));
+  const returnTy = expandAlias(resolveTsType(fn.returnType, overrides, "\\result"), typeDecls);
 
   let env: Env | null = null;
   if (opts?.thisBinding) env = extend(env, opts.thisBinding.name, opts.thisBinding.ty);
@@ -1166,6 +1207,16 @@ function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInf
 /** Pre-compute Ty on all TypeDeclInfo fields/variants/aliases.
  *  Called once per module so consumers can read field.type instead of re-parsing tsType. */
 function precomputeFieldTypes(typeDecls: TypeDeclInfo[]) {
+  precomputeFieldTypesInner(typeDecls);
+  // Expand alias references inside record/variant field types so downstream
+  // code doesn't have to follow `user("Ruleset")` indirection at every lookup.
+  for (const d of typeDecls) {
+    if (d.fields) for (const f of d.fields) if (f.type) f.type = expandAlias(f.type, typeDecls);
+    if (d.variants) for (const v of d.variants) for (const f of v.fields) if (f.type) f.type = expandAlias(f.type, typeDecls);
+  }
+}
+
+function precomputeFieldTypesInner(typeDecls: TypeDeclInfo[]) {
   for (const d of typeDecls) {
     if (d.fields) for (const f of d.fields) f.type = parseTsType(f.tsType);
     if (d.variants) for (const v of d.variants) for (const f of v.fields) f.type = parseTsType(f.tsType);
@@ -1181,8 +1232,8 @@ export function resolveModule(raw: RawModule): TModule {
   const fnReturns = new Map<string, Ty>();
   for (const fn of raw.functions) {
     const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
-    fnParams.set(fn.name, fn.params.map(p => resolveTsType(p.tsType, overrides, p.name)));
-    fnReturns.set(fn.name, resolveTsType(fn.returnType, overrides, "\\result"));
+    fnParams.set(fn.name, fn.params.map(p => expandAlias(resolveTsType(p.tsType, overrides, p.name), raw.typeDecls)));
+    fnReturns.set(fn.name, expandAlias(resolveTsType(fn.returnType, overrides, "\\result"), raw.typeDecls));
   }
   // Externs: resolve param/return types once. For bare-name externs (no dot),
   // also register in fnReturns so ordinary `foo(args)` calls get the right
