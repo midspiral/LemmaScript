@@ -531,7 +531,12 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
           const fields: { name: string; tsType: string }[] = [];
           for (const prop of m.getProperties()) {
             if (prop.getName() === discriminant) continue;
-            fields.push({ name: prop.getName(), tsType: typeToString(prop.getTypeAtLocation(decl)) });
+            let tsType = typeToString(prop.getTypeAtLocation(decl));
+            const propDecl = prop.getDeclarations()[0];
+            if (propDecl && (propDecl as any).hasQuestionToken?.() && !tsType.includes(" | undefined")) {
+              tsType = `${tsType} | undefined`;
+            }
+            fields.push({ name: prop.getName(), tsType });
           }
           return { name: tag, fields };
         });
@@ -594,6 +599,13 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
 
     const propType = prop.getTypeAtLocation(locationNode);
     let tsType = typeToString(propType);
+    // Optional property: `foo?: T` reports as `T` (ts-morph strips the
+    // `| undefined` from a question-token type). Add it back so the field
+    // resolves to `Optional<T>`.
+    const propDecl = prop.getDeclarations()[0];
+    if (propDecl && (propDecl as any).hasQuestionToken?.() && !tsType.includes(" | undefined")) {
+      tsType = `${tsType} | undefined`;
+    }
 
     // Inline anonymous object types: ts-morph names them __type.
     // Generate a synthetic named record and reference it by name instead.
@@ -839,6 +851,49 @@ function extractStmts(stmts: Node[]): RawStmt[] {
             continue;
           }
         }
+        // Plain object destructuring: const { a, b, c } = obj → field access lets.
+        // Skipped if any element has a computed property (handled by the rest+
+        // computed branch below) or a rest element (also handled below).
+        if (!isHavoc && Node.isObjectBindingPattern(nameNode)) {
+          const elements = nameNode.getElements();
+          const hasRest = elements.some(el => el.getDotDotDotToken());
+          const hasComputed = elements.some(el => {
+            const pn = el.getPropertyNameNode();
+            return pn && Node.isComputedPropertyName(pn);
+          });
+          if (!hasRest && !hasComputed) {
+            const initializer = d.getInitializer();
+            if (initializer) {
+              let initExpr: RawExpr = extractExpr(initializer);
+              let initVar: RawExpr = initExpr;
+              if (initExpr.kind !== "var") {
+                const tempName = `_destr${_destrCounter++}`;
+                const initTs = _eraseGenerics(typeToString(initializer.getType()));
+                result.push({ kind: "let", name: tempName, mutable: false, tsType: initTs, init: initExpr, line });
+                initVar = { kind: "var", name: tempName };
+              }
+              for (const el of elements) {
+                const inner = el.getNameNode();
+                if (!Node.isIdentifier(inner)) {
+                  throw new Error(`nested binding pattern in object destructuring not yet supported: ${el.getText()}`);
+                }
+                const localName = inner.getText();
+                const propNode = el.getPropertyNameNode();
+                const fieldName = propNode ? propNode.getText() : localName;
+                const elTs = _eraseGenerics(typeToString(el.getType()));
+                result.push({
+                  kind: "let",
+                  name: localName,
+                  mutable: s.getDeclarationKind() === "let",
+                  tsType: elTs,
+                  init: { kind: "field", obj: initVar, field: fieldName },
+                  line,
+                });
+              }
+              continue;
+            }
+          }
+        }
         // Destructuring rest: const { [k]: _, ...rest } = map → let rest = map.delete(k)
         if (!isHavoc && Node.isObjectBindingPattern(nameNode)) {
           const elements = nameNode.getElements();
@@ -880,14 +935,30 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         } else {
           const initializer = d.getInitializer();
           _havocKey = havocKey;
-          init = initializer ? extractExpr(initializer) : { kind: "var" as const, name: "default" };
+          if (initializer) {
+            init = extractExpr(initializer);
+          } else {
+            // No initializer — for `let x: T | undefined` this should be None.
+            // Detect by looking at the TS type string for `| undefined` / `| null`.
+            const tsType = _eraseGenerics(d.getTypeNode()?.getText() ?? typeToString(declType));
+            const isOptional = / \| (null|undefined)\b/.test(tsType)
+              || tsType.endsWith(" | undefined") || tsType.endsWith(" | null");
+            init = isOptional
+              ? { kind: "var" as const, name: "undefined" }
+              : { kind: "var" as const, name: "default" };
+          }
           _havocKey = null;
         }
+        // Use the source-level type annotation if present — ts-morph's
+        // `d.getType()` strips `| undefined` from optional annotations.
+        const annotatedText = d.getTypeNode()?.getText();
+        const tsType = havocType
+          ?? (annotatedText ? _eraseGenerics(annotatedText) : _eraseGenerics(typeToString(declType)));
         result.push({
           kind: "let",
           name: d.getName(),
           mutable: s.getDeclarationKind() === "let",
-          tsType: havocType ?? _eraseGenerics(typeToString(declType)),
+          tsType,
           init,
           line,
         });
@@ -1303,11 +1374,17 @@ export function extractModule(sourceFile: SourceFile): RawModule {
           // Skip huge string constants — they crash the verifier and have no verification value
           const initType = decl.getType();
           const isHugeString = (initType.isString() || initType.isStringLiteral()) && (init as Expression).getText().length > 200;
-          if (init && !isHugeString && !Node.isArrowFunction(init)) {
+          // Skip anonymous-object consts (e.g., `const Util = { dotMatch(s, p) { ... } }`).
+          // ts-morph names these `__type` / `__object`; Dafny has no model for
+          // object-namespace-with-methods. The methods themselves should be
+          // extracted via the function path if marked `//@ verify`.
+          const declTsType = typeToString(decl.getType());
+          const isAnonObject = declTsType.startsWith("__");
+          if (init && !isHugeString && !isAnonObject && !Node.isArrowFunction(init)) {
             try {
               constants.push({
                 name: decl.getName(),
-                tsType: typeToString(decl.getType()),
+                tsType: declTsType,
                 value: extractExpr(init as Expression),
               });
             } catch (e) {
@@ -1583,23 +1660,52 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       }
       continue;
     }
+    // Inline-anon return type — bare `{...}` (no union wrapping).
+    //
+    // ts-morph's `fn.getReturnType()` returns the COMPUTED type, which strips
+    // `| null` in non-strict mode (and sometimes `| undefined`). The source
+    // annotation, however, encodes the user's actual intent. Check the
+    // already-extracted `fn.returnType` string for nullish suffixes to detect
+    // the wrap-in-Optional case.
+    let innerType: Type | null = null;
+    let wrapOptional = false;
+    const sourceReturnText = fn.returnType ?? "";
+    const sourceHadNullish = / \| (null|undefined)$/.test(sourceReturnText)
+      || sourceReturnText.includes(" | null ") || sourceReturnText.includes(" | undefined ")
+      || sourceReturnText.includes(" | null|") || sourceReturnText.includes(" | undefined|");
     const sym = retType.getSymbol();
     if (sym?.getName() === "__type" && retType.isObject() && !retType.isArray()) {
+      innerType = retType;
+      if (sourceHadNullish) wrapOptional = true;
+    } else if (retType.isUnion()) {
+      const arms = retType.getUnionTypes();
+      const nullish = arms.filter(t => t.isNull() || t.isUndefined());
+      const others = arms.filter(t => !t.isNull() && !t.isUndefined());
+      if (nullish.length >= 1 && others.length === 1) {
+        const onlyOther = others[0];
+        const otherSym = onlyOther.getSymbol();
+        if (otherSym?.getName() === "__type" && onlyOther.isObject() && !onlyOther.isArray()) {
+          innerType = onlyOther;
+          wrapOptional = true;
+        }
+      }
+    }
+    if (innerType) {
       // Try typeToString first — it resolves collapsed single-variant unions
-      const resolved = typeToString(retType);
+      const resolved = typeToString(innerType);
       if (resolved !== "__type" && !resolved.includes("__type") && knownTypes.has(resolved)) {
-        fn.returnType = resolved;
+        fn.returnType = wrapOptional ? `${resolved} | undefined` : resolved;
         continue;
       }
       const synName = fn.name.charAt(0).toUpperCase() + fn.name.slice(1) + "Result";
       if (!knownTypes.has(synName)) {
         const extra: TypeDeclInfo[] = [];
-        const info = extractRecord(synName, retType, f.node, undefined, extra);
+        const info = extractRecord(synName, innerType, f.node, undefined, extra);
         if (info) { typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(synName); }
       }
-      fn.returnType = synName;
+      fn.returnType = wrapOptional ? `${synName} | undefined` : synName;
       // Also resolve imported types referenced in the return type's fields
-      for (const prop of retType.getProperties()) {
+      for (const prop of innerType.getProperties()) {
         resolveType(prop.getTypeAtLocation(f.node), f.node);
       }
     }

@@ -148,6 +148,10 @@ function emitExpr(e: Expr): string {
           needPreamble("SeqFindLast");
           return `SeqFindLast(${obj}, ${args[0]})`;
         }
+        if (e.method === "findIndex") {
+          needPreamble("SeqFindIndex");
+          return `SeqFindIndex(${obj}, ${args[0]})`;
+        }
         if (e.method === "flat" && args.length === 0) {
           needPreamble("SeqFlatten");
           return `SeqFlatten(${obj})`;
@@ -169,7 +173,25 @@ function emitExpr(e: Expr): string {
       // String methods
       if (ty === "string") {
         if (e.method === "indexOf") { needPreamble("StringIndexOf"); return `StringIndexOf(${obj}, ${args[0]})`; }
-        if (e.method === "slice")   return `${obj}[${args[0]}..${args[1]}]`;
+        if (e.method === "split")   { needPreamble("StringSplit"); return `StringSplit(${obj}, ${args[0]})`; }
+        if (e.method === "slice") {
+          // JS negative index: arr.slice(0, -N) → arr[0..|arr|-N]. After
+          // transform, unary minus on a numeric literal is folded to a
+          // negative `num` IR node, so check for that here.
+          const negVal = (a: typeof e.args[0]): number | null =>
+            a.kind === "num" && a.value < 0 ? -a.value : null;
+          const loN = negVal(e.args[0]);
+          const loEx = loN !== null ? `|${obj}|-${loN}` : args[0];
+          if (args.length === 1) return `${obj}[${loEx}..]`;
+          const hiN = negVal(e.args[1]);
+          const hiEx = hiN !== null ? `|${obj}|-${hiN}` : args[1];
+          return `${obj}[${loEx}..${hiEx}]`;
+        }
+        if (e.method === "substring") {
+          if (args.length === 1) return `${obj}[${args[0]}..]`;
+          return `${obj}[${args[0]}..${args[1]}]`;
+        }
+        if (e.method === "endsWith") return `(|${obj}| >= |${args[0]}| && ${obj}[|${obj}|-|${args[0]}|..] == ${args[0]})`;
         if (e.method === "trim")    { needPreamble("StringTrim"); return `StringTrim(${obj})`; }
         if (e.method === "toLowerCase") { needPreamble("StringToLower"); return `StringToLower(${obj})`; }
         if (e.method === "toUpperCase") { needPreamble("StringToUpper"); return `StringToUpper(${obj})`; }
@@ -646,6 +668,32 @@ const CEIL_REAL = `function CeilReal(x: real): int
   else x.Floor + 1
 }`;
 
+const SEQ_FIND_INDEX = `function SeqFindIndex<T>(s: seq<T>, p: T -> bool): int
+  ensures -1 <= SeqFindIndex(s, p) < |s|
+  ensures SeqFindIndex(s, p) >= 0 ==> p(s[SeqFindIndex(s, p)])
+  ensures SeqFindIndex(s, p) >= 0 ==>
+    (forall i: nat :: i < SeqFindIndex(s, p) ==> !p(s[i]))
+  ensures SeqFindIndex(s, p) == -1 ==> (forall i: nat :: i < |s| ==> !p(s[i]))
+{
+  SeqFindIndexFrom(s, p, 0)
+}
+
+function SeqFindIndexFrom<T>(s: seq<T>, p: T -> bool, from: nat): int
+  requires from <= |s|
+  ensures -1 <= SeqFindIndexFrom(s, p, from) < |s|
+  ensures SeqFindIndexFrom(s, p, from) >= 0 ==>
+    from <= SeqFindIndexFrom(s, p, from) && p(s[SeqFindIndexFrom(s, p, from)])
+  ensures SeqFindIndexFrom(s, p, from) >= 0 ==>
+    (forall i: nat :: from <= i < SeqFindIndexFrom(s, p, from) ==> !p(s[i]))
+  ensures SeqFindIndexFrom(s, p, from) == -1 ==>
+    (forall i: nat :: from <= i < |s| ==> !p(s[i]))
+  decreases |s| - from
+{
+  if from >= |s| then -1
+  else if p(s[from]) then from as int
+  else SeqFindIndexFrom(s, p, from + 1)
+}`;
+
 const SEQ_INDEX_OF = `function SeqIndexOf<T(==)>(s: seq<T>, x: T): int
   ensures -1 <= SeqIndexOf(s, x) < |s|
   ensures SeqIndexOf(s, x) >= 0 ==> s[SeqIndexOf(s, x)] == x
@@ -715,6 +763,17 @@ function StringIndexOfFrom(s: string, sub: string, from: nat): int
   else if s[from..from + |sub|] == sub then from as int
   else StringIndexOfFrom(s, sub, from + 1)
 }`;
+
+// `s.split(d)` in TS returns a non-empty sequence of segments. Modeled here as
+// an axiom — defining it recursively would force StringIndexOf to grow ensures
+// clauses that callers don't need. The two ensures cover what verification
+// usually wants: result has at least one element, and every element fits
+// within the source length.
+const STRING_SPLIT = `function {:axiom} StringSplit(s: string, d: string): seq<string>
+  requires |d| > 0
+  ensures |StringSplit(s, d)| >= 1
+  ensures |StringSplit(s, d)| <= |s| + 1
+  ensures forall k :: 0 <= k < |StringSplit(s, d)| ==> |StringSplit(s, d)[k]| <= |s|`;
 
 const STRING_TRIM = `function StringTrimLeft(s: string): string
   ensures |StringTrimLeft(s)| <= |s|
@@ -854,11 +913,13 @@ const PREAMBLE_CODE: [string, string][] = [
   ["CeilReal", CEIL_REAL],
   ["FloorReal", FLOOR_REAL],
   ["SeqIndexOf", SEQ_INDEX_OF],
+  ["SeqFindIndex", SEQ_FIND_INDEX],
   ["SeqFindLast", SEQ_FIND_LAST],
   ["SeqFlatten", SEQ_FLATTEN],
   ["SeqJoin", SEQ_JOIN],
   ["SafeSlice", SAFE_SLICE],
   ["StringIndexOf", STRING_INDEX_OF],
+  ["StringSplit", STRING_SPLIT],
   ["StringTrim", STRING_TRIM],
   ["StringToLower", STRING_TO_LOWER],
   ["StringToUpper", STRING_TO_UPPER],

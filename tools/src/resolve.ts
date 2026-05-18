@@ -27,6 +27,12 @@ function lookup(env: Env | null, name: string): Ty | undefined {
 function extend(env: Env | null, name: string, ty: Ty): Env {
   return { name, ty, parent: env };
 }
+function envKeys(env: Env | null): string[] {
+  const out: string[] = [];
+  let e = env;
+  while (e) { out.push(e.name); e = e.parent; }
+  return out;
+}
 
 // ── Access paths ─────────────────────────────────────────────
 
@@ -362,7 +368,7 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
  *  Returns updated rawArgs with inferred tsType on the first lambda param. */
 function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[]): RawExpr[] {
   if (fn.kind === "field" && fn.obj.ty.kind === "array" &&
-      ["map", "filter", "every", "some", "find", "findLast"].includes(fn.field) &&
+      ["map", "filter", "every", "some", "find", "findLast", "findIndex"].includes(fn.field) &&
       rawArgs.length >= 1 && rawArgs[0].kind === "lambda" &&
       rawArgs[0].params.length >= 1 && !rawArgs[0].params[0].tsType) {
     const elemTy = fn.obj.ty.elem;
@@ -419,6 +425,7 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
     if (fn.field === "filter") return objTy;
     if (fn.field === "every" || fn.field === "some") return { kind: "bool" };
     if (fn.field === "find" || fn.field === "findLast") return { kind: "optional", inner: objTy.elem };
+    if (fn.field === "findIndex") return { kind: "int" };
     if (fn.field === "flat" && objTy.elem.kind === "array") return { kind: "array", elem: objTy.elem.elem };
     if (fn.field === "slice") return objTy;
     if (fn.field === "join" && objTy.elem.kind === "string") return { kind: "string" };
@@ -429,7 +436,9 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
     }
   } else if (objTy.kind === "string") {
     if (fn.field === "trim" || fn.field === "toLowerCase" || fn.field === "toUpperCase") return { kind: "string" };
-    if (fn.field === "includes" || fn.field === "startsWith") return { kind: "bool" };
+    if (fn.field === "slice" || fn.field === "substring") return { kind: "string" };
+    if (fn.field === "split") return { kind: "array", elem: { kind: "string" } };
+    if (fn.field === "includes" || fn.field === "startsWith" || fn.field === "endsWith") return { kind: "bool" };
   }
   return { kind: "unknown" };
 }
@@ -685,8 +694,11 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         const fields = e.fields.map(f => ({ name: f.name, value: resolveExpr(f.value, fieldCtx) }));
         return { kind: "record", spread: null, fields, ty: mapTy };
       }
-      // Infer record type: from spread, or from return type context
-      const recordTy = ty.kind === "user" ? ty : ctx.returnTy.kind === "user" ? ctx.returnTy : null;
+      // Infer record type: from spread, or from return type context. Unwrap
+      // an outer Optional when looking at returnTy — `return {...} : null`
+      // has ctx.returnTy = Option<T>, but the record literal's natural type is T.
+      const returnTyUnwrapped = ctx.returnTy.kind === "optional" ? ctx.returnTy.inner : ctx.returnTy;
+      const recordTy = ty.kind === "user" ? ty : returnTyUnwrapped.kind === "user" ? returnTyUnwrapped : null;
       const decl = recordTy ? ctx.typeDecls.find(d => d.name === recordTy.name && d.kind === "record") : undefined;
       // Clear returnTy for field values — it applies to THIS record, not nested ones
       const fieldCtx = recordTy ? { ...ctx, returnTy: { kind: "unknown" as const } as Ty } : ctx;
@@ -797,6 +809,12 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         ty = { kind: "optional", inner: else_.ty };
       } else if (else_.ty.kind === "void" && then_.ty.kind !== "void" && then_.ty.kind !== "unknown") {
         ty = { kind: "optional", inner: then_.ty };
+      } else if (then_.ty.kind === "optional" && else_.ty.kind !== "optional" && else_.ty.kind !== "unknown") {
+        // Asymmetric optional: one branch returns Option<T>, the other returns T.
+        // Widen to Option<T> so callers/return-coercion see the wider type.
+        ty = then_.ty;
+      } else if (else_.ty.kind === "optional" && then_.ty.kind !== "optional" && then_.ty.kind !== "unknown") {
+        ty = else_.ty;
       }
       return { kind: "conditional", cond, then: then_, else: else_, ty };
     }
@@ -889,7 +907,13 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
 
     case "assign": {
       const targetTy = lookup(ctx.env, s.target) ?? { kind: "unknown" as const };
-      return [{ kind: "assign", target: s.target, value: coerceStr(resolveExpr(s.value, ctx), targetTy) }, ctx.env];
+      let value = coerceStr(resolveExpr(s.value, ctx), targetTy);
+      // Auto-wrap non-optional value in Some when target is optional
+      const isUndef = value.kind === "var" && value.name === "undefined";
+      if (targetTy.kind === "optional" && value.ty.kind !== "optional" && value.ty.kind !== "unknown" && !isUndef) {
+        value = wrapSome(value, targetTy);
+      }
+      return [{ kind: "assign", target: s.target, value }, ctx.env];
     }
 
     case "return": {
