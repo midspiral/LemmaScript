@@ -349,10 +349,27 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           (e.left.ty.kind === "user" && e.right.ty.kind === "string"))) {
         const left = lowerExpr(e.left, binds);
         const right = lowerExpr(e.right, binds);
+        // `s || undefined` produces `Option<string>` — wrap the truthy branch in Some.
+        const rightIsUndef = e.right.kind === "var" && e.right.name === "undefined";
         return {
           kind: "if",
           cond: { kind: "binop", op: ">", left: { kind: "field", obj: left, field: "size" }, right: { kind: "num", value: 0 } },
-          then: left, else: right,
+          then: rightIsUndef ? { kind: "app", fn: "Some", args: [left] } : left,
+          else: right,
+        };
+      }
+      // `bool || undefined` → `if bool then Some(bool) else None`. Used in
+      // optional-field initialization where the source assigns a truthy/false
+      // bool to a `T?` field. Without this, emit produces `bool || None`,
+      // which Dafny rejects (bool || Option<?> is ill-typed).
+      if (e.op === "||" && e.left.ty.kind === "bool" &&
+          e.right.kind === "var" && e.right.name === "undefined") {
+        const left = lowerExpr(e.left, binds);
+        return {
+          kind: "if",
+          cond: left,
+          then: { kind: "app", fn: "Some", args: [left] },
+          else: { kind: "var", name: "undefined" },
         };
       }
       // int + string → NatToString(int) + string (string concatenation)
@@ -582,7 +599,13 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "exists", var: e.var, type: e.varTy, body: transformExpr(e.body) };
 
     case "conditional": {
-      const cond = lowerExpr(e.cond, binds);
+      let cond = lowerExpr(e.cond, binds);
+      // JS truthiness coercion: string cond → |cond| > 0. Matches the negation
+      // form already documented in SPEC §3.1 (`!s` → `s == ""`). Optional
+      // conds are already rewritten to someMatch by narrow.ts.
+      if (e.cond.ty.kind === "string") {
+        cond = { kind: "binop", op: ">", left: { kind: "field", obj: cond, field: "size" }, right: { kind: "num", value: 0 } };
+      }
       let thenExpr = lowerExpr(e.then, binds);
       let elseExpr = lowerExpr(e.else, binds);
       if (e.ty.kind === "optional") {
@@ -717,10 +740,19 @@ function eliminateTopLevelContinue(stmts: Stmt[]): Stmt[] {
   const out: Stmt[] = [];
   for (let i = 0; i < stmts.length; i++) {
     const s = stmts[i];
+    // `if (X) {...A, continue}; rest` (empty else, trailing continue in then)
+    // — if A is empty, rewrite to `if (!X) { rest }`; otherwise rewrite to
+    // `if (X) { ...A } else { rest }`. Either form lets the loop fall through
+    // naturally past the bottom of the body.
     if (s.kind === "if" && s.else.length === 0 &&
-        s.then.length === 1 && s.then[0].kind === "continue") {
+        s.then.length >= 1 && s.then[s.then.length - 1].kind === "continue") {
       const rest = eliminateTopLevelContinue(stmts.slice(i + 1));
-      out.push({ kind: "if", cond: negateExpr(s.cond), then: rest, else: [] });
+      const thenWithoutContinue = s.then.slice(0, -1);
+      if (thenWithoutContinue.length === 0) {
+        out.push({ kind: "if", cond: negateExpr(s.cond), then: rest, else: [] });
+      } else {
+        out.push({ kind: "if", cond: s.cond, then: thenWithoutContinue, else: rest });
+      }
       return out;
     }
     // narrow.ts's ruleEarlyReturnConsume rewrites `if (!x) continue; rest`
@@ -989,7 +1021,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
         invariants: s.invariants.map(transformExpr),
         decreasing: s.decreases ? transformExpr(s.decreases) : null,
         doneWith: s.doneWith ? transformExpr(s.doneWith) : null,
-        body: transformStmts(s.body, typeDecls),
+        body: eliminateTopLevelContinue(transformStmts(s.body, typeDecls)),
       }];
 
     case "throw":
