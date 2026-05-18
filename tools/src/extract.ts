@@ -1374,11 +1374,17 @@ export function extractModule(sourceFile: SourceFile): RawModule {
           // Skip huge string constants — they crash the verifier and have no verification value
           const initType = decl.getType();
           const isHugeString = (initType.isString() || initType.isStringLiteral()) && (init as Expression).getText().length > 200;
-          if (init && !isHugeString && !Node.isArrowFunction(init)) {
+          // Skip anonymous-object consts (e.g., `const Util = { dotMatch(s, p) { ... } }`).
+          // ts-morph names these `__type` / `__object`; Dafny has no model for
+          // object-namespace-with-methods. The methods themselves should be
+          // extracted via the function path if marked `//@ verify`.
+          const declTsType = typeToString(decl.getType());
+          const isAnonObject = declTsType.startsWith("__");
+          if (init && !isHugeString && !isAnonObject && !Node.isArrowFunction(init)) {
             try {
               constants.push({
                 name: decl.getName(),
-                tsType: typeToString(decl.getType()),
+                tsType: declTsType,
                 value: extractExpr(init as Expression),
               });
             } catch (e) {

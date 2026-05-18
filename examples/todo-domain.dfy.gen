@@ -1026,7 +1026,7 @@ method getTasksInList(m: Model, listId: ListId) returns (res: seq<TaskId>)
 {
   if (listId in m.tasks) {
     var i_lane_val := m.tasks[listId];
-    var result: seq<int> := [];
+    var result: seq<TaskId> := [];
     var i := 0;
     while (i < |i_lane_val|)
       invariant (i >= 0)
