@@ -26,6 +26,9 @@ let _currentSourceFile: SourceFile | null = null;
  *  that no verified function actually calls — and whose TS return types
  *  often don't translate to valid Dafny. */
 let _inFunctionExtraction = false;
+/** Counter for synthetic names used by let-statement array destructuring
+ *  when the initializer isn't a bare variable (single-eval temp). */
+let _destrCounter = 0;
 
 /** Register the call's callee as a cross-file extern if applicable, then
  *  walk the source declaration's body for nested cross-file calls (so the
@@ -798,6 +801,44 @@ function extractStmts(stmts: Node[]): RawStmt[] {
           }
           continue;
         }
+        // Array destructuring: const [a, , c, ...rest] = arr → individual lets,
+        // each picking from `arr` by position. Rest (if present) must be last
+        // and emits as `arr.slice(N)`. Omitted slots (`,,`) are skipped. Nested
+        // binding patterns throw — extend the helper here when a case study
+        // hits them.
+        if (!isHavoc && Node.isArrayBindingPattern(nameNode)) {
+          const elements = nameNode.getElements();
+          const initializer = d.getInitializer();
+          if (initializer) {
+            let initExpr: RawExpr = extractExpr(initializer);
+            let initVar: RawExpr = initExpr;
+            if (initExpr.kind !== "var") {
+              const tempName = `_destr${_destrCounter++}`;
+              const initTs = _eraseGenerics(typeToString(initializer.getType()));
+              result.push({ kind: "let", name: tempName, mutable: false, tsType: initTs, init: initExpr, line });
+              initVar = { kind: "var", name: tempName };
+            }
+            for (let i = 0; i < elements.length; i++) {
+              const el = elements[i];
+              if (Node.isOmittedExpression(el)) continue;
+              if (!Node.isBindingElement(el)) continue;
+              const inner = el.getNameNode();
+              if (!Node.isIdentifier(inner)) {
+                throw new Error(`nested binding pattern in array destructuring not yet supported: ${el.getText()}`);
+              }
+              const name = inner.getText();
+              const isRest = !!el.getDotDotDotToken();
+              const elTs = _eraseGenerics(typeToString(el.getType()));
+              const init: RawExpr = isRest
+                ? { kind: "call",
+                    fn: { kind: "field", obj: initVar, field: "slice" },
+                    args: [{ kind: "num", value: i }] }
+                : { kind: "index", obj: initVar, idx: { kind: "num", value: i } };
+              result.push({ kind: "let", name, mutable: s.getDeclarationKind() === "let", tsType: elTs, init, line });
+            }
+            continue;
+          }
+        }
         // Destructuring rest: const { [k]: _, ...rest } = map → let rest = map.delete(k)
         if (!isHavoc && Node.isObjectBindingPattern(nameNode)) {
           const elements = nameNode.getElements();
@@ -1295,6 +1336,37 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     }
   }
 
+  // `//@ extern` on a same-file declaration: register the function as an
+  // opaque axiom (signature + any //@ requires/ensures), skip its body. Use
+  // when the function is outside LS's verification model — e.g., wraps a
+  // regex — but its callers should still be verifiable against an
+  // uninterpreted predicate. Parallel to auto-extern for cross-file calls,
+  // and emitted the same way (`function {:axiom} foo(...)` in Dafny).
+  function hasExtern(f: { node: FunctionDeclaration; parentStmt?: Node }) {
+    if (f.node.getFullText().includes('//@ extern')) return true;
+    if (f.parentStmt) {
+      for (const r of f.parentStmt.getLeadingCommentRanges()) {
+        if (r.getText().includes('//@ extern')) return true;
+      }
+    }
+    return false;
+  }
+  for (const f of allFns) {
+    if (!hasExtern(f)) continue;
+    if (_externs.has(f.name)) continue;
+    const sig = f.node.getType().getCallSignatures()[0];
+    if (!sig) continue;
+    const params = sig.getParameters().map(p => ({
+      name: p.getName(),
+      tsType: p.getTypeAtLocation(f.node).getText(),
+    }));
+    const returnType = sig.getReturnType().getText();
+    const annots = collectFunctionAnnotations(f.node);
+    const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
+    const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
+    _externs.set(f.name, { qualified: f.name, flat: f.name, params, returnType, requires, ensures });
+  }
+
   // If any function has //@ verify, only extract those (brownfield mode).
   // For expression-body arrows, //@ verify may be on the parent variable statement.
   function hasVerify(f: { node: FunctionDeclaration; parentStmt?: Node }) {
@@ -1307,7 +1379,8 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     return false;
   }
   const hasVerifyDirective = sourceFile.getFullText().includes('//@ verify');
-  const fnsToExtract = hasVerifyDirective ? allFns.filter(hasVerify) : allFns;
+  const nonExternFns = allFns.filter(f => !hasExtern(f));
+  const fnsToExtract = hasVerifyDirective ? nonExternFns.filter(hasVerify) : nonExternFns;
 
   const functions = fnsToExtract.map(f => {
     // For expression-body arrows, annotations come from the parent variable statement

@@ -42,6 +42,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `havoc` | Before a variable declaration | Nondeterministic value — skip init expression (see §2.9). |
 | `havoc <key>` | Before a variable declaration | Nondeterministic subexpression — replace calls matching `<key>` (see §2.10). |
 | `declare-type N { f: T, ... }` | Before any statement | Declare a record type for cross-file types (see §2.5). |
+| `extern` | Before function declaration | Treat function as a body-less axiom — extract signature only, skip body (see §2.11). |
 | `skip` | Before any statement | Omit statement from verification model (for side-effect-only code). |
 
 ### 2.2 Spec Expression Grammar
@@ -306,6 +307,23 @@ const foundEdge = edges.find((e) => e.id === oldEdge.id) as EdgeType;
 **Axioms:** To constrain a havoced variable (e.g., `|cleaned| <= |text|`),
 add an `assume` in the `.dfy` file as a proof addition.
 
+### 2.11 Same-File Extern: `//@ extern`
+
+Mark a function declaration as an opaque axiom — signature (with any `//@ requires` / `//@ ensures`) is extracted, body is skipped:
+
+```typescript
+//@ extern
+export function match(str: string, pattern: string): boolean { ... }  // regex, out of model
+```
+
+→ Dafny: `function {:axiom} match_(str: string, pattern: string): bool`
+
+Same machinery as cross-file auto-extern (§2.9): registered in the same externs map, lifted contract, name-escaped at emission so Dafny-keyword collisions (`match` → `match_`) resolve consistently. The difference from auto-extern is the trigger — cross-file fires automatically, in-file requires the explicit annotation.
+
+**Use case:** the function is outside LS's model (regex, IO, parser) but callers should still verify *parametric over its behavior*. The axiom is deterministic and extensional, so proofs that depend on `f(x) == f(x)` go through. Unlike `//@ havoc`, which is nondeterministic at each call site and defeats determinism-dependent proofs.
+
+In brownfield `//@ verify` mode (§2.6), `//@ extern` declarations are still extracted as externs; only their bodies are skipped.
+
 ---
 
 ## 3. Spec Expression Translation
@@ -392,6 +410,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `{ ...map, [k]: v }` | — | `map[k := v]` (desugared to `.set()` in extract) |
 | `{ [k]: v }` | — | `map[][k := v]` (desugared to `{}.set()` in extract) |
 | `const { [k]: _, ...rest } = map` | — | `var rest := (map k' \| k' in map && k' != k :: map[k'])` (desugared to `.delete()` in extract) |
+| `const [a, , c, ...rest] = arr` | — | `var a := arr[0]; var c := arr[2]; var rest := arr[3..]` (omits skipped, rest emits as slice) |
 | `arr.with(i, v)` | `arr.set! i v` | `arr[i := v]` |
 | `` `${n} items` `` (int+string) | — | `NatToString(n) + " items"` |
 | `{ k1: v1, ... }: Record<K,V>` | — | `map["k1" := v1, ...]` |
