@@ -104,6 +104,8 @@ jobs:
             branch: lemmascript
           - repo: midspiral/talktimer-lemmascript
             branch: main
+          - repo: midspiral/opencode-lemmascript
+            branch: lemmascript
     steps:
       - uses: actions/checkout@v4
 
