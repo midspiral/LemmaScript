@@ -324,6 +324,8 @@ Same machinery as cross-file auto-extern (§2.9): registered in the same externs
 
 In brownfield `//@ verify` mode (§2.6), `//@ extern` declarations are still extracted as externs; only their bodies are skipped.
 
+Bare-name `//@ extern` calls are classified as pure (since they emit as `function {:axiom}`), so they are not lifted out of enclosing expressions by the method-call-lifting pass (§3.6). This means a bare-name extern call can appear inside a lambda body without producing a multi-statement lambda. Dotted externs (cross-file `NS.method` calls) go through a separate dispatch and are also pure.
+
 ---
 
 ## 3. Spec Expression Translation
