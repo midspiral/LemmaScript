@@ -58,7 +58,7 @@ export type Stmt =
   | { kind: "forin"; idx: string; bound: Expr; invariants: Expr[]; body: Stmt[] }
   | { kind: "ghostLet"; name: string; type: Ty; value: Expr }
   | { kind: "ghostAssign"; target: string; value: Expr }
-  | { kind: "assert"; expr: Expr }
+  | { kind: "assert"; expr: Expr; assumed?: boolean }
 
 export interface StmtMatchArm {
   pattern: string;

@@ -143,6 +143,7 @@ export interface RawAssert {
   kind: "assert";
   expr: string;              // spec expression string (parsed later)
   line: number;
+  assumed?: boolean;         // true when source was //@ assume — emitted as `assume`, not `assert`
 }
 
 export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawContinue | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf | RawThrow | RawGhostLet | RawGhostAssign | RawAssert;

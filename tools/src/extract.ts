@@ -768,6 +768,11 @@ function parseSpecComments(ranges: ReturnType<Node["getLeadingCommentRanges"]>, 
       result.push({ kind: "assert", expr: content.slice(7).trim(), line });
       continue;
     }
+    // assume expr — trusted form of assert; emitted as `assume P;` in Dafny.
+    if (content.startsWith("assume ")) {
+      result.push({ kind: "assert", expr: content.slice(7).trim(), line, assumed: true });
+      continue;
+    }
     if (!content.startsWith("ghost ")) continue;
     const ghostBody = content.slice(6).trim();
     // ghost let varName: type = expr  OR  ghost let varName = expr
@@ -1200,6 +1205,11 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       // assert expr
       if (content.startsWith("assert ")) {
         result.push({ kind: "assert", expr: content.slice(7).trim(), line });
+        continue;
+      }
+      // assume expr — trusted form of assert; emitted as `assume P;` in Dafny.
+      if (content.startsWith("assume ")) {
+        result.push({ kind: "assert", expr: content.slice(7).trim(), line, assumed: true });
         continue;
       }
       if (!content.startsWith("ghost ")) continue;

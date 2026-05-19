@@ -1040,7 +1040,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       return [{ kind: "ghostAssign", target: s.target, value: transformExpr(s.value) }];
 
     case "assert":
-      return [{ kind: "assert", expr: transformExpr(s.expr) }];
+      return [{ kind: "assert", expr: transformExpr(s.expr), assumed: s.assumed }];
 
     case "someMatch": {
       const path = asTAccessPath(s.scrutinee);

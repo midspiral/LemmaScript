@@ -85,7 +85,7 @@ export type TStmt =
   | { kind: "throw" }
   | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
   | { kind: "ghostAssign"; target: string; value: TExpr }
-  | { kind: "assert"; expr: TExpr }
+  | { kind: "assert"; expr: TExpr; assumed?: boolean }
   | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
       someBody: TStmt[]; noneBody: TStmt[] }
   | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;

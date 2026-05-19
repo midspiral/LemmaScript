@@ -38,6 +38,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `ghost let x = e` | Before any statement | Ghost variable (proof-only, not runtime). See §2.3. |
 | `ghost x = e` | Before any statement | Ghost variable reassignment. |
 | `assert e` | Before any statement | Assertion (`assertGadget` in Lean, `assert` in Dafny). |
+| `assume e` | Before any statement | Trusted assumption — emits `assume e;` in Dafny. Dafny backend only. See §2.3. |
 | `pure` | Before function declaration | Force function to be pure — required to call from another function's `requires`/`ensures`. Dafny: `function by method` if body can't auto-convert (see §5.1). |
 | `havoc` | Before a variable declaration | Nondeterministic value — skip init expression (see §2.9). |
 | `havoc <key>` | Before a variable declaration | Nondeterministic subexpression — replace calls matching `<key>` (see §2.10). |
@@ -87,6 +88,8 @@ Ghost annotations introduce proof-only state that does not exist at runtime:
 Ghost `let` declarations become mutable bindings in both backends (since they are typically reassigned). Ghost assignments become regular assignments. Assertions become `assertGadget` in Lean and `assert` in Dafny.
 
 The init expression in `ghost let` supports `new Set<T>()` and `new Map<K,V>()` constructors, as well as any spec expression. An optional type annotation is supported: `//@ ghost let x: type = expr`.
+
+**`//@ assume P`** is the trusted form of `//@ assert P` — emits `assume P;` in Dafny, not supported in the Lean backend. Canonical use is to constrain a `//@ havoc`'d value (see §2.10) inline in TS instead of post-hoc in the generated `.dfy` file.
 
 ### 2.4 Type Annotations
 
@@ -305,7 +308,8 @@ const foundEdge = edges.find((e) => e.id === oldEdge.id) as EdgeType;
 ```
 
 **Axioms:** To constrain a havoced variable (e.g., `|cleaned| <= |text|`),
-add an `assume` in the `.dfy` file as a proof addition.
+add a `//@ assume` immediately after the `//@ havoc` declaration. The
+assume flows through to `.dfy.gen` and survives `lsc regen`.
 
 ### 2.11 Same-File Extern: `//@ extern`
 

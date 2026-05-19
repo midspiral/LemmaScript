@@ -1064,7 +1064,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     case "assert": {
       const specCtx = { ...ctx, inSpec: true };
       const expr = resolveExpr(parseExpr(s.expr), specCtx);
-      return [{ kind: "assert", expr }, ctx.env];
+      return [{ kind: "assert", expr, assumed: s.assumed }, ctx.env];
     }
   }
 }
