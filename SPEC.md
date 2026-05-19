@@ -324,6 +324,8 @@ Same machinery as cross-file auto-extern (§2.9): registered in the same externs
 
 In brownfield `//@ verify` mode (§2.6), `//@ extern` declarations are still extracted as externs; only their bodies are skipped.
 
+Bare-name `//@ extern` calls are classified as pure (since they emit as `function {:axiom}`), so they are not lifted out of enclosing expressions by the method-call-lifting pass (§3.6). This means a bare-name extern call can appear inside a lambda body without producing a multi-statement lambda. Dotted externs (cross-file `NS.method` calls) go through a separate dispatch and are also pure.
+
 ---
 
 ## 3. Spec Expression Translation
@@ -376,10 +378,13 @@ No normalization of operators. Both backends handle all comparison directions.
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
 | `s.slice(start, end)` | `JSString.slice s start end` | `s[start..end]` |
 | `s.trim()` | — | `StringTrim(s)` |
+| `s.trimEnd()` / `s.trimStart()` | — | `StringTrimRight(s)` / `StringTrimLeft(s)` |
+| `s.split(d)` (requires `\|d\| > 0`) | — | `StringSplit(s, d)` (axiomatic preamble: `1 <= \|res\| <= \|s\| + 1`) |
 | `s.toLowerCase()` | — | `StringToLower(s)` |
 | `s.toUpperCase()` | — | `StringToUpper(s)` |
 | `s.includes(sub)` | — | `StringIndexOf(s, sub) >= 0` |
 | `s.startsWith(p)` | — | `\|s\| >= \|p\| && s[..\|p\|] == p` |
+| `s.endsWith(p)` | — | `\|s\| >= \|p\| && s[\|s\|-\|p\|..] == p` |
 | `s.length` | `s.length` | `\|s\|` |
 | `Math.max(...s)` / `Math.min(...s)` | — | `MaxOfSeq(s)` / `MinOfSeq(s)` (requires `\|s\| > 0`) |
 | `arr.map((x) => e)` | `arr.map (fun x => e)` | `Seq.Map((x) => e, arr)` |
@@ -389,6 +394,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `arr.includes(x)` | `arr.contains x` | `(x in arr)` |
 | `arr.indexOf(x)` | — | `SeqIndexOf(arr, x)` (preamble) |
 | `arr.find((x) => e)` | `arr.find? (fun x => e)` | — |
+| `arr.findIndex((x) => e)` | — | `SeqFindIndex(arr, (x) => e)` (preamble: `-1 ⇔ no match`, `≥0 ⇔ first match with no earlier match`) |
 | `arr.shift()` | — | `arr[0]` + `arr := arr[1..]` |
 | `arr.slice(start)` | — | `arr[start..]` |
 | `arr.slice(start, end)` | — | `arr[start..end]` |
@@ -856,6 +862,7 @@ The spec body is purely additive — `regen` three-way-merges and preserves user
 | `T \| undefined` | `Option T'` | `Option<T'>` |
 | `true \| false \| undefined` | `Option Bool` | `Option<bool>` |
 | `Record<K, V>` | `Std.HashMap K' V'` | `map<K', V'>` |
+| `(a: T1, b: T2) => R` (function type) | — | `(T1, T2) -> R` (typically used in a `type Foo = (...) => R` alias; lambda params passed to a callee with a `Foo`-typed parameter get inferred types) |
 | `unknown` | `Int` | `int` |
 | `[T, T, ...]` (tuple) | `Array T'` | `seq<T'>` |
 | `<T extends Base>` (generic) | `T` erased to `Base` | `T` erased to `Base` |

@@ -19,6 +19,7 @@ export type Ty =
   | { kind: "set"; elem: Ty }
   | { kind: "optional"; inner: Ty }
   | { kind: "user"; name: string }
+  | { kind: "fn"; params: Ty[]; result: Ty }
   | { kind: "unknown" }
 
 export type CallKind = "pure" | "method" | "spec-pure" | "unknown"

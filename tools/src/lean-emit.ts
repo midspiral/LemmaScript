@@ -36,6 +36,15 @@ function tyToLean(ty: Ty): string {
       return inner.includes(" ") ? `Option (${inner})` : `Option ${inner}`;
     }
     case "user": return ty.name;
+    case "fn": {
+      const params = ty.params.map(p => {
+        const s = tyToLean(p);
+        return s.includes(" ") ? `(${s})` : s;
+      });
+      const ret = tyToLean(ty.result);
+      const retStr = ret.includes(" ") ? `(${ret})` : ret;
+      return [...params, retStr].join(" → ");
+    }
     case "unknown": return "_";
   }
 }

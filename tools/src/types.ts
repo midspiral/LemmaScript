@@ -63,6 +63,29 @@ function splitTypeArgs(s: string): string[] {
 
 export function parseTsType(tsType: string): Ty {
   const t = tsType.trim();
+  // Function type: `(a: T1, b: T2) => R` or `(T1, T2) => R`. Match the
+  // outermost `(...) => R` shape; param names (with `:`) are stripped.
+  // Handled before union so that arrow-types whose return is a union don't
+  // get consumed by the union branch.
+  if (t.startsWith("(") && t.includes(") => ")) {
+    const arrowIdx = t.lastIndexOf(") => ");
+    let depth = 0;
+    let openIdx = -1;
+    for (let i = 0; i <= arrowIdx; i++) {
+      if (t[i] === "(") { if (depth === 0) openIdx = i; depth++; }
+      else if (t[i] === ")") depth--;
+    }
+    if (openIdx === 0) {
+      const paramsStr = t.slice(openIdx + 1, arrowIdx);
+      const ret = t.slice(arrowIdx + 5).trim();
+      const paramArgs = paramsStr.length === 0 ? [] : splitTypeArgs(paramsStr);
+      const params = paramArgs.map(a => {
+        const colon = a.indexOf(":");
+        return parseTsType(colon >= 0 ? a.slice(colon + 1) : a);
+      });
+      return { kind: "fn", params, result: parseTsType(ret) };
+    }
+  }
   // Union: T | undefined → optional<T>
   if (t.includes(" | ")) {
     let arms = t.split(" | ").map(a => a.trim());
