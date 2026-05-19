@@ -1160,7 +1160,12 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     if (Node.isReturnStatement(s)) {
       const expr = s.getExpression();
-      result.push({ kind: "return", value: expr ? extractExpr(expr) : { kind: "var", name: "()" }, line });
+      // Bare `return;` in a `T | undefined` function → emit `return None;`
+      // ("undefined" is mapped to None by dafny-emit). For void-returning
+      // functions this would emit the wrong shape, but lsc has no current
+      // examples of explicit bare return in void functions; revisit if one
+      // appears.
+      result.push({ kind: "return", value: expr ? extractExpr(expr) : { kind: "var", name: "undefined" }, line });
       continue;
     }
 
