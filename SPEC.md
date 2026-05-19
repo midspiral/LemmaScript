@@ -239,19 +239,29 @@ A call to a symbol declared in another `.ts` file (resolved via ts-morph) is emi
 
 ### 2.10 Havoc: `//@ havoc`
 
-Marks a variable declaration as nondeterministic — the init expression is
-discarded and the variable receives an arbitrary value of its declared type:
+Marks a variable declaration *or assignment* as nondeterministic — the RHS
+expression is discarded and the target receives an arbitrary value of its
+declared type:
 
 ```typescript
 //@ havoc
 const cleaned = text.replace(/[^a-z]/g, '');
+// later in the same scope
+//@ havoc
+cleaned = cleaned.replace(/\s+/g, ' ');
 ```
 
 generates (Dafny):
 
 ```dafny
 var cleaned: string := *;
+cleaned := *;
 ```
+
+For assignments, the type is taken from the LHS variable (already declared);
+`//@ havoc : Type` may still override. Only plain `x = e` is supported —
+compound assigns (`x += e`), element assigns (`arr[i] = v`), and `x++` fall
+through to normal extraction.
 
 The verifier makes no assumptions about `cleaned`'s value. Code after the
 havoc is verified for ALL possible values of the havoced variable.

@@ -1176,6 +1176,20 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     if (Node.isExpressionStatement(s)) {
       const expr = s.getExpression();
+      // //@ havoc before `x = e` — discard the RHS, assign a nondeterministic
+      // value of x's type. Only applies to plain `=` with an identifier LHS;
+      // compound assigns, `arr[i] = v`, and `x++` fall through to desugaring.
+      const havocMatch = s.getLeadingCommentRanges()
+        .map(r => r.getText().trim().match(/^\/\/@ havoc(?:\s*:\s*(.+))?$/))
+        .find(m => m !== null);
+      if (havocMatch && Node.isBinaryExpression(expr)
+          && expr.getOperatorToken().getText() === "="
+          && Node.isIdentifier(expr.getLeft())) {
+        const target = expr.getLeft().getText();
+        const tsType = havocMatch[1]?.trim() ?? _eraseGenerics(typeToString(expr.getLeft().getType()));
+        result.push({ kind: "assign", target, value: { kind: "havoc", tsType }, line });
+        continue;
+      }
       const asAssign = desugarStmtExpr(expr, line);
       result.push(asAssign ?? { kind: "expr", expr: extractExpr(expr), line });
       continue;
