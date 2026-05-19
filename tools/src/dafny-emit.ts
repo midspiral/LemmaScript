@@ -20,6 +20,7 @@ function tyToDafny(ty: Ty): string {
     case "set": return `set<${tyToDafny(ty.elem)}>`;
     case "optional": { needPreamble("OptionType"); return `Option<${tyToDafny(ty.inner)}>`; }
     case "user": return ty.name;
+    case "fn": return `(${ty.params.map(tyToDafny).join(", ")}) -> ${tyToDafny(ty.result)}`;
     case "unknown": return "int";
   }
 }
@@ -193,6 +194,8 @@ function emitExpr(e: Expr): string {
         }
         if (e.method === "endsWith") return `(|${obj}| >= |${args[0]}| && ${obj}[|${obj}|-|${args[0]}|..] == ${args[0]})`;
         if (e.method === "trim")    { needPreamble("StringTrim"); return `StringTrim(${obj})`; }
+        if (e.method === "trimEnd") { needPreamble("StringTrim"); return `StringTrimRight(${obj})`; }
+        if (e.method === "trimStart") { needPreamble("StringTrim"); return `StringTrimLeft(${obj})`; }
         if (e.method === "toLowerCase") { needPreamble("StringToLower"); return `StringToLower(${obj})`; }
         if (e.method === "toUpperCase") { needPreamble("StringToUpper"); return `StringToUpper(${obj})`; }
         if (e.method === "includes") { needPreamble("StringIndexOf"); return `(StringIndexOf(${obj}, ${args[0]}) >= 0)`; }

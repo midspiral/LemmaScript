@@ -353,6 +353,11 @@ function inferQuantVarType(varName: string, body: RawExpr, ctx: Ctx): Ty | null 
 function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Math") return "pure";
   if (fn.kind === "var" && (ctx.inSpec || ctx.inLambda) && ctx.pureFns.has(fn.name)) return "spec-pure";
+  // Bare-name `//@ extern` declarations are emitted as `function {:axiom}` —
+  // pure from the verifier's perspective. Classify them as pure so callers
+  // don't get lifted to statement-level binds (which would force lambdas to
+  // become multi-statement, illegal in Dafny).
+  if (fn.kind === "var" && ctx.externs.has(fn.name)) return "pure";
   if (fn.kind === "var" && ctx.inSpec) {
     // Not a known pure function — could be external (Lean-defined spec helper).
     // Pass through as "pure" and let Lean catch any errors.
@@ -364,23 +369,48 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
 
 // ── Call resolution helpers ─────────────────────────────────
 
-/** Infer lambda param types from array method context (map, filter, etc.).
- *  Returns updated rawArgs with inferred tsType on the first lambda param. */
-function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[]): RawExpr[] {
+/** Infer lambda param types from array method context (map, filter, etc.)
+ *  AND from function-typed parameters of named callees (e.g., a `Comparator =
+ *  (a, b) => bool` parameter propagates `string, string` to the lambda's
+ *  inline params). Returns updated rawArgs with inferred tsType. */
+function tyToTsStr(ty: Ty): string | undefined {
+  if (ty.kind === "user") return ty.name;
+  if (ty.kind === "string") return "string";
+  if (ty.kind === "int" || ty.kind === "nat") return "number";
+  if (ty.kind === "bool") return "boolean";
+  return undefined;
+}
+function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExpr[] {
   if (fn.kind === "field" && fn.obj.ty.kind === "array" &&
       ["map", "filter", "every", "some", "find", "findLast", "findIndex"].includes(fn.field) &&
       rawArgs.length >= 1 && rawArgs[0].kind === "lambda" &&
       rawArgs[0].params.length >= 1 && !rawArgs[0].params[0].tsType) {
     const elemTy = fn.obj.ty.elem;
-    const tsType = elemTy.kind === "user" ? elemTy.name
-      : elemTy.kind === "string" ? "string"
-      : elemTy.kind === "int" || elemTy.kind === "nat" ? "number"
-      : elemTy.kind === "bool" ? "boolean" : undefined;
+    const tsType = tyToTsStr(elemTy);
     if (tsType) {
       const lam = rawArgs[0];
       const updatedParams = [{ ...lam.params[0], tsType }, ...lam.params.slice(1)];
       return [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
     }
+  }
+  // Named-callee propagation: when an argument position expects a function
+  // type, infer the lambda's param types from that function type. Aliases
+  // (e.g., `Comparator`) are expanded via the typeDecls.
+  if (fn.kind === "var" && ctx?.fnParams.has(fn.name)) {
+    const paramTys = ctx.fnParams.get(fn.name)!;
+    return rawArgs.map((a, i) => {
+      if (a.kind !== "lambda" || i >= paramTys.length) return a;
+      let pTy = paramTys[i];
+      if (pTy.kind === "user") {
+        const decl = ctx.typeDecls.find(d => d.name === (pTy as any).name);
+        if (decl?.kind === "alias" && decl.aliasOfTy) pTy = decl.aliasOfTy;
+        else if (decl?.kind === "alias" && decl.aliasOf) pTy = parseTsType(decl.aliasOf);
+      }
+      if (pTy.kind !== "fn") return a;
+      const updatedParams = a.params.map((p, idx) =>
+        p.tsType || idx >= pTy.params.length ? p : { ...p, tsType: tyToTsStr(pTy.params[idx]) });
+      return { ...a, params: updatedParams };
+    });
   }
   return rawArgs;
 }
@@ -435,7 +465,7 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
       return { kind: "array", elem: retTy };
     }
   } else if (objTy.kind === "string") {
-    if (fn.field === "trim" || fn.field === "toLowerCase" || fn.field === "toUpperCase") return { kind: "string" };
+    if (fn.field === "trim" || fn.field === "trimEnd" || fn.field === "trimStart" || fn.field === "toLowerCase" || fn.field === "toUpperCase") return { kind: "string" };
     if (fn.field === "slice" || fn.field === "substring") return { kind: "string" };
     if (fn.field === "split") return { kind: "array", elem: { kind: "string" } };
     if (fn.field === "includes" || fn.field === "startsWith" || fn.field === "endsWith") return { kind: "bool" };
@@ -547,7 +577,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         }
       }
       const fn = resolveExpr(e.fn, ctx);
-      const rawArgs = inferLambdaParamTypes(fn, e.args);
+      const rawArgs = inferLambdaParamTypes(fn, e.args, ctx);
       // For .push() on a typed array, resolve args with element type context
       let argCtx = ctx;
       if (fn.kind === "field" && fn.obj.ty.kind === "array" && fn.field === "push" &&

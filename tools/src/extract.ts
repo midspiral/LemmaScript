@@ -569,6 +569,18 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
     }
   }
 
+  // Function-type alias: `type Comparator = (a: T, b: T) => boolean` —
+  // ts-morph reports these as object-typed with a call signature and no
+  // user-visible properties. Emit as a Dafny `type X = (...) -> R` alias.
+  if (type.isObject()) {
+    const sig = type.getCallSignatures()[0];
+    const hasProps = type.getProperties().length > 0;
+    if (sig && !hasProps) {
+      const params = sig.getParameters().map(p => typeToString(p.getTypeAtLocation(decl)));
+      const ret = typeToString(sig.getReturnType());
+      return { name, kind: "alias", aliasOf: `(${params.join(", ")}) => ${ret}` };
+    }
+  }
   if (type.isObject() || type.isIntersection()) return extractRecord(name, type, decl, undefined, extraDecls);
   // Primitive type alias: type TaskId = number → alias
   const tsType = typeToString(type);
@@ -1266,7 +1278,10 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
           return { name, tsType: propType ? typeToString(propType) : "unknown" };
         });
       }
-      let tsType = _eraseGenerics(p.getTypeNode()?.getText() ?? "unknown");
+      // Prefer source annotation; fall back to computed type when omitted
+      // (e.g., `eof = false` infers `boolean` from the default value).
+      const typeNodeText = p.getTypeNode()?.getText();
+      let tsType = _eraseGenerics(typeNodeText ?? _eraseGenerics(typeToString(p.getType())));
       // Optional parameters (foo?: T) need | undefined in the type string
       if (p.hasQuestionToken()) tsType = `${tsType} | undefined`;
       return [{ name: p.getName(), tsType }];
