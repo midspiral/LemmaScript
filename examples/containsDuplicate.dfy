@@ -21,3 +21,36 @@ method containsDuplicate(nums: seq<int>) returns (res: bool)
   }
   return false;
 }
+
+method containsNearbyDuplicate(nums: seq<int>, k: nat) returns (res: bool)
+  requires (k <= |nums|)
+  ensures ((res == true) ==> exists a: nat, b: nat :: ((((a < b) && (b < |nums|)) && ((b - a) <= k)) && (nums[a] == nums[b])))
+  ensures ((res == false) ==> forall a: nat, b: nat :: ((a < b) ==> (b < |nums|) ==> ((b - a) <= k) ==> (nums[a] != nums[b])))
+{
+  var windowSet: set<int> := {};
+  var n := |nums|;
+  if (k == 0) {
+    return false;
+  }
+  var i := 0;
+  while (i < n)
+    invariant (0 <= i)
+    invariant (i <= n)
+    invariant ((i < k) ==> forall x: int :: ((x in windowSet) ==> exists j: nat :: ((j < i) && (nums[j] == x))))
+    invariant ((i >= k) ==> forall x: int :: ((x in windowSet) ==> exists j: nat :: ((((i - k) <= j) && (j < i)) && (nums[j] == x))))
+    invariant ((i < k) ==> forall j: nat :: ((j < i) ==> (nums[j] in windowSet)))
+    invariant ((i >= k) ==> forall j: nat :: (((i - k) <= j) ==> (j < i) ==> (nums[j] in windowSet)))
+    invariant forall a: nat, b: nat :: ((a < b) ==> (b < i) ==> ((b - a) <= k) ==> (nums[a] != nums[b]))
+    decreases (n - i)
+  {
+    if (nums[i] in windowSet) {
+      return true;
+    }
+    if (i >= k) {
+      windowSet := (windowSet - {nums[(i - k)]});
+    }
+    windowSet := (windowSet + {nums[i]});
+    i := (i + 1);
+  }
+  return false;
+}
