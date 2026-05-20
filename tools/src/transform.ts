@@ -208,6 +208,18 @@ function transformExpr(e: TExpr): Expr { return lowerExpr(e, null); }
  * field, index, record, forall, or exists sub-expressions.
  */
 
+/** JS truthiness coercion for `if`/`while`/`?:` conditions.
+ *  Dafny requires bool; TS treats number/string/array as truthy when non-empty.
+ *  Optional conds are handled separately by narrow.ts (rewritten to someMatch). */
+function coerceCondToBool(cond: Expr, ty: Ty): Expr {
+  if (ty.kind === "bool") return cond;
+  if (ty.kind === "int" || ty.kind === "nat")
+    return { kind: "binop", op: ">", left: cond, right: { kind: "num", value: 0 } };
+  if (ty.kind === "string" || ty.kind === "array")
+    return { kind: "binop", op: ">", left: { kind: "field", obj: cond, field: "size" }, right: { kind: "num", value: 0 } };
+  return cond;
+}
+
 /** Wrap an expression in Some/None for optional-typed conditionals.
  *  If the raw TExpr is `undefined`, emit `.none`; otherwise wrap in `Some`. */
 function wrapOptionalBranch(expr: Expr, raw: TExpr): Expr {
@@ -599,13 +611,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "exists", var: e.var, type: e.varTy, body: transformExpr(e.body) };
 
     case "conditional": {
-      let cond = lowerExpr(e.cond, binds);
-      // JS truthiness coercion: string cond → |cond| > 0. Matches the negation
-      // form already documented in SPEC §3.1 (`!s` → `s == ""`). Optional
-      // conds are already rewritten to someMatch by narrow.ts.
-      if (e.cond.ty.kind === "string") {
-        cond = { kind: "binop", op: ">", left: { kind: "field", obj: cond, field: "size" }, right: { kind: "num", value: 0 } };
-      }
+      // JS truthiness coercion (string/array/int → ... > 0).  Matches SPEC §3.1
+      // negation forms (`!s` → `s == ""`).  Optional conds are already
+      // rewritten to someMatch by narrow.ts.
+      const cond = coerceCondToBool(lowerExpr(e.cond, binds), e.cond.ty);
       let thenExpr = lowerExpr(e.then, binds);
       let elseExpr = lowerExpr(e.else, binds);
       if (e.ty.kind === "optional") {
@@ -1052,13 +1061,13 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     case "if": {
       // Lift from condition only (Lean rule: don't lift from branches).
       const { binds, expr: cond } = liftMethodCalls(s.cond);
-      return [...binds, { kind: "if", cond, then: transformStmts(s.then, typeDecls), else: transformStmts(s.else, typeDecls) }];
+      return [...binds, { kind: "if", cond: coerceCondToBool(cond, s.cond.ty), then: transformStmts(s.then, typeDecls), else: transformStmts(s.else, typeDecls) }];
     }
 
     case "while":
       return [{
         kind: "while",
-        cond: transformExpr(s.cond),
+        cond: coerceCondToBool(transformExpr(s.cond), s.cond.ty),
         invariants: s.invariants.map(transformExpr),
         decreasing: s.decreases ? transformExpr(s.decreases) : null,
         doneWith: s.doneWith ? transformExpr(s.doneWith) : null,
