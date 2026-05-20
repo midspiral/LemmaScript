@@ -119,6 +119,14 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
 
 // ── Expression emission ─────────────────────────────────────
 
+// Lean's `∀`/`∃` body extends as far as possible. So `(∃ x, P) <op> Q`
+// (or `∃ x, P → Q`) would parse with the operator absorbed into the body.
+// Wrap a quantifier in parens to terminate its body before the operator.
+function wrapQuantifier(sub: Expr, parentPrec?: number): string {
+  const inner = emitExpr(sub, parentPrec);
+  return (sub.kind === "forall" || sub.kind === "exists") ? `(${inner})` : inner;
+}
+
 function emitExpr(e: Expr, parentPrec?: number): string {
   switch (e.kind) {
     case "var": return escapeName(e.name);
@@ -178,12 +186,12 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         return `${wrap ? `(${recv})` : recv}.contains ${emitExpr(e.left)}`;
       }
       const op = e.op === "arrayConcat" ? "++" : e.op;
-      const s = `${emitExpr(e.left, prec(e.op))} ${op} ${emitExpr(e.right, prec(e.op))}`;
+      const s = `${wrapQuantifier(e.left, prec(e.op))} ${op} ${emitExpr(e.right, prec(e.op))}`;
       return (parentPrec !== undefined && prec(e.op) < parentPrec) ? `(${s})` : s;
     }
 
     case "implies": {
-      const parts = [...e.premises.map(p => emitExpr(p)), emitExpr(e.conclusion)];
+      const parts = [...e.premises.map(p => wrapQuantifier(p)), emitExpr(e.conclusion)];
       const s = parts.join(" → ");
       return parentPrec !== undefined ? `(${s})` : s;
     }
