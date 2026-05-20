@@ -736,6 +736,25 @@ function negateExpr(e: Expr): Expr {
   if (e.kind === "unop" && e.op === "!") return e.expr;
   return { kind: "unop", op: "!", expr: e };
 }
+
+/** Build the two pieces of an `arr.pop()` lowering on a named array variable:
+ *  - `optValue` is `(if |arr|>0 then Some(arr[|arr|-1]) else None)` (the popped element)
+ *  - `guardedTrunc` is `(if |arr|>0 then arr[..|arr|-1] else arr)` (the array minus its last element)
+ *  Callers wrap these in let/assign statements appropriate to their context. */
+function buildPopLowering(arrName: string, arrTy: Ty): { optValue: Expr; guardedTrunc: Expr } {
+  const arrVar: Expr = { kind: "var", name: arrName };
+  const arrLen: Expr = { kind: "field", obj: arrVar, field: "size" };
+  const lastIdx: Expr = { kind: "binop", op: "-", left: arrLen, right: { kind: "num", value: 1 } };
+  const lastElem: Expr = { kind: "index", arr: arrVar, idx: lastIdx };
+  const isNonEmpty: Expr = { kind: "binop", op: ">", left: arrLen, right: { kind: "num", value: 0 } };
+  const optValue: Expr = { kind: "if", cond: isNonEmpty,
+    then: { kind: "app", fn: "Some", args: [lastElem] },
+    else: { kind: "var", name: "undefined" } };
+  const truncated: Expr = { kind: "methodCall", obj: arrVar, objTy: arrTy, method: "slice",
+    args: [{ kind: "num", value: 0 }, lastIdx], monadic: false };
+  const guardedTrunc: Expr = { kind: "if", cond: isNonEmpty, then: truncated, else: arrVar };
+  return { optValue, guardedTrunc };
+}
 function eliminateTopLevelContinue(stmts: Stmt[]): Stmt[] {
   const out: Stmt[] = [];
   for (let i = 0; i < stmts.length; i++) {
@@ -904,6 +923,17 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           return [letHead, sliceTail];
         }
       }
+      // let x = arr.pop() → let x: T? = (Option-expr); arr := (truncated-or-self)
+      if (init && init.fn.kind === "field" && init.fn.field === "pop" && init.fn.obj.ty.kind === "array") {
+        const arrName = init.fn.obj.kind === "var" ? init.fn.obj.name : undefined;
+        if (arrName) {
+          const { optValue, guardedTrunc } = buildPopLowering(arrName, init.fn.obj.ty);
+          return [
+            { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: optValue },
+            { kind: "assign", target: arrName, value: guardedTrunc },
+          ];
+        }
+      }
       // new Map(arr.map(n => [n.field, n])) → let m = map[]; for (n of arr) m[n.field] := n
       if (init && init.fn.kind === "var" && init.fn.name === "__mapFromArray" &&
           init.args.length === 1 && init.args[0].kind === "call" &&
@@ -955,6 +985,17 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     }
 
     case "assign": {
+      // x = arr.pop() → x := (Option-expr); arr := (truncated-or-self)
+      if (s.value.kind === "call" && s.value.fn.kind === "field" &&
+          s.value.fn.field === "pop" && s.value.fn.obj.ty.kind === "array" &&
+          s.value.fn.obj.kind === "var") {
+        const arrName = s.value.fn.obj.name;
+        const { optValue, guardedTrunc } = buildPopLowering(arrName, s.value.fn.obj.ty);
+        return [
+          { kind: "assign", target: s.target, value: optValue },
+          { kind: "assign", target: arrName, value: guardedTrunc },
+        ];
+      }
       // Top-level method call → direct monadic bind, no lifting needed
       if (s.value.kind === "call" && s.value.callKind === "method")
         return [{ kind: "bind", target: s.target, value: transformExpr(s.value) }];
