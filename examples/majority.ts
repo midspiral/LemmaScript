@@ -13,11 +13,16 @@
  * Together they say: no value other than cand can be a strict majority of
  * arr[0..i]. At i === arr.length this collapses to: any strict majority
  * of arr must equal cand. Pass 2 then verifies cand by direct count.
- *
- * The spec references one ghost function `occOf(arr, x, n)` — the standard
- * recursive prefix-occurrence count, defined in the .dfy.
  */
 //@ backend dafny
+
+//@ pure
+function occOf(arr: number[], x: number, n: number): number {
+  //@ requires 0 <= n && n <= arr.length
+  //@ decreases n
+  //@ type n nat
+  return n === 0 ? 0 : occOf(arr, x, n - 1) + (arr[n - 1] === x ? 1 : 0);
+}
 
 export function majority(arr: number[]): number {
   //@ requires forall(k: nat, k < arr.length ==> arr[k] >= 0)
