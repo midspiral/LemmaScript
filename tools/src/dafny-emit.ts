@@ -94,6 +94,16 @@ function emitQuantifier(e: Expr & { kind: "forall" | "exists" }, keyword: string
   return `${keyword} ${vars.join(", ")} :: ${emitExpr(body)}`;
 }
 
+// Dafny's `forall`/`exists ::` body extends as far as possible. So
+// `(forall i :: P(i)) <op> Q` (or `... ==> Q`) would parse with the operator
+// absorbed into the body. Wrap a quantifier in parens to terminate its body
+// before the operator. Only the LEFT operand needs this — a quantifier in
+// right-operand position is fine because its body correctly spans the rest.
+function wrapQuantifier(sub: Expr): string {
+  const inner = emitExpr(sub);
+  return (sub.kind === "forall" || sub.kind === "exists") ? `(${inner})` : inner;
+}
+
 function emitExpr(e: Expr): string {
   switch (e.kind) {
     case "var": return e.name === "undefined" ? "None" : escapeName(e.name);
@@ -246,14 +256,6 @@ function emitExpr(e: Expr): string {
         const pred = `${emitExpr(e.left)}.${ctorName}?`;
         return op === "!=" ? `(!${pred})` : pred;
       }
-      // Dafny's `forall`/`exists ::` extends the body as far as possible. So
-      // `(forall i :: P(i)) <op> Q` would parse as `forall i :: (P(i) <op> Q)`.
-      // Wrap a quantifier LEFT-operand in parens. A quantifier in right-operand
-      // position is fine because its body is correctly the whole right side.
-      const wrapQ = (sub: Expr): string => {
-        const inner = emitExpr(sub);
-        return (sub.kind === "forall" || sub.kind === "exists") ? `(${inner})` : inner;
-      };
       // Bitwise operators on int: translate to arithmetic
       // x >> n → x / 2^n (right shift)
       // x << n → x * 2^n (left shift)
@@ -293,17 +295,11 @@ function emitExpr(e: Expr): string {
           return `(${left} ${op} ${right})`;
         }
       }
-      return `(${wrapQ(e.left)} ${op} ${emitExpr(e.right)})`;
+      return `(${wrapQuantifier(e.left)} ${op} ${emitExpr(e.right)})`;
     }
 
     case "implies": {
-      const wrapQI = (sub: Expr): string => {
-        const inner = emitExpr(sub);
-        return (sub.kind === "forall" || sub.kind === "exists") ? `(${inner})` : inner;
-      };
-      // Wrap quantifier premises; the conclusion's quantifier body correctly
-      // spans the rest of the implication, so no wrap needed.
-      const parts = [...e.premises.map(wrapQI), emitExpr(e.conclusion)];
+      const parts = [...e.premises.map(wrapQuantifier), emitExpr(e.conclusion)];
       return `(${parts.join(" ==> ")})`;
     }
 

@@ -119,6 +119,14 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
 
 // ── Expression emission ─────────────────────────────────────
 
+// Lean's `∀`/`∃` body extends as far as possible. So `(∃ x, P) <op> Q`
+// (or `∃ x, P → Q`) would parse with the operator absorbed into the body.
+// Wrap a quantifier in parens to terminate its body before the operator.
+function wrapQuantifier(sub: Expr, parentPrec?: number): string {
+  const inner = emitExpr(sub, parentPrec);
+  return (sub.kind === "forall" || sub.kind === "exists") ? `(${inner})` : inner;
+}
+
 function emitExpr(e: Expr, parentPrec?: number): string {
   switch (e.kind) {
     case "var": return escapeName(e.name);
@@ -177,26 +185,13 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         const wrap = e.right.kind === "binop" || e.right.kind === "app" || e.right.kind === "methodCall";
         return `${wrap ? `(${recv})` : recv}.contains ${emitExpr(e.left)}`;
       }
-      // Lean's `∀`/`∃` body extends as far as possible. So `(∃ x, P) <op> Q`
-      // would parse as `∃ x, (P <op> Q)`. Wrap a quantifier LEFT-operand in
-      // parens. Right operand is fine: its body correctly spans the rest.
-      const wrapQ = (sub: Expr, p?: number): string => {
-        const inner = emitExpr(sub, p);
-        return (sub.kind === "forall" || sub.kind === "exists") ? `(${inner})` : inner;
-      };
       const op = e.op === "arrayConcat" ? "++" : e.op;
-      const s = `${wrapQ(e.left, prec(e.op))} ${op} ${emitExpr(e.right, prec(e.op))}`;
+      const s = `${wrapQuantifier(e.left, prec(e.op))} ${op} ${emitExpr(e.right, prec(e.op))}`;
       return (parentPrec !== undefined && prec(e.op) < parentPrec) ? `(${s})` : s;
     }
 
     case "implies": {
-      // Lean's `∀`/`∃` body extends as far as possible. So `∃ x, P → Q`
-      // parses as `∃ x, (P → Q)`. Wrap a quantifier left-operand in parens.
-      const wrapQI = (sub: Expr): string => {
-        const inner = emitExpr(sub);
-        return (sub.kind === "forall" || sub.kind === "exists") ? `(${inner})` : inner;
-      };
-      const parts = [...e.premises.map(wrapQI), emitExpr(e.conclusion)];
+      const parts = [...e.premises.map(p => wrapQuantifier(p)), emitExpr(e.conclusion)];
       const s = parts.join(" → ");
       return parentPrec !== undefined ? `(${s})` : s;
     }
