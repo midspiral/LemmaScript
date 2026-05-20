@@ -14,8 +14,6 @@
  * arr[0..i]. At i === arr.length this collapses to: any strict majority
  * of arr must equal cand. Pass 2 then verifies cand by direct count.
  */
-//@ backend dafny
-
 //@ pure
 function occOf(arr: number[], x: number, n: number): number {
   //@ requires 0 <= n && n <= arr.length
