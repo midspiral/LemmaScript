@@ -370,6 +370,8 @@ No normalization of operators. Both backends handle all comparison directions.
 
 `!!expr` works naturally: the inner `!` coerces to bool, the outer `!` negates.
 
+The same coercion applies to non-bool conditions in `if`/`while`/`?:` positions: `n` (number) → `n > 0`, `xs` (array) → `|xs| > 0`, `s` (string) → `|s| > 0`. Optional conditions are handled separately (see Optional narrowing).
+
 ### 3.2 Special Forms
 
 | Spec / TS | Lean | Dafny |
@@ -390,6 +392,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `opt ? f(opt) : undefined` | match on Some/None | `match opt { case Some(v) => Some(f(v)) case None => None }` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
+| `s.indexOf(sub, from)` | — | `StringIndexOfFrom(s, sub, from)` (negative `from` clamps to 0) |
 | `s.slice(start, end)` | `JSString.slice s start end` | `s[start..end]` |
 | `s.trim()` | — | `StringTrim(s)` |
 | `s.trimEnd()` / `s.trimStart()` | — | `StringTrimRight(s)` / `StringTrimLeft(s)` |
@@ -410,6 +413,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `arr.find((x) => e)` | `arr.find? (fun x => e)` | — |
 | `arr.findIndex((x) => e)` | — | `SeqFindIndex(arr, (x) => e)` (preamble: `-1 ⇔ no match`, `≥0 ⇔ first match with no earlier match`) |
 | `arr.shift()` | — | `arr[0]` + `arr := arr[1..]` |
+| `arr.pop()` | — | `(if \|arr\|>0 then Some(arr[\|arr\|-1]) else None)` + `arr := (if \|arr\|>0 then arr[..\|arr\|-1] else arr)` |
 | `arr.slice(start)` | — | `arr[start..]` |
 | `arr.slice(start, end)` | — | `arr[start..end]` |
 | `expr!` (non-null) | unwrap Option | unwrap Option / direct map access |
@@ -605,7 +609,7 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 - Equality: `v !== undefined`, `v === undefined` (early return)
 - Truthiness: `if (v)`, `if (!v)`, `opt ? a : b`
-- Composition: `v && rest`, `a === undefined || b === undefined`
+- Composition: `v && rest` or `rest && v` (optional check on either side), `a === undefined || b === undefined`
 - Spec implication: `path !== undefined && rest ==> B` (premise narrows conclusion)
 - Optional chaining: `obj?.field`, `obj?.foo()`, `obj?.[i]`, chained `obj?.a?.b?.c` and `obj?.a.b.c`
 - Nullish coalescing: `x ?? default`
@@ -691,6 +695,8 @@ When the bound variable IS used after the match, the `let` is preserved and the 
 All expressions `e` above are translated using the spec expression rules (§3).
 
 **`const` collections:** `const` declarations of Array, Map, or Set types become mutable bindings in both backends, since TS mutates these in place but the backends require reassignment.
+
+**Uninitialized `let`:** `let x: T;` (no initializer) emits a type-appropriate default — `[]` for `T[]`, `map[]`/`{}` for `Map`/`Set`, `None` for `T | undefined` (and `null | T`), `0`/`false`/`""` for primitives. Other types fall through to Dafny's `default`, which won't compile — initialize at the declaration or annotate with `T | undefined`.
 
 **For-of loops** are desugared to indexed loops: `for idx in [:bound]` (Lean) or `while idx < bound` (Dafny) with an auto-generated index variable `_varName_idx`. A bound invariant `_varName_idx ≤ bound` is automatically prepended to the user's invariants. When multiple for-of loops use the same variable name, the index is disambiguated with a suffix: `_id_idx`, `_id_idx2`, etc.
 
