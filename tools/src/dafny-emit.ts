@@ -183,7 +183,11 @@ function emitExpr(e: Expr): string {
       }
       // String methods
       if (ty === "string") {
-        if (e.method === "indexOf") { needPreamble("StringIndexOf"); return `StringIndexOf(${obj}, ${args[0]})`; }
+        if (e.method === "indexOf") {
+          needPreamble("StringIndexOf");
+          if (args.length === 2) return `StringIndexOfFrom(${obj}, ${args[0]}, ${args[1]})`;
+          return `StringIndexOf(${obj}, ${args[0]})`;
+        }
         if (e.method === "split")   { needPreamble("StringSplit"); return `StringSplit(${obj}, ${args[0]})`; }
         if (e.method === "slice") {
           // JS negative index: arr.slice(0, -N) → arr[0..|arr|-N]. After
@@ -751,16 +755,30 @@ const SAFE_SLICE = `function SafeSlice<T>(s: seq<T>, lo: int, hi: int): seq<T>
 }`;
 
 const STRING_INDEX_OF = `function StringIndexOf(s: string, sub: string): int
+  ensures StringIndexOf(s, sub) == -1
+       || (0 <= StringIndexOf(s, sub) <= |s| - |sub| && s[StringIndexOf(s, sub)..StringIndexOf(s, sub) + |sub|] == sub)
 {
   StringIndexOfFrom(s, sub, 0)
 }
 
-function StringIndexOfFrom(s: string, sub: string, from: nat): int
+function StringIndexOfFrom(s: string, sub: string, from: int): int
+  ensures StringIndexOfFrom(s, sub, from) == -1
+       || (0 <= StringIndexOfFrom(s, sub, from) <= |s| - |sub|
+           && s[StringIndexOfFrom(s, sub, from)..StringIndexOfFrom(s, sub, from) + |sub|] == sub
+           && StringIndexOfFrom(s, sub, from) >= from)
+{
+  StringIndexOfFromN(s, sub, if from < 0 then 0 else from)
+}
+
+function StringIndexOfFromN(s: string, sub: string, from: nat): int
   decreases |s| - from
+  ensures StringIndexOfFromN(s, sub, from) == -1
+       || (from <= StringIndexOfFromN(s, sub, from) <= |s| - |sub|
+           && s[StringIndexOfFromN(s, sub, from)..StringIndexOfFromN(s, sub, from) + |sub|] == sub)
 {
   if from + |sub| > |s| then -1
   else if s[from..from + |sub|] == sub then from as int
-  else StringIndexOfFrom(s, sub, from + 1)
+  else StringIndexOfFromN(s, sub, from + 1)
 }`;
 
 // `s.split(d)` in TS returns a non-empty sequence of segments. Modeled here as

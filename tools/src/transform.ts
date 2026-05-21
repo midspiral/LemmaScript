@@ -208,6 +208,18 @@ function transformExpr(e: TExpr): Expr { return lowerExpr(e, null); }
  * field, index, record, forall, or exists sub-expressions.
  */
 
+/** JS truthiness coercion for `if`/`while`/`?:` conditions.
+ *  Dafny requires bool; TS treats number/string/array as truthy when non-empty.
+ *  Optional conds are handled separately by narrow.ts (rewritten to someMatch). */
+function coerceCondToBool(cond: Expr, ty: Ty): Expr {
+  if (ty.kind === "bool") return cond;
+  if (ty.kind === "int" || ty.kind === "nat")
+    return { kind: "binop", op: ">", left: cond, right: { kind: "num", value: 0 } };
+  if (ty.kind === "string" || ty.kind === "array")
+    return { kind: "binop", op: ">", left: { kind: "field", obj: cond, field: "size" }, right: { kind: "num", value: 0 } };
+  return cond;
+}
+
 /** Wrap an expression in Some/None for optional-typed conditionals.
  *  If the raw TExpr is `undefined`, emit `.none`; otherwise wrap in `Some`. */
 function wrapOptionalBranch(expr: Expr, raw: TExpr): Expr {
@@ -599,13 +611,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "exists", var: e.var, type: e.varTy, body: transformExpr(e.body) };
 
     case "conditional": {
-      let cond = lowerExpr(e.cond, binds);
-      // JS truthiness coercion: string cond → |cond| > 0. Matches the negation
-      // form already documented in SPEC §3.1 (`!s` → `s == ""`). Optional
-      // conds are already rewritten to someMatch by narrow.ts.
-      if (e.cond.ty.kind === "string") {
-        cond = { kind: "binop", op: ">", left: { kind: "field", obj: cond, field: "size" }, right: { kind: "num", value: 0 } };
-      }
+      // JS truthiness coercion (string/array/int → ... > 0).  Matches SPEC §3.1
+      // negation forms (`!s` → `s == ""`).  Optional conds are already
+      // rewritten to someMatch by narrow.ts.
+      const cond = coerceCondToBool(lowerExpr(e.cond, binds), e.cond.ty);
       let thenExpr = lowerExpr(e.then, binds);
       let elseExpr = lowerExpr(e.else, binds);
       if (e.ty.kind === "optional") {
@@ -735,6 +744,25 @@ function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; ts
 function negateExpr(e: Expr): Expr {
   if (e.kind === "unop" && e.op === "!") return e.expr;
   return { kind: "unop", op: "!", expr: e };
+}
+
+/** Build the two pieces of an `arr.pop()` lowering on a named array variable:
+ *  - `optValue` is `(if |arr|>0 then Some(arr[|arr|-1]) else None)` (the popped element)
+ *  - `guardedTrunc` is `(if |arr|>0 then arr[..|arr|-1] else arr)` (the array minus its last element)
+ *  Callers wrap these in let/assign statements appropriate to their context. */
+function buildPopLowering(arrName: string, arrTy: Ty): { optValue: Expr; guardedTrunc: Expr } {
+  const arrVar: Expr = { kind: "var", name: arrName };
+  const arrLen: Expr = { kind: "field", obj: arrVar, field: "size" };
+  const lastIdx: Expr = { kind: "binop", op: "-", left: arrLen, right: { kind: "num", value: 1 } };
+  const lastElem: Expr = { kind: "index", arr: arrVar, idx: lastIdx };
+  const isNonEmpty: Expr = { kind: "binop", op: ">", left: arrLen, right: { kind: "num", value: 0 } };
+  const optValue: Expr = { kind: "if", cond: isNonEmpty,
+    then: { kind: "app", fn: "Some", args: [lastElem] },
+    else: { kind: "var", name: "undefined" } };
+  const truncated: Expr = { kind: "methodCall", obj: arrVar, objTy: arrTy, method: "slice",
+    args: [{ kind: "num", value: 0 }, lastIdx], monadic: false };
+  const guardedTrunc: Expr = { kind: "if", cond: isNonEmpty, then: truncated, else: arrVar };
+  return { optValue, guardedTrunc };
 }
 function eliminateTopLevelContinue(stmts: Stmt[]): Stmt[] {
   const out: Stmt[] = [];
@@ -904,6 +932,17 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           return [letHead, sliceTail];
         }
       }
+      // let x = arr.pop() → let x: T? = (Option-expr); arr := (truncated-or-self)
+      if (init && init.fn.kind === "field" && init.fn.field === "pop" && init.fn.obj.ty.kind === "array") {
+        const arrName = init.fn.obj.kind === "var" ? init.fn.obj.name : undefined;
+        if (arrName) {
+          const { optValue, guardedTrunc } = buildPopLowering(arrName, init.fn.obj.ty);
+          return [
+            { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: optValue },
+            { kind: "assign", target: arrName, value: guardedTrunc },
+          ];
+        }
+      }
       // new Map(arr.map(n => [n.field, n])) → let m = map[]; for (n of arr) m[n.field] := n
       if (init && init.fn.kind === "var" && init.fn.name === "__mapFromArray" &&
           init.args.length === 1 && init.args[0].kind === "call" &&
@@ -955,6 +994,17 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     }
 
     case "assign": {
+      // x = arr.pop() → x := (Option-expr); arr := (truncated-or-self)
+      if (s.value.kind === "call" && s.value.fn.kind === "field" &&
+          s.value.fn.field === "pop" && s.value.fn.obj.ty.kind === "array" &&
+          s.value.fn.obj.kind === "var") {
+        const arrName = s.value.fn.obj.name;
+        const { optValue, guardedTrunc } = buildPopLowering(arrName, s.value.fn.obj.ty);
+        return [
+          { kind: "assign", target: s.target, value: optValue },
+          { kind: "assign", target: arrName, value: guardedTrunc },
+        ];
+      }
       // Top-level method call → direct monadic bind, no lifting needed
       if (s.value.kind === "call" && s.value.callKind === "method")
         return [{ kind: "bind", target: s.target, value: transformExpr(s.value) }];
@@ -1011,13 +1061,13 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     case "if": {
       // Lift from condition only (Lean rule: don't lift from branches).
       const { binds, expr: cond } = liftMethodCalls(s.cond);
-      return [...binds, { kind: "if", cond, then: transformStmts(s.then, typeDecls), else: transformStmts(s.else, typeDecls) }];
+      return [...binds, { kind: "if", cond: coerceCondToBool(cond, s.cond.ty), then: transformStmts(s.then, typeDecls), else: transformStmts(s.else, typeDecls) }];
     }
 
     case "while":
       return [{
         kind: "while",
-        cond: transformExpr(s.cond),
+        cond: coerceCondToBool(transformExpr(s.cond), s.cond.ty),
         invariants: s.invariants.map(transformExpr),
         decreasing: s.decreases ? transformExpr(s.decreases) : null,
         doneWith: s.doneWith ? transformExpr(s.doneWith) : null,

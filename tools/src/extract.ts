@@ -956,14 +956,25 @@ function extractStmts(stmts: Node[]): RawStmt[] {
           if (initializer) {
             init = extractExpr(initializer);
           } else {
-            // No initializer — for `let x: T | undefined` this should be None.
-            // Detect by looking at the TS type string for `| undefined` / `| null`.
+            // No initializer — emit a type-appropriate default so the emitted
+            // Dafny binding `var x: T := <default>;` typechecks. The empty-
+            // collection cases are picked up by dafny-emit's let case, which
+            // adds an explicit `: T` annotation for inference.
             const tsType = _eraseGenerics(d.getTypeNode()?.getText() ?? typeToString(declType));
             const isOptional = / \| (null|undefined)\b/.test(tsType)
+              || /^(null|undefined) \| /.test(tsType)
               || tsType.endsWith(" | undefined") || tsType.endsWith(" | null");
-            init = isOptional
-              ? { kind: "var" as const, name: "undefined" }
-              : { kind: "var" as const, name: "default" };
+            const isArray = tsType.endsWith("[]") || /^Array</.test(tsType) || /^readonly /.test(tsType);
+            const isMap = /^Map</.test(tsType);
+            const isSet = /^Set</.test(tsType);
+            if (isOptional)      init = { kind: "var" as const, name: "undefined" };
+            else if (isArray)    init = { kind: "arrayLiteral" as const, elems: [] };
+            else if (isMap)      init = { kind: "emptyCollection" as const, collectionType: "Map", tsType };
+            else if (isSet)      init = { kind: "emptyCollection" as const, collectionType: "Set", tsType };
+            else if (tsType === "number") init = { kind: "num" as const, value: 0 };
+            else if (tsType === "boolean") init = { kind: "bool" as const, value: false };
+            else if (tsType === "string")  init = { kind: "str" as const, value: "" };
+            else init = { kind: "var" as const, name: "default" };
           }
           _havocKey = null;
         }
