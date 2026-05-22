@@ -133,6 +133,15 @@ When a variable is Nat-typed:
 - Dafny: no difference (Dafny handles `nat` natively)
 - Ghost function calls pass the variable directly
 
+Type aliases can be overridden with a leading `//@ type <ty>` annotation. Use this when the declared TS type can't be modeled precisely — e.g. numeric-literal unions:
+
+```typescript
+//@ type nat
+export type PresetMinutes = 5 | 15 | 30 | 45 | 60;
+```
+
+emits `type PresetMinutes = nat`. Any reference to `PresetMinutes` (parameters, fields, `PresetMinutes[]`) then resolves through the alias.
+
 Interface fields can also be overridden with a trailing annotation on the same line:
 
 ```typescript

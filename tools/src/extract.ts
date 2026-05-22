@@ -515,6 +515,12 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   const typeParams = decl.getTypeParameters().map(tp => tp.getName());
   const tpField = typeParams.length > 0 ? typeParams : undefined;
 
+  // Leading `//@ type <ty>` overrides extraction — the declared TS type is
+  // replaced by the annotated backend type. Used to coerce literal unions
+  // (`5 | 15 | 30` → `nat`) and other types LS can't model precisely.
+  const override = parseAnnotations(decl).find(a => a.kind === "type");
+  if (override) return { name, typeParams: tpField, kind: "alias", aliasOf: override.expr };
+
   if (type.isUnion()) {
     const members = type.getUnionTypes();
     if (members.every(m => m.isStringLiteral())) {
