@@ -225,6 +225,9 @@ class Parser {
     if (t.type === "ident") {
       if (t.value === "true") { this.advance(); return { kind: "bool", value: true }; }
       if (t.value === "false") { this.advance(); return { kind: "bool", value: false }; }
+      // Match the body extractor (extract.ts NullLiteral): `null` and
+      // `undefined` are interchangeable in LS, both map to None.
+      if (t.value === "null") { this.advance(); return { kind: "var", name: "undefined" }; }
       // new Set<T>() / new Map<K,V>()
       if (t.value === "new") {
         this.advance();
