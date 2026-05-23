@@ -2,7 +2,7 @@
 
 A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations. The toolchain generates verifiable code from your TypeScript — either in Dafny or Lean 4 (with Velvet/Loom).
 
-See [SPEC.md](SPEC.md) and [DESIGN.md](DESIGN.md).
+See [SPEC.md](SPEC.md), [DESIGN.md](DESIGN.md), and [GETTING_STARTED.md](GETTING_STARTED.md).
 
 This is a **Tech Preview**: the core idea is there, but support, semantics, and ergonomics are still evolving.
 
