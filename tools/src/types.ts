@@ -100,6 +100,16 @@ function tyFromTypeNode(tn: TypeNode): Ty {
       const inner: Ty = "syntheticBool" in sole ? { kind: "bool" } : tyFromTypeNode(sole.node);
       return { kind: "optional", inner };
     }
+    // Multi-member union with a nullish arm (`A | B | undefined`): the
+    // structured part is opaque to us, but the optionality isn't. Expose it as
+    // optional<user "A | B"> so downstream (e.g. the let-type merge in resolve)
+    // can keep the nullability while taking structure from a more precise
+    // source. Without this the whole thing collapses to one opaque user blob.
+    const hadNullish = normalized.some(a => !("syntheticBool" in a) && isNullish(a.node));
+    if (hadNullish && nonNullish.length >= 2) {
+      const innerName = nonNullish.map(a => ("syntheticBool" in a ? "boolean" : a.node.getText())).join(" | ");
+      return { kind: "optional", inner: { kind: "user", name: innerName } };
+    }
     // Other unions: leave as a user type spelled how the source wrote it.
     return { kind: "user", name: tn.getText() };
   }

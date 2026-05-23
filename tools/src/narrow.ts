@@ -133,10 +133,14 @@ function recurseExpr(e: TExpr): TExpr {
 function walkStmt(s: TStmt): TStmt {
   // Recurse into children first, then try rules at this node.
   const r = recurseStmt(s);
-  // && rule fires before simple rule because it produces nested ifs whose
-  // inner shape doesn't match simple rule directly. someMatch result needs
-  // no further rewriting at this level.
-  return ruleIfAndArrayIsArray(r) ?? ruleIfAndOptional(r) ?? ruleIfOptionalSimple(r) ?? r;
+  // Optional narrowing fires before Array.isArray narrowing: in a chain like
+  // `next && Array.isArray(next.content)` the optional check must unwrap `next`
+  // *outside* the array match, since `next.content` is unreachable until then.
+  // (When the chain has no leading optional, ruleIfAndOptional no-ops and the
+  // array rule fires; independent narrows commute, so the order is harmless.)
+  // && rules fire before the simple rule because they produce nested ifs whose
+  // inner shape doesn't match the simple rule directly.
+  return ruleIfAndOptional(r) ?? ruleIfAndArrayIsArray(r) ?? ruleIfOptionalSimple(r) ?? r;
 }
 
 function walkStmts(stmts: TStmt[]): TStmt[] {
