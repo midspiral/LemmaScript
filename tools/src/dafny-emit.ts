@@ -365,6 +365,9 @@ function emitExpr(e: Expr): string {
 
     case "record": {
       if (e.spread) {
+        if (e.fields.length === 0) {
+          return emitExpr(e.spread);
+        }
         const updates = e.fields.map(f => `${escapeName(f.name)} := ${emitExpr(f.value)}`);
         return `${emitExpr(e.spread)}.(${updates.join(", ")})`;
       }
