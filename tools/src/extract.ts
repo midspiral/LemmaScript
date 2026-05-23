@@ -591,6 +591,17 @@ function collectAnnotations(node: Node, body?: Node[]): Annotation[] {
   return own;
 }
 
+// A loop's `//@ invariant`/`decreases`/`done_with` annotations live as leading
+// comments of its first body statement — never on the loop node itself. (The
+// loop node's own leading comments belong to whatever precedes it; when the
+// loop is the first statement of an *enclosing* loop, those comments are the
+// enclosing loop's invariants, which must not leak in.) So collect from the
+// body alone, unlike `collectAnnotations`, which also reads the node (needed for
+// functions, whose specs may precede the declaration).
+function collectLoopAnnotations(body: Node[]): Annotation[] {
+  return body.length > 0 ? parseAnnotations(body[0]) : [];
+}
+
 /** All `//@ ` annotations for a function-like node, regardless of whether its
  *  body is a block (annotations on the first statement) or an expression-body
  *  arrow (annotations only on the declaration). Used both for in-file function
@@ -1302,7 +1313,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       // A braceless body (`while (c) stmt`) is a single statement, not a Block;
       // wrap it so it isn't dropped (mirrors the for / for-of / if handlers).
       const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [bodyNode];
-      const annots = collectAnnotations(s, bodyStmts);
+      const annots = collectLoopAnnotations(bodyStmts);
       result.push({
         kind: "while",
         cond: extractExpr(s.getExpression()),
@@ -1351,7 +1362,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
       const bodyNode = s.getStatement();
       const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [bodyNode];
-      const annots = collectAnnotations(s, bodyStmts);
+      const annots = collectLoopAnnotations(bodyStmts);
       result.push({
         kind: "forof",
         names,
@@ -1378,7 +1389,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       const incrementor = s.getIncrementor();
       const bodyNode = s.getStatement();
       const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [bodyNode];
-      const annots = collectAnnotations(s, bodyStmts);
+      const annots = collectLoopAnnotations(bodyStmts);
 
       if (!init || !Node.isVariableDeclarationList(init))
         throw new Error(`for(...) at line ${line}: only variable-declaration init supported`);
@@ -1451,7 +1462,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       }
       const bodyNode = s.getStatement();
       const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [bodyNode];
-      const annots = collectAnnotations(s, bodyStmts);
+      const annots = collectLoopAnnotations(bodyStmts);
       result.push({
         kind: "forof",
         names: [name],
