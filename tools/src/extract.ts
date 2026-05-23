@@ -931,6 +931,30 @@ function parseSpecComments(ranges: ReturnType<Node["getLeadingCommentRanges"]>, 
   return result;
 }
 
+/** Splice a copy of `update` before each `continue` in the same loop scope.
+ *  Recurses into `if`/`switch` (same scope) but not nested `while`/`forof`
+ *  (they own their own continue). Used by the C-style `for` desugar so a
+ *  `continue` doesn't skip the loop update. */
+function insertUpdateBeforeContinue(stmts: RawStmt[], update: RawStmt): RawStmt[] {
+  const out: RawStmt[] = [];
+  for (const s of stmts) {
+    if (s.kind === "continue") {
+      out.push(structuredClone(update), s);
+    } else if (s.kind === "if") {
+      out.push({ ...s, then: insertUpdateBeforeContinue(s.then, update), else: insertUpdateBeforeContinue(s.else, update) });
+    } else if (s.kind === "switch") {
+      out.push({
+        ...s,
+        cases: s.cases.map(c => ({ ...c, body: insertUpdateBeforeContinue(c.body, update) })),
+        defaultBody: insertUpdateBeforeContinue(s.defaultBody, update),
+      });
+    } else {
+      out.push(s);
+    }
+  }
+  return out;
+}
+
 function extractStmts(stmts: Node[]): RawStmt[] {
   const result: RawStmt[] = [];
   for (const s of stmts) {
@@ -1236,11 +1260,18 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         });
       }
 
-      const extractedBody = extractStmts(bodyStmts);
+      let extractedBody = extractStmts(bodyStmts);
       if (incrementor) {
         const incLine = incrementor.getStartLineNumber();
         const asStmt = desugarStmtExpr(incrementor, incLine);
         if (!asStmt) throw new Error(`for(...) at line ${line}: incrementor must be an assignment, compound assignment, or ++/--`);
+        // The loop variable update runs at the bottom of every iteration. A
+        // `continue` in the body would skip it, so emit a copy of the update
+        // immediately before each same-scope `continue` (transform's
+        // eliminateTopLevelContinue then turns `if (X) { update; continue }`
+        // into `if (X) { update } else { rest }`). Nested `while`/`for-of`
+        // loops own their continue scope and are left untouched.
+        extractedBody = insertUpdateBeforeContinue(extractedBody, asStmt);
         extractedBody.push(asStmt);
       }
 
