@@ -344,6 +344,25 @@ function getDiscriminant(ctx: Ctx, typeName: string): string | undefined {
   return findDecl(ctx, typeName)?.discriminant;
 }
 
+/** A type ts-morph handed us that LemmaScript hasn't modeled: contains
+ *  `unknown` (TS `any`), or a `user` type whose name isn't a known declaration
+ *  (an opaque expanded union like `"AssistantMsg | ToolMsg"` that ts-morph
+ *  produced by expanding an alias LS shadows via declare-type). Used by
+ *  `case "let"` to decide when LS's own `init.ty` is the better source of
+ *  structure. */
+function isUnmodeledTy(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
+  if (ty.kind === "unknown") return true;
+  if (ty.kind === "optional") return isUnmodeledTy(ty.inner, typeDecls);
+  if (ty.kind === "array") return isUnmodeledTy(ty.elem, typeDecls);
+  if (ty.kind === "set") return isUnmodeledTy(ty.elem, typeDecls);
+  if (ty.kind === "map") return isUnmodeledTy(ty.key, typeDecls) || isUnmodeledTy(ty.value, typeDecls);
+  if (ty.kind === "user") {
+    const base = ty.name.includes("<") ? ty.name.slice(0, ty.name.indexOf("<")) : ty.name;
+    return !typeDecls.some(d => d.name === base);
+  }
+  return false;
+}
+
 /** Infer quantifier variable type from usage in body.
  *  If the variable is used as a map/set key (e.g. map.has(k), map.get(k)),
  *  return the collection's key type. Otherwise return null (default to int). */
@@ -986,8 +1005,19 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // resolve union variants correctly (e.g., EffectState → mode: EffectMode → { kind: 'Idle' })
       const initCtx = declTy.kind === "user" ? { ...ctx, returnTy: declTy } : ctx;
       const init = coerceStr(resolveExpr(s.init, initCtx), declTy);
-      // Map indexing: TS says T, but access can fail → use Optional<T> from init
-      const ty = (declTy.kind !== "optional" && init.ty.kind === "optional") ? init.ty : declTy;
+      let ty: Ty;
+      if (isUnmodeledTy(declTy, ctx.typeDecls) && !isUnmodeledTy(init.ty, ctx.typeDecls)) {
+        // ts-morph's declared type is opaque to us (an expanded union it made
+        // by inlining an alias we shadow via declare-type, or any-laden), but
+        // LS resolved the initializer to something concrete. Take the structure
+        // from `init.ty`, keeping only the optionality ts-morph reported.
+        ty = declTy.kind === "optional" && init.ty.kind !== "optional"
+          ? { kind: "optional", inner: init.ty }
+          : init.ty;
+      } else {
+        // Map indexing: TS says T, but access can fail → use Optional<T> from init
+        ty = (declTy.kind !== "optional" && init.ty.kind === "optional") ? init.ty : declTy;
+      }
       // const collections are mutable in value-semantics world (TS mutates in place, Dafny/Lean reassign)
       const mutable = s.mutable || isRefMutableInTS(ty);
       return [{ kind: "let", name: s.name, ty, mutable, init }, extend(ctx.env, s.name, ty)];
