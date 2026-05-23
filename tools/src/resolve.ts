@@ -1018,9 +1018,20 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         // Map indexing: TS says T, but access can fail → use Optional<T> from init
         ty = (declTy.kind !== "optional" && init.ty.kind === "optional") ? init.ty : declTy;
       }
+      // Under noUncheckedIndexedAccess, `arr[i]` is `T | undefined`: when the
+      // let's type is optional and the initializer is a direct array index,
+      // tag the index as optional so transform lowers it to a bounds-guarded
+      // `0 <= i < |arr| ? Some(arr[i]) : None` (an out-of-range index yields
+      // None rather than a verification failure). A `!`-asserted access types
+      // as non-optional, so this doesn't fire there — LS keeps demanding the
+      // in-bounds proof.
+      const initFinal: TExpr =
+        ty.kind === "optional" && init.kind === "index" && init.obj.ty.kind === "array" && init.ty.kind !== "optional"
+          ? { ...init, ty }
+          : init;
       // const collections are mutable in value-semantics world (TS mutates in place, Dafny/Lean reassign)
       const mutable = s.mutable || isRefMutableInTS(ty);
-      return [{ kind: "let", name: s.name, ty, mutable, init }, extend(ctx.env, s.name, ty)];
+      return [{ kind: "let", name: s.name, ty, mutable, init: initFinal }, extend(ctx.env, s.name, ty)];
     }
 
     case "assign": {

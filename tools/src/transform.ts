@@ -471,7 +471,25 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         return { kind: "methodCall", obj: transformExpr(e.obj), objTy: e.obj.ty, method, args: [idx], monadic: false };
       }
       const wrappedIdx = isArray(e.obj.ty) && !isNat(e.idx.ty) ? { kind: "toNat" as const, expr: idx } : idx;
-      return { kind: "index", arr: transformExpr(e.obj), idx: wrappedIdx };
+      const arr = transformExpr(e.obj);
+      // Optional-tagged array index (from a `T | undefined` indexed access under
+      // noUncheckedIndexedAccess): bounds-guard it so out-of-range → None.
+      // `0 <= i < |arr| ? Some(arr[i]) : None` — the `arr[i]` only evaluates in
+      // the `then`, where Dafny knows the index is in range.
+      if (isArray(e.obj.ty) && e.ty.kind === "optional") {
+        const len: Expr = { kind: "field", obj: arr, field: "size" };
+        const inBounds: Expr = {
+          kind: "binop", op: "&&",
+          left: { kind: "binop", op: "<=", left: { kind: "num", value: 0 }, right: wrappedIdx },
+          right: { kind: "binop", op: "<", left: wrappedIdx, right: len },
+        };
+        return {
+          kind: "if", cond: inBounds,
+          then: { kind: "constructor", name: "Some", type: "Option", args: [{ kind: "index", arr, idx: wrappedIdx }] },
+          else: { kind: "constructor", name: "None", type: "Option" },
+        };
+      }
+      return { kind: "index", arr, idx: wrappedIdx };
     }
 
     case "call": {
