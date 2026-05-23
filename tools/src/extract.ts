@@ -1884,6 +1884,11 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     const alias = t.getAliasSymbol();
     if (alias) {
       const aliasName = alias.getName();
+      // A //@ declare-type already defines the verification surface for this
+      // alias. Don't walk the imported structure — its union members would
+      // leak unrelated variant datatypes (and the types those reference, which
+      // we don't model) into the output. See examples/declareTypeShadow.ts.
+      if (declaredNames.has(aliasName)) return;
       if (!knownTypes.has(aliasName) && !builtins.has(aliasName) && !aliasName.startsWith("__")) {
         const decls = alias.getDeclarations();
         if (decls.length > 0 && Node.isTypeAliasDeclaration(decls[0])) {
