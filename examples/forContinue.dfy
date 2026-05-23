@@ -10,12 +10,37 @@ method countOdds(xs: seq<int>) returns (res: int)
     invariant (n <= i)
     decreases (|xs| - i)
   {
-    if !(((xs[i] % 2) == 0)) {
+    if ((xs[i] % 2) == 0) {
+      i := (i + 1);
+    } else {
       n := (n + 1);
       i := (i + 1);
     }
   }
   return n;
+}
+
+method copyNonzero(xs: seq<int>) returns (res: seq<int>)
+  ensures (|res| <= |xs|)
+{
+  var out: seq<int> := [];
+  var i := 0;
+  while (i < |xs|)
+    invariant (i <= |xs|)
+    invariant (|out| <= i)
+    decreases (|xs| - i)
+  {
+    var v := xs[i];
+    if (v == 0) {
+      i := (i + 1);
+    } else if (v < 0) {
+      i := (i + 1);
+    } else {
+      out := (out + [v]);
+      i := (i + 1);
+    }
+  }
+  return out;
 }
 
 method countPositivesNonNested(grid: seq<seq<int>>) returns (res: int)
