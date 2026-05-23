@@ -931,15 +931,17 @@ function parseSpecComments(ranges: ReturnType<Node["getLeadingCommentRanges"]>, 
   return result;
 }
 
-/** Splice a copy of `update` before each `continue` in the same loop scope.
- *  Recurses into `if`/`switch` (same scope) but not nested `while`/`forof`
- *  (they own their own continue). Used by the C-style `for` desugar so a
- *  `continue` doesn't skip the loop update. */
+/** Splice `update` before each `continue` in the same loop scope. Recurses
+ *  into `if`/`switch` (same scope) but not nested `while`/`forof` (they own
+ *  their own continue). Used by the C-style `for` desugar so a `continue`
+ *  doesn't skip the loop update. The `update` node is shared by reference —
+ *  the IR is transformed functionally downstream (no in-place mutation), so
+ *  aliasing it across the body is safe. */
 function insertUpdateBeforeContinue(stmts: RawStmt[], update: RawStmt): RawStmt[] {
   const out: RawStmt[] = [];
   for (const s of stmts) {
     if (s.kind === "continue") {
-      out.push(structuredClone(update), s);
+      out.push(update, s);
     } else if (s.kind === "if") {
       out.push({ ...s, then: insertUpdateBeforeContinue(s.then, update), else: insertUpdateBeforeContinue(s.else, update) });
     } else if (s.kind === "switch") {
