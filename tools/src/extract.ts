@@ -5,7 +5,7 @@
  * The only strings are //@ annotation expressions (parsed later by specparser).
  */
 
-import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget } from "ts-morph";
+import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration } from "ts-morph";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
@@ -244,6 +244,11 @@ function _tsTypeFromUnionNode(tn: Node): string {
 
 /** Generic bounds erasure map — set during extractFunction, applied in extractStmts. */
 let _typeParamMap: Map<string, string> = new Map();
+
+// Fresh for-counter names allocated in the current function — so two sibling
+// loops that both need renaming don't independently pick the same `<name>_N`
+// (detection is read-only, so the source still shows the original names).
+let _reservedForCounterNames = new Set<string>();
 function _eraseGenerics(tsType: string): string {
   if (_typeParamMap.size === 0) return tsType;
   if (tsType.includes(" | ")) {
@@ -903,6 +908,122 @@ function desugarStmtExpr(expr: Expression, line: number): RawStmt | null {
   return null;
 }
 
+// A C-style `for (let i …)` counter is hoisted out of its loop scope into the
+// enclosing block (the desugar runs `init; while (cond) { body; update }`). If
+// another binding of that name shares the hoisted scope — a sibling `let i`, or
+// an enclosing for-loop whose own `i` stays live where the inner counter and the
+// outer update sit — the two collapse to one Dafny `var i` ("Duplicate
+// local-variable name", or a silently-misbound update). When that happens we
+// rename this counter to a fresh `<name>_N` in the loop's own desugared pieces.
+//
+// `forCounterRename` is a read-only scope check (no AST mutation): it returns the
+// fresh name when this counter would collide, else null — so a non-conflicting
+// loop keeps its name and output is byte-identical. The rename itself is applied
+// to the extracted Raw IR by `renameRawStmts` / `renameRawExpr` (code) and
+// `renameSpec` (the `//@` strings, still unparsed at this phase).
+function forCounterRename(decl: VariableDeclaration, forStmt: Node): string | null {
+  const name = decl.getName();
+  const fnLike = forStmt.getFirstAncestor(a =>
+    Node.isFunctionDeclaration(a) || Node.isArrowFunction(a) ||
+    Node.isFunctionExpression(a) || Node.isMethodDeclaration(a));
+  const scopeRoot: Node = fnLike ?? forStmt.getSourceFile();
+
+  const isScope = (a: Node) => Node.isBlock(a) || Node.isSourceFile(a) ||
+    Node.isForStatement(a) || Node.isForOfStatement(a) || Node.isForInStatement(a);
+  // Scopes that enclose this loop — its counter, once hoisted, lives in one of
+  // these, so a same-named binding scoped here would collide.
+  const enclosing = new Set<Node>(forStmt.getAncestors());
+
+  const paramClash = (fnLike as any)?.getParameters?.().some((p: any) => p.getName() === name) ?? false;
+  const declClash = scopeRoot.getDescendantsOfKind(SyntaxKind.VariableDeclaration).some(d => {
+    if (d === decl || d.getName() !== name) return false;
+    const scope = d.getFirstAncestor(isScope);
+    return !!scope && enclosing.has(scope);
+  });
+  if (!paramClash && !declClash) return null;
+
+  const used = new Set(scopeRoot.getDescendantsOfKind(SyntaxKind.Identifier).map(i => i.getText()));
+  let n = 2;
+  while (used.has(`${name}_${n}`) || _reservedForCounterNames.has(`${name}_${n}`)) n++;
+  const fresh = `${name}_${n}`;
+  _reservedForCounterNames.add(fresh);
+  return fresh;
+}
+
+/** Whole-word rename of an identifier inside an unparsed `//@` spec string. */
+function renameSpec(s: string, from: string, to: string): string {
+  return s.replace(new RegExp(`\\b${from}\\b`, "g"), to);
+}
+
+/** Rename free references to `from` → `to` in a Raw expression, stopping under a
+ *  lambda / quantifier that re-binds the name (it shadows). */
+function renameRawExpr(e: RawExpr, from: string, to: string): RawExpr {
+  const r = (x: RawExpr) => renameRawExpr(x, from, to);
+  switch (e.kind) {
+    case "var": return e.name === from ? { kind: "var", name: to } : e;
+    case "num": case "str": case "bool": case "result": case "havoc": case "emptyCollection": return e;
+    case "binop": return { ...e, left: r(e.left), right: r(e.right) };
+    case "unop": return { ...e, expr: r(e.expr) };
+    case "call": return { ...e, fn: r(e.fn), args: e.args.map(r) };
+    case "index": return { ...e, obj: r(e.obj), idx: r(e.idx) };
+    case "field": return { ...e, obj: r(e.obj) };
+    case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(f => ({ ...f, value: r(f.value) })) };
+    case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
+    case "conditional": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
+    case "nullish": return { ...e, left: r(e.left), right: r(e.right) };
+    case "nonNull": return { ...e, expr: r(e.expr) };
+    case "optChain": return { ...e, obj: r(e.obj), chain: e.chain.map(c =>
+      c.kind === "call" ? { ...c, args: c.args.map(r) } : c.kind === "index" ? { ...c, idx: r(c.idx) } : c) };
+    case "lambda": return e.params.some(p => p.name === from) ? e
+      : { ...e, body: Array.isArray(e.body) ? renameRawStmts(e.body, from, to) : r(e.body) };
+    case "forall": case "exists": return e.var === from ? e : { ...e, body: r(e.body) };
+  }
+}
+
+/** Rename references to `from` → `to` across a Raw statement (code refs via
+ *  `renameRawExpr`, `//@` strings via `renameSpec`). Statement lists stop
+ *  renaming once a `let from` re-declares the name (it shadows). */
+function renameRawStmt(s: RawStmt, from: string, to: string): RawStmt {
+  const r = (x: RawExpr) => renameRawExpr(x, from, to);
+  const sp = (x: string) => renameSpec(x, from, to);
+  switch (s.kind) {
+    case "let": return { ...s, init: r(s.init) };  // name kept: a shadowing binding is a different variable
+    case "assign": return { ...s, target: s.target === from ? to : s.target, value: r(s.value) };
+    case "return": return { ...s, value: r(s.value) };
+    case "expr": return { ...s, expr: r(s.expr) };
+    case "if": return { ...s, cond: r(s.cond), then: renameRawStmts(s.then, from, to), else: renameRawStmts(s.else, from, to) };
+    case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(sp),
+      decreases: s.decreases ? sp(s.decreases) : null, doneWith: s.doneWith ? sp(s.doneWith) : null,
+      body: renameRawStmts(s.body, from, to) };
+    case "forof": return e_forof(s);
+    case "switch": return { ...s, expr: r(s.expr), cases: s.cases.map(c => ({ ...c, body: renameRawStmts(c.body, from, to) })),
+      defaultBody: renameRawStmts(s.defaultBody, from, to) };
+    case "ghostLet": return { ...s, init: sp(s.init) };
+    case "ghostAssign": return { ...s, target: s.target === from ? to : s.target, value: sp(s.value) };
+    case "assert": return { ...s, expr: sp(s.expr) };
+    case "break": case "continue": case "throw": return s;
+  }
+  function e_forof(f: RawStmt & { kind: "forof" }): RawStmt {
+    // for-of names bind in the body; if one shadows `from`, leave the body alone.
+    const body = f.names.includes(from) ? f.body : renameRawStmts(f.body, from, to);
+    return { ...f, iterable: r(f.iterable), invariants: f.invariants.map(sp),
+      doneWith: f.doneWith ? sp(f.doneWith) : null, body };
+  }
+}
+
+/** Rename `from` → `to` through a statement list, stopping after a `let from`
+ *  shadows it (subsequent references are a different variable). */
+function renameRawStmts(stmts: RawStmt[], from: string, to: string): RawStmt[] {
+  const out: RawStmt[] = [];
+  let active = true;
+  for (const s of stmts) {
+    if (!active) { out.push(s); continue; }
+    out.push(renameRawStmt(s, from, to));
+    if (s.kind === "let" && s.name === from) active = false;
+  }
+  return out;
+}
+
 // ── Statement extraction ─────────────────────────────────────
 
 /** Parse ghost and assert annotations from comment ranges. */
@@ -1261,12 +1382,19 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
       if (!init || !Node.isVariableDeclarationList(init))
         throw new Error(`for(...) at line ${line}: only variable-declaration init supported`);
+      // Hoist the counter declarations, renaming any that would collide once
+      // lifted out of the loop scope (see forCounterRename). The renames are
+      // then applied to the loop's own desugared pieces below.
+      const hoisted: RawStmt[] = [];
+      const renames: [string, string][] = [];
       for (const decl of init.getDeclarations()) {
-        const name = decl.getName();
+        const fresh = forCounterRename(decl, s);
+        const name = fresh ?? decl.getName();
+        if (fresh) renames.push([decl.getName(), fresh]);
         const tsType = decl.getTypeNode()?.getText() ?? typeToString(decl.getType());
         const initExpr = decl.getInitializer();
         if (!initExpr) throw new Error(`for(...) at line ${line}: missing initializer for ${name}`);
-        result.push({
+        hoisted.push({
           kind: "let", name, mutable: true, tsType,
           init: extractExpr(initExpr as Expression),
           line: decl.getStartLineNumber(),
@@ -1288,12 +1416,26 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         extractedBody.push(asStmt);
       }
 
+      let condExpr: RawExpr = cond ? extractExpr(cond) : { kind: "bool", value: true };
+      let invariants = annots.filter(a => a.kind === "invariant").map(a => a.expr);
+      let decreases = annots.find(a => a.kind === "decreases")?.expr ?? null;
+      let doneWith = annots.find(a => a.kind === "done_with")?.expr ?? null;
+      for (const [from, to] of renames) {
+        for (let k = 0; k < hoisted.length; k++) hoisted[k] = renameRawStmt(hoisted[k], from, to);
+        condExpr = renameRawExpr(condExpr, from, to);
+        extractedBody = renameRawStmts(extractedBody, from, to);
+        invariants = invariants.map(inv => renameSpec(inv, from, to));
+        decreases = decreases ? renameSpec(decreases, from, to) : null;
+        doneWith = doneWith ? renameSpec(doneWith, from, to) : null;
+      }
+
+      result.push(...hoisted);
       result.push({
         kind: "while",
-        cond: cond ? extractExpr(cond) : { kind: "bool", value: true },
-        invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
-        decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
-        doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
+        cond: condExpr,
+        invariants,
+        decreases,
+        doneWith,
         body: extractedBody,
         line,
       });
@@ -1463,6 +1605,7 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
   // Generic bounds erasure: <T extends Base> → substitute T with Base everywhere
   // Unbounded type params are preserved as Dafny type parameters
   _typeParamMap = new Map();
+  _reservedForCounterNames = new Set();
   const unboundedTypeParams: string[] = [];
   for (const tp of fn.getTypeParameters?.() ?? []) {
     const constraint = tp.getConstraint();
