@@ -1169,7 +1169,9 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     if (Node.isWhileStatement(s)) {
       const bodyNode = s.getStatement();
-      const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [];
+      // A braceless body (`while (c) stmt`) is a single statement, not a Block;
+      // wrap it so it isn't dropped (mirrors the for / for-of / if handlers).
+      const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [bodyNode];
       const annots = collectAnnotations(s, bodyStmts);
       result.push({
         kind: "while",
