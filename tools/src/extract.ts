@@ -684,7 +684,9 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
     const sig = type.getCallSignatures()[0];
     const hasProps = type.getProperties().length > 0;
     if (sig && !hasProps) {
-      const params = sig.getParameters().map(p => typeToString(p.getTypeAtLocation(decl)));
+      // Synthesize fresh param names — the ts-morph parser used downstream
+      // needs `name: T` syntax; bare `T` is read as a param name with `any`.
+      const params = sig.getParameters().map((p, i) => `_p${i}: ${typeToString(p.getTypeAtLocation(decl))}`);
       const ret = typeToString(sig.getReturnType());
       return { name, kind: "alias", aliasOf: `(${params.join(", ")}) => ${ret}` };
     }
@@ -1852,8 +1854,18 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       }
     }
   }
-  for (const f of fnsToExtract) {
-    for (const p of f.node.getParameters()) resolveType(p.getType(), p);
+  for (let i = 0; i < fnsToExtract.length; i++) {
+    const f = fnsToExtract[i];
+    const fn = functions[i];
+    // Skip params whose TS type was overridden by `//@ type <param> <Override>`
+    // — the verification works against the override, so cross-file resolving
+    // the original type pulls in unused datatypes (often with unsupported
+    // shapes the override exists precisely to avoid).
+    const overriddenNames = new Set(fn.typeAnnotations.map(a => a.name));
+    for (const p of f.node.getParameters()) {
+      if (overriddenNames.has(p.getName())) continue;
+      resolveType(p.getType(), p);
+    }
   }
   // Resolve anonymous object return types into synthetic named types
   for (let i = 0; i < fnsToExtract.length; i++) {
@@ -1863,9 +1875,15 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     // Prefer alias symbol (named type aliases) over underlying object symbol (__type)
     const aliasSym = retType.getAliasSymbol();
     if (aliasSym && !aliasSym.getName().startsWith("__")) {
-      // Named type alias — resolve it instead of generating a synthetic name
-      resolveType(retType, f.node);
       const aliasName = aliasSym.getName();
+      // If the alias name is already locally declared (e.g. via `//@ declare-type
+      // Ruleset = Rule[]`), don't unwrap further — the declared shape is the
+      // verification surface, and walking the original cross-file alias pulls
+      // unused datatypes (often with unsupported shapes) into the gen.
+      if (!knownTypes.has(aliasName)) {
+        // Named type alias — resolve it instead of generating a synthetic name
+        resolveType(retType, f.node);
+      }
       if (knownTypes.has(aliasName)) {
         // Preserve type arguments: Result<Model, Err> not just Result
         const typeArgs = retType.getAliasTypeArguments();

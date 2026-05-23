@@ -77,17 +77,28 @@ function tyFromTypeNode(tn: TypeNode): Ty {
   if (Node.isParenthesizedTypeNode(tn)) return tyFromTypeNode(tn.getTypeNode());
   if (Node.isUnionTypeNode(tn)) {
     const arms = tn.getTypeNodes();
-    // Collapse expanded boolean: `true | false` → boolean
     const isBoolLit = (a: TypeNode) =>
       Node.isLiteralTypeNode(a) && (a.getLiteral().getKind() === SyntaxKind.TrueKeyword || a.getLiteral().getKind() === SyntaxKind.FalseKeyword);
-    if (arms.length === 2 && arms.every(isBoolLit)) return { kind: "bool" };
     const isNullish = (a: TypeNode) =>
       a.getKind() === SyntaxKind.NullKeyword ||
       a.getKind() === SyntaxKind.UndefinedKeyword ||
       (Node.isLiteralTypeNode(a) && a.getLiteral().getKind() === SyntaxKind.NullKeyword);
-    const nonNullish = arms.filter(a => !isNullish(a));
-    if (nonNullish.length === 1 && arms.length >= 2) {
-      return { kind: "optional", inner: tyFromTypeNode(nonNullish[0]) };
+    // Collapse expanded boolean (`true | false`) into a single bool slot, so
+    // `boolean | undefined` (which TS expands to `false | true | undefined`)
+    // still reads as `optional<bool>` rather than falling through to user.
+    const hasTrueLit = arms.some(a => Node.isLiteralTypeNode(a) && a.getLiteral().getKind() === SyntaxKind.TrueKeyword);
+    const hasFalseLit = arms.some(a => Node.isLiteralTypeNode(a) && a.getLiteral().getKind() === SyntaxKind.FalseKeyword);
+    const collapseBool = hasTrueLit && hasFalseLit;
+    const normalized: ({ node: TypeNode } | { syntheticBool: true })[] =
+      collapseBool
+        ? [{ syntheticBool: true } as const, ...arms.filter(a => !isBoolLit(a)).map(node => ({ node }))]
+        : arms.map(node => ({ node }));
+    if (normalized.length === 1 && "syntheticBool" in normalized[0]) return { kind: "bool" };
+    const nonNullish = normalized.filter(a => "syntheticBool" in a || !isNullish(a.node));
+    if (nonNullish.length === 1 && normalized.length >= 2) {
+      const sole = nonNullish[0];
+      const inner: Ty = "syntheticBool" in sole ? { kind: "bool" } : tyFromTypeNode(sole.node);
+      return { kind: "optional", inner };
     }
     // Other unions: leave as a user type spelled how the source wrote it.
     return { kind: "user", name: tn.getText() };
