@@ -1000,7 +1000,10 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         const mutable = s.mutable || isRefMutableInTS(ty);
         return [{ kind: "let", name: s.name, ty, mutable, init }, extend(ctx.env, s.name, ty)];
       }
-      const declTy = resolveTsType(s.tsType, ctx.overrides, s.name);
+      // expandAlias unwraps an array/collection alias (`type Board = number[]`)
+      // to its underlying type, so array methods / index-assignment on the
+      // local dispatch correctly (params get the same treatment, see makeParams).
+      const declTy = expandAlias(resolveTsType(s.tsType, ctx.overrides, s.name), ctx.typeDecls);
       // Propagate declared type as returnTy so nested record expressions
       // resolve union variants correctly (e.g., EffectState → mode: EffectMode → { kind: 'Idle' })
       const initCtx = declTy.kind === "user" ? { ...ctx, returnTy: declTy } : ctx;
