@@ -20,8 +20,8 @@ TS source (.ts)
 
 Structured AST from ts-morph. Expressions are nodes, not strings. Has declared type references (`tsType: "Packet"`) but no resolved types. Close to TS syntax.
 
-- `RawExpr`: var, num, str, bool, binop, unop, call, field, index, record
-- `RawStmt`: let, assign, return, break, if, while, switch
+- `RawExpr`: var, num, str, bool, binop, unop, call, index, field, record, arrayLiteral, lambda, conditional, optChain (`obj?.…`), nullish (`a ?? b`), emptyCollection (`new Map`/`new Set`), nonNull (`e!`); spec-only: result (`\result`), forall, exists, havoc
+- `RawStmt`: let, assign, return, break, continue, expr, if, while, switch, forof, throw; spec-only: ghostLet, ghostAssign, assert
 - `//@ ` annotations remain as strings (parsed by specparser in the resolve pass)
 
 ### Typed IR (`typedir.ts`)
@@ -39,11 +39,11 @@ Each statement carries type information for variables. Unsupported patterns (dat
 
 Backend-neutral intermediate representation. Produced by the transform from Typed IR. Consumed by either emitter. Types are preserved as `Ty` objects (not converted to strings) — each emitter converts to its own type syntax.
 
-Type names: `Expr`, `Stmt`, `Decl`, `Module`, `FnDef`, `FnMethod`, `Inductive`, `Structure`, `Namespace`, `MatchArm`, `StmtMatchArm`.
+Type names: `Expr`, `Stmt`, `Module`, `MatchArm`, `StmtMatchArm`, and `Decl` = `Inductive` | `Structure` | `FnDef` | `FnDefByMethod` | `FnMethod` | `Namespace` | `ClassDecl` | `ConstDecl` | `TypeAlias` | `ExternDecl`. (`FnDefByMethod` is a `//@ pure` function whose body can't be a pure expression — emitted as a Dafny function-by-method.)
 
 ## Phases
 
-**Extract** (`extract.ts`): ts-morph → Raw IR. Walks the TS AST, produces structured expression nodes. Only string outputs are `//@ ` annotation text.
+**Extract** (`extract.ts`): ts-morph → Raw IR. Walks the TS AST, produces structured expression nodes. Only string outputs are `//@ ` annotation text. Two backend-neutral CLI commands stop here: `lsc extract foo.ts` dumps the Raw IR as JSON; `lsc info foo.ts` writes `foo.ts.json`, a per-function spec summary (`{ name: { sig, requires, ensures, decreases } }`, class methods keyed `Class.method`) — see `info-command.ts`.
 
 **Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedPaths`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: simple vars and pure access paths (`a.b.c`, any depth) narrow. `&&` chains accumulate narrowings (each premise in scope for later ones); `==>` propagates premise narrowings into the conclusion. **Type narrowing only** — no structural rewriting.
 
@@ -62,6 +62,10 @@ All TS `receiver.method(args)` calls produce `methodCall` IR nodes carrying the 
 Each emitter dispatches on `(receiverTy, method)` to decide syntax. For example, `(array, "map")` → Lean: `arr.map f`, Dafny: `Seq.Map(f, arr)`. Unsupported `(type, method)` pairs error at emit time.
 
 `app` is reserved for receiver-less calls: user-defined functions, `Pure.fnName(...)`, `JSFloorDiv(a, b)`, `SetToSeq(s)`.
+
+## Externs
+
+When a call resolves to a pure function declared in a *different* `.ts` file, extract records it as a `RawExtern` (resolved to `TExtern`, lowered to `ExternDecl`). The Dafny emitter renders these as top-of-file `function {:axiom} Name(...): R` with the source declaration's `requires`/`ensures` lifted along, so callers reason against the same contract the source verified. Externs are emitted before all other declarations so they're in scope everywhere.
 
 ## Spec Expression Parser
 
@@ -130,10 +134,12 @@ Each TS source produces two Dafny files:
 
 - **`foo.dfy.gen`** — always regeneratable from TS. The merge base.
 - **`foo.dfy`** — source of truth. Starts as a copy of `.dfy.gen`, then accumulates user/LLM proof additions. The diff between `.dfy.gen` and `.dfy` must be additions-only.
+- **`foo.dfy.base`** — transient three-way-merge anchor written by `regen` when a regenerated `.dfy.gen` diverges from a dirty `.dfy`; deleted on a clean, verified merge.
 
 ### Commands (`dafny-commands.ts`)
 
 - `lsc gen --backend=dafny foo.ts` — generate `.dfy.gen` + seed `.dfy`
+- `lsc gen-check --backend=dafny foo.ts` — gen + additions-only check (no `dafny verify`)
 - `lsc regen --backend=dafny foo.ts` — regenerate `.dfy.gen`, three-way merge, verify
 - `lsc check --backend=dafny foo.ts` — gen + additions-only check + `dafny verify`
 
@@ -252,7 +258,7 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 | `extract.ts` | Extract | ts-morph → Raw IR |
 | `specparser.ts` | (parser) | Parses `//@ ` annotations → RawExpr |
 | `resolve.ts` | Resolve | Raw IR → Typed IR (types and type-narrowing) |
-| `typedir.ts` | Types | Typed IR type definitions (incl. `someMatch`) |
+| `typedir.ts` | Types | Typed IR type definitions (incl. `someMatch`/`tagMatch`) |
 | `narrow.ts` | Narrow | Typed IR → Typed IR (structural narrowing → `someMatch` / `tagMatch`) |
 | `ir.ts` | Types | Backend-neutral IR type definitions |
 | `transform.ts` | Transform | Typed IR → IR |
@@ -261,5 +267,6 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 | `lean-emit.ts` | Emit | IR → Lean text |
 | `dafny-emit.ts` | Emit | IR → Dafny text |
 | `lean-commands.ts` | CLI | Lean gen/check commands |
-| `dafny-commands.ts` | CLI | Dafny gen/regen/check commands |
+| `dafny-commands.ts` | CLI | Dafny gen/gen-check/regen/check commands |
+| `info-command.ts` | CLI | `lsc info` — per-function spec summary JSON |
 | `lsc.ts` | CLI | Wires the pipeline, dispatches to backend |
