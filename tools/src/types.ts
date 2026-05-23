@@ -135,3 +135,23 @@ export function parseTsType(tsType: string): Ty {
   return { kind: "user", name: t };
 }
 
+/** Render a Ty in LemmaScript canonical syntax — backend-neutral, side-effect-free.
+ *  Used by `lsc info` for the signature field of `foo.ts.json`. */
+export function tyToCanonical(ty: Ty): string {
+  switch (ty.kind) {
+    case "bool":   return "bool";
+    case "nat":    return "nat";
+    case "int":    return "int";
+    case "real":   return "real";
+    case "string": return "string";
+    case "void":   return "void";
+    case "unknown":return "unknown";
+    case "array":  return `seq<${tyToCanonical(ty.elem)}>`;
+    case "map":    return `map<${tyToCanonical(ty.key)}, ${tyToCanonical(ty.value)}>`;
+    case "set":    return `set<${tyToCanonical(ty.elem)}>`;
+    case "optional": return `Option<${tyToCanonical(ty.inner)}>`;
+    case "user":   return ty.name;
+    case "fn":     return `(${ty.params.map(tyToCanonical).join(", ")}) -> ${tyToCanonical(ty.result)}`;
+  }
+}
+

@@ -17,6 +17,7 @@ import { emitLeanFile } from "./lean-emit.js";
 import { emitDafnyFile } from "./dafny-emit.js";
 import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-commands.js";
 import { leanGen, leanCheck } from "./lean-commands.js";
+import { runInfo } from "./info-command.js";
 
 function main() {
   const args = process.argv.slice(2);
@@ -48,7 +49,7 @@ function main() {
 
   const [cmd, filePath] = args;
   if (!cmd || !filePath) {
-    console.error("Usage: lsc <gen|check|regen|extract> [--backend=lean|dafny] <file.ts>");
+    console.error("Usage: lsc <gen|check|regen|extract|info> [--backend=lean|dafny] <file.ts>");
     process.exit(1);
   }
 
@@ -78,9 +79,10 @@ function main() {
 
   const fullText = sourceFile.getFullText();
 
-  // Check //@ backend directive — skip if backend doesn't match
+  // Check //@ backend directive — skip if backend doesn't match.
+  // `extract` and `info` are backend-neutral and always run.
   const backendDirective = fullText.match(/\/\/@ backend (\w+)/);
-  if (backendDirective && backendDirective[1] !== backend) {
+  if (cmd !== "extract" && cmd !== "info" && backendDirective && backendDirective[1] !== backend) {
     console.log(`Skipped: ${path.basename(filePath)} (//@ backend ${backendDirective[1]}, current: ${backend})`);
     return;
   }
@@ -93,6 +95,12 @@ function main() {
 
   if (cmd === "extract") {
     console.log(JSON.stringify(raw, null, 2));
+    return;
+  }
+
+  if (cmd === "info") {
+    const outPath = path.join(path.dirname(absPath), `${path.basename(filePath, ".ts")}.ts.json`);
+    runInfo(raw, outPath);
     return;
   }
 
