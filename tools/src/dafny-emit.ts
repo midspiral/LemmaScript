@@ -144,6 +144,9 @@ function emitExpr(e: Expr): string {
         if (e.method === "indexOf") { needPreamble("SeqIndexOf"); return `SeqIndexOf(${obj}, ${args[0]})`; }
         if (e.method === "push")     return `(${obj} + [${args[0]}])`;
         if (e.method === "concat")   return `(${obj} + [${args[0]}])`;
+        // No-arg slice is a full copy; Dafny seq is an immutable value type, so
+        // the copy is just the seq itself (the idiom for "copy then mutate").
+        if (e.method === "slice" && args.length === 0) return obj;
         if (e.method === "slice" && args.length === 1) return `${obj}[${args[0]}..]`;
         if (e.method === "slice" && args.length === 2) {
           // JS slice clamps both bounds; Dafny requires `0 <= lo <= hi <= |s|`.
