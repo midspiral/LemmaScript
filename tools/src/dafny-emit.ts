@@ -112,6 +112,10 @@ function emitExpr(e: Expr): string {
     case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 
     case "constructor": {
+      // Option constructors (Some/None) may appear in inferred positions
+      // (e.g. lambda result) without an explicit `optional<T>` in any
+      // signature, so request the preamble here.
+      if (e.type === "Option") needPreamble("OptionType");
       const head = qualifyCtor(e.name, e.type);
       if (!e.args || e.args.length === 0) return head;
       return `${head}(${e.args.map(emitExpr).join(", ")})`;

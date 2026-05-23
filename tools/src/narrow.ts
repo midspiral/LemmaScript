@@ -97,7 +97,7 @@ const parseSimpleOptionalCheck = parseOptionalCheck;
 
 function walkExpr(e: TExpr): TExpr {
   const r = recurseExpr(e);
-  return ruleNullish(r) ?? ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleImplArrayIsArray(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalInMap(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
+  return ruleNullish(r) ?? ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleImplArrayIsArray(r) ?? ruleConditionalArrayIsArray(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalInMap(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
 }
 
 function recurseExpr(e: TExpr): TExpr {
@@ -322,6 +322,34 @@ function ruleImplArrayIsArray(e: TExpr): TExpr | null {
   };
 }
 
+/** Rule (expression): `Array.isArray(x) ? a : b` — ternary narrowing for
+ *  synth array-unions. Mirrors `ruleImplArrayIsArray` but at the conditional
+ *  position rather than the `==>` position.
+ *  → `tagMatch x { ArrayBranch => walkExpr(a) } fallthrough walkExpr(b)`
+ *  (or NonArrayBranch when the condition is negated).
+ *  Inside the matched arm, bare references to `x` are rewritten to the
+ *  variant's payload field (e.g. `x.arr`) by `transformExpr` when emitting
+ *  the tagMatch — same mechanism `ruleImplArrayIsArray` already relies on. */
+function ruleConditionalArrayIsArray(e: TExpr): TExpr | null {
+  if (e.kind !== "conditional") return null;
+  const pos = parseArrayIsArrayCall(e.cond);
+  const neg = e.cond.kind === "unop" && e.cond.op === "!"
+    ? parseArrayIsArrayCall(e.cond.expr)
+    : null;
+  const matched = pos ?? (neg ? { scrutinee: neg.scrutinee, typeName: neg.typeName, variant: "NonArrayBranch" as const } : null);
+  if (!matched) return null;
+  const thenBody = pos ? e.then : e.else;
+  const elseBody = pos ? e.else : e.then;
+  return {
+    kind: "tagMatch",
+    scrutinee: matched.scrutinee,
+    typeName: matched.typeName,
+    cases: [{ variant: matched.variant, body: walkExpr(thenBody) }],
+    fallthrough: walkExpr(elseBody),
+    ty: e.ty,
+  };
+}
+
 /** Rule (expression): `(path !== undefined [&& rest]) ==> B` — premise narrowing
  *  for spec implications (ensures/requires). The premise's optional checks
  *  bind narrowed values that the conclusion can use.
@@ -519,19 +547,31 @@ function ruleIfAndOptional(s: TStmt): TStmt | null {
 
 // ── Discriminant narrowing ──────────────────────────────────
 
-/** Detect `Array.isArray(x)` where x has type of a synthesized array-union
- *  (discriminant `"__isArray__"`). Returns the variant name to narrow to. */
-function parseArrayIsArrayCall(call: TExpr): { scrutinee: TExpr & { kind: "var" }; typeName: string; variant: "ArrayBranch" } | null {
+/** Detect `Array.isArray(<path>)` where `<path>` is a var or a chain of
+ *  field accesses rooted at a var, and the path's type is a synthesized
+ *  array-union (discriminant `"__isArray__"`). Returns the variant name to
+ *  narrow to. The scrutinee is whatever path the user wrote — downstream
+ *  transforms substitute it inside the matched arm. */
+function parseArrayIsArrayCall(call: TExpr): { scrutinee: TExpr; typeName: string; variant: "ArrayBranch" } | null {
   if (call.kind !== "call") return null;
   if (call.fn.kind !== "field" || call.fn.field !== "isArray") return null;
   if (call.fn.obj.kind !== "var" || call.fn.obj.name !== "Array") return null;
   if (call.args.length !== 1) return null;
   const arg = call.args[0];
-  if (arg.kind !== "var" || arg.ty.kind !== "user") return null;
+  if (!isNarrowablePath(arg) || arg.ty.kind !== "user") return null;
   const baseTyName = arg.ty.name.includes("<") ? arg.ty.name.slice(0, arg.ty.name.indexOf("<")) : arg.ty.name;
   const decl = _typeDecls.find(d => d.name === baseTyName);
   if (decl?.kind !== "discriminated-union" || decl.discriminant !== "__isArray__") return null;
   return { scrutinee: arg, typeName: arg.ty.name, variant: "ArrayBranch" };
+}
+
+/** A "narrowable path" is a var or a chain of field accesses rooted at a var
+ *  — i.e., pure and structurally addressable, so transforms can substitute
+ *  occurrences inside a matched arm without worrying about re-evaluation. */
+function isNarrowablePath(e: TExpr): boolean {
+  if (e.kind === "var") return true;
+  if (e.kind === "field") return isNarrowablePath(e.obj);
+  return false;
 }
 
 /** Detect `x.kind === "variant"`, `'key' in x`, or `Array.isArray(x)` (synth
@@ -560,9 +600,16 @@ function parseDiscriminantCond(cond: TExpr): { scrutinee: TExpr & { kind: "var" 
     }
   }
   // Pattern: Array.isArray(x) — narrows x to the ArrayBranch variant of a
-  // synthesized array-union (discriminant "__isArray__").
+  // synthesized array-union (discriminant "__isArray__"). Statement-level
+  // discriminant chains (`if (Array.isArray(x)) {...} else if (...)`) still
+  // require a bare-var scrutinee since the existing var-name-keyed
+  // replacement machinery in transform.ts only handles that shape; path
+  // scrutinees (e.g. `m.content`) are handled exclusively by
+  // `ruleConditionalArrayIsArray` and the expression-form tagMatch path.
   const arrCheck = parseArrayIsArrayCall(cond);
-  if (arrCheck) return arrCheck;
+  if (arrCheck && arrCheck.scrutinee.kind === "var") {
+    return { scrutinee: arrCheck.scrutinee, typeName: arrCheck.typeName, variant: arrCheck.variant };
+  }
   return null;
 }
 
@@ -575,9 +622,12 @@ function parseNegativeDiscriminantCond(cond: TExpr): { scrutinee: TExpr & { kind
     return { scrutinee: cond.left.obj, typeName: cond.left.obj.ty.name, variant: cond.right.value };
   }
   // Pattern: !Array.isArray(x) — narrows x to the NonArrayBranch variant.
+  // Same var-scrutinee restriction as parseDiscriminantCond.
   if (cond.kind === "unop" && cond.op === "!") {
     const arrCheck = parseArrayIsArrayCall(cond.expr);
-    if (arrCheck) return { scrutinee: arrCheck.scrutinee, typeName: arrCheck.typeName, variant: "NonArrayBranch" };
+    if (arrCheck && arrCheck.scrutinee.kind === "var") {
+      return { scrutinee: arrCheck.scrutinee, typeName: arrCheck.typeName, variant: "NonArrayBranch" };
+    }
   }
   return null;
 }

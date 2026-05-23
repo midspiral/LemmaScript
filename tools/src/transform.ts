@@ -696,14 +696,18 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
 
     case "tagMatch": {
       // Expression-form tagMatch — emitted by `ruleImplArrayIsArray` for spec
-      // implications like `Array.isArray(x) ==> B`. Mirrors emitMatchStmt /
-      // transformPureMatch but at expression level. Substitutes scrutinee
-      // field accesses and (for synth array-unions) bare scrutinee refs
-      // inside each arm with the variant's payload binder.
+      // implications like `Array.isArray(x) ==> B` and by
+      // `ruleConditionalArrayIsArray` for ternary narrowing. Substitutes
+      // scrutinee field accesses and (for synth array-unions) scrutinee
+      // path occurrences inside each arm with the variant's payload binder.
+      // Path scrutinees (e.g. `m.content`) get a synthesized hint derived
+      // from the last field/var name so the binder reads naturally.
       const scrutinee = lowerExpr(e.scrutinee, binds);
       const decl = _typeDecls.find(d => d.name === e.typeName);
       const isSynthArrayUnion = decl?.discriminant === "__isArray__";
       const varName = e.scrutinee.kind === "var" ? e.scrutinee.name : undefined;
+      const pathHint = varName ?? scrutineeHint(e.scrutinee);
+      const wrapOpt = e.ty.kind === "optional";
       const arms: MatchArm[] = e.cases.map(c => {
         const variant = decl?.variants?.find(v => v.name === c.variant);
         const fields = variant?.fields ?? [];
@@ -713,11 +717,19 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           if (isSynthArrayUnion && fields.length === 1) {
             body = replaceVarInExpr(body, varName, matchBinder(fields[0].name, varName));
           }
+        } else if (!varName && isSynthArrayUnion && fields.length === 1) {
+          // Path scrutinee (e.g. `m.content`): replace structural occurrences
+          // with the binder var ref.
+          const binderName = matchBinder(fields[0].name, pathHint);
+          body = replaceExprInExpr(body, scrutinee, { kind: "var", name: binderName });
         }
-        return { pattern: buildMatchPattern(c.variant, fields, varName), body };
+        if (wrapOpt) body = wrapOptionalBranch(body, c.body);
+        return { pattern: buildMatchPattern(c.variant, fields, pathHint), body };
       });
       if (e.fallthrough) {
-        arms.push({ pattern: "_", body: lowerExpr(e.fallthrough, binds) });
+        let body = lowerExpr(e.fallthrough, binds);
+        if (wrapOpt) body = wrapOptionalBranch(body, e.fallthrough);
+        arms.push({ pattern: "_", body });
       }
       return { kind: "match", scrutinee: varName ?? scrutinee, arms };
     }
@@ -787,6 +799,35 @@ function replaceVarInExpr(e: Expr, oldName: string, newName: string): Expr {
     if (x.kind === "let" && x.name === oldName) return { ...x, value: replaceVarInExpr(x.value, oldName, newName) };
     return null;
   });
+}
+
+/** Structural equality on Expr access-paths (var / field chain). Enough to
+ *  match the scrutinee `m.content` against later occurrences in a match arm. */
+function exprPathEqual(a: Expr, b: Expr): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "var" && b.kind === "var") return a.name === b.name;
+  if (a.kind === "field" && b.kind === "field") return a.field === b.field && exprPathEqual(a.obj, b.obj);
+  return false;
+}
+
+/** Substitute every occurrence of `target` (an access-path Expr) with `repl`
+ *  inside `e`. Mirror of `replaceVarInExpr` but keyed on a sub-path rather
+ *  than a bare name — needed when the narrowing scrutinee is `m.content`
+ *  (field access) rather than a bare `content` (var). */
+function replaceExprInExpr(e: Expr, target: Expr, repl: Expr): Expr {
+  return mapExpr(e, x => {
+    if (exprPathEqual(x, target)) return repl;
+    return null;
+  });
+}
+
+/** Extract a short reader-friendly hint for a TExpr access-path: the last
+ *  field name in a field chain, or the var name. Used to derive a stable
+ *  binder prefix when the scrutinee isn't a bare var. */
+function scrutineeHint(e: TExpr): string {
+  if (e.kind === "var") return e.name;
+  if (e.kind === "field") return e.field;
+  return "x";
 }
 
 // ── Transform statements ─────────────────────────────────────
