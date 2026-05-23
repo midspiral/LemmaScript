@@ -1205,11 +1205,8 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       throw new Error(`someMatch stmt scrutinee must be a pure access path, got ${s.scrutinee.kind}`);
     }
 
-    case "tagMatch": {
-      const varName = s.scrutinee.kind === "var" ? s.scrutinee.name : "?";
-      const chain: Chain = { varName, typeName: s.typeName, cases: s.cases, fallthrough: s.fallthrough };
-      return [emitMatchStmt(chain, typeDecls)];
-    }
+    case "tagMatch":
+      return [emitMatchStmt(s.scrutinee, s.typeName, s.cases, s.fallthrough, typeDecls)];
   }
 }
 
@@ -1249,38 +1246,67 @@ function buildMatchArms<T>(
   return arms;
 }
 
-function emitMatchStmt(chain: Chain, typeDecls: TypeDeclInfo[]): Stmt {
-  const cases = chain.cases.map(c => ({ name: c.variant, body: c.body }));
-  const decl = typeDecls.find(d => d.name === chain.typeName);
+function emitMatchStmt(
+  scrutinee: TExpr,
+  typeName: string,
+  cases: { variant: string; body: TStmt[] }[],
+  fallthrough: TStmt[],
+  typeDecls: TypeDeclInfo[],
+): Stmt {
+  const decl = typeDecls.find(d => d.name === typeName);
   // Synth array-unions (discriminant "__isArray__") have single-field variants
-  // ArrayBranch(arr) / NonArrayBranch(val). The user code in the matched arm
-  // refers to the scrutinee by its bare name (`content`), not as `content.arr`
-  // — so in addition to the normal field-access substitution, substitute the
-  // bare scrutinee var with the variant's sole field binder.
+  // ArrayBranch(arr) / NonArrayBranch(val). The matched arm refers to the
+  // scrutinee by its bare name/path (`content`, `m.content`), not `.arr`, so
+  // we substitute that whole reference with the variant's sole field binder.
   const isSynthArrayUnion = decl?.discriminant === "__isArray__";
-  function transformArmBody(body: TStmt[], vn: string, fields: { name: string; tsType: string; type?: Ty }[]): Stmt[] {
-    let stmts = replaceFieldAccessInTStmts(body, vn, fields);
-    if (isSynthArrayUnion && fields.length === 1) {
-      const f = fields[0];
-      stmts = replaceVarInTStmts(stmts, vn, matchBinder(f.name, vn), f.type ?? parseTsType(f.tsType));
+  // The scrutinee is a bare var (`current`) or a field-access path
+  // (`current.content`). `prefix` names the binder scope — the var name, or a
+  // safe id derived from the path (`current.content` → `current_content`) —
+  // and is used for both pattern binders and arm-body substitution so they
+  // always agree. A var scrutinee has empty `fields`, so `prefix` is just its
+  // name and the emitted code is unchanged from before this generalization.
+  const path = asTAccessPath(scrutinee);
+  const isPath = !!path && path.fields.length > 0;
+  const prefix = path ? [path.rootVar, ...path.fields].join("_") : "?";
+  function transformArmBody(body: TStmt[], fields: { name: string; tsType: string; type?: Ty }[]): Stmt[] {
+    let stmts: TStmt[];
+    if (isPath && path) {
+      // Path scrutinee: the matched value is referred to by the bare path, so
+      // substitute the whole path (only the synth single-field shape arises
+      // here — discriminant chains require a var scrutinee).
+      stmts = isSynthArrayUnion && fields.length === 1
+        ? replacePathInTStmts(body, path, matchBinder(fields[0].name, prefix), fields[0].type ?? parseTsType(fields[0].tsType))
+        : body;
+    } else {
+      stmts = replaceFieldAccessInTStmts(body, prefix, fields);
+      if (isSynthArrayUnion && fields.length === 1) {
+        const f = fields[0];
+        stmts = replaceVarInTStmts(stmts, prefix, matchBinder(f.name, prefix), f.type ?? parseTsType(f.tsType));
+      }
     }
     return transformStmts(stmts, typeDecls);
   }
-  const arms = buildMatchArms(cases, chain.varName, chain.typeName, typeDecls,
-    (body, vn, fields) => transformArmBody(body, vn!, fields))!;
-  if (chain.fallthrough.length > 0) {
-    const remaining = remainingVariant(chain, typeDecls);
+  const armCases = cases.map(c => ({ name: c.variant, body: c.body }));
+  const arms = buildMatchArms(armCases, prefix, typeName, typeDecls,
+    (body, _vn, fields) => transformArmBody(body, fields))!;
+  // Add the fallthrough arm whenever the listed cases don't cover every
+  // variant — needed for exhaustiveness even when there's no `else`
+  // (`fallthrough` empty), e.g. `if (Array.isArray(x)) {...}` with no else
+  // becomes `match x { case ArrayBranch(..) => ... case NonArrayBranch(..) => }`.
+  const allCovered = !!decl?.variants && cases.length >= decl.variants.length;
+  if (!allCovered) {
+    const remaining = remainingVariant(typeName, cases, typeDecls);
     if (remaining) {
       // Exactly one variant left — destructure so the fallthrough body can
       // access variant-specific fields (Lean requires this; Dafny tolerates `_`).
-      const pattern = buildMatchPattern(remaining.name, remaining.fields, chain.varName);
-      const body = transformArmBody(chain.fallthrough, chain.varName, remaining.fields);
+      const pattern = buildMatchPattern(remaining.name, remaining.fields, prefix);
+      const body = transformArmBody(fallthrough, remaining.fields);
       arms.push({ pattern, body });
     } else {
-      arms.push({ pattern: "_", body: transformStmts(chain.fallthrough, typeDecls) });
+      arms.push({ pattern: "_", body: transformStmts(fallthrough, typeDecls) });
     }
   }
-  return { kind: "match", scrutinee: chain.varName, arms };
+  return { kind: "match", scrutinee: isPath ? transformExpr(scrutinee) : prefix, arms };
 }
 
 /** Replace bare `var(oldName)` references → `var(newName)` with the given type.
@@ -1296,10 +1322,10 @@ function replaceVarInTStmts(stmts: TStmt[], oldName: string, newName: string, ne
 }
 
 /** If the chain has matched all variants but one, return that remaining variant. */
-function remainingVariant(chain: Chain, typeDecls: TypeDeclInfo[]): { name: string; fields: { name: string; tsType: string; type?: Ty }[] } | null {
-  const decl = typeDecls.find(d => d.name === chain.typeName);
+function remainingVariant(typeName: string, cases: { variant: string }[], typeDecls: TypeDeclInfo[]): { name: string; fields: { name: string; tsType: string; type?: Ty }[] } | null {
+  const decl = typeDecls.find(d => d.name === typeName);
   if (!decl?.variants) return null;
-  const matched = new Set(chain.cases.map(c => c.variant));
+  const matched = new Set(cases.map(c => c.variant));
   const remaining = decl.variants.filter(v => !matched.has(v.name));
   if (remaining.length !== 1) return null;
   return remaining[0];
@@ -1514,7 +1540,7 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
   // since Lean errors on redundant match arms.
   const allCovered = decl?.variants && chain.cases.length >= decl.variants.length;
   if (chain.fallthrough.length > 0 && !allCovered) {
-    const remaining = remainingVariant(chain, typeDecls);
+    const remaining = remainingVariant(chain.typeName, chain.cases, typeDecls);
     if (remaining) {
       // Exactly one variant left — destructure for variant-specific field access.
       let body = transformPureBody(chain.fallthrough, typeDecls);
