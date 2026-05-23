@@ -18,7 +18,7 @@ npx lsc check --backend=<dafny|lean> path/to/foo.ts   # gen + verify
 npx lsc regen --backend=dafny        path/to/foo.ts   # three-way merge after TS changes
 ```
 
-Default backend is Lean. Always pass `--backend=dafny` explicitly when targeting Dafny — silently using the wrong backend wastes a lot of cycles.
+Default backend is Dafny. Pass `--backend=...` explicitly anyway — case-study CIs and helper scripts all do, and the default has been flipped before.
 
 After editing `lsc` itself (anything under `tools/`), run `npm run build` before re-invoking `npx lsc` — the CLI runs the compiled `tools/dist/lsc.js`, not the TS source.
 

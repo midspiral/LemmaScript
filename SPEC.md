@@ -1172,7 +1172,7 @@ lsc regen --backend=dafny <file.ts>           — regenerate with three-way merg
 lsc extract <file.ts>                          — print Raw IR JSON (debugging)
 ```
 
-Default backend is Lean (for now).
+Default backend is Dafny.
 
 ### 7.1 `gen`
 
