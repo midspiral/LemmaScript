@@ -12,12 +12,12 @@ For the annotation language and what each `//@ ` keyword does, see [SPEC.md](SPE
 
 ## Directory layout
 
-Clone LemmaScript and your target project (or a fork of it) as **siblings** under a shared parent directory:
+Clone LemmaScript and your target project as **siblings** under a shared parent directory. To get a working verified example to learn from, clone [midspiral/hono-lemmascript](https://github.com/midspiral/hono-lemmascript/) — it already has the annotations, generated Dafny, proof additions, and CI in place:
 
 ```
 ~/code/
   LemmaScript/                  ← this repo
-  hono-lemmascript/             ← your fork of the target project
+  hono-lemmascript/             ← worked example: hono with LemmaScript verification
 ```
 
 Why siblings? Two reasons:
@@ -30,10 +30,12 @@ mkdir -p ~/code && cd ~/code
 git clone https://github.com/midspiral/LemmaScript.git
 cd LemmaScript && npm install && cd tools && npm ci && cd ../..
 
-# Your project — fork first if you intend to upstream, otherwise plain clone is fine
-git clone https://github.com/honojs/hono.git hono-lemmascript
+# Worked example — hono with verified middleware
+git clone -b lemmascript https://github.com/midspiral/hono-lemmascript.git
 cd hono-lemmascript
 ```
+
+From here you can run `../LemmaScript/tools/check.sh dafny` to reproduce the full verification, or jump straight to the edit loop below on any file listed in `LemmaScript-files.txt`.
 
 ## Pick something to verify
 
