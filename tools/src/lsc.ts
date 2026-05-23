@@ -2,7 +2,7 @@
 /**
  * lsc — LemmaScript compiler CLI
  *
- * Pipeline: extract → resolve → transform → emit
+ * Pipeline: extract → resolve → narrow → transform → peephole → emit
  */
 
 import { Project, ScriptTarget } from "ts-morph";
