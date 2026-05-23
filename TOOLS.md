@@ -47,7 +47,7 @@ Type names: `Expr`, `Stmt`, `Decl`, `Module`, `FnDef`, `FnMethod`, `Inductive`, 
 
 **Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedPaths`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: simple vars and pure access paths (`a.b.c`, any depth) narrow. `&&` chains accumulate narrowings (each premise in scope for later ones); `==>` propagates premise narrowings into the conclusion. **Type narrowing only** — no structural rewriting.
 
-**Narrow** (`narrow.ts`): Typed IR → Typed IR. Owns all structural narrowing — both for optional checks and for discriminated unions. Optional patterns rewrite to `someMatch`; discriminant patterns (`x.kind === "v"`, `'k' in x`, `x.kind !== "v") return; ...`) rewrite to `tagMatch`. Also handles `==>` premise narrowing in specs, `left ?? right` (nullish coalescing), and `obj?.<chain>` for any combination of `?.field`, `?.foo()`, `?.[i]`, and continuations (via the `optChain` IR node). Rules fire for pure access paths (`var(x)`, `field(purePath, name)`); `optChain` and `nullish` are the sole paths for complex scrutinees. See [Narrow rules](#narrow-rules) below.
+**Narrow** (`narrow.ts`): Typed IR → Typed IR. Owns all structural narrowing — both for optional checks and for discriminated unions. Optional patterns rewrite to `someMatch`; discriminant patterns (`x.kind === "v"`, `'k' in x`, `Array.isArray(x)` for synthesized array-unions, `x.kind !== "v") return; ...`) rewrite to `tagMatch`. Also handles `==>` premise narrowing in specs, `left ?? right` (nullish coalescing), `k in m ? m[k] : default` for map-typed `m`, and `obj?.<chain>` for any combination of `?.field`, `?.foo()`, `?.[i]`, and continuations (via the `optChain` IR node). Rules fire for pure access paths (`var(x)`, `field(purePath, name)`); `optChain` and `nullish` are the sole paths for complex scrutinees. See [Narrow rules](#narrow-rules) below.
 
 **Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None — substituting the binder for any pure access path scrutinee, or lowering naively when the scrutinee is complex (narrow pre-bound the someBody). No optional-narrowing logic of its own.
 
@@ -159,8 +159,11 @@ Throughout, `e !== undefined` includes equivalent forms: `undefined !== e`, bare
 
 | Pattern | Rewrites to |
 |---------|-------------|
-| `if (x.kind === "v1") S1 [else if (x.kind === "v2") S2 ...]` (or `'k' in x` form) | `tagMatch x { v1 => S1, v2 => S2, ..., _ => fallthrough }` |
-| `if (x.kind !== "v") terminate; rest` | `tagMatch x { v => rest, _ => terminate }` |
+| `if (x.kind === "v1") S1 [else if (x.kind === "v2") S2 ...]` (also `'k' in x` and `Array.isArray(x)` forms) | `tagMatch x { v1 => S1, v2 => S2, ..., _ => fallthrough }` |
+| `if (x.kind !== "v") terminate; rest` (also `!Array.isArray(x)` form) | `tagMatch x { v => rest, _ => terminate }` |
+| `if (<rest> && Array.isArray(path) && <more>) S [else]` | `tagMatch path { ArrayBranch => if (<rest && more>) S [else] }` |
+
+For the chain and neg-early-return rules, the `Array.isArray(x)` / `!Array.isArray(x)` discriminant forms require a bare-var scrutinee (the var-name-keyed replacement in transform only handles that shape); path scrutinees like `m.content` go through the expression-form rules below.
 
 **Expression-level rules**
 
@@ -172,8 +175,21 @@ Throughout, `e !== undefined` includes equivalent forms: `undefined !== e`, bare
 | `left ?? right` (nullish coalescing) | `someMatch left { Some(_v) => _v, None => right }` |
 | `path !== undefined [&& rest] ==> B` (spec implication) | `someMatch path { Some(_p_val) => (rest ==> B), None => true }` |
 | `optChain(obj, chain)` (from extract's `obj?.<chain>` — chain may be field/call/index steps) | `someMatch obj { Some(_oc{N}_val) => apply(chain, _oc{N}_val), None => undefined }` |
+| `k in m ? m[k] : default` (`m` map-typed; then-branch is exactly `m[k]`, `default` non-optional) | `someMatch m[k] { Some(_m_k_val) => _m_k_val, None => default }` |
 
 The `&&`-ternary rule skips when `rest` contains impure method calls (those would be lifted out of the match arm by transform, breaking binder scope) — the let-cond statement-level rule handles those. Both `&&`-ternary and `==>` rules walk their inner expression recursively so chained checks (`a !== undefined && a.b !== undefined ? ... : ...`, `... ==> ...`) become nested someMatches.
+
+The `k in m` map rule mirrors the discriminant-`in` path but is gated on `map`; the existing Dafny `Map.get` peephole then collapses the result back to `if k in m then m[k] else default`.
+
+**Expression-level rules — `Array.isArray` narrowing** (synthesized array-unions, discriminant `"__isArray__"`; emit `tagMatch` IR). The matched arm rewrites bare `x` references to the variant's payload field (e.g. `x.arr`) at transform time; scrutinee may be any narrowable path (var or field chain).
+
+| Pattern | Rewrites to |
+|---------|-------------|
+| `Array.isArray(x) ? a : b` (or `!Array.isArray(x) ? a : b`) | `tagMatch x { ArrayBranch => a } fallthrough b` (`NonArrayBranch` when negated) |
+| `(<rest> && Array.isArray(path)) ? a : b` | `tagMatch path { ArrayBranch => (<rest>) ? a : b } fallthrough b` |
+| `Array.isArray(x) ==> B` (or `!Array.isArray(x) ==> B`) | `tagMatch x { ArrayBranch => B, _ => true }` (`NonArrayBranch` when negated) |
+
+The `==>` form mirrors `ruleImplOptional`: the unmatched variant becomes a vacuous-`true` fallthrough, since the implication is trivially satisfied when the premise is false.
 
 **Scrutinee handling**
 
@@ -181,7 +197,7 @@ All optional-narrowing rules above (except `optChain` and `nullish`) accept any 
 
 The `optChain` and `nullish` rules are exceptions: their scrutinee can be any expression (call result, deep chain, etc.), and narrow constructs the someBody to reference the binder directly — so transform's lowering skips substitution for complex scrutinees.
 
-The discriminant rules require the scrutinee to be a simple var (`x.kind === "v"` requires `x` to be a var). Transform's `emitMatchStmt` does the variant destructuring (replaces `x.field` with the variant binder). Discriminator must be the named discriminant field of a user `discriminated-union` type.
+The statement-level discriminant rules require the scrutinee to be a simple var (`x.kind === "v"` requires `x` to be a var; likewise the `Array.isArray(x)` statement forms). Transform's `emitMatchStmt` does the variant destructuring (replaces `x.field` with the variant binder). Discriminator must be the named discriminant field of a user `discriminated-union` type. The expression-form `Array.isArray` rules relax this to any narrowable path (var or field chain).
 
 ## Peephole Rules
 
