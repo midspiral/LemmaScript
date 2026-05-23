@@ -43,96 +43,113 @@ export interface TypeDeclInfo {
 // ── TS type string → Ty (single source of truth) ───────────
 
 import type { Ty } from "./typedir.js";
+import { Node, Project, SyntaxKind } from "ts-morph";
+import type { Project as TsProject, SourceFile, TypeNode } from "ts-morph";
 
+/**
+ * Parses TS type strings via a real ts-morph parse — no regex cascade. Set
+ * once per run by `extractModule` (so it reuses the module's Project); a
+ * separate in-memory Project is created lazily for callers that hit
+ * `parseTsType` outside the extract pipeline (e.g. tests, `lsc info` when
+ * driven independently).
+ */
+let _synthFile: SourceFile | null = null;
 
-/** Split generic type arguments respecting nested angle brackets. */
-function splitTypeArgs(s: string): string[] {
-  const args: string[] = [];
-  let depth = 0, start = 0;
-  for (let i = 0; i < s.length; i++) {
-    if (s[i] === '<') depth++;
-    else if (s[i] === '>') depth--;
-    else if (s[i] === ',' && depth === 0) {
-      args.push(s.slice(start, i));
-      start = i + 1;
-    }
-  }
-  args.push(s.slice(start));
-  return args.map(a => a.trim());
+export function initTypeParser(project: TsProject): void {
+  _synthFile = project.createSourceFile("__lsc_type_parse__.ts", "", { overwrite: true });
+}
+
+function synthFile(): SourceFile {
+  if (_synthFile) return _synthFile;
+  const p = new Project({ useInMemoryFileSystem: true });
+  _synthFile = p.createSourceFile("__lsc_type_parse__.ts", "");
+  return _synthFile;
 }
 
 export function parseTsType(tsType: string): Ty {
-  const t = tsType.trim();
-  // Function type: `(a: T1, b: T2) => R` or `(T1, T2) => R`. Match the
-  // outermost `(...) => R` shape; param names (with `:`) are stripped.
-  // Handled before union so that arrow-types whose return is a union don't
-  // get consumed by the union branch.
-  if (t.startsWith("(") && t.includes(") => ")) {
-    const arrowIdx = t.lastIndexOf(") => ");
-    let depth = 0;
-    let openIdx = -1;
-    for (let i = 0; i <= arrowIdx; i++) {
-      if (t[i] === "(") { if (depth === 0) openIdx = i; depth++; }
-      else if (t[i] === ")") depth--;
+  const sf = synthFile();
+  sf.replaceWithText(`type __t = ${tsType};`);
+  const alias = sf.getTypeAliasOrThrow("__t");
+  return tyFromTypeNode(alias.getTypeNodeOrThrow());
+}
+
+function tyFromTypeNode(tn: TypeNode): Ty {
+  if (Node.isParenthesizedTypeNode(tn)) return tyFromTypeNode(tn.getTypeNode());
+  if (Node.isUnionTypeNode(tn)) {
+    const arms = tn.getTypeNodes();
+    const isBoolLit = (a: TypeNode) =>
+      Node.isLiteralTypeNode(a) && (a.getLiteral().getKind() === SyntaxKind.TrueKeyword || a.getLiteral().getKind() === SyntaxKind.FalseKeyword);
+    const isNullish = (a: TypeNode) =>
+      a.getKind() === SyntaxKind.NullKeyword ||
+      a.getKind() === SyntaxKind.UndefinedKeyword ||
+      (Node.isLiteralTypeNode(a) && a.getLiteral().getKind() === SyntaxKind.NullKeyword);
+    // Collapse expanded boolean (`true | false`) into a single bool slot, so
+    // `boolean | undefined` (which TS expands to `false | true | undefined`)
+    // still reads as `optional<bool>` rather than falling through to user.
+    const hasTrueLit = arms.some(a => Node.isLiteralTypeNode(a) && a.getLiteral().getKind() === SyntaxKind.TrueKeyword);
+    const hasFalseLit = arms.some(a => Node.isLiteralTypeNode(a) && a.getLiteral().getKind() === SyntaxKind.FalseKeyword);
+    const collapseBool = hasTrueLit && hasFalseLit;
+    const normalized: ({ node: TypeNode } | { syntheticBool: true })[] =
+      collapseBool
+        ? [{ syntheticBool: true } as const, ...arms.filter(a => !isBoolLit(a)).map(node => ({ node }))]
+        : arms.map(node => ({ node }));
+    if (normalized.length === 1 && "syntheticBool" in normalized[0]) return { kind: "bool" };
+    const nonNullish = normalized.filter(a => "syntheticBool" in a || !isNullish(a.node));
+    if (nonNullish.length === 1 && normalized.length >= 2) {
+      const sole = nonNullish[0];
+      const inner: Ty = "syntheticBool" in sole ? { kind: "bool" } : tyFromTypeNode(sole.node);
+      return { kind: "optional", inner };
     }
-    if (openIdx === 0) {
-      const paramsStr = t.slice(openIdx + 1, arrowIdx);
-      const ret = t.slice(arrowIdx + 5).trim();
-      const paramArgs = paramsStr.length === 0 ? [] : splitTypeArgs(paramsStr);
-      const params = paramArgs.map(a => {
-        const colon = a.indexOf(":");
-        return parseTsType(colon >= 0 ? a.slice(colon + 1) : a);
-      });
-      return { kind: "fn", params, result: parseTsType(ret) };
+    // Other unions: leave as a user type spelled how the source wrote it.
+    return { kind: "user", name: tn.getText() };
+  }
+  if (Node.isArrayTypeNode(tn)) return { kind: "array", elem: tyFromTypeNode(tn.getElementTypeNode()) };
+  if (Node.isTupleTypeNode(tn)) {
+    const elems = tn.getElements();
+    if (elems.length === 0) return { kind: "array", elem: { kind: "unknown" } };
+    return { kind: "array", elem: tyFromTypeNode(elems[0]) };
+  }
+  if (Node.isFunctionTypeNode(tn)) {
+    const params = tn.getParameters().map(p => {
+      const ptn = p.getTypeNode();
+      return ptn ? tyFromTypeNode(ptn) : { kind: "unknown" as const };
+    });
+    const result = tyFromTypeNode(tn.getReturnTypeNodeOrThrow());
+    return { kind: "fn", params, result };
+  }
+  if (Node.isLiteralTypeNode(tn)) {
+    const lk = tn.getLiteral().getKind();
+    if (lk === SyntaxKind.TrueKeyword || lk === SyntaxKind.FalseKeyword) return { kind: "bool" };
+  }
+  switch (tn.getKind()) {
+    case SyntaxKind.NumberKeyword:
+    case SyntaxKind.BigIntKeyword:
+      return { kind: "int" };
+    case SyntaxKind.BooleanKeyword:
+      return { kind: "bool" };
+    case SyntaxKind.StringKeyword:
+      return { kind: "string" };
+    case SyntaxKind.VoidKeyword:
+    case SyntaxKind.UndefinedKeyword:
+      return { kind: "void" };
+    case SyntaxKind.UnknownKeyword:
+    case SyntaxKind.AnyKeyword:
+      return { kind: "unknown" };
+  }
+  if (Node.isTypeReference(tn)) {
+    const name = tn.getTypeName().getText();
+    const args = tn.getTypeArguments();
+    if (name === "nat" && args.length === 0) return { kind: "nat" };
+    if (name === "Array" && args.length === 1) return { kind: "array", elem: tyFromTypeNode(args[0]) };
+    if (name === "Set" && args.length === 1) return { kind: "set", elem: tyFromTypeNode(args[0]) };
+    if ((name === "Map" || name === "Record") && args.length === 2) {
+      return { kind: "map", key: tyFromTypeNode(args[0]), value: tyFromTypeNode(args[1]) };
     }
+    // User-named type: include generic args in the spelled name so callers
+    // that key on the string (e.g. typedir alias lookups) see the exact form.
+    return { kind: "user", name: tn.getText() };
   }
-  // Union: T | undefined → optional<T>
-  if (t.includes(" | ")) {
-    let arms = t.split(" | ").map(a => a.trim());
-    // Normalize expanded boolean literals: true | false → boolean
-    const boolLits = new Set(["true", "false"]);
-    const hasBoth = arms.includes("true") && arms.includes("false");
-    if (hasBoth) {
-      arms = arms.filter(a => !boolLits.has(a));
-      arms.unshift("boolean");
-    }
-    const nonUndef = arms.filter(a => a !== "undefined" && a !== "null");
-    if (nonUndef.length === 1 && arms.length >= 2) {
-      return { kind: "optional", inner: parseTsType(nonUndef[0]) };
-    }
-  }
-  if (t === "number") return { kind: "int" };
-  if (t === "bigint") return { kind: "int" };
-  if (t === "nat") return { kind: "nat" };
-  if (t === "boolean" || t === "true" || t === "false") return { kind: "bool" };
-  if (t === "string") return { kind: "string" };
-  if (t === "void" || t === "undefined") return { kind: "void" };
-  if (t === "unknown") return { kind: "unknown" };
-  // Record<K, V> → map
-  const recordMatch = t.match(/^Record<(.+)>$/);
-  if (recordMatch) {
-    const args = splitTypeArgs(recordMatch[1]);
-    if (args.length === 2) return { kind: "map", key: parseTsType(args[0]), value: parseTsType(args[1]) };
-  }
-  // Array<T> or T[]
-  const m = t.match(/^(?:Array<(.+)>|(.+)\[\])$/);
-  if (m) return { kind: "array", elem: parseTsType(m[1] || m[2]) };
-  // Map<K, V>
-  const mapMatch = t.match(/^Map<(.+)>$/);
-  if (mapMatch) {
-    const args = splitTypeArgs(mapMatch[1]);
-    if (args.length === 2) return { kind: "map", key: parseTsType(args[0]), value: parseTsType(args[1]) };
-  }
-  // Set<T>
-  const setMatch = t.match(/^Set<(.+)>$/);
-  if (setMatch) return { kind: "set", elem: parseTsType(setMatch[1]) };
-  // Tuple [T1, T2, ...] → array of the common element type
-  const tupleMatch = t.match(/^\[(.+)\]$/);
-  if (tupleMatch) {
-    const elems = splitTypeArgs(tupleMatch[1]);
-    return { kind: "array", elem: parseTsType(elems[0]) };
-  }
-  return { kind: "user", name: t };
+  return { kind: "user", name: tn.getText() };
 }
 
 /** Render a Ty in LemmaScript canonical syntax — backend-neutral, side-effect-free.

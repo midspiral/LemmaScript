@@ -123,6 +123,43 @@ function wrapSome(value: TExpr, optionalTy: Ty): TExpr {
   };
 }
 
+/** Find the synth array-union TypeDecl named `name` (discriminant `__isArray__`). */
+function findSynthArrayUnion(name: string, typeDecls: TypeDeclInfo[]): TypeDeclInfo | null {
+  const decl = typeDecls.find(d => d.name === name);
+  if (decl?.kind === "discriminated-union" && decl.discriminant === "__isArray__") return decl;
+  return null;
+}
+
+/** Coerce `value` to `targetTy` at an assignment-position. Mirrors TS subtyping
+ *  for the two upcast shapes LS synthesizes:
+ *    - `T` into `optional<T>` slot  → wrap with `Some(...)`
+ *    - `T[]` into a synth `T[] | U` slot → wrap with `ArrayBranch(...)`
+ *    - `U`   into a synth `T[] | U` slot → wrap with `NonArrayBranch(...)`
+ *  Returns `value` unchanged if no coercion applies (types already match,
+ *  source is unknown, or no rule matches). */
+function coerceToTargetTy(value: TExpr, targetTy: Ty, typeDecls: TypeDeclInfo[]): TExpr {
+  if (value.ty.kind === "unknown" || value.ty.kind === "void") return value;
+  if (targetTy.kind === "optional" && value.ty.kind !== "optional") {
+    return wrapSome(value, targetTy);
+  }
+  if (targetTy.kind === "user") {
+    const synth = findSynthArrayUnion(targetTy.name, typeDecls);
+    if (synth && synth.variants && synth.variants.length === 2) {
+      const arrVariant = synth.variants.find(v => v.name === "ArrayBranch");
+      const nonVariant = synth.variants.find(v => v.name === "NonArrayBranch");
+      if (value.ty.kind === "array" && arrVariant) {
+        return { kind: "call", fn: { kind: "var", name: "ArrayBranch", ty: targetTy },
+          args: [value], ty: targetTy, callKind: "pure" };
+      }
+      if (value.ty.kind !== "array" && nonVariant) {
+        return { kind: "call", fn: { kind: "var", name: "NonArrayBranch", ty: targetTy },
+          args: [value], ty: targetTy, callKind: "pure" };
+      }
+    }
+  }
+  return value;
+}
+
 /** Detect optional checks: `v !== undefined` (positive narrows then-branch),
  *  `v === undefined` (negative narrows else-branch), or `!v` (equivalent to
  *  `=== undefined`).
@@ -352,6 +389,7 @@ function inferQuantVarType(varName: string, body: RawExpr, ctx: Ctx): Ty | null 
 
 function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Math") return "pure";
+  if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Array" && fn.field === "isArray") return "pure";
   if (fn.kind === "var" && (ctx.inSpec || ctx.inLambda) && ctx.pureFns.has(fn.name)) return "spec-pure";
   // Bare-name `//@ extern` declarations are emitted as `function {:axiom}` —
   // pure from the verifier's perspective. Classify them as pure so callers
@@ -439,6 +477,11 @@ function coerceCallArgs(args: TExpr[], fn: TExpr, ctx: Ctx): TExpr[] {
 /** Infer return type for collection/string method calls. */
 function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
   if (fn.kind !== "field") return { kind: "unknown" };
+  // `Array.isArray(x)` always returns boolean. narrow.ts recognizes this call as
+  // a discriminator predicate when `x` has type of a synthesized array-union.
+  if (fn.obj.kind === "var" && fn.obj.name === "Array" && fn.field === "isArray") {
+    return { kind: "bool" };
+  }
   const objTy = fn.obj.ty;
   if (objTy.kind === "map") {
     if (fn.field === "get") return ctx.inSpec ? objTy.value : { kind: "optional", inner: objTy.value };
@@ -588,13 +631,20 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // Propagate parameter types to arguments for record literal resolution
       // (enables inline discriminated union construction in function arguments)
       const paramTypes = fn.kind === "var" && ctx.fnParams.has(fn.name) ? ctx.fnParams.get(fn.name)! : null;
-      const args = coerceCallArgs(rawArgs.map((a, i) => {
+      let args = coerceCallArgs(rawArgs.map((a, i) => {
         let aCtx = argCtx;
         if (paramTypes && i < paramTypes.length && paramTypes[i].kind === "user") {
           aCtx = { ...aCtx, returnTy: paramTypes[i] };
         }
         return resolveExpr(a, aCtx);
       }), fn, ctx);
+      // Array method `.with(i, v)`: coerce the value arg to the element type
+      // so `arr[i] = v` on `(T|null)[]` wraps `T` → `Some(T)` (and similarly
+      // for synth array-unions). Same shape as the record-field coercion
+      // below: assigning a narrower value into a wider slot.
+      if (fn.kind === "field" && fn.field === "with" && fn.obj.ty.kind === "array" && args.length === 2) {
+        args = [args[0], coerceToTargetTy(args[1], fn.obj.ty.elem, ctx.typeDecls)];
+      }
       let ty = inferMethodReturnTy(fn, args, ctx);
       // For same-file function calls, use the known return type
       if (ty.kind === "unknown" && fn.kind === "var" && ctx.fnReturns.has(fn.name)) {
@@ -748,10 +798,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           if (value.kind === "record" && value.fields.length === 0 && !value.spread && declTy.kind === "map") {
             value = { kind: "arrayLiteral", elems: [], ty: declTy };
           }
-          // Coerce non-optional to optional: wrap in Some (only when value type is concrete)
-          if (declTy.kind === "optional" && value.ty.kind !== "optional" && value.ty.kind !== "void" && value.ty.kind !== "unknown") {
-            value = wrapSome(value, declTy);
-          }
+          // Assignment-position upcasts: T → Option<T>, T[] → ArrayBranch(T[]),
+          // U → NonArrayBranch(U). Handles both optional fields and fields
+          // typed as a synth array-union (`T[] | U`).
+          value = coerceToTargetTy(value, declTy, ctx.typeDecls);
         }
         return { name: f.name, value };
       });
@@ -924,6 +974,13 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
 function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
   switch (s.kind) {
     case "let": {
+      // No source annotation → infer type from initializer (resolved first).
+      if (s.tsType === null) {
+        const init = resolveExpr(s.init, ctx);
+        const ty = init.ty;
+        const mutable = s.mutable || isRefMutableInTS(ty);
+        return [{ kind: "let", name: s.name, ty, mutable, init }, extend(ctx.env, s.name, ty)];
+      }
       const declTy = resolveTsType(s.tsType, ctx.overrides, s.name);
       // Propagate declared type as returnTy so nested record expressions
       // resolve union variants correctly (e.g., EffectState → mode: EffectMode → { kind: 'Idle' })
