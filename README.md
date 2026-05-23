@@ -89,17 +89,17 @@ lake build
 
 | File | Generated? | Purpose |
 |------|-----------|---------|
-| `foo.ts` | — | TypeScript source with `//@ ` annotations |
-| `foo.dfy.gen` | Yes | Generated Dafny (merge base, always regeneratable) |
-| `foo.dfy` | Yes (initial) | Annotated Dafny (gen + proof additions) |
+| [`majority.ts`](examples/majority.ts) | — | TypeScript source with `//@ ` annotations |
+| [`majority.dfy.gen`](examples/majority.dfy.gen) | Yes | Generated Dafny (merge base, always regeneratable) |
+| [`majority.dfy`](examples/majority.dfy) | Yes (initial) | Annotated Dafny (gen + proof additions) |
 
 ### Lean backend
 
 | File | Generated? | Purpose |
 |------|-----------|---------|
-| `foo.ts` | — | TypeScript source with `//@ ` annotations |
-| `foo.types.lean` | Yes | Lean types, `namespace Pure` defs |
-| `foo.spec.lean` | No | Ghost definitions, helper lemmas |
-| `foo.def.lean` | Yes | Velvet method definitions |
-| `foo.proof.lean` | No | `prove_correct` with proof tactics |
+| [`majority.ts`](examples/majority.ts) | — | TypeScript source with `//@ ` annotations |
+| [`majority.types.lean`](examples/majority.types.lean) | Yes | Lean types, `namespace Pure` defs |
+| [`majority.spec.lean`](examples/majority.spec.lean) | No | Ghost definitions, helper lemmas |
+| [`majority.def.lean`](examples/majority.def.lean) | Yes | Velvet method definitions |
+| [`majority.proof.lean`](examples/majority.proof.lean) | No | `prove_correct` with proof tactics |
 
