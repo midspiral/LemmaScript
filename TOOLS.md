@@ -1,6 +1,6 @@
 # LemmaScript Tools — Internal Architecture
 
-The `lsc` toolchain translates annotated TypeScript to formal verification artifacts (Lean or Dafny).
+The `lsc` toolchain translates annotated TypeScript to formal verification artifacts (Lean or Dafny), using [ts-morph](https://ts-morph.com/).
 
 ## Pipeline
 
