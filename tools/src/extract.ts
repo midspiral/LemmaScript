@@ -1684,49 +1684,70 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     return raw;
   });
 
-  // Resolve imported type names referenced in function signatures and type fields
+  // Resolve type references in function signatures via ts-morph's type
+  // checker — walk the TypeNode tree, resolve each TypeReferenceNode to its
+  // declaration through symbol resolution, recurse. This is the principled
+  // replacement for an earlier regex-based walker that extracted identifier
+  // names from tsType strings and searched the whole project by name — that
+  // approach had ambiguous resolution (name collisions in generated files
+  // could shadow what the user actually imported).
   const knownTypeNames = new Set(typeDecls.map(d => d.name));
-  const primitives = new Set(["number", "string", "boolean", "void", "unknown", "undefined"]);
-  const builtinTypes = new Set(["Map", "Set", "Array", "Record", "Promise", "Date", "RegExp", "Error"]);
-  function resolveTypeName(name: string) {
-    if (knownTypeNames.has(name) || primitives.has(name) || builtinTypes.has(name)) return;
-    for (const sf2 of sourceFile.getProject().getSourceFiles()) {
-      for (const stmt of sf2.getStatements()) {
-        if (Node.isTypeAliasDeclaration(stmt) && stmt.getName() === name) {
-          const extra: TypeDeclInfo[] = [];
-          const info = extractTypeDecl(stmt, extra);
-          typeDecls.push(...extra);
-          if (info) { typeDecls.push(info); knownTypeNames.add(name); }
-        }
-        if (Node.isInterfaceDeclaration(stmt) && stmt.getName() === name && !knownTypeNames.has(name)) {
-          const extra: TypeDeclInfo[] = [];
-          const info = extractInterface(stmt, extra);
-          typeDecls.push(...extra);
-          if (info) { typeDecls.push(info); knownTypeNames.add(name); }
+  function resolveTypeNodeRefs(tn: Node | undefined) {
+    if (!tn) return;
+    if (Node.isTypeReference(tn)) {
+      const sym = tn.getTypeName().getSymbol();
+      if (sym) {
+        for (const d of sym.getDeclarations()) {
+          // Skip ambient/built-in declarations: `.d.ts` files (lib.dom.d.ts,
+          // node_modules typings) describe runtime/host types, not user code
+          // — backends map these directly (`Map<K,V>` → `map<K,V>`) without
+          // needing the interface dump.
+          if (d.getSourceFile().getFilePath().endsWith(".d.ts")) continue;
+          let added: TypeDeclInfo | null = null;
+          if (Node.isTypeAliasDeclaration(d) && !knownTypeNames.has(d.getName())) {
+            const extra: TypeDeclInfo[] = [];
+            added = extractTypeDecl(d, extra);
+            typeDecls.push(...extra);
+            if (added) { typeDecls.push(added); knownTypeNames.add(d.getName()); }
+          } else if (Node.isInterfaceDeclaration(d) && !knownTypeNames.has(d.getName())) {
+            const extra: TypeDeclInfo[] = [];
+            added = extractInterface(d, extra);
+            typeDecls.push(...extra);
+            if (added) { typeDecls.push(added); knownTypeNames.add(d.getName()); }
+          }
+          // Recurse into the newly-added declaration's TypeNodes — preferring
+          // the actual AST over re-parsing tsType strings.
+          if (added) {
+            if (Node.isTypeAliasDeclaration(d)) resolveTypeNodeRefs(d.getTypeNode());
+            else if (Node.isInterfaceDeclaration(d)) {
+              for (const m of d.getProperties()) resolveTypeNodeRefs(m.getTypeNode());
+            }
+          }
         }
       }
-      if (knownTypeNames.has(name)) break;
+      for (const a of tn.getTypeArguments()) resolveTypeNodeRefs(a);
+      return;
     }
-    // Recursively resolve types referenced by the newly added type's fields
-    const decl = typeDecls.find(d => d.name === name);
-    if (decl?.fields) {
-      for (const f of decl.fields) {
-        for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) resolveTypeName(m[1]);
-      }
+    if (Node.isUnionTypeNode(tn) || Node.isIntersectionTypeNode(tn)) {
+      for (const arm of tn.getTypeNodes()) resolveTypeNodeRefs(arm);
+      return;
     }
-    if (decl?.variants) {
-      for (const v of decl.variants) {
-        for (const f of v.fields) {
-          for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) resolveTypeName(m[1]);
-        }
-      }
+    if (Node.isArrayTypeNode(tn)) { resolveTypeNodeRefs(tn.getElementTypeNode()); return; }
+    if (Node.isTupleTypeNode(tn)) { for (const el of tn.getElements()) resolveTypeNodeRefs(el); return; }
+    if (Node.isParenthesizedTypeNode(tn)) { resolveTypeNodeRefs(tn.getTypeNode()); return; }
+    if (Node.isFunctionTypeNode(tn)) {
+      for (const p of tn.getParameters()) resolveTypeNodeRefs(p.getTypeNode());
+      resolveTypeNodeRefs(tn.getReturnTypeNode());
+      return;
+    }
+    if (Node.isTypeLiteral(tn)) {
+      for (const m of tn.getProperties()) resolveTypeNodeRefs(m.getTypeNode());
+      return;
     }
   }
-  for (const fn of functions) {
-    const refs = [fn.returnType, ...fn.params.map(p => p.tsType)];
-    for (const ref of refs) {
-      for (const m of ref.matchAll(/\b([A-Z]\w*)\b/g)) resolveTypeName(m[1]);
-    }
+  for (const f of fnsToExtract) {
+    for (const p of f.node.getParameters()) resolveTypeNodeRefs(p.getTypeNode());
+    resolveTypeNodeRefs(f.node.getReturnTypeNode());
   }
 
   // Resolve union param types: A | B → intersection of fields
