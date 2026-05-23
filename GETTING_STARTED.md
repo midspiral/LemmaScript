@@ -102,44 +102,7 @@ LemmaScript is a tech preview. You will hit unsupported TS methods, missed narro
 
 ## CI
 
-Once a function verifies, wire up CI. The pattern every case study uses:
-
-```yaml
-# .github/workflows/lemmascript.yml
-name: Dafny
-
-on:
-  push: { branches: [main] }
-  pull_request: { branches: [main] }
-
-jobs:
-  dafny:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '20' }
-
-      - name: Clone LemmaScript
-        run: git clone https://github.com/midspiral/LemmaScript.git ../LemmaScript
-      - run: cd ../LemmaScript/tools && npm ci
-
-      - uses: actions/setup-dotnet@v4
-        with: { dotnet-version: '8.0.x' }
-      - uses: dafny-lang/setup-dafny-action@v1
-        with: { dafny-version: '4.11.0' }
-
-      - name: Regenerate and verify
-        run: ../LemmaScript/tools/check.sh dafny
-
-      - name: Check generated files are up to date
-        run: |
-          git diff --exit-code -- '*.dfy.gen' '*.dfy'
-          untracked=$(git ls-files --others --exclude-standard -- '*.dfy.gen')
-          if [ -n "$untracked" ]; then
-            echo "ERROR: Untracked .dfy.gen files:"; echo "$untracked"; exit 1
-          fi
-```
+Once a function verifies, wire up CI. Copy [hono-lemmascript's workflow](https://github.com/midspiral/hono-lemmascript/blob/lemmascript/.github/workflows/lemmascript.yml) as the template — it clones LemmaScript as a sibling, sets up Dafny, runs `check.sh dafny`, and fails if generated files are out of date.
 
 `tools/check.sh` reads `LemmaScript-files.txt` — one verified file per line, optionally followed by a Dafny timeout and extra flags:
 
