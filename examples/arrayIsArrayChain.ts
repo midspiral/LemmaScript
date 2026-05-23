@@ -15,8 +15,14 @@
 
 //@ backend dafny
 
-//@ declare-type Part { type: string }
-//@ declare-type Msg { role: string, content: string | Part[] }
+interface Part {
+  type: string;
+}
+
+interface Msg {
+  role: string;
+  content: string | Part[];
+}
 
 export function countAssistantParts(msgs: Msg[]): number {
   //@ verify
