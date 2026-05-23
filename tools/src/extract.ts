@@ -7,6 +7,7 @@
 
 import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget } from "ts-morph";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
+import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
 
 // ── Expression extraction ────────────────────────────────────
@@ -1499,6 +1500,11 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // `extractExpr` during call extraction (only symbols *actually used* end up
   // here), deduped by qualified name.
   _externs.clear();
+
+  // Share the module's ts-morph Project with parseTsType (scratch source file
+  // for type-string parsing). Done before declare-type parsing so any
+  // parseTsType call downstream uses the same Project.
+  initTypeParser(sourceFile.getProject());
 
   // Activate the synthesized-array-union accumulator. typeToString registers
   // a discriminated-union TypeDeclInfo for any `T[] | U` shape it encounters,
