@@ -198,6 +198,39 @@ const BOOL_OP_MAP: Record<string, string> = {
 
 function transformExpr(e: TExpr): Expr { return lowerExpr(e, null); }
 
+/** Reduce an if/let/return-shaped statement body to a single expression, for
+ *  expression-only lambda bodies. Returns null for shapes that can't be a pure
+ *  expression (loops, assignments, bare side effects), so callers leave the
+ *  body as statements. A `return` is terminal — statements after it are
+ *  unreachable and dropped.
+ *    [return e]                          → e
+ *    [let x = e, …rest]                  → Expr.let(x, e, flatten(rest))
+ *    [if (c) thenStmts elseStmts, …rest] → Expr.if(c, …) where each branch
+ *        absorbs `rest` if it doesn't already terminate with a return. */
+function flattenLambdaBody(stmts: Stmt[]): Expr | null {
+  if (stmts.length === 0) return null;
+  const first = stmts[0]!;
+  const rest = stmts.slice(1);
+  if (first.kind === "return") return first.value;
+  if (first.kind === "let" && !first.mutable) {
+    const body = flattenLambdaBody(rest);
+    return body === null ? null : { kind: "let", name: first.name, value: first.value, body };
+  }
+  if (first.kind === "if") {
+    const thenTerminates = flattenLambdaBody(first.then);
+    if (thenTerminates !== null) {
+      // then-branch yields a value (ends in return) → `rest` is the else path.
+      const elseExpr = flattenLambdaBody(first.else.length > 0 ? [...first.else, ...rest] : rest);
+      return elseExpr === null ? null : { kind: "if", cond: first.cond, then: thenTerminates, else: elseExpr };
+    }
+    // then-branch falls through → both branches continue into `rest`.
+    const thenExpr = flattenLambdaBody([...first.then, ...rest]);
+    const elseExpr = flattenLambdaBody(first.else.length > 0 ? [...first.else, ...rest] : rest);
+    return thenExpr === null || elseExpr === null ? null : { kind: "if", cond: first.cond, then: thenExpr, else: elseExpr };
+  }
+  return null;
+}
+
 /**
  * Lower a typed expression to Backend IR.
  *
@@ -620,8 +653,20 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.ty.kind === "set") return { kind: "app", fn: "SetLiteral", args: e.elems.map(el => lowerExpr(el, binds)) };
       return { kind: "arrayLiteral", elems: e.elems.map(el => lowerExpr(el, binds)) };
 
-    case "lambda":
-      return { kind: "lambda", params: e.params.map(p => ({ name: p.name, type: p.ty })), body: transformStmts(e.body, []) };
+    case "lambda": {
+      const body = transformStmts(e.body, []);
+      // Flatten an if/let/return-shaped multi-statement body into a single
+      // `return <expr>` so both backends' single-return-lambda fast path emits
+      // it (Dafny lambdas are expression-only; Lean prefers the expression form
+      // over a `do` block). Bodies with shapes we can't reduce (loops, bare
+      // side effects) are left as-is.
+      const flat = flattenLambdaBody(body);
+      return {
+        kind: "lambda",
+        params: e.params.map(p => ({ name: p.name, type: p.ty })),
+        body: flat === null ? body : [{ kind: "return", value: flat }],
+      };
+    }
 
     case "forall":
       return { kind: "forall", var: e.var, type: e.varTy, body: transformExpr(e.body) };
