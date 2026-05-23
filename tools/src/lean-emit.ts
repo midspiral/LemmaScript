@@ -36,6 +36,15 @@ function tyToLean(ty: Ty): string {
       return inner.includes(" ") ? `Option (${inner})` : `Option ${inner}`;
     }
     case "user": return ty.name;
+    case "fn": {
+      const params = ty.params.map(p => {
+        const s = tyToLean(p);
+        return s.includes(" ") ? `(${s})` : s;
+      });
+      const ret = tyToLean(ty.result);
+      const retStr = ret.includes(" ") ? `(${ret})` : ret;
+      return [...params, retStr].join(" → ");
+    }
     case "unknown": return "_";
   }
 }
@@ -110,6 +119,14 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
 
 // ── Expression emission ─────────────────────────────────────
 
+// Lean's `∀`/`∃` body extends as far as possible. So `(∃ x, P) <op> Q`
+// (or `∃ x, P → Q`) would parse with the operator absorbed into the body.
+// Wrap a quantifier in parens to terminate its body before the operator.
+function wrapQuantifier(sub: Expr, parentPrec?: number): string {
+  const inner = emitExpr(sub, parentPrec);
+  return (sub.kind === "forall" || sub.kind === "exists") ? `(${inner})` : inner;
+}
+
 function emitExpr(e: Expr, parentPrec?: number): string {
   switch (e.kind) {
     case "var": return escapeName(e.name);
@@ -169,12 +186,12 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         return `${wrap ? `(${recv})` : recv}.contains ${emitExpr(e.left)}`;
       }
       const op = e.op === "arrayConcat" ? "++" : e.op;
-      const s = `${emitExpr(e.left, prec(e.op))} ${op} ${emitExpr(e.right, prec(e.op))}`;
+      const s = `${wrapQuantifier(e.left, prec(e.op))} ${op} ${emitExpr(e.right, prec(e.op))}`;
       return (parentPrec !== undefined && prec(e.op) < parentPrec) ? `(${s})` : s;
     }
 
     case "implies": {
-      const parts = [...e.premises.map(p => emitExpr(p)), emitExpr(e.conclusion)];
+      const parts = [...e.premises.map(p => wrapQuantifier(p)), emitExpr(e.conclusion)];
       const s = parts.join(" → ");
       return parentPrec !== undefined ? `(${s})` : s;
     }
@@ -268,6 +285,7 @@ function emitStmt(s: Stmt, indent: number): string {
       return `${pad}let mut ${escapeName(s.name)} : ${tyToLean(s.type)} := ${emitExpr(s.value)}`;
     case "ghostAssign": return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)}`;
     case "assert": {
+      if (s.assumed) throw new Error("//@ assume: not supported in Lean backend.");
       // WPGen.assert needs a Prop; bare Bool expressions (`k in m` → `.contains`,
       // method calls, vars) lack a matching WPGen instance and silently fall back
       // to WPGen.default, which drops the assertion. Coerce to Prop via `= true`.
@@ -416,6 +434,11 @@ function emitDecl(d: Decl): string {
 
     case "const":
       return `def ${escapeName(d.name)} : ${tyToLean(d.type)} := ${emitExpr(d.value)}`;
+
+    case "extern":
+      // Lean: emit an opaque function declaration. The user is expected to
+      // provide an axiomatic body or a stub in the companion spec file.
+      throw new Error(`Lean extern support not yet implemented: ${d.name}`);
   }
 }
 

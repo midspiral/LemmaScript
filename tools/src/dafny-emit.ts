@@ -20,6 +20,7 @@ function tyToDafny(ty: Ty): string {
     case "set": return `set<${tyToDafny(ty.elem)}>`;
     case "optional": { needPreamble("OptionType"); return `Option<${tyToDafny(ty.inner)}>`; }
     case "user": return ty.name;
+    case "fn": return `(${ty.params.map(tyToDafny).join(", ")}) -> ${tyToDafny(ty.result)}`;
     case "unknown": return "int";
   }
 }
@@ -93,6 +94,16 @@ function emitQuantifier(e: Expr & { kind: "forall" | "exists" }, keyword: string
   return `${keyword} ${vars.join(", ")} :: ${emitExpr(body)}`;
 }
 
+// Dafny's `forall`/`exists ::` body extends as far as possible. So
+// `(forall i :: P(i)) <op> Q` (or `... ==> Q`) would parse with the operator
+// absorbed into the body. Wrap a quantifier in parens to terminate its body
+// before the operator. Only the LEFT operand needs this — a quantifier in
+// right-operand position is fine because its body correctly spans the rest.
+function wrapQuantifier(sub: Expr): string {
+  const inner = emitExpr(sub);
+  return (sub.kind === "forall" || sub.kind === "exists") ? `(${inner})` : inner;
+}
+
 function emitExpr(e: Expr): string {
   switch (e.kind) {
     case "var": return e.name === "undefined" ? "None" : escapeName(e.name);
@@ -113,6 +124,11 @@ function emitExpr(e: Expr): string {
     case "emptyMap": return `map[]`;
     case "emptySet": return `{}`;
 
+    case "mapLiteral": {
+      const entries = e.entries.map(en => `${emitExpr(en.key)} := ${emitExpr(en.value)}`);
+      return `map[${entries.join(", ")}]`;
+    }
+
     case "methodCall": {
       const obj = emitExpr(e.obj);
       const args = e.args.map(emitExpr);
@@ -125,10 +141,36 @@ function emitExpr(e: Expr): string {
         if (e.method === "push")     return `(${obj} + [${args[0]}])`;
         if (e.method === "concat")   return `(${obj} + [${args[0]}])`;
         if (e.method === "slice" && args.length === 1) return `${obj}[${args[0]}..]`;
-        if (e.method === "slice" && args.length === 2) return `${obj}[${args[0]}..${args[1]}]`;
+        if (e.method === "slice" && args.length === 2) {
+          // JS slice clamps both bounds; Dafny requires `0 <= lo <= hi <= |s|`.
+          // Direct slice is default (matches existing case studies that wrote
+          // bounded calls). Files needing JS clamping opt in via `//@ safe-slice`.
+          if (_useSafeSlice) {
+            needPreamble("SafeSlice");
+            return `SafeSlice(${obj}, ${args[0]}, ${args[1]})`;
+          }
+          return `${obj}[${args[0]}..${args[1]}]`;
+        }
         if (e.method === "map")    return `Std.Collections.Seq.Map(${args[0]}, ${obj})`;
         if (e.method === "filter") return `Std.Collections.Seq.Filter(${args[0]}, ${obj})`;
         if (e.method === "every")  return `Std.Collections.Seq.All(${obj}, ${args[0]})`;
+        if (e.method === "findLast") {
+          needPreamble("OptionType");
+          needPreamble("SeqFindLast");
+          return `SeqFindLast(${obj}, ${args[0]})`;
+        }
+        if (e.method === "findIndex") {
+          needPreamble("SeqFindIndex");
+          return `SeqFindIndex(${obj}, ${args[0]})`;
+        }
+        if (e.method === "flat" && args.length === 0) {
+          needPreamble("SeqFlatten");
+          return `SeqFlatten(${obj})`;
+        }
+        if (e.method === "join") {
+          needPreamble("SeqJoin");
+          return `SeqJoin(${obj}, ${args[0]})`;
+        }
         if (e.method === "some" && e.args[0].kind === "lambda" &&
             e.args[0].body.length === 1 && e.args[0].body[0].kind === "return") {
           const lam = e.args[0];
@@ -141,9 +183,33 @@ function emitExpr(e: Expr): string {
       }
       // String methods
       if (ty === "string") {
-        if (e.method === "indexOf") { needPreamble("StringIndexOf"); return `StringIndexOf(${obj}, ${args[0]})`; }
-        if (e.method === "slice")   return `${obj}[${args[0]}..${args[1]}]`;
+        if (e.method === "indexOf") {
+          needPreamble("StringIndexOf");
+          if (args.length === 2) return `StringIndexOfFrom(${obj}, ${args[0]}, ${args[1]})`;
+          return `StringIndexOf(${obj}, ${args[0]})`;
+        }
+        if (e.method === "split")   { needPreamble("StringSplit"); return `StringSplit(${obj}, ${args[0]})`; }
+        if (e.method === "slice") {
+          // JS negative index: arr.slice(0, -N) → arr[0..|arr|-N]. After
+          // transform, unary minus on a numeric literal is folded to a
+          // negative `num` IR node, so check for that here.
+          const negVal = (a: typeof e.args[0]): number | null =>
+            a.kind === "num" && a.value < 0 ? -a.value : null;
+          const loN = negVal(e.args[0]);
+          const loEx = loN !== null ? `|${obj}|-${loN}` : args[0];
+          if (args.length === 1) return `${obj}[${loEx}..]`;
+          const hiN = negVal(e.args[1]);
+          const hiEx = hiN !== null ? `|${obj}|-${hiN}` : args[1];
+          return `${obj}[${loEx}..${hiEx}]`;
+        }
+        if (e.method === "substring") {
+          if (args.length === 1) return `${obj}[${args[0]}..]`;
+          return `${obj}[${args[0]}..${args[1]}]`;
+        }
+        if (e.method === "endsWith") return `(|${obj}| >= |${args[0]}| && ${obj}[|${obj}|-|${args[0]}|..] == ${args[0]})`;
         if (e.method === "trim")    { needPreamble("StringTrim"); return `StringTrim(${obj})`; }
+        if (e.method === "trimEnd") { needPreamble("StringTrim"); return `StringTrimRight(${obj})`; }
+        if (e.method === "trimStart") { needPreamble("StringTrim"); return `StringTrimLeft(${obj})`; }
         if (e.method === "toLowerCase") { needPreamble("StringToLower"); return `StringToLower(${obj})`; }
         if (e.method === "toUpperCase") { needPreamble("StringToUpper"); return `StringToUpper(${obj})`; }
         if (e.method === "includes") { needPreamble("StringIndexOf"); return `(StringIndexOf(${obj}, ${args[0]}) >= 0)`; }
@@ -233,11 +299,11 @@ function emitExpr(e: Expr): string {
           return `(${left} ${op} ${right})`;
         }
       }
-      return `(${emitExpr(e.left)} ${op} ${emitExpr(e.right)})`;
+      return `(${wrapQuantifier(e.left)} ${op} ${emitExpr(e.right)})`;
     }
 
     case "implies": {
-      const parts = [...e.premises.map(emitExpr), emitExpr(e.conclusion)];
+      const parts = [...e.premises.map(wrapQuantifier), emitExpr(e.conclusion)];
       return `(${parts.join(" ==> ")})`;
     }
 
@@ -271,8 +337,14 @@ function emitExpr(e: Expr): string {
       // Dafny doesn't need toNat — just emit the inner expression
       return emitExpr(e.expr);
 
-    case "index":
-      return `${emitExpr(e.arr)}[${emitExpr(e.idx)}]`;
+    case "index": {
+      const obj = emitExpr(e.arr);
+      const idx = emitExpr(e.idx);
+      // Plain seq/map subscript. For maps where the result is meant to be
+      // `Option<V>` (the TS `Record<K,V>[k]` shape), transform should have
+      // wrapped this in an Option-coercion; here we just emit the subscript.
+      return `${obj}[${idx}]`;
+    }
 
     case "record": {
       if (e.spread) {
@@ -292,8 +364,9 @@ function emitExpr(e: Expr): string {
       }
       if (ctorName) {
         const structFields = _structureDecls.get(ctorName);
-        if (structFields && e.fields.length < structFields.length) {
-          // Pad missing fields: match by name, fill None for optional
+        // Always reorder by struct field name — TS object literal order ≠ Dafny
+        // positional order. Pad missing optional fields with None.
+        if (structFields) {
           const provided = new Map(e.fields.map(f => [f.name, f]));
           const vals = structFields.map(sf => {
             const f = provided.get(sf.name);
@@ -377,7 +450,7 @@ function emitStmt(s: Stmt, indent: number): string {
     case "ghostAssign":
       return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)};`;
     case "assert":
-      return `${pad}assert ${emitExpr(s.expr)};`;
+      return `${pad}${s.assumed ? "assume {:axiom}" : "assert"} ${emitExpr(s.expr)};`;
     case "bind":
       // Monadic bind shouldn't appear in Dafny mode, emit as regular assign
       return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)};`;
@@ -530,6 +603,16 @@ function emitDecl(d: Decl): string {
       return `const ${escapeName(d.name)}: ${tyToDafny(d.type)} := ${emitExpr(d.value)}`;
     }
 
+    case "extern": {
+      // Body-less Dafny function — `:axiom` makes Dafny accept the missing body
+      // and treats it as an uninterpreted symbol. Any `requires`/`ensures` were
+      // lifted from the source declaration's annotations.
+      const lines = [`function {:axiom} ${escapeName(d.name)}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
+      for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
+      for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
+      return lines.join("\n");
+    }
+
     case "namespace": {
       // Dafny doesn't need namespaces — flatten declarations
       return d.decls.map(emitDecl).join("\n\n");
@@ -544,6 +627,12 @@ function emitDecl(d: Decl): string {
 /** Preamble tracking — emitters add keys via `needPreamble(key)`, emitDafnyFile emits them. */
 const _neededPreambles = new Set<string>();
 function needPreamble(key: string) { _neededPreambles.add(key); }
+
+/** File-level opt-in for JS-clamp semantics on `arr.slice(lo, hi)`. Set by
+ *  `emitDafnyFile` from the `//@ safe-slice` directive; consulted by the
+ *  array-method emit. Off by default — case studies that wrote their `.slice`
+ *  calls with provable bounds get direct `s[lo..hi]` emission. */
+let _useSafeSlice = false;
 
 const POW2 = `function Pow2(n: int): int
   requires n >= 0
@@ -582,6 +671,32 @@ const CEIL_REAL = `function CeilReal(x: real): int
   else x.Floor + 1
 }`;
 
+const SEQ_FIND_INDEX = `function SeqFindIndex<T>(s: seq<T>, p: T -> bool): int
+  ensures -1 <= SeqFindIndex(s, p) < |s|
+  ensures SeqFindIndex(s, p) >= 0 ==> p(s[SeqFindIndex(s, p)])
+  ensures SeqFindIndex(s, p) >= 0 ==>
+    (forall i: nat :: i < SeqFindIndex(s, p) ==> !p(s[i]))
+  ensures SeqFindIndex(s, p) == -1 ==> (forall i: nat :: i < |s| ==> !p(s[i]))
+{
+  SeqFindIndexFrom(s, p, 0)
+}
+
+function SeqFindIndexFrom<T>(s: seq<T>, p: T -> bool, from: nat): int
+  requires from <= |s|
+  ensures -1 <= SeqFindIndexFrom(s, p, from) < |s|
+  ensures SeqFindIndexFrom(s, p, from) >= 0 ==>
+    from <= SeqFindIndexFrom(s, p, from) && p(s[SeqFindIndexFrom(s, p, from)])
+  ensures SeqFindIndexFrom(s, p, from) >= 0 ==>
+    (forall i: nat :: from <= i < SeqFindIndexFrom(s, p, from) ==> !p(s[i]))
+  ensures SeqFindIndexFrom(s, p, from) == -1 ==>
+    (forall i: nat :: from <= i < |s| ==> !p(s[i]))
+  decreases |s| - from
+{
+  if from >= |s| then -1
+  else if p(s[from]) then from as int
+  else SeqFindIndexFrom(s, p, from + 1)
+}`;
+
 const SEQ_INDEX_OF = `function SeqIndexOf<T(==)>(s: seq<T>, x: T): int
   ensures -1 <= SeqIndexOf(s, x) < |s|
   ensures SeqIndexOf(s, x) >= 0 ==> s[SeqIndexOf(s, x)] == x
@@ -602,18 +717,80 @@ function SeqIndexOfFrom<T(==)>(s: seq<T>, x: T, from: nat): int
   else SeqIndexOfFrom(s, x, from + 1)
 }`;
 
+const SEQ_FIND_LAST = `function SeqFindLast<T>(s: seq<T>, p: T -> bool): Option<T>
+  ensures SeqFindLast(s, p).Some? ==> p(SeqFindLast(s, p).value)
+  ensures SeqFindLast(s, p).Some? ==> SeqFindLast(s, p).value in s
+  ensures SeqFindLast(s, p).Some? ==>
+    exists i: nat :: i < |s| && s[i] == SeqFindLast(s, p).value && p(s[i]) &&
+                     (forall j: nat :: i < j < |s| ==> !p(s[j]))
+  ensures SeqFindLast(s, p).None? ==> forall i :: 0 <= i < |s| ==> !p(s[i])
+  decreases |s|
+{
+  if |s| == 0 then None
+  else if p(s[|s|-1]) then Some(s[|s|-1])
+  else SeqFindLast(s[..|s|-1], p)
+}`;
+
+const SEQ_FLATTEN = `function SeqFlatten<T>(s: seq<seq<T>>): seq<T>
+  decreases |s|
+{
+  if |s| == 0 then []
+  else s[0] + SeqFlatten(s[1..])
+}`;
+
+const SEQ_JOIN = `function SeqJoin(s: seq<string>, sep: string): string
+  decreases |s|
+{
+  if |s| == 0 then ""
+  else if |s| == 1 then s[0]
+  else s[0] + sep + SeqJoin(s[1..], sep)
+}`;
+
+const SAFE_SLICE = `function SafeSlice<T>(s: seq<T>, lo: int, hi: int): seq<T>
+  ensures |SafeSlice(s, lo, hi)| <= |s|
+{
+  var lo' := if lo < 0 then 0 else if lo > |s| as int then |s| else lo;
+  var hi' := if hi > |s| as int then |s| else if hi < lo' then lo' else hi;
+  s[lo'..hi']
+}`;
+
 const STRING_INDEX_OF = `function StringIndexOf(s: string, sub: string): int
+  ensures StringIndexOf(s, sub) == -1
+       || (0 <= StringIndexOf(s, sub) <= |s| - |sub| && s[StringIndexOf(s, sub)..StringIndexOf(s, sub) + |sub|] == sub)
 {
   StringIndexOfFrom(s, sub, 0)
 }
 
-function StringIndexOfFrom(s: string, sub: string, from: nat): int
+function StringIndexOfFrom(s: string, sub: string, from: int): int
+  ensures StringIndexOfFrom(s, sub, from) == -1
+       || (0 <= StringIndexOfFrom(s, sub, from) <= |s| - |sub|
+           && s[StringIndexOfFrom(s, sub, from)..StringIndexOfFrom(s, sub, from) + |sub|] == sub
+           && StringIndexOfFrom(s, sub, from) >= from)
+{
+  StringIndexOfFromN(s, sub, if from < 0 then 0 else from)
+}
+
+function StringIndexOfFromN(s: string, sub: string, from: nat): int
   decreases |s| - from
+  ensures StringIndexOfFromN(s, sub, from) == -1
+       || (from <= StringIndexOfFromN(s, sub, from) <= |s| - |sub|
+           && s[StringIndexOfFromN(s, sub, from)..StringIndexOfFromN(s, sub, from) + |sub|] == sub)
 {
   if from + |sub| > |s| then -1
   else if s[from..from + |sub|] == sub then from as int
-  else StringIndexOfFrom(s, sub, from + 1)
+  else StringIndexOfFromN(s, sub, from + 1)
 }`;
+
+// `s.split(d)` in TS returns a non-empty sequence of segments. Modeled here as
+// an axiom — defining it recursively would force StringIndexOf to grow ensures
+// clauses that callers don't need. The two ensures cover what verification
+// usually wants: result has at least one element, and every element fits
+// within the source length.
+const STRING_SPLIT = `function {:axiom} StringSplit(s: string, d: string): seq<string>
+  requires |d| > 0
+  ensures |StringSplit(s, d)| >= 1
+  ensures |StringSplit(s, d)| <= |s| + 1
+  ensures forall k :: 0 <= k < |StringSplit(s, d)| ==> |StringSplit(s, d)[k]| <= |s|`;
 
 const STRING_TRIM = `function StringTrimLeft(s: string): string
   ensures |StringTrimLeft(s)| <= |s|
@@ -753,7 +930,13 @@ const PREAMBLE_CODE: [string, string][] = [
   ["CeilReal", CEIL_REAL],
   ["FloorReal", FLOOR_REAL],
   ["SeqIndexOf", SEQ_INDEX_OF],
+  ["SeqFindIndex", SEQ_FIND_INDEX],
+  ["SeqFindLast", SEQ_FIND_LAST],
+  ["SeqFlatten", SEQ_FLATTEN],
+  ["SeqJoin", SEQ_JOIN],
+  ["SafeSlice", SAFE_SLICE],
   ["StringIndexOf", STRING_INDEX_OF],
+  ["StringSplit", STRING_SPLIT],
   ["StringTrim", STRING_TRIM],
   ["StringToLower", STRING_TO_LOWER],
   ["StringToUpper", STRING_TO_UPPER],
@@ -825,7 +1008,8 @@ function translatePattern(pattern: string): string {
 }
 
 
-export function emitDafnyFile(file: Module, tsFileName?: string): string {
+export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSlice?: boolean }): string {
+  _useSafeSlice = !!opts?.safeSlice;
   buildRecordCtorMap(file.decls);
   _neededPreambles.clear();
 

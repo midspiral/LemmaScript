@@ -27,6 +27,12 @@ function lookup(env: Env | null, name: string): Ty | undefined {
 function extend(env: Env | null, name: string, ty: Ty): Env {
   return { name, ty, parent: env };
 }
+function envKeys(env: Env | null): string[] {
+  const out: string[] = [];
+  let e = env;
+  while (e) { out.push(e.name); e = e.parent; }
+  return out;
+}
 
 // ── Access paths ─────────────────────────────────────────────
 
@@ -80,6 +86,7 @@ interface Ctx {
   pureFns: Set<string>;  // names of pure functions in this module
   fnParams: Map<string, Ty[]>;  // function name → parameter types
   fnReturns: Map<string, Ty>;  // function name → return type
+  externs: Map<string, { flat: string; params: Ty[]; returnTy: Ty }>;  // qualified name → declared signature (from `//@ extern`)
   inSpec: boolean;
   inLambda: boolean;
   narrowedPaths: NarrowedPath[];  // pure access path narrowing for conditional then-branches
@@ -154,6 +161,11 @@ function classifyOptExpr(e: RawExpr, ctx: Ctx): { varName: string; innerTy: Ty; 
     const ty = lookup(ctx.env, e.name);
     if (!ty || ty.kind !== "optional") return null;
     return { varName: e.name, innerTy: ty.inner };
+  }
+  if (e.kind === "result") {
+    const ty = lookup(ctx.env, "\\result");
+    if (!ty || ty.kind !== "optional") return null;
+    return { varName: "\\result", innerTy: ty.inner };
   }
   const resolved = resolveExpr(e, ctx);
   if (resolved.ty.kind !== "optional") return null;
@@ -254,7 +266,41 @@ function isRefMutableInTS(ty: Ty): boolean {
 }
 
 function findDecl(ctx: Ctx, name: string): TypeDeclInfo | undefined {
-  return ctx.typeDecls.find(d => d.name === name);
+  const direct = ctx.typeDecls.find(d => d.name === name);
+  if (direct) return direct;
+  // Dotted names (e.g. `Agent.Info`, `Permission.Ruleset`): fall back to the
+  // last segment, so `//@ declare-type Info { ... }` matches a reference to
+  // `Agent.Info` without forcing the user to repeat the namespace.
+  const dotIdx = name.lastIndexOf(".");
+  if (dotIdx >= 0) return ctx.typeDecls.find(d => d.name === name.slice(dotIdx + 1));
+  return undefined;
+}
+
+/** Expand alias-kind typeDecls when the alias target is structural (array,
+ *  map, set, optional, or another user type). Primitive-typed aliases like
+ *  `type TaskId = number` stay as `user("TaskId")` so the generated Dafny
+ *  preserves the alias name. Recursive through compound types; cycle-safe. */
+function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new Set()): Ty {
+  if (ty.kind === "user") {
+    if (seen.has(ty.name)) return ty;
+    let decl = typeDecls.find(d => d.name === ty.name);
+    if (!decl && ty.name.includes(".")) {
+      const tail = ty.name.slice(ty.name.lastIndexOf(".") + 1);
+      decl = typeDecls.find(d => d.name === tail);
+    }
+    if (decl?.kind === "alias" && decl.aliasOfTy) {
+      const target = decl.aliasOfTy;
+      if (target.kind === "array" || target.kind === "map" || target.kind === "set" || target.kind === "optional" || target.kind === "user") {
+        return expandAlias(target, typeDecls, new Set([...seen, ty.name]));
+      }
+    }
+    return ty;
+  }
+  if (ty.kind === "optional") return { kind: "optional", inner: expandAlias(ty.inner, typeDecls, seen) };
+  if (ty.kind === "array") return { kind: "array", elem: expandAlias(ty.elem, typeDecls, seen) };
+  if (ty.kind === "set") return { kind: "set", elem: expandAlias(ty.elem, typeDecls, seen) };
+  if (ty.kind === "map") return { kind: "map", key: expandAlias(ty.key, typeDecls, seen), value: expandAlias(ty.value, typeDecls, seen) };
+  return ty;
 }
 
 function getDiscriminant(ctx: Ctx, typeName: string): string | undefined {
@@ -308,6 +354,11 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Math") return "pure";
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Array" && fn.field === "isArray") return "pure";
   if (fn.kind === "var" && (ctx.inSpec || ctx.inLambda) && ctx.pureFns.has(fn.name)) return "spec-pure";
+  // Bare-name `//@ extern` declarations are emitted as `function {:axiom}` —
+  // pure from the verifier's perspective. Classify them as pure so callers
+  // don't get lifted to statement-level binds (which would force lambdas to
+  // become multi-statement, illegal in Dafny).
+  if (fn.kind === "var" && ctx.externs.has(fn.name)) return "pure";
   if (fn.kind === "var" && ctx.inSpec) {
     // Not a known pure function — could be external (Lean-defined spec helper).
     // Pass through as "pure" and let Lean catch any errors.
@@ -319,23 +370,48 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
 
 // ── Call resolution helpers ─────────────────────────────────
 
-/** Infer lambda param types from array method context (map, filter, etc.).
- *  Returns updated rawArgs with inferred tsType on the first lambda param. */
-function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[]): RawExpr[] {
+/** Infer lambda param types from array method context (map, filter, etc.)
+ *  AND from function-typed parameters of named callees (e.g., a `Comparator =
+ *  (a, b) => bool` parameter propagates `string, string` to the lambda's
+ *  inline params). Returns updated rawArgs with inferred tsType. */
+function tyToTsStr(ty: Ty): string | undefined {
+  if (ty.kind === "user") return ty.name;
+  if (ty.kind === "string") return "string";
+  if (ty.kind === "int" || ty.kind === "nat") return "number";
+  if (ty.kind === "bool") return "boolean";
+  return undefined;
+}
+function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExpr[] {
   if (fn.kind === "field" && fn.obj.ty.kind === "array" &&
-      ["map", "filter", "every", "some", "find"].includes(fn.field) &&
+      ["map", "filter", "every", "some", "find", "findLast", "findIndex"].includes(fn.field) &&
       rawArgs.length >= 1 && rawArgs[0].kind === "lambda" &&
       rawArgs[0].params.length >= 1 && !rawArgs[0].params[0].tsType) {
     const elemTy = fn.obj.ty.elem;
-    const tsType = elemTy.kind === "user" ? elemTy.name
-      : elemTy.kind === "string" ? "string"
-      : elemTy.kind === "int" || elemTy.kind === "nat" ? "number"
-      : elemTy.kind === "bool" ? "boolean" : undefined;
+    const tsType = tyToTsStr(elemTy);
     if (tsType) {
       const lam = rawArgs[0];
       const updatedParams = [{ ...lam.params[0], tsType }, ...lam.params.slice(1)];
       return [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
     }
+  }
+  // Named-callee propagation: when an argument position expects a function
+  // type, infer the lambda's param types from that function type. Aliases
+  // (e.g., `Comparator`) are expanded via the typeDecls.
+  if (fn.kind === "var" && ctx?.fnParams.has(fn.name)) {
+    const paramTys = ctx.fnParams.get(fn.name)!;
+    return rawArgs.map((a, i) => {
+      if (a.kind !== "lambda" || i >= paramTys.length) return a;
+      let pTy = paramTys[i];
+      if (pTy.kind === "user") {
+        const decl = ctx.typeDecls.find(d => d.name === (pTy as any).name);
+        if (decl?.kind === "alias" && decl.aliasOfTy) pTy = decl.aliasOfTy;
+        else if (decl?.kind === "alias" && decl.aliasOf) pTy = parseTsType(decl.aliasOf);
+      }
+      if (pTy.kind !== "fn") return a;
+      const updatedParams = a.params.map((p, idx) =>
+        p.tsType || idx >= pTy.params.length ? p : { ...p, tsType: tyToTsStr(pTy.params[idx]) });
+      return { ...a, params: updatedParams };
+    });
   }
   return rawArgs;
 }
@@ -381,17 +457,25 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
     if (fn.field === "includes") return { kind: "bool" };
     if (fn.field === "indexOf") return { kind: "int" };
     if (fn.field === "shift") return objTy.elem;
+    if (fn.field === "pop") return { kind: "optional", inner: objTy.elem };
     if (fn.field === "push" || fn.field === "concat") return objTy;
     if (fn.field === "filter") return objTy;
     if (fn.field === "every" || fn.field === "some") return { kind: "bool" };
+    if (fn.field === "find" || fn.field === "findLast") return { kind: "optional", inner: objTy.elem };
+    if (fn.field === "findIndex") return { kind: "int" };
+    if (fn.field === "flat" && objTy.elem.kind === "array") return { kind: "array", elem: objTy.elem.elem };
+    if (fn.field === "slice") return objTy;
+    if (fn.field === "join" && objTy.elem.kind === "string") return { kind: "string" };
     if (fn.field === "map" && args.length >= 1 && args[0].kind === "lambda") {
       const retTy = args[0].body.length > 0 && args[0].body[0].kind === "return"
         ? args[0].body[0].value.ty : { kind: "unknown" as const };
       return { kind: "array", elem: retTy };
     }
   } else if (objTy.kind === "string") {
-    if (fn.field === "trim" || fn.field === "toLowerCase" || fn.field === "toUpperCase") return { kind: "string" };
-    if (fn.field === "includes" || fn.field === "startsWith") return { kind: "bool" };
+    if (fn.field === "trim" || fn.field === "trimEnd" || fn.field === "trimStart" || fn.field === "toLowerCase" || fn.field === "toUpperCase") return { kind: "string" };
+    if (fn.field === "slice" || fn.field === "substring") return { kind: "string" };
+    if (fn.field === "split") return { kind: "array", elem: { kind: "string" } };
+    if (fn.field === "includes" || fn.field === "startsWith" || fn.field === "endsWith") return { kind: "bool" };
   }
   return { kind: "unknown" };
 }
@@ -486,8 +570,21 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "call": {
+      // Extern dispatch: `NS.method(args)` where NS.method is declared via
+      // `//@ extern`. Rewrite into a flat-name call (`NS_method(args)`) so the
+      // rest of the pipeline sees an ordinary pure function. The extern's
+      // declaration is emitted alongside the file as `function {:axiom} ...`.
+      if (e.fn.kind === "field" && e.fn.obj.kind === "var") {
+        const qualified = `${e.fn.obj.name}.${e.fn.field}`;
+        const ext = ctx.externs.get(qualified);
+        if (ext) {
+          const args = e.args.map(a => resolveExpr(a, ctx));
+          const fn: TExpr = { kind: "var", name: ext.flat, ty: { kind: "unknown" } };
+          return { kind: "call", fn, args, ty: ext.returnTy, callKind: "pure" };
+        }
+      }
       const fn = resolveExpr(e.fn, ctx);
-      const rawArgs = inferLambdaParamTypes(fn, e.args);
+      const rawArgs = inferLambdaParamTypes(fn, e.args, ctx);
       // For .push() on a typed array, resolve args with element type context
       let argCtx = ctx;
       if (fn.kind === "field" && fn.obj.ty.kind === "array" && fn.field === "push" &&
@@ -591,22 +688,29 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           stepInTy = idxTy;
         } else {
           // call: prev step yielded a callable (typically a method via field).
-          // Build a fake fn TExpr from prev steps to reuse inferMethodReturnTy.
-          const args = step.args.map(a => resolveExpr(a, ctx));
+          // Build a fake fn TExpr from prev steps to reuse inferMethodReturnTy
+          // and inferLambdaParamTypes — without the latter, a lambda arg buried
+          // inside `obj?.filter(r => ...)` gets `int`-typed params instead of
+          // the array's element type.
           const lastField = chain.length > 0 && chain[chain.length - 1].kind === "field"
             ? chain[chain.length - 1] as { kind: "field"; name: string; ty: Ty } : null;
           let callTy: Ty = { kind: "unknown" };
           let callKind: CallKind = "unknown";
+          let rawArgs = step.args;
           if (lastField) {
-            // Build a synthetic field TExpr with the prior step's input type as obj
-            // so inferMethodReturnTy can dispatch on the receiver type.
             const priorInTy = chain.length >= 2 ? chain[chain.length - 2].ty
               : (obj.ty.kind === "optional" ? obj.ty.inner : obj.ty);
             const fakeObj: TExpr = { kind: "var", name: "_chain_recv", ty: priorInTy };
             const fakeFn: TExpr = { kind: "field", obj: fakeObj, field: lastField.name, ty: lastField.ty };
+            rawArgs = inferLambdaParamTypes(fakeFn, rawArgs);
+            const args = rawArgs.map(a => resolveExpr(a, ctx));
             callTy = inferMethodReturnTy(fakeFn, args, ctx);
             callKind = "method";
+            chain.push({ kind: "call", args, ty: callTy, callKind });
+            stepInTy = callTy;
+            continue;
           }
+          const args = rawArgs.map(a => resolveExpr(a, ctx));
           chain.push({ kind: "call", args, ty: callTy, callKind });
           stepInTy = callTy;
         }
@@ -619,8 +723,19 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     case "record": {
       const spread = e.spread ? resolveExpr(e.spread, ctx) : null;
       const ty = spread ? spread.ty : { kind: "unknown" as const };
-      // Infer record type: from spread, or from return type context
-      const recordTy = ty.kind === "user" ? ty : ctx.returnTy.kind === "user" ? ctx.returnTy : null;
+      // Record literal in map-typed context (e.g. `const M: Record<string, V> = {a: ...}`):
+      // attach the map type so transform/emit can produce a map literal.
+      if (!spread && ctx.returnTy.kind === "map") {
+        const mapTy = ctx.returnTy;
+        const fieldCtx = { ...ctx, returnTy: mapTy.value };
+        const fields = e.fields.map(f => ({ name: f.name, value: resolveExpr(f.value, fieldCtx) }));
+        return { kind: "record", spread: null, fields, ty: mapTy };
+      }
+      // Infer record type: from spread, or from return type context. Unwrap
+      // an outer Optional when looking at returnTy — `return {...} : null`
+      // has ctx.returnTy = Option<T>, but the record literal's natural type is T.
+      const returnTyUnwrapped = ctx.returnTy.kind === "optional" ? ctx.returnTy.inner : ctx.returnTy;
+      const recordTy = ty.kind === "user" ? ty : returnTyUnwrapped.kind === "user" ? returnTyUnwrapped : null;
       const decl = recordTy ? ctx.typeDecls.find(d => d.name === recordTy.name && d.kind === "record") : undefined;
       // Clear returnTy for field values — it applies to THIS record, not nested ones
       const fieldCtx = recordTy ? { ...ctx, returnTy: { kind: "unknown" as const } as Ty } : ctx;
@@ -731,6 +846,12 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         ty = { kind: "optional", inner: else_.ty };
       } else if (else_.ty.kind === "void" && then_.ty.kind !== "void" && then_.ty.kind !== "unknown") {
         ty = { kind: "optional", inner: then_.ty };
+      } else if (then_.ty.kind === "optional" && else_.ty.kind !== "optional" && else_.ty.kind !== "unknown") {
+        // Asymmetric optional: one branch returns Option<T>, the other returns T.
+        // Widen to Option<T> so callers/return-coercion see the wider type.
+        ty = then_.ty;
+      } else if (else_.ty.kind === "optional" && then_.ty.kind !== "optional" && then_.ty.kind !== "unknown") {
+        ty = else_.ty;
       }
       return { kind: "conditional", cond, then: then_, else: else_, ty };
     }
@@ -823,7 +944,13 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
 
     case "assign": {
       const targetTy = lookup(ctx.env, s.target) ?? { kind: "unknown" as const };
-      return [{ kind: "assign", target: s.target, value: coerceStr(resolveExpr(s.value, ctx), targetTy) }, ctx.env];
+      let value = coerceStr(resolveExpr(s.value, ctx), targetTy);
+      // Auto-wrap non-optional value in Some when target is optional
+      const isUndef = value.kind === "var" && value.name === "undefined";
+      if (targetTy.kind === "optional" && value.ty.kind !== "optional" && value.ty.kind !== "unknown" && !isUndef) {
+        value = wrapSome(value, targetTy);
+      }
+      return [{ kind: "assign", target: s.target, value }, ctx.env];
     }
 
     case "return": {
@@ -944,7 +1071,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     case "assert": {
       const specCtx = { ...ctx, inSpec: true };
       const expr = resolveExpr(parseExpr(s.expr), specCtx);
-      return [{ kind: "assert", expr }, ctx.env];
+      return [{ kind: "assert", expr, assumed: s.assumed }, ctx.env];
     }
   }
 }
@@ -1089,18 +1216,23 @@ function containsReturn(stmts: RawStmt[]): boolean {
 function resolveFunction(
   fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Set<string>,
   fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map(),
+  externs: Map<string, { flat: string; params: Ty[]; returnTy: Ty }> = new Map(),
+  moduleConstants: Map<string, Ty> = new Map(),
   opts?: { thisBinding?: { name: string; ty: Ty }; forcePure?: boolean }
 ): TFunction {
 
   const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
-  const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: resolveTsType(p.tsType, overrides, p.name) }));
-  const returnTy = resolveTsType(fn.returnType, overrides, "\\result");
+  const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: expandAlias(resolveTsType(p.tsType, overrides, p.name), typeDecls) }));
+  const returnTy = expandAlias(resolveTsType(fn.returnType, overrides, "\\result"), typeDecls);
 
   let env: Env | null = null;
+  // Module-level constants are in scope for every function body. Added before
+  // params so a param named the same as a const would shadow it (param wins).
+  for (const [name, ty] of moduleConstants) env = extend(env, name, ty);
   if (opts?.thisBinding) env = extend(env, opts.thisBinding.name, opts.thisBinding.ty);
   for (const p of params) env = extend(env, p.name, p.ty);
 
-  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
+  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
   const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
   const ensuresCtx: Ctx = { ...baseCtx, env: extend(env, "\\result", returnTy), allowResult: true, inSpec: true };
 
@@ -1130,7 +1262,7 @@ function resolveFunction(
   };
 }
 
-function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map()): import("./typedir.js").TClass {
+function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map(), externs: Map<string, { flat: string; params: Ty[]; returnTy: Ty }> = new Map(), moduleConstants: Map<string, Ty> = new Map()): import("./typedir.js").TClass {
   const fields = cls.fields.map(f => ({ name: f.name, ty: parseTsType(f.tsType) }));
   // Create a synthetic record type for 'this' so field access resolves
   const thisType: Ty = { kind: "user", name: cls.name };
@@ -1138,7 +1270,7 @@ function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInf
   const allTypeDecls = [...typeDecls, thisDecl];
 
   const methods = cls.methods.map(fn =>
-    resolveFunction(fn, allTypeDecls, pureFns, fnParams, fnReturns, {
+    resolveFunction(fn, allTypeDecls, pureFns, fnParams, fnReturns, externs, moduleConstants, {
       thisBinding: { name: "this", ty: thisType },
       forcePure: false,  // class methods are never pure (they access this)
     })
@@ -1150,6 +1282,16 @@ function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInf
 /** Pre-compute Ty on all TypeDeclInfo fields/variants/aliases.
  *  Called once per module so consumers can read field.type instead of re-parsing tsType. */
 function precomputeFieldTypes(typeDecls: TypeDeclInfo[]) {
+  precomputeFieldTypesInner(typeDecls);
+  // Expand alias references inside record/variant field types so downstream
+  // code doesn't have to follow `user("Ruleset")` indirection at every lookup.
+  for (const d of typeDecls) {
+    if (d.fields) for (const f of d.fields) if (f.type) f.type = expandAlias(f.type, typeDecls);
+    if (d.variants) for (const v of d.variants) for (const f of v.fields) if (f.type) f.type = expandAlias(f.type, typeDecls);
+  }
+}
+
+function precomputeFieldTypesInner(typeDecls: TypeDeclInfo[]) {
   for (const d of typeDecls) {
     if (d.fields) for (const f of d.fields) f.type = parseTsType(f.tsType);
     if (d.variants) for (const v of d.variants) for (const f of v.fields) f.type = parseTsType(f.tsType);
@@ -1165,21 +1307,65 @@ export function resolveModule(raw: RawModule): TModule {
   const fnReturns = new Map<string, Ty>();
   for (const fn of raw.functions) {
     const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
-    fnParams.set(fn.name, fn.params.map(p => resolveTsType(p.tsType, overrides, p.name)));
-    fnReturns.set(fn.name, resolveTsType(fn.returnType, overrides, "\\result"));
+    fnParams.set(fn.name, fn.params.map(p => expandAlias(resolveTsType(p.tsType, overrides, p.name), raw.typeDecls)));
+    fnReturns.set(fn.name, expandAlias(resolveTsType(fn.returnType, overrides, "\\result"), raw.typeDecls));
   }
-  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
-  const constants = (raw.constants ?? []).map(c => ({
-    name: c.name,
-    ty: parseTsType(c.tsType),
-    value: resolveExpr(c.value, emptyCtx),
-  }));
+  // Externs: resolve param/return types once. For bare-name externs (no dot),
+  // also register in fnReturns so ordinary `foo(args)` calls get the right
+  // return type at resolution; dotted externs are handled in resolveExpr's
+  // call case via the externs map directly.
+  const externs = new Map<string, { flat: string; params: Ty[]; returnTy: Ty }>();
+  // First pass: register signatures so spec resolution (below) can reference
+  // them — including the extern referring to itself, or specs that mention
+  // sibling externs.
+  for (const ext of raw.externs ?? []) {
+    const params = ext.params.map(p => parseTsType(p.tsType));
+    const returnTy = parseTsType(ext.returnType);
+    externs.set(ext.qualified, { flat: ext.flat, params, returnTy });
+    if (!ext.qualified.includes(".")) fnReturns.set(ext.qualified, returnTy);
+  }
+  // Second pass: resolve the lifted `requires`/`ensures` strings in each
+  // extern's own param scope. `\result` is in scope under `ensures`.
+  const tExterns = (raw.externs ?? []).map(ext => {
+    const sig = externs.get(ext.qualified)!;
+    let env: Env | null = null;
+    for (let i = 0; i < ext.params.length; i++) {
+      env = extend(env, ext.params[i].name, sig.params[i]);
+    }
+    const baseCtx: Ctx = { env, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: sig.returnTy, pureFns, fnParams, fnReturns, externs, inSpec: true, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
+    const ensuresCtx: Ctx = { ...baseCtx, env: extend(env, "\\result", sig.returnTy), allowResult: true };
+    const requires = ext.requires.map(s => {
+      try { return resolveSpec(s, baseCtx); } catch { return null; }
+    }).filter((e): e is TExpr => e !== null);
+    const ensures = ext.ensures.map(s => {
+      try { return resolveSpec(s, ensuresCtx); } catch { return null; }
+    }).filter((e): e is TExpr => e !== null);
+    return {
+      qualified: ext.qualified,
+      flat: ext.flat,
+      params: ext.params.map((p, i) => ({ name: p.name, ty: sig.params[i] })),
+      returnTy: sig.returnTy,
+      requires,
+      ensures,
+    };
+  });
+  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
+  const constants = (raw.constants ?? []).map(c => {
+    const ty = expandAlias(parseTsType(c.tsType), raw.typeDecls);
+    // Propagate the declared type into the value's resolution context so that
+    // record literals on map-typed constants (e.g. `Record<string, number>`)
+    // get their `ty` set to `map<...>` rather than `user("...")`.
+    const valueCtx: Ctx = { ...emptyCtx, returnTy: ty };
+    return { name: c.name, ty, value: resolveExpr(c.value, valueCtx) };
+  });
+  const moduleConstants = new Map<string, Ty>(constants.map(c => [c.name, c.ty]));
 
   return {
     file: raw.file,
     typeDecls: raw.typeDecls,
+    externs: tExterns,
     constants,
-    functions: raw.functions.map(fn => resolveFunction(fn, raw.typeDecls, pureFns, fnParams, fnReturns)),
-    classes: (raw.classes ?? []).map(cls => resolveClass(cls, raw.typeDecls, pureFns, fnParams, fnReturns)),
+    functions: raw.functions.map(fn => resolveFunction(fn, raw.typeDecls, pureFns, fnParams, fnReturns, externs, moduleConstants)),
+    classes: (raw.classes ?? []).map(cls => resolveClass(cls, raw.typeDecls, pureFns, fnParams, fnReturns, externs, moduleConstants)),
   };
 }

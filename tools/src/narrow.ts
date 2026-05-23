@@ -472,18 +472,26 @@ function ruleConditionalOptionalTruthy(e: TExpr): TExpr | null {
   };
 }
 
-/** Extract the leftmost optional check from an `&&` chain.
- *  `(x !== undefined && b) && c` → { check, restCond: b && c }. */
+/** Extract an optional check from any position in an `&&` chain.
+ *  `(x !== undefined && b) && c` → { check, restCond: b && c }.
+ *  `a && (x !== undefined)`     → { check, restCond: a }.
+ *  Conjunct order doesn't carry semantic weight, so either side is fine. */
 function extractLeftmostOptionalCheck(cond: TExpr): {
   check: NonNullable<ReturnType<typeof parseSimpleOptionalCheck>>;
   restCond: TExpr;
 } | null {
   if (cond.kind !== "binop" || cond.op !== "&&") return null;
-  const check = parseSimpleOptionalCheck(cond.left);
-  if (check && !check.negated) return { check, restCond: cond.right };
+  const leftCheck = parseSimpleOptionalCheck(cond.left);
+  if (leftCheck && !leftCheck.negated) return { check: leftCheck, restCond: cond.right };
+  const rightCheck = parseSimpleOptionalCheck(cond.right);
+  if (rightCheck && !rightCheck.negated) return { check: rightCheck, restCond: cond.left };
   if (cond.left.kind === "binop" && cond.left.op === "&&") {
     const inner = extractLeftmostOptionalCheck(cond.left);
     if (inner) return { check: inner.check, restCond: { ...cond, left: inner.restCond } as TExpr };
+  }
+  if (cond.right.kind === "binop" && cond.right.op === "&&") {
+    const inner = extractLeftmostOptionalCheck(cond.right);
+    if (inner) return { check: inner.check, restCond: { ...cond, right: inner.restCond } as TExpr };
   }
   return null;
 }

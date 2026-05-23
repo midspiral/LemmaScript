@@ -38,10 +38,12 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `ghost let x = e` | Before any statement | Ghost variable (proof-only, not runtime). See §2.3. |
 | `ghost x = e` | Before any statement | Ghost variable reassignment. |
 | `assert e` | Before any statement | Assertion (`assertGadget` in Lean, `assert` in Dafny). |
+| `assume e` | Before any statement | Trusted assumption — emits `assume e;` in Dafny. Dafny backend only. See §2.3. |
 | `pure` | Before function declaration | Force function to be pure — required to call from another function's `requires`/`ensures`. Dafny: `function by method` if body can't auto-convert (see §5.1). |
 | `havoc` | Before a variable declaration | Nondeterministic value — skip init expression (see §2.9). |
 | `havoc <key>` | Before a variable declaration | Nondeterministic subexpression — replace calls matching `<key>` (see §2.10). |
 | `declare-type N { f: T, ... }` | Before any statement | Declare a record type for cross-file types (see §2.5). |
+| `extern` | Before function declaration | Treat function as a body-less axiom — extract signature only, skip body (see §2.11). |
 | `skip` | Before any statement | Omit statement from verification model (for side-effect-only code). |
 
 ### 2.2 Spec Expression Grammar
@@ -87,6 +89,8 @@ Ghost `let` declarations become mutable bindings in both backends (since they ar
 
 The init expression in `ghost let` supports `new Set<T>()` and `new Map<K,V>()` constructors, as well as any spec expression. An optional type annotation is supported: `//@ ghost let x: type = expr`.
 
+**`//@ assume P`** is the trusted form of `//@ assert P` — emits `assume P;` in Dafny, not supported in the Lean backend. Canonical use is to constrain a `//@ havoc`'d value (see §2.10) inline in TS instead of post-hoc in the generated `.dfy` file.
+
 ### 2.4 Type Annotations
 
 `lsc` reads TS types from ts-morph and maps them to the backend's type system. For `number` variables, the default mapping is `Int`/`int`. The `type` annotation overrides this to `Nat`/`nat`:
@@ -129,6 +133,15 @@ When a variable is Nat-typed:
 - Dafny: no difference (Dafny handles `nat` natively)
 - Ghost function calls pass the variable directly
 
+Type aliases can be overridden with a leading `//@ type <ty>` annotation. Use this when the declared TS type can't be modeled precisely — e.g. numeric-literal unions:
+
+```typescript
+//@ type nat
+export type PresetMinutes = 5 | 15 | 30 | 45 | 60;
+```
+
+emits `type PresetMinutes = nat`. Any reference to `PresetMinutes` (parameters, fields, `PresetMinutes[]`) then resolves through the alias.
+
 Interface fields can also be overridden with a trailing annotation on the same line:
 
 ```typescript
@@ -150,6 +163,8 @@ When imported types can't be resolved by ts-morph (e.g., in monorepos with bundl
 Each `declare-type` generates a Dafny `datatype` (or Lean `structure`) with the given fields. Field types use TS syntax (`number`, `string`, `boolean`, `T[]`, etc.) and are mapped through the standard type rules (§6.1).
 
 Place `declare-type` annotations before the first function that uses the type. They can appear as leading comments on any statement. `declare-type` takes precedence over any type/interface of the same name in the source file, and is never filtered out by brownfield mode.
+
+An **alias form** `//@ declare-type Name = TsType` declares `Name` as an alias for a TS type expression (e.g., `Ruleset = Rule[]`). Dotted references like `Namespace.Name` resolve via last-segment fallback, so `//@ declare-type Info { ... }` matches a reference to `Agent.Info`. Aliases whose target is structural (array/map/set/optional/another user type) are expanded at use sites; primitive-targeted aliases (`type TaskId = number`) stay nominal so the generated Dafny preserves the alias name.
 
 ### 2.6 Selective Verification: `//@ verify`
 
@@ -178,6 +193,8 @@ A file-level directive that restricts the file to a specific backend:
 ```
 
 When `lsc` runs with a different backend (e.g., `--backend=lean`), the file is silently skipped. This is used for features only supported in one backend, such as class methods (Dafny only).
+
+A second file-level directive, `//@ safe-slice`, opts the file into JS-clamping semantics for two-arg `arr.slice(lo, hi)`: the emitted Dafny goes through a `SafeSlice` helper that clamps both bounds to `[0, |s|]` rather than producing a direct `s[lo..hi]` (which Dafny requires `0 <= lo <= hi <= |s|`). Off by default — files that wrote `.slice` calls with provable bounds get direct emission. Files verifying production code that relies on JS's permissive slicing opt in with the directive at the top.
 
 ### 2.8 Classes
 
@@ -225,21 +242,35 @@ class Counter {
 
 **Lean:** Class support is Dafny-only. Use `//@ backend dafny` on files with classes.
 
+### 2.9 Cross-File Calls
+
+A call to a symbol declared in another `.ts` file (resolved via ts-morph) is emitted as `function {:axiom} <flat>(...): T` — opaque, uninterpreted. Any `//@ requires` / `//@ ensures` on the source declaration are lifted onto the axiom so callers reason against the same contract the source verified; the lift is transitive through nested cross-file references. Only symbols *actually called* are externed; `.d.ts` declarations are skipped (covered by built-in dispatch, §3.8). No annotation is required.
+
 ### 2.10 Havoc: `//@ havoc`
 
-Marks a variable declaration as nondeterministic — the init expression is
-discarded and the variable receives an arbitrary value of its declared type:
+Marks a variable declaration *or assignment* as nondeterministic — the RHS
+expression is discarded and the target receives an arbitrary value of its
+declared type:
 
 ```typescript
 //@ havoc
 const cleaned = text.replace(/[^a-z]/g, '');
+// later in the same scope
+//@ havoc
+cleaned = cleaned.replace(/\s+/g, ' ');
 ```
 
 generates (Dafny):
 
 ```dafny
 var cleaned: string := *;
+cleaned := *;
 ```
+
+For assignments, the type is taken from the LHS variable (already declared);
+`//@ havoc : Type` may still override. Only plain `x = e` is supported —
+compound assigns (`x += e`), element assigns (`arr[i] = v`), and `x++` fall
+through to normal extraction.
 
 The verifier makes no assumptions about `cleaned`'s value. Code after the
 havoc is verified for ALL possible values of the havoced variable.
@@ -296,7 +327,27 @@ const foundEdge = edges.find((e) => e.id === oldEdge.id) as EdgeType;
 ```
 
 **Axioms:** To constrain a havoced variable (e.g., `|cleaned| <= |text|`),
-add an `assume` in the `.dfy` file as a proof addition.
+add a `//@ assume` immediately after the `//@ havoc` declaration. The
+assume flows through to `.dfy.gen` and survives `lsc regen`.
+
+### 2.11 Same-File Extern: `//@ extern`
+
+Mark a function declaration as an opaque axiom — signature (with any `//@ requires` / `//@ ensures`) is extracted, body is skipped:
+
+```typescript
+//@ extern
+export function match(str: string, pattern: string): boolean { ... }  // regex, out of model
+```
+
+→ Dafny: `function {:axiom} match_(str: string, pattern: string): bool`
+
+Same machinery as cross-file auto-extern (§2.9): registered in the same externs map, lifted contract, name-escaped at emission so Dafny-keyword collisions (`match` → `match_`) resolve consistently. The difference from auto-extern is the trigger — cross-file fires automatically, in-file requires the explicit annotation.
+
+**Use case:** the function is outside LS's model (regex, IO, parser) but callers should still verify *parametric over its behavior*. The axiom is deterministic and extensional, so proofs that depend on `f(x) == f(x)` go through. Unlike `//@ havoc`, which is nondeterministic at each call site and defeats determinism-dependent proofs.
+
+In brownfield `//@ verify` mode (§2.6), `//@ extern` declarations are still extracted as externs; only their bodies are skipped.
+
+Bare-name `//@ extern` calls are classified as pure (since they emit as `function {:axiom}`), so they are not lifted out of enclosing expressions by the method-call-lifting pass (§3.6). This means a bare-name extern call can appear inside a lambda body without producing a multi-statement lambda. Dotted externs (cross-file `NS.method` calls) go through a separate dispatch and are also pure.
 
 ---
 
@@ -328,6 +379,8 @@ No normalization of operators. Both backends handle all comparison directions.
 
 `!!expr` works naturally: the inner `!` coerces to bool, the outer `!` negates.
 
+The same coercion applies to non-bool conditions in `if`/`while`/`?:` positions: `n` (number) → `n > 0`, `xs` (array) → `|xs| > 0`, `s` (string) → `|s| > 0`. Optional conditions are handled separately (see Optional narrowing).
+
 ### 3.2 Special Forms
 
 | Spec / TS | Lean | Dafny |
@@ -348,12 +401,16 @@ No normalization of operators. Both backends handle all comparison directions.
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `opt ? f(opt) : undefined` | match on Some/None | `match opt { case Some(v) => Some(f(v)) case None => None }` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
+| `s.indexOf(sub, from)` | — | `StringIndexOfFrom(s, sub, from)` (negative `from` clamps to 0) |
 | `s.slice(start, end)` | `JSString.slice s start end` | `s[start..end]` |
 | `s.trim()` | — | `StringTrim(s)` |
+| `s.trimEnd()` / `s.trimStart()` | — | `StringTrimRight(s)` / `StringTrimLeft(s)` |
+| `s.split(d)` (requires `\|d\| > 0`) | — | `StringSplit(s, d)` (axiomatic preamble: `1 <= \|res\| <= \|s\| + 1`) |
 | `s.toLowerCase()` | — | `StringToLower(s)` |
 | `s.toUpperCase()` | — | `StringToUpper(s)` |
 | `s.includes(sub)` | — | `StringIndexOf(s, sub) >= 0` |
 | `s.startsWith(p)` | — | `\|s\| >= \|p\| && s[..\|p\|] == p` |
+| `s.endsWith(p)` | — | `\|s\| >= \|p\| && s[\|s\|-\|p\|..] == p` |
 | `s.length` | `s.length` | `\|s\|` |
 | `Math.max(...s)` / `Math.min(...s)` | — | `MaxOfSeq(s)` / `MinOfSeq(s)` (requires `\|s\| > 0`) |
 | `arr.map((x) => e)` | `arr.map (fun x => e)` | `Seq.Map((x) => e, arr)` |
@@ -363,7 +420,9 @@ No normalization of operators. Both backends handle all comparison directions.
 | `arr.includes(x)` | `arr.contains x` | `(x in arr)` |
 | `arr.indexOf(x)` | — | `SeqIndexOf(arr, x)` (preamble) |
 | `arr.find((x) => e)` | `arr.find? (fun x => e)` | — |
+| `arr.findIndex((x) => e)` | — | `SeqFindIndex(arr, (x) => e)` (preamble: `-1 ⇔ no match`, `≥0 ⇔ first match with no earlier match`) |
 | `arr.shift()` | — | `arr[0]` + `arr := arr[1..]` |
+| `arr.pop()` | — | `(if \|arr\|>0 then Some(arr[\|arr\|-1]) else None)` + `arr := (if \|arr\|>0 then arr[..\|arr\|-1] else arr)` |
 | `arr.slice(start)` | — | `arr[start..]` |
 | `arr.slice(start, end)` | — | `arr[start..end]` |
 | `expr!` (non-null) | unwrap Option | unwrap Option / direct map access |
@@ -384,6 +443,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `{ ...map, [k]: v }` | — | `map[k := v]` (desugared to `.set()` in extract) |
 | `{ [k]: v }` | — | `map[][k := v]` (desugared to `{}.set()` in extract) |
 | `const { [k]: _, ...rest } = map` | — | `var rest := (map k' \| k' in map && k' != k :: map[k'])` (desugared to `.delete()` in extract) |
+| `const [a, , c, ...rest] = arr` | — | `var a := arr[0]; var c := arr[2]; var rest := arr[3..]` (omits skipped, rest emits as slice) |
 | `arr.with(i, v)` | `arr.set! i v` | `arr[i := v]` |
 | `` `${n} items` `` (int+string) | — | `NatToString(n) + " items"` |
 | `{ k1: v1, ... }: Record<K,V>` | — | `map["k1" := v1, ...]` |
@@ -558,7 +618,7 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 - Equality: `v !== undefined`, `v === undefined` (early return)
 - Truthiness: `if (v)`, `if (!v)`, `opt ? a : b`
-- Composition: `v && rest`, `a === undefined || b === undefined`
+- Composition: `v && rest` or `rest && v` (optional check on either side), `a === undefined || b === undefined`
 - Spec implication: `path !== undefined && rest ==> B` (premise narrows conclusion)
 - Optional chaining: `obj?.field`, `obj?.foo()`, `obj?.[i]`, chained `obj?.a?.b?.c` and `obj?.a.b.c`
 - Nullish coalescing: `x ?? default`
@@ -645,6 +705,8 @@ All expressions `e` above are translated using the spec expression rules (§3).
 
 **`const` collections:** `const` declarations of Array, Map, or Set types become mutable bindings in both backends, since TS mutates these in place but the backends require reassignment.
 
+**Uninitialized `let`:** `let x: T;` (no initializer) emits a type-appropriate default — `[]` for `T[]`, `map[]`/`{}` for `Map`/`Set`, `None` for `T | undefined` (and `null | T`), `0`/`false`/`""` for primitives. Other types fall through to Dafny's `default`, which won't compile — initialize at the declaration or annotate with `T | undefined`.
+
 **For-of loops** are desugared to indexed loops: `for idx in [:bound]` (Lean) or `while idx < bound` (Dafny) with an auto-generated index variable `_varName_idx`. A bound invariant `_varName_idx ≤ bound` is automatically prepended to the user's invariants. When multiple for-of loops use the same variable name, the index is disambiguated with a suffix: `_id_idx`, `_id_idx2`, etc.
 
 ### 4.2 While Loops
@@ -684,6 +746,8 @@ while condition'
 **Decreasing clause:** Emitted directly as a backend expression. Both backends accept well-founded relations — `Nat`/`nat`, lexicographic tuples, etc.
 
 **`done_with` clause:** If the loop body contains `break`, the user should add a `//@ done_with` annotation specifying what is true when the loop exits. (Lean: if omitted, Velvet defaults to the negation of the loop condition, which is only correct when there is no `break`. Dafny: not needed, the verifier handles break paths automatically.)
+
+**C-style `for (init; cond; update)` loops** are desugared at extract time to the equivalent `init; while (cond) { body; update; }`. The loop variable from `init` is forced mutable so the update can mutate it. The update is a bare `Expression` in TS (not wrapped in an `ExpressionStatement`), but is routed through the same statement-position desugaring as `i++;` standalone — `i++`/`i--` become `i = i ± 1`, compound assignments become their plain-assignment equivalents. `//@ invariant` and `//@ decreases` annotations placed in the for-loop body carry through to the desugared `while`.
 
 ### 4.3 Return Inside Loops
 
@@ -827,6 +891,7 @@ The spec body is purely additive — `regen` three-way-merges and preserves user
 | `T \| undefined` | `Option T'` | `Option<T'>` |
 | `true \| false \| undefined` | `Option Bool` | `Option<bool>` |
 | `Record<K, V>` | `Std.HashMap K' V'` | `map<K', V'>` |
+| `(a: T1, b: T2) => R` (function type) | — | `(T1, T2) -> R` (typically used in a `type Foo = (...) => R` alias; lambda params passed to a callee with a `Foo`-typed parameter get inferred types) |
 | `unknown` | `Int` | `int` |
 | `[T, T, ...]` (tuple) | `Array T'` | `seq<T'>` |
 | `<T extends Base>` (generic) | `T` erased to `Base` | `T` erased to `Base` |
@@ -1107,7 +1172,7 @@ lsc regen --backend=dafny <file.ts>           — regenerate with three-way merg
 lsc extract <file.ts>                          — print Raw IR JSON (debugging)
 ```
 
-Default backend is Lean (for now).
+Default backend is Dafny.
 
 ### 7.1 `gen`
 

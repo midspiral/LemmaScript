@@ -19,6 +19,7 @@ export type Ty =
   | { kind: "set"; elem: Ty }
   | { kind: "optional"; inner: Ty }
   | { kind: "user"; name: string }
+  | { kind: "fn"; params: Ty[]; result: Ty }
   | { kind: "unknown" }
 
 export type CallKind = "pure" | "method" | "spec-pure" | "unknown"
@@ -84,7 +85,7 @@ export type TStmt =
   | { kind: "throw" }
   | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
   | { kind: "ghostAssign"; target: string; value: TExpr }
-  | { kind: "assert"; expr: TExpr }
+  | { kind: "assert"; expr: TExpr; assumed?: boolean }
   | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
       someBody: TStmt[]; noneBody: TStmt[] }
   | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
@@ -123,9 +124,20 @@ export interface TConst {
   value: TExpr;
 }
 
+/** Resolved counterpart of RawExtern. */
+export interface TExtern {
+  qualified: string;
+  flat: string;
+  params: TParam[];
+  returnTy: Ty;
+  requires: TExpr[];
+  ensures: TExpr[];
+}
+
 export interface TModule {
   file: string;
   typeDecls: import("./types.js").TypeDeclInfo[];
+  externs: TExtern[];
   constants: TConst[];
   functions: TFunction[];
   classes: TClass[];

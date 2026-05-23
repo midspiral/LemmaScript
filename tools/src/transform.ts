@@ -23,6 +23,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
   const r = (x: Expr) => mapExpr(x, f);
   switch (e.kind) {
     case "var": case "num": case "bool": case "str": case "emptyMap": case "emptySet": case "havoc": return e;
+    case "mapLiteral": return { ...e, entries: e.entries.map(en => ({ key: r(en.key), value: r(en.value) })) };
     case "constructor": return e.args ? { ...e, args: e.args.map(r) } : e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
@@ -207,6 +208,18 @@ function transformExpr(e: TExpr): Expr { return lowerExpr(e, null); }
  * field, index, record, forall, or exists sub-expressions.
  */
 
+/** JS truthiness coercion for `if`/`while`/`?:` conditions.
+ *  Dafny requires bool; TS treats number/string/array as truthy when non-empty.
+ *  Optional conds are handled separately by narrow.ts (rewritten to someMatch). */
+function coerceCondToBool(cond: Expr, ty: Ty): Expr {
+  if (ty.kind === "bool") return cond;
+  if (ty.kind === "int" || ty.kind === "nat")
+    return { kind: "binop", op: ">", left: cond, right: { kind: "num", value: 0 } };
+  if (ty.kind === "string" || ty.kind === "array")
+    return { kind: "binop", op: ">", left: { kind: "field", obj: cond, field: "size" }, right: { kind: "num", value: 0 } };
+  return cond;
+}
+
 /** Wrap an expression in Some/None for optional-typed conditionals.
  *  If the raw TExpr is `undefined`, emit `.none`; otherwise wrap in `Some`. */
 function wrapOptionalBranch(expr: Expr, raw: TExpr): Expr {
@@ -348,10 +361,27 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           (e.left.ty.kind === "user" && e.right.ty.kind === "string"))) {
         const left = lowerExpr(e.left, binds);
         const right = lowerExpr(e.right, binds);
+        // `s || undefined` produces `Option<string>` — wrap the truthy branch in Some.
+        const rightIsUndef = e.right.kind === "var" && e.right.name === "undefined";
         return {
           kind: "if",
           cond: { kind: "binop", op: ">", left: { kind: "field", obj: left, field: "size" }, right: { kind: "num", value: 0 } },
-          then: left, else: right,
+          then: rightIsUndef ? { kind: "app", fn: "Some", args: [left] } : left,
+          else: right,
+        };
+      }
+      // `bool || undefined` → `if bool then Some(bool) else None`. Used in
+      // optional-field initialization where the source assigns a truthy/false
+      // bool to a `T?` field. Without this, emit produces `bool || None`,
+      // which Dafny rejects (bool || Option<?> is ill-typed).
+      if (e.op === "||" && e.left.ty.kind === "bool" &&
+          e.right.kind === "var" && e.right.name === "undefined") {
+        const left = lowerExpr(e.left, binds);
+        return {
+          kind: "if",
+          cond: left,
+          then: { kind: "app", fn: "Some", args: [left] },
+          else: { kind: "var", name: "undefined" },
         };
       }
       // int + string → NatToString(int) + string (string concatenation)
@@ -567,6 +597,19 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.fields.length === 0 && !e.spread && e.ty.kind === "map") {
         return { kind: "emptyMap" };
       }
+      // Non-empty record literal with map type — emit as a flat Dafny map
+      // literal `map[k1 := v1, k2 := v2, ...]`. (A chain of `m["k" := v]`
+      // works for a handful of entries but Dafny's type resolver stack-
+      // overflows on hundreds; the flat form is fine at any size.)
+      if (e.fields.length > 0 && !e.spread && e.ty.kind === "map") {
+        return {
+          kind: "mapLiteral",
+          entries: e.fields.map(f => ({
+            key: { kind: "str" as const, value: f.name },
+            value: lowerExpr(f.value, binds),
+          })),
+        };
+      }
       return { kind: "record", spread: null, fields: e.fields.map(f => ({ name: f.name, value: lowerExpr(f.value, binds) })) };
     }
 
@@ -587,7 +630,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "exists", var: e.var, type: e.varTy, body: transformExpr(e.body) };
 
     case "conditional": {
-      const cond = lowerExpr(e.cond, binds);
+      // JS truthiness coercion (string/array/int → ... > 0).  Matches SPEC §3.1
+      // negation forms (`!s` → `s == ""`).  Optional conds are already
+      // rewritten to someMatch by narrow.ts.
+      const cond = coerceCondToBool(lowerExpr(e.cond, binds), e.cond.ty);
       let thenExpr = lowerExpr(e.then, binds);
       let elseExpr = lowerExpr(e.else, binds);
       if (e.ty.kind === "optional") {
@@ -745,6 +791,72 @@ function replaceVarInExpr(e: Expr, oldName: string, newName: string): Expr {
 
 // ── Transform statements ─────────────────────────────────────
 
+// `if (X) continue; rest` → `if (!X) { rest }` at the top of a loop body.
+// Dafny's lowered while-loops have the index increment at the bottom, so a
+// `continue` would skip it and loop forever; rewriting to if/else lets the
+// loop fall through normally.
+function negateExpr(e: Expr): Expr {
+  if (e.kind === "unop" && e.op === "!") return e.expr;
+  return { kind: "unop", op: "!", expr: e };
+}
+
+/** Build the two pieces of an `arr.pop()` lowering on a named array variable:
+ *  - `optValue` is `(if |arr|>0 then Some(arr[|arr|-1]) else None)` (the popped element)
+ *  - `guardedTrunc` is `(if |arr|>0 then arr[..|arr|-1] else arr)` (the array minus its last element)
+ *  Callers wrap these in let/assign statements appropriate to their context. */
+function buildPopLowering(arrName: string, arrTy: Ty): { optValue: Expr; guardedTrunc: Expr } {
+  const arrVar: Expr = { kind: "var", name: arrName };
+  const arrLen: Expr = { kind: "field", obj: arrVar, field: "size" };
+  const lastIdx: Expr = { kind: "binop", op: "-", left: arrLen, right: { kind: "num", value: 1 } };
+  const lastElem: Expr = { kind: "index", arr: arrVar, idx: lastIdx };
+  const isNonEmpty: Expr = { kind: "binop", op: ">", left: arrLen, right: { kind: "num", value: 0 } };
+  const optValue: Expr = { kind: "if", cond: isNonEmpty,
+    then: { kind: "app", fn: "Some", args: [lastElem] },
+    else: { kind: "var", name: "undefined" } };
+  const truncated: Expr = { kind: "methodCall", obj: arrVar, objTy: arrTy, method: "slice",
+    args: [{ kind: "num", value: 0 }, lastIdx], monadic: false };
+  const guardedTrunc: Expr = { kind: "if", cond: isNonEmpty, then: truncated, else: arrVar };
+  return { optValue, guardedTrunc };
+}
+function eliminateTopLevelContinue(stmts: Stmt[]): Stmt[] {
+  const out: Stmt[] = [];
+  for (let i = 0; i < stmts.length; i++) {
+    const s = stmts[i];
+    // `if (X) {...A, continue}; rest` (empty else, trailing continue in then)
+    // — if A is empty, rewrite to `if (!X) { rest }`; otherwise rewrite to
+    // `if (X) { ...A } else { rest }`. Either form lets the loop fall through
+    // naturally past the bottom of the body.
+    if (s.kind === "if" && s.else.length === 0 &&
+        s.then.length >= 1 && s.then[s.then.length - 1].kind === "continue") {
+      const rest = eliminateTopLevelContinue(stmts.slice(i + 1));
+      const thenWithoutContinue = s.then.slice(0, -1);
+      if (thenWithoutContinue.length === 0) {
+        out.push({ kind: "if", cond: negateExpr(s.cond), then: rest, else: [] });
+      } else {
+        out.push({ kind: "if", cond: s.cond, then: thenWithoutContinue, else: rest });
+      }
+      return out;
+    }
+    // narrow.ts's ruleEarlyReturnConsume rewrites `if (!x) continue; rest`
+    // (when x is Optional) to a someMatch which transform.ts then emits as a
+    // `match`. A trailing `continue` inside a match arm is a no-op when the
+    // match is the last statement in the loop body — drop it.
+    if (s.kind === "match" && i === stmts.length - 1) {
+      const arms = s.arms.map(arm => {
+        const b = arm.body;
+        if (b.length > 0 && b[b.length - 1].kind === "continue") {
+          return { ...arm, body: b.slice(0, -1) };
+        }
+        return arm;
+      });
+      out.push({ ...s, arms });
+      continue;
+    }
+    out.push(s);
+  }
+  return out;
+}
+
 function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
   const result: Stmt[] = [];
   let i = 0;
@@ -770,7 +882,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
         const idxName = `_${keyName}_idx${suffix}`;
         const idx: Expr = { kind: "var", name: idxName };
         const arrSize: Expr = { kind: "field", obj: keysVar, field: "size" };
-        const bodyStmts = transformStmts(s.body, typeDecls);
+        const bodyStmts = eliminateTopLevelContinue(transformStmts(s.body, typeDecls));
         const letKey: Stmt = { kind: "let", name: keyName, type: keyTy, mutable: false, value: { kind: "index", arr: keysVar, idx } };
         const boundInv: Expr = { kind: "binop", op: "≤", left: idx, right: arrSize };
         result.push({
@@ -797,7 +909,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
         const idxName = `_${keyName}_idx${suffix}`;
         const idx: Expr = { kind: "var", name: idxName };
         const arrSize: Expr = { kind: "field", obj: keysVar, field: "size" };
-        const bodyStmts = transformStmts(s.body, typeDecls);
+        const bodyStmts = eliminateTopLevelContinue(transformStmts(s.body, typeDecls));
         const letKey: Stmt = { kind: "let", name: keyName, type: keyTy, mutable: false, value: { kind: "index", arr: keysVar, idx } };
         const letVal: Stmt = { kind: "let", name: valueName, type: valueTy, mutable: false,
           value: { kind: "methodCall", obj: iterExpr, objTy: s.iterable.ty, method: "getDirect", args: [{ kind: "var", name: keyName }], monadic: false } };
@@ -825,7 +937,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
       const idxName = `_${varName}_idx${suffix}`;
       const idx: Expr = { kind: "var", name: idxName };
       const arrSize: Expr = { kind: "field", obj: iterExpr, field: "size" };
-      const bodyStmts = transformStmts(s.body, typeDecls);
+      const bodyStmts = eliminateTopLevelContinue(transformStmts(s.body, typeDecls));
       const letElem: Stmt = { kind: "let", name: varName, type: varTy, mutable: false, value: { kind: "index", arr: iterExpr, idx } };
       // Auto-add bound invariant: idx ≤ bound (always true for range loops)
       const boundInv: Expr = { kind: "binop", op: "≤", left: idx, right: arrSize };
@@ -872,6 +984,17 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           const sliceTail: Stmt = { kind: "assign", target: arrName,
             value: { kind: "methodCall", obj: arrVar, objTy: init.fn.obj.ty, method: "slice", args: [{ kind: "num", value: 1 }], monadic: false } };
           return [letHead, sliceTail];
+        }
+      }
+      // let x = arr.pop() → let x: T? = (Option-expr); arr := (truncated-or-self)
+      if (init && init.fn.kind === "field" && init.fn.field === "pop" && init.fn.obj.ty.kind === "array") {
+        const arrName = init.fn.obj.kind === "var" ? init.fn.obj.name : undefined;
+        if (arrName) {
+          const { optValue, guardedTrunc } = buildPopLowering(arrName, init.fn.obj.ty);
+          return [
+            { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: optValue },
+            { kind: "assign", target: arrName, value: guardedTrunc },
+          ];
         }
       }
       // new Map(arr.map(n => [n.field, n])) → let m = map[]; for (n of arr) m[n.field] := n
@@ -925,6 +1048,17 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     }
 
     case "assign": {
+      // x = arr.pop() → x := (Option-expr); arr := (truncated-or-self)
+      if (s.value.kind === "call" && s.value.fn.kind === "field" &&
+          s.value.fn.field === "pop" && s.value.fn.obj.ty.kind === "array" &&
+          s.value.fn.obj.kind === "var") {
+        const arrName = s.value.fn.obj.name;
+        const { optValue, guardedTrunc } = buildPopLowering(arrName, s.value.fn.obj.ty);
+        return [
+          { kind: "assign", target: s.target, value: optValue },
+          { kind: "assign", target: arrName, value: guardedTrunc },
+        ];
+      }
       // Top-level method call → direct monadic bind, no lifting needed
       if (s.value.kind === "call" && s.value.callKind === "method")
         return [{ kind: "bind", target: s.target, value: transformExpr(s.value) }];
@@ -981,17 +1115,17 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     case "if": {
       // Lift from condition only (Lean rule: don't lift from branches).
       const { binds, expr: cond } = liftMethodCalls(s.cond);
-      return [...binds, { kind: "if", cond, then: transformStmts(s.then, typeDecls), else: transformStmts(s.else, typeDecls) }];
+      return [...binds, { kind: "if", cond: coerceCondToBool(cond, s.cond.ty), then: transformStmts(s.then, typeDecls), else: transformStmts(s.else, typeDecls) }];
     }
 
     case "while":
       return [{
         kind: "while",
-        cond: transformExpr(s.cond),
+        cond: coerceCondToBool(transformExpr(s.cond), s.cond.ty),
         invariants: s.invariants.map(transformExpr),
         decreasing: s.decreases ? transformExpr(s.decreases) : null,
         doneWith: s.doneWith ? transformExpr(s.doneWith) : null,
-        body: transformStmts(s.body, typeDecls),
+        body: eliminateTopLevelContinue(transformStmts(s.body, typeDecls)),
       }];
 
     case "throw":
@@ -1010,7 +1144,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       return [{ kind: "ghostAssign", target: s.target, value: transformExpr(s.value) }];
 
     case "assert":
-      return [{ kind: "assert", expr: transformExpr(s.expr) }];
+      return [{ kind: "assert", expr: transformExpr(s.expr), assumed: s.assumed }];
 
     case "someMatch": {
       const path = asTAccessPath(s.scrutinee);
@@ -1528,18 +1662,35 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
 
   const base = mod.file.split("/").pop()?.replace(/\.ts$/, "") ?? "module";
 
+  // Externs: emit as top-of-file `function {:axiom}` (Dafny) declarations.
+  // Any `requires`/`ensures` from the source declaration come along so callers
+  // see the same spec the source itself verified. Substitute `\result` with the
+  // function call (same pattern as for in-file pure-function ensures).
+  const externDecls: Decl[] = (mod.externs ?? []).map(ext => {
+    const fnCall: Expr = { kind: "app", fn: ext.flat, args: ext.params.map(p => ({ kind: "var" as const, name: p.name })) };
+    return {
+      kind: "extern" as const,
+      name: ext.flat,
+      params: ext.params.map(p => ({ name: p.name, type: p.ty })),
+      returnType: ext.returnTy,
+      requires: ext.requires.map(transformExpr),
+      ensures: ext.ensures.map(e => replaceVar(transformExpr(e), "\\result", fnCall)),
+    };
+  });
+
   // Types file
   const typesImports: string[] = ["LemmaScript"];
   let typesFile: Module | null = null;
   const pureNamespace: Decl[] = pureDefs.length > 0
     ? [{ kind: "namespace", name: "Pure", decls: pureDefs }]
     : [];
-  if (typeDecls.length > 0 || pureDefs.length > 0) {
+  if (typeDecls.length > 0 || pureDefs.length > 0 || externDecls.length > 0) {
     typesFile = {
       comment: "  Generated by lsc — Lean types and pure function mirrors.",
       imports: typesImports,
       options: [],
-      decls: [...typeDecls, ...pureNamespace],
+      // Externs come first so they're in scope for every later declaration.
+      decls: [...externDecls, ...typeDecls, ...pureNamespace],
     };
   }
 

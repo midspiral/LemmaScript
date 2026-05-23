@@ -25,6 +25,7 @@ export type Expr =
   | { kind: "arrayLiteral"; elems: Expr[] }
   | { kind: "emptyMap" }
   | { kind: "emptySet" }
+  | { kind: "mapLiteral"; entries: { key: Expr; value: Expr }[] }
   | { kind: "methodCall"; obj: Expr; objTy: Ty; method: string; args: Expr[]; monadic: boolean }
   | { kind: "lambda"; params: { name: string; type: Ty }[]; body: Stmt[] }
   | { kind: "if"; cond: Expr; then: Expr; else: Expr }
@@ -57,7 +58,7 @@ export type Stmt =
   | { kind: "forin"; idx: string; bound: Expr; invariants: Expr[]; body: Stmt[] }
   | { kind: "ghostLet"; name: string; type: Ty; value: Expr }
   | { kind: "ghostAssign"; target: string; value: Expr }
-  | { kind: "assert"; expr: Expr }
+  | { kind: "assert"; expr: Expr; assumed?: boolean }
 
 export interface StmtMatchArm {
   pattern: string;
@@ -143,7 +144,21 @@ export interface TypeAlias {
   target: Ty;
 }
 
-export type Decl = Inductive | Structure | FnDef | FnDefByMethod | FnMethod | Namespace | ClassDecl | ConstDecl | TypeAlias;
+/** Externally-declared pure function: `function {:axiom} name(...): returnType`
+ *  in Dafny. No body — the prover treats it as an uninterpreted symbol of the
+ *  declared type. Auto-detected during extraction for cross-file calls; any
+ *  `requires`/`ensures` on the source declaration are lifted along so callers
+ *  reason against the same contract the source itself verified. */
+export interface ExternDecl {
+  kind: "extern";
+  name: string;                                 // flat name (dots → underscores)
+  params: { name: string; type: Ty }[];
+  returnType: Ty;
+  requires: Expr[];
+  ensures: Expr[];
+}
+
+export type Decl = Inductive | Structure | FnDef | FnDefByMethod | FnMethod | Namespace | ClassDecl | ConstDecl | TypeAlias | ExternDecl;
 
 export interface Module {
   comment: string;

@@ -63,6 +63,29 @@ function splitTypeArgs(s: string): string[] {
 
 export function parseTsType(tsType: string): Ty {
   const t = tsType.trim();
+  // Function type: `(a: T1, b: T2) => R` or `(T1, T2) => R`. Match the
+  // outermost `(...) => R` shape; param names (with `:`) are stripped.
+  // Handled before union so that arrow-types whose return is a union don't
+  // get consumed by the union branch.
+  if (t.startsWith("(") && t.includes(") => ")) {
+    const arrowIdx = t.lastIndexOf(") => ");
+    let depth = 0;
+    let openIdx = -1;
+    for (let i = 0; i <= arrowIdx; i++) {
+      if (t[i] === "(") { if (depth === 0) openIdx = i; depth++; }
+      else if (t[i] === ")") depth--;
+    }
+    if (openIdx === 0) {
+      const paramsStr = t.slice(openIdx + 1, arrowIdx);
+      const ret = t.slice(arrowIdx + 5).trim();
+      const paramArgs = paramsStr.length === 0 ? [] : splitTypeArgs(paramsStr);
+      const params = paramArgs.map(a => {
+        const colon = a.indexOf(":");
+        return parseTsType(colon >= 0 ? a.slice(colon + 1) : a);
+      });
+      return { kind: "fn", params, result: parseTsType(ret) };
+    }
+  }
   // Union: T | undefined → optional<T>
   if (t.includes(" | ")) {
     let arms = t.split(" | ").map(a => a.trim());
@@ -110,5 +133,25 @@ export function parseTsType(tsType: string): Ty {
     return { kind: "array", elem: parseTsType(elems[0]) };
   }
   return { kind: "user", name: t };
+}
+
+/** Render a Ty in LemmaScript canonical syntax — backend-neutral, side-effect-free.
+ *  Used by `lsc info` for the signature field of `foo.ts.json`. */
+export function tyToCanonical(ty: Ty): string {
+  switch (ty.kind) {
+    case "bool":   return "bool";
+    case "nat":    return "nat";
+    case "int":    return "int";
+    case "real":   return "real";
+    case "string": return "string";
+    case "void":   return "void";
+    case "unknown":return "unknown";
+    case "array":  return `seq<${tyToCanonical(ty.elem)}>`;
+    case "map":    return `map<${tyToCanonical(ty.key)}, ${tyToCanonical(ty.value)}>`;
+    case "set":    return `set<${tyToCanonical(ty.elem)}>`;
+    case "optional": return `Option<${tyToCanonical(ty.inner)}>`;
+    case "user":   return ty.name;
+    case "fn":     return `(${ty.params.map(tyToCanonical).join(", ")}) -> ${tyToCanonical(ty.result)}`;
+  }
 }
 

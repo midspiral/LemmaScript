@@ -14,6 +14,95 @@ import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawG
 /** When set, calls whose function/method name matches this key are replaced with havoc. */
 let _havocKey: string | null = null;
 
+/** Auto-detected cross-file calls. Populated by `extractExpr` whenever it sees
+ *  a call `Obj.method(...)` or `foo(...)` whose ts-morph symbol resolves to a
+ *  different `.ts` source file. Emitted in Dafny as `function {:axiom} <flat>`.
+ *  Cleared at the start of every `extractModule`. */
+const _externs = new Map<string, import("./rawir.js").RawExtern>();
+let _currentSourceFile: SourceFile | null = null;
+/** True only while extracting a function body. Module-level constants that
+ *  reference cross-file callees (e.g., `BusEvent.define(...)` inside a
+ *  module-level record) would otherwise pollute the output with externs
+ *  that no verified function actually calls — and whose TS return types
+ *  often don't translate to valid Dafny. */
+let _inFunctionExtraction = false;
+/** Counter for synthetic names used by let-statement array destructuring
+ *  when the initializer isn't a bare variable (single-eval temp). */
+let _destrCounter = 0;
+
+/** Register the call's callee as a cross-file extern if applicable, then
+ *  walk the source declaration's body for nested cross-file calls (so the
+ *  lifted `requires`/`ensures` see all the symbols they reference). Idempotent
+ *  via the `_externs` dedup. */
+function registerExternIfCrossFile(
+  callee: import("ts-morph").PropertyAccessExpression | import("ts-morph").Identifier,
+  sourceFile: SourceFile,
+): void {
+  const ext = detectCrossFileExtern(callee, sourceFile);
+  if (!ext || _externs.has(ext.qualified)) return;
+  _externs.set(ext.qualified, ext);
+  // Recurse: scan the source decl's body for nested cross-file calls so any
+  // symbol referenced by the copied spec is itself declared in the output.
+  let symbol = callee.getSymbol();
+  if (!symbol) return;
+  const aliased = symbol.getAliasedSymbol();
+  if (aliased) symbol = aliased;
+  const sourceDecl = symbol.getDeclarations().find(
+    d => d.getSourceFile().getFilePath() !== sourceFile.getFilePath(),
+  );
+  if (!sourceDecl) return;
+  const sourceSF = sourceDecl.getSourceFile();
+  const body = (sourceDecl as any).getBody?.();
+  if (!body) return;
+  for (const inner of body.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    const innerCallee = inner.getExpression();
+    if (Node.isPropertyAccessExpression(innerCallee) || Node.isIdentifier(innerCallee)) {
+      registerExternIfCrossFile(innerCallee, sourceSF);
+    }
+  }
+}
+
+function detectCrossFileExtern(
+  callee: import("ts-morph").PropertyAccessExpression | import("ts-morph").Identifier,
+  sourceFile: SourceFile,
+): import("./rawir.js").RawExtern | null {
+  let symbol = callee.getSymbol();
+  if (!symbol) return null;
+  // For bare imports `import { foo } from "..."`, the call-site symbol is the
+  // local ImportSpecifier — declared in the current file. Follow the alias to
+  // the original `export function` declaration.
+  const aliased = symbol.getAliasedSymbol();
+  if (aliased) symbol = aliased;
+  const decls = symbol.getDeclarations();
+  if (decls.length === 0) return null;
+  const currentPath = sourceFile.getFilePath();
+  const externalDecl = decls.find(d => d.getSourceFile().getFilePath() !== currentPath);
+  if (!externalDecl) return null;
+  // Skip stdlib / typings — those have built-in dispatch elsewhere or are
+  // genuinely out of LS's verification model.
+  if (externalDecl.getSourceFile().getFilePath().endsWith(".d.ts")) return null;
+  const sig = callee.getType().getCallSignatures()[0];
+  if (!sig) return null;
+  const params = sig.getParameters().map(p => ({
+    name: p.getName(),
+    tsType: p.getTypeAtLocation(callee).getText(),
+  }));
+  const returnType = sig.getReturnType().getText();
+  let qualified: string;
+  if (Node.isPropertyAccessExpression(callee)) {
+    qualified = `${callee.getExpression().getText()}.${callee.getName()}`;
+  } else {
+    qualified = callee.getText();
+  }
+  const flat = qualified.replace(/\./g, "_");
+  // Lift `//@ requires`/`//@ ensures` from the source declaration so callers
+  // reason against the source's verified contract, not an unconstrained axiom.
+  const annots = collectFunctionAnnotations(externalDecl);
+  const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
+  const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
+  return { qualified, flat, params, returnType, requires, ensures };
+}
+
 /** Build a concat-tree from a mixed list of literal and SpreadElement nodes.
  *  Literals collapse into arrayLiteral segments; spreads become bare expressions;
  *  segments are joined with `arrayConcat`. Used by array-literal and Math.max/min
@@ -279,6 +368,15 @@ function extractExpr(node: Expression): RawExpr {
         return { kind: "call", fn: { kind: "var", name: fnName }, args: [combined] };
       }
     }
+    // Auto-extern: if the callee resolves (via ts-morph) to a symbol declared
+    // in a different `.ts` file, register it as an opaque extern. Covers both
+    // `Obj.method(...)` and bare `foo(...)` imports. Skipped for stdlib/.d.ts
+    // declarations — those are either built-in methods (handled in dafny-emit)
+    // or genuinely out of scope.
+    if (_currentSourceFile && _inFunctionExtraction &&
+        (Node.isPropertyAccessExpression(callee) || Node.isIdentifier(callee))) {
+      registerExternIfCrossFile(callee, _currentSourceFile);
+    }
     const fn = extractExpr(callee);
     const args = node.getArguments().map(a => extractExpr(a as Expression));
     if (node.hasQuestionDotToken()) {
@@ -368,7 +466,10 @@ function extractExpr(node: Expression): RawExpr {
         if (init && Node.isComputedPropertyName(nameNode)) {
           computedFields.push({ key: extractExpr(nameNode.getExpression()), value: extractExpr(init) });
         } else if (init) {
-          fields.push({ name: prop.getName(), value: extractExpr(init) });
+          // String-literal keys (e.g. `"bun run": 3`) — use the unquoted literal
+          // value; otherwise `prop.getName()` may include surrounding quotes.
+          const name = Node.isStringLiteral(nameNode) ? nameNode.getLiteralValue() : prop.getName();
+          fields.push({ name, value: extractExpr(init) });
         }
       }
     }
@@ -484,6 +585,18 @@ function collectAnnotations(node: Node, body?: Node[]): Annotation[] {
   return own;
 }
 
+/** All `//@ ` annotations for a function-like node, regardless of whether its
+ *  body is a block (annotations on the first statement) or an expression-body
+ *  arrow (annotations only on the declaration). Used both for in-file function
+ *  extraction and for pulling specs off cross-file externs. */
+function collectFunctionAnnotations(fn: Node): Annotation[] {
+  const body = (fn as any).getBody?.();
+  if (body && Node.isBlock(body)) {
+    return collectAnnotations(fn, body.getStatements() as Node[]);
+  }
+  return collectAnnotations(fn);
+}
+
 /** Check for bare `//@ pure` annotation (no expression). */
 function hasPureAnnotation(node: Node, body?: Node[]): boolean {
   const nodes = body && body.length > 0 ? [node, body[0]] : [node];
@@ -503,6 +616,12 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   const typeParams = decl.getTypeParameters().map(tp => tp.getName());
   const tpField = typeParams.length > 0 ? typeParams : undefined;
 
+  // Leading `//@ type <ty>` overrides extraction — the declared TS type is
+  // replaced by the annotated backend type. Used to coerce literal unions
+  // (`5 | 15 | 30` → `nat`) and other types LS can't model precisely.
+  const override = parseAnnotations(decl).find(a => a.kind === "type");
+  if (override) return { name, typeParams: tpField, kind: "alias", aliasOf: override.expr };
+
   if (type.isUnion()) {
     const members = type.getUnionTypes();
     if (members.every(m => m.isStringLiteral())) {
@@ -519,7 +638,12 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
           const fields: { name: string; tsType: string }[] = [];
           for (const prop of m.getProperties()) {
             if (prop.getName() === discriminant) continue;
-            fields.push({ name: prop.getName(), tsType: typeToString(prop.getTypeAtLocation(decl)) });
+            let tsType = typeToString(prop.getTypeAtLocation(decl));
+            const propDecl = prop.getDeclarations()[0];
+            if (propDecl && (propDecl as any).hasQuestionToken?.() && !tsType.includes(" | undefined")) {
+              tsType = `${tsType} | undefined`;
+            }
+            fields.push({ name: prop.getName(), tsType });
           }
           return { name: tag, fields };
         });
@@ -552,6 +676,18 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
     }
   }
 
+  // Function-type alias: `type Comparator = (a: T, b: T) => boolean` —
+  // ts-morph reports these as object-typed with a call signature and no
+  // user-visible properties. Emit as a Dafny `type X = (...) -> R` alias.
+  if (type.isObject()) {
+    const sig = type.getCallSignatures()[0];
+    const hasProps = type.getProperties().length > 0;
+    if (sig && !hasProps) {
+      const params = sig.getParameters().map(p => typeToString(p.getTypeAtLocation(decl)));
+      const ret = typeToString(sig.getReturnType());
+      return { name, kind: "alias", aliasOf: `(${params.join(", ")}) => ${ret}` };
+    }
+  }
   if (type.isObject() || type.isIntersection()) return extractRecord(name, type, decl, undefined, extraDecls);
   // Primitive type alias: type TaskId = number → alias
   const tsType = typeToString(type);
@@ -582,6 +718,13 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
 
     const propType = prop.getTypeAtLocation(locationNode);
     let tsType = typeToString(propType);
+    // Optional property: `foo?: T` reports as `T` (ts-morph strips the
+    // `| undefined` from a question-token type). Add it back so the field
+    // resolves to `Optional<T>`.
+    const propDecl = prop.getDeclarations()[0];
+    if (propDecl && (propDecl as any).hasQuestionToken?.() && !tsType.includes(" | undefined")) {
+      tsType = `${tsType} | undefined`;
+    }
 
     // Inline anonymous object types: ts-morph names them __type.
     // Generate a synthetic named record and reference it by name instead.
@@ -702,7 +845,51 @@ function typeToString(type: Type): string {
 
 const COMPOUND_OPS: Record<string, string> = {
   "+=": "+", "-=": "-", "*=": "*", "/=": "/", "%=": "%",
+  "<<=": "<<", ">>=": ">>", "|=": "|", "&=": "&", "^=": "^", "**=": "**",
 };
+
+/** Desugar a statement-position side-effecting expression — `x = e`, `x += e`,
+ *  `i++`, `arr[i] = v`, etc. — into a `RawAssign`. Returns null when no shape
+ *  match (caller emits a plain `{kind: "expr"}` or errors). Called by both
+ *  `ExpressionStatement` extraction (wrapped) and the C-style for-loop
+ *  incrementor (bare Expression — same shape, no `;` wrapper). */
+function desugarStmtExpr(expr: Expression, line: number): RawStmt | null {
+  if (Node.isBinaryExpression(expr)) {
+    const opText = expr.getOperatorToken().getText();
+    const left = expr.getLeft();
+    if (opText === "=" && Node.isElementAccessExpression(left)) {
+      const obj = extractExpr(left.getExpression());
+      const idx = extractExpr(left.getArgumentExpression()!);
+      const val = extractExpr(expr.getRight());
+      const target = left.getExpression().getText();
+      const withCall: RawExpr = { kind: "call", fn: { kind: "field", obj, field: "with" }, args: [idx, val] };
+      return { kind: "assign", target, value: withCall, line };
+    }
+    if (opText === "=") {
+      return { kind: "assign", target: left.getText(), value: extractExpr(expr.getRight()), line };
+    }
+    const compound = COMPOUND_OPS[opText];
+    if (compound) {
+      const target = left.getText();
+      return {
+        kind: "assign", target,
+        value: { kind: "binop", op: compound, left: { kind: "var", name: target }, right: extractExpr(expr.getRight()) },
+        line,
+      };
+    }
+  }
+  if ((Node.isPostfixUnaryExpression(expr) || Node.isPrefixUnaryExpression(expr)) &&
+      (expr.getOperatorToken() === SyntaxKind.PlusPlusToken || expr.getOperatorToken() === SyntaxKind.MinusMinusToken)) {
+    const target = expr.getOperand().getText();
+    const op = expr.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+" : "-";
+    return {
+      kind: "assign", target,
+      value: { kind: "binop", op, left: { kind: "var", name: target }, right: { kind: "num", value: 1 } },
+      line,
+    };
+  }
+  return null;
+}
 
 // ── Statement extraction ─────────────────────────────────────
 
@@ -718,12 +905,18 @@ function parseSpecComments(ranges: ReturnType<Node["getLeadingCommentRanges"]>, 
       result.push({ kind: "assert", expr: content.slice(7).trim(), line });
       continue;
     }
+    // assume expr — trusted form of assert; emitted as `assume P;` in Dafny.
+    if (content.startsWith("assume ")) {
+      result.push({ kind: "assert", expr: content.slice(7).trim(), line, assumed: true });
+      continue;
+    }
     if (!content.startsWith("ghost ")) continue;
     const ghostBody = content.slice(6).trim();
     // ghost let varName: type = expr  OR  ghost let varName = expr
-    const letMatch = ghostBody.match(/^let\s+(\w+)(?:\s*:\s*(\w+))?\s*=\s*(.+)$/);
+    // Type segment accepts compound forms like `number[]`, `Map<K,V>`, etc.
+    const letMatch = ghostBody.match(/^let\s+(\w+)(?:\s*:\s*([^=]+?))?\s*=\s*(.+)$/);
     if (letMatch) {
-      result.push({ kind: "ghostLet", name: letMatch[1], tsType: letMatch[2] ?? null, init: letMatch[3].trim(), line });
+      result.push({ kind: "ghostLet", name: letMatch[1], tsType: letMatch[2]?.trim() ?? null, init: letMatch[3].trim(), line });
       continue;
     }
     // ghost varName = expr
@@ -775,6 +968,87 @@ function extractStmts(stmts: Node[]): RawStmt[] {
           }
           continue;
         }
+        // Array destructuring: const [a, , c, ...rest] = arr → individual lets,
+        // each picking from `arr` by position. Rest (if present) must be last
+        // and emits as `arr.slice(N)`. Omitted slots (`,,`) are skipped. Nested
+        // binding patterns throw — extend the helper here when a case study
+        // hits them.
+        if (!isHavoc && Node.isArrayBindingPattern(nameNode)) {
+          const elements = nameNode.getElements();
+          const initializer = d.getInitializer();
+          if (initializer) {
+            let initExpr: RawExpr = extractExpr(initializer);
+            let initVar: RawExpr = initExpr;
+            if (initExpr.kind !== "var") {
+              const tempName = `_destr${_destrCounter++}`;
+              const initTs = _eraseGenerics(typeToString(initializer.getType()));
+              result.push({ kind: "let", name: tempName, mutable: false, tsType: initTs, init: initExpr, line });
+              initVar = { kind: "var", name: tempName };
+            }
+            for (let i = 0; i < elements.length; i++) {
+              const el = elements[i];
+              if (Node.isOmittedExpression(el)) continue;
+              if (!Node.isBindingElement(el)) continue;
+              const inner = el.getNameNode();
+              if (!Node.isIdentifier(inner)) {
+                throw new Error(`nested binding pattern in array destructuring not yet supported: ${el.getText()}`);
+              }
+              const name = inner.getText();
+              const isRest = !!el.getDotDotDotToken();
+              const elTs = _eraseGenerics(typeToString(el.getType()));
+              const init: RawExpr = isRest
+                ? { kind: "call",
+                    fn: { kind: "field", obj: initVar, field: "slice" },
+                    args: [{ kind: "num", value: i }] }
+                : { kind: "index", obj: initVar, idx: { kind: "num", value: i } };
+              result.push({ kind: "let", name, mutable: s.getDeclarationKind() === "let", tsType: elTs, init, line });
+            }
+            continue;
+          }
+        }
+        // Plain object destructuring: const { a, b, c } = obj → field access lets.
+        // Skipped if any element has a computed property (handled by the rest+
+        // computed branch below) or a rest element (also handled below).
+        if (!isHavoc && Node.isObjectBindingPattern(nameNode)) {
+          const elements = nameNode.getElements();
+          const hasRest = elements.some(el => el.getDotDotDotToken());
+          const hasComputed = elements.some(el => {
+            const pn = el.getPropertyNameNode();
+            return pn && Node.isComputedPropertyName(pn);
+          });
+          if (!hasRest && !hasComputed) {
+            const initializer = d.getInitializer();
+            if (initializer) {
+              let initExpr: RawExpr = extractExpr(initializer);
+              let initVar: RawExpr = initExpr;
+              if (initExpr.kind !== "var") {
+                const tempName = `_destr${_destrCounter++}`;
+                const initTs = _eraseGenerics(typeToString(initializer.getType()));
+                result.push({ kind: "let", name: tempName, mutable: false, tsType: initTs, init: initExpr, line });
+                initVar = { kind: "var", name: tempName };
+              }
+              for (const el of elements) {
+                const inner = el.getNameNode();
+                if (!Node.isIdentifier(inner)) {
+                  throw new Error(`nested binding pattern in object destructuring not yet supported: ${el.getText()}`);
+                }
+                const localName = inner.getText();
+                const propNode = el.getPropertyNameNode();
+                const fieldName = propNode ? propNode.getText() : localName;
+                const elTs = _eraseGenerics(typeToString(el.getType()));
+                result.push({
+                  kind: "let",
+                  name: localName,
+                  mutable: s.getDeclarationKind() === "let",
+                  tsType: elTs,
+                  init: { kind: "field", obj: initVar, field: fieldName },
+                  line,
+                });
+              }
+              continue;
+            }
+          }
+        }
         // Destructuring rest: const { [k]: _, ...rest } = map → let rest = map.delete(k)
         if (!isHavoc && Node.isObjectBindingPattern(nameNode)) {
           const elements = nameNode.getElements();
@@ -816,14 +1090,41 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         } else {
           const initializer = d.getInitializer();
           _havocKey = havocKey;
-          init = initializer ? extractExpr(initializer) : { kind: "var" as const, name: "default" };
+          if (initializer) {
+            init = extractExpr(initializer);
+          } else {
+            // No initializer — emit a type-appropriate default so the emitted
+            // Dafny binding `var x: T := <default>;` typechecks. The empty-
+            // collection cases are picked up by dafny-emit's let case, which
+            // adds an explicit `: T` annotation for inference.
+            const tsType = _eraseGenerics(d.getTypeNode()?.getText() ?? typeToString(declType));
+            const isOptional = / \| (null|undefined)\b/.test(tsType)
+              || /^(null|undefined) \| /.test(tsType)
+              || tsType.endsWith(" | undefined") || tsType.endsWith(" | null");
+            const isArray = tsType.endsWith("[]") || /^Array</.test(tsType) || /^readonly /.test(tsType);
+            const isMap = /^Map</.test(tsType);
+            const isSet = /^Set</.test(tsType);
+            if (isOptional)      init = { kind: "var" as const, name: "undefined" };
+            else if (isArray)    init = { kind: "arrayLiteral" as const, elems: [] };
+            else if (isMap)      init = { kind: "emptyCollection" as const, collectionType: "Map", tsType };
+            else if (isSet)      init = { kind: "emptyCollection" as const, collectionType: "Set", tsType };
+            else if (tsType === "number") init = { kind: "num" as const, value: 0 };
+            else if (tsType === "boolean") init = { kind: "bool" as const, value: false };
+            else if (tsType === "string")  init = { kind: "str" as const, value: "" };
+            else init = { kind: "var" as const, name: "default" };
+          }
           _havocKey = null;
         }
+        // Use the source-level type annotation if present — ts-morph's
+        // `d.getType()` strips `| undefined` from optional annotations.
+        const annotatedText = d.getTypeNode()?.getText();
+        const tsType = havocType
+          ?? (annotatedText ? _eraseGenerics(annotatedText) : _eraseGenerics(typeToString(declType)));
         result.push({
           kind: "let",
           name: d.getName(),
           mutable: s.getDeclarationKind() === "let",
-          tsType: havocType ?? _eraseGenerics(typeToString(declType)),
+          tsType,
           init,
           line,
         });
@@ -896,6 +1197,56 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       continue;
     }
 
+    // C-style for(init; cond; update) — desugar to:
+    //   init;
+    //   while (cond) { body; update }
+    // The init's binding is forced mutable (update mutates it). The update is
+    // a bare Expression in ts-morph (not wrapped in an ExpressionStatement),
+    // so we route it through the same `desugarStmtExpr` helper that the
+    // ExpressionStatement branch above uses — `i++` etc. end up as RawAssign
+    // exactly as they would if written as their own statement.
+    if (Node.isForStatement(s)) {
+      const init = s.getInitializer();
+      const cond = s.getCondition();
+      const incrementor = s.getIncrementor();
+      const bodyNode = s.getStatement();
+      const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [bodyNode];
+      const annots = collectAnnotations(s, bodyStmts);
+
+      if (!init || !Node.isVariableDeclarationList(init))
+        throw new Error(`for(...) at line ${line}: only variable-declaration init supported`);
+      for (const decl of init.getDeclarations()) {
+        const name = decl.getName();
+        const tsType = decl.getTypeNode()?.getText() ?? typeToString(decl.getType());
+        const initExpr = decl.getInitializer();
+        if (!initExpr) throw new Error(`for(...) at line ${line}: missing initializer for ${name}`);
+        result.push({
+          kind: "let", name, mutable: true, tsType,
+          init: extractExpr(initExpr as Expression),
+          line: decl.getStartLineNumber(),
+        });
+      }
+
+      const extractedBody = extractStmts(bodyStmts);
+      if (incrementor) {
+        const incLine = incrementor.getStartLineNumber();
+        const asStmt = desugarStmtExpr(incrementor, incLine);
+        if (!asStmt) throw new Error(`for(...) at line ${line}: incrementor must be an assignment, compound assignment, or ++/--`);
+        extractedBody.push(asStmt);
+      }
+
+      result.push({
+        kind: "while",
+        cond: cond ? extractExpr(cond) : { kind: "bool", value: true },
+        invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
+        decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
+        doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
+        body: extractedBody,
+        line,
+      });
+      continue;
+    }
+
     // for...in: for (const k in obj) → treat as forof with single key name
     if (Node.isForInStatement(s)) {
       const init = s.getInitializer();
@@ -957,7 +1308,12 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     if (Node.isReturnStatement(s)) {
       const expr = s.getExpression();
-      result.push({ kind: "return", value: expr ? extractExpr(expr) : { kind: "var", name: "()" }, line });
+      // Bare `return;` in a `T | undefined` function → emit `return None;`
+      // ("undefined" is mapped to None by dafny-emit). For void-returning
+      // functions this would emit the wrong shape, but lsc has no current
+      // examples of explicit bare return in void functions; revisit if one
+      // appears.
+      result.push({ kind: "return", value: expr ? extractExpr(expr) : { kind: "var", name: "undefined" }, line });
       continue;
     }
 
@@ -973,36 +1329,22 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     if (Node.isExpressionStatement(s)) {
       const expr = s.getExpression();
-      // arr[i] = v → arr = arr.with(i, v)
-      if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getText() === "=" && Node.isElementAccessExpression(expr.getLeft())) {
-        const left = expr.getLeft() as ElementAccessExpression;
-        const obj = extractExpr(left.getExpression());
-        const idx = extractExpr(left.getArgumentExpression()!);
-        const val = extractExpr(expr.getRight());
-        const target = left.getExpression().getText();
-        const withCall: RawExpr = { kind: "call", fn: { kind: "field", obj, field: "with" }, args: [idx, val] };
-        result.push({ kind: "assign", target, value: withCall, line });
-      // x = e
-      } else if (Node.isBinaryExpression(expr) && expr.getOperatorToken().getText() === "=") {
-        result.push({ kind: "assign", target: expr.getLeft().getText(), value: extractExpr(expr.getRight()), line });
-      // x += e, x -= e, etc.
-      } else if (Node.isBinaryExpression(expr) && COMPOUND_OPS[expr.getOperatorToken().getText()]) {
-        const op = COMPOUND_OPS[expr.getOperatorToken().getText()];
+      // //@ havoc before `x = e` — discard the RHS, assign a nondeterministic
+      // value of x's type. Only applies to plain `=` with an identifier LHS;
+      // compound assigns, `arr[i] = v`, and `x++` fall through to desugaring.
+      const havocMatch = s.getLeadingCommentRanges()
+        .map(r => r.getText().trim().match(/^\/\/@ havoc(?:\s*:\s*(.+))?$/))
+        .find(m => m !== null);
+      if (havocMatch && Node.isBinaryExpression(expr)
+          && expr.getOperatorToken().getText() === "="
+          && Node.isIdentifier(expr.getLeft())) {
         const target = expr.getLeft().getText();
-        result.push({ kind: "assign", target, value: { kind: "binop", op, left: { kind: "var", name: target }, right: extractExpr(expr.getRight()) }, line });
-      // i++, i--
-      } else if (Node.isPostfixUnaryExpression(expr)) {
-        const target = expr.getOperand().getText();
-        const op = expr.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+" : "-";
-        result.push({ kind: "assign", target, value: { kind: "binop", op, left: { kind: "var", name: target }, right: { kind: "num", value: 1 } }, line });
-      // ++i, --i
-      } else if (Node.isPrefixUnaryExpression(expr) && (expr.getOperatorToken() === SyntaxKind.PlusPlusToken || expr.getOperatorToken() === SyntaxKind.MinusMinusToken)) {
-        const target = expr.getOperand().getText();
-        const op = expr.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+" : "-";
-        result.push({ kind: "assign", target, value: { kind: "binop", op, left: { kind: "var", name: target }, right: { kind: "num", value: 1 } }, line });
-      } else {
-        result.push({ kind: "expr", expr: extractExpr(expr), line });
+        const tsType = havocMatch[1]?.trim() ?? _eraseGenerics(typeToString(expr.getLeft().getType()));
+        result.push({ kind: "assign", target, value: { kind: "havoc", tsType }, line });
+        continue;
       }
+      const asAssign = desugarStmtExpr(expr, line);
+      result.push(asAssign ?? { kind: "expr", expr: extractExpr(expr), line });
       continue;
     }
 
@@ -1032,11 +1374,16 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         result.push({ kind: "assert", expr: content.slice(7).trim(), line });
         continue;
       }
+      // assume expr — trusted form of assert; emitted as `assume P;` in Dafny.
+      if (content.startsWith("assume ")) {
+        result.push({ kind: "assert", expr: content.slice(7).trim(), line, assumed: true });
+        continue;
+      }
       if (!content.startsWith("ghost ")) continue;
       const ghostBody = content.slice(6).trim();
-      const letMatch = ghostBody.match(/^let\s+(\w+)(?:\s*:\s*(\w+))?\s*=\s*(.+)$/);
+      const letMatch = ghostBody.match(/^let\s+(\w+)(?:\s*:\s*([^=]+?))?\s*=\s*(.+)$/);
       if (letMatch) {
-        result.push({ kind: "ghostLet", name: letMatch[1], tsType: letMatch[2] ?? null, init: letMatch[3].trim(), line });
+        result.push({ kind: "ghostLet", name: letMatch[1], tsType: letMatch[2]?.trim() ?? null, init: letMatch[3].trim(), line });
         continue;
       }
       const assignMatch = ghostBody.match(/^(\w+)\s*=\s*(.+)$/);
@@ -1051,6 +1398,15 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 // ── Function extraction ──────────────────────────────────────
 
 function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
+  const prevInFn = _inFunctionExtraction;
+  _inFunctionExtraction = true;
+  try {
+    return extractFunctionInner(fn, parentAnnotations);
+  } finally {
+    _inFunctionExtraction = prevInFn;
+  }
+}
+function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
   // Generic bounds erasure: <T extends Base> → substitute T with Base everywhere
   // Unbounded type params are preserved as Dafny type parameters
   _typeParamMap = new Map();
@@ -1069,11 +1425,10 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
   if (body && !Node.isBlock(body)) {
     const expr = extractExpr(body as Expression);
     extractedBody = [{ kind: "return", value: expr, line: body.getStartLineNumber() }];
-    annots = parentAnnotations ?? collectAnnotations(fn);
+    annots = parentAnnotations ?? collectFunctionAnnotations(fn);
   } else if (body && Node.isBlock(body)) {
-    const bodyStmts = body.getStatements();
-    extractedBody = extractStmts(bodyStmts);
-    annots = collectAnnotations(fn, bodyStmts);
+    extractedBody = extractStmts(body.getStatements());
+    annots = collectFunctionAnnotations(fn);
   } else {
     throw new Error(`${(fn as any).getName?.() ?? "arrow"}: function has no body`);
   }
@@ -1100,17 +1455,20 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
           return { name, tsType: propType ? typeToString(propType) : "unknown" };
         });
       }
-      const tn = p.getTypeNode();
       // Syntactic union nodes go through _tsTypeFromUnionNode so synth fires
-      // and aliases are preserved. Non-union nodes use the syntactic text
-      // directly, plus `| undefined` for optional `?` params.
+      // and aliases are preserved. Non-union nodes use the syntactic text;
+      // when no annotation is present, fall back to the computed type
+      // (e.g., `eof = false` infers `boolean` from the default value).
+      const tn = p.getTypeNode();
       let tsType: string;
       if (tn && Node.isUnionTypeNode(tn)) {
         tsType = _eraseGenerics(_tsTypeFromUnionNode(tn));
+      } else if (tn) {
+        tsType = _eraseGenerics(tn.getText());
       } else {
-        tsType = _eraseGenerics(tn?.getText() ?? "unknown");
-        if (p.hasQuestionToken()) tsType = `${tsType} | undefined`;
+        tsType = _eraseGenerics(typeToString(p.getType()));
       }
+      if (p.hasQuestionToken()) tsType = `${tsType} | undefined`;
       return [{ name: p.getName(), tsType }];
     }),
     returnType: (() => {
@@ -1135,6 +1493,12 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
 
 export function extractModule(sourceFile: SourceFile): RawModule {
   const typeDecls: TypeDeclInfo[] = [];
+  // Cross-file calls are auto-externed: ts-morph resolves the call's symbol;
+  // if it's defined in a different source file we treat the symbol as opaque
+  // and emit a body-less `function {:axiom}` in Dafny. Populated by
+  // `extractExpr` during call extraction (only symbols *actually used* end up
+  // here), deduped by qualified name.
+  _externs.clear();
 
   // Activate the synthesized-array-union accumulator. typeToString registers
   // a discriminated-union TypeDeclInfo for any `T[] | U` shape it encounters,
@@ -1142,36 +1506,37 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // Set before declare-type parsing so declare-type field types can also synth.
   _synthArrayUnions = typeDecls;
 
-  function parseDeclareTypeField(f: string): { name: string; tsType: string } {
-    const [fname, ftype] = f.split(":").map(s => s.trim());
-    const synth = _synthFromTsTypeString(ftype);
-    return { name: fname, tsType: synth ?? ftype };
+  // `//@ declare-type Name { f1: T1, ... }` — record form.
+  // `//@ declare-type Name = TsType`         — alias form (e.g. `Ruleset = Rule[]`).
+  function parseDeclareType(body: string) {
+    const recordMatch = body.match(/^(\w+)\s*\{(.+)\}$/);
+    if (recordMatch) {
+      const name = recordMatch[1];
+      const fields = recordMatch[2].split(",").map(f => f.trim()).filter(Boolean).map(f => {
+        const [fname, ftype] = f.split(":").map(s => s.trim());
+        const synth = _synthFromTsTypeString(ftype);
+        return { name: fname, tsType: synth ?? ftype };
+      });
+      typeDecls.push({ name, kind: "record", fields });
+      return;
+    }
+    const aliasMatch = body.match(/^(\w+)\s*=\s*(.+)$/);
+    if (aliasMatch) {
+      typeDecls.push({ name: aliasMatch[1], kind: "alias", aliasOf: aliasMatch[2].trim() });
+    }
   }
 
-  // Parse //@ declare-type directives from file comments
   for (const range of sourceFile.getLeadingCommentRanges()) {
     const text = range.getText().trim();
-    if (!text.startsWith("//@ declare-type ")) continue;
-    const body = text.slice("//@ declare-type ".length);
-    const match = body.match(/^(\w+)\s*\{(.+)\}$/);
-    if (!match) continue;
-    const name = match[1];
-    const fields = match[2].split(",").map(f => f.trim()).filter(Boolean).map(parseDeclareTypeField);
-    typeDecls.push({ name, kind: "record", fields });
+    if (text.startsWith("//@ declare-type ")) parseDeclareType(text.slice("//@ declare-type ".length));
   }
-  // Also scan statement-level comments for declare-type
   for (const stmt of sourceFile.getStatements()) {
     for (const range of stmt.getLeadingCommentRanges()) {
       const text = range.getText().trim();
-      if (!text.startsWith("//@ declare-type ")) continue;
-      const body = text.slice("//@ declare-type ".length);
-      const match = body.match(/^(\w+)\s*\{(.+)\}$/);
-      if (!match) continue;
-      const name = match[1];
-      const fields = match[2].split(",").map(f => f.trim()).filter(Boolean).map(parseDeclareTypeField);
-      typeDecls.push({ name, kind: "record", fields });
+      if (text.startsWith("//@ declare-type ")) parseDeclareType(text.slice("//@ declare-type ".length));
     }
   }
+  _currentSourceFile = sourceFile;
 
   // Pre-scan for collapsed single-variant unions so typeToString can recover alias names.
   // TypeScript collapses `type X = | { kind: 'A'; ... }` to a plain object type, losing
@@ -1218,11 +1583,17 @@ export function extractModule(sourceFile: SourceFile): RawModule {
           // Skip huge string constants — they crash the verifier and have no verification value
           const initType = decl.getType();
           const isHugeString = (initType.isString() || initType.isStringLiteral()) && (init as Expression).getText().length > 200;
-          if (init && !isHugeString && !Node.isArrowFunction(init)) {
+          // Skip anonymous-object consts (e.g., `const Util = { dotMatch(s, p) { ... } }`).
+          // ts-morph names these `__type` / `__object`; Dafny has no model for
+          // object-namespace-with-methods. The methods themselves should be
+          // extracted via the function path if marked `//@ verify`.
+          const declTsType = typeToString(decl.getType());
+          const isAnonObject = declTsType.startsWith("__");
+          if (init && !isHugeString && !isAnonObject && !Node.isArrowFunction(init)) {
             try {
               constants.push({
                 name: decl.getName(),
-                tsType: typeToString(decl.getType()),
+                tsType: declTsType,
                 value: extractExpr(init as Expression),
               });
             } catch (e) {
@@ -1251,6 +1622,37 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     }
   }
 
+  // `//@ extern` on a same-file declaration: register the function as an
+  // opaque axiom (signature + any //@ requires/ensures), skip its body. Use
+  // when the function is outside LS's verification model — e.g., wraps a
+  // regex — but its callers should still be verifiable against an
+  // uninterpreted predicate. Parallel to auto-extern for cross-file calls,
+  // and emitted the same way (`function {:axiom} foo(...)` in Dafny).
+  function hasExtern(f: { node: FunctionDeclaration; parentStmt?: Node }) {
+    if (f.node.getFullText().includes('//@ extern')) return true;
+    if (f.parentStmt) {
+      for (const r of f.parentStmt.getLeadingCommentRanges()) {
+        if (r.getText().includes('//@ extern')) return true;
+      }
+    }
+    return false;
+  }
+  for (const f of allFns) {
+    if (!hasExtern(f)) continue;
+    if (_externs.has(f.name)) continue;
+    const sig = f.node.getType().getCallSignatures()[0];
+    if (!sig) continue;
+    const params = sig.getParameters().map(p => ({
+      name: p.getName(),
+      tsType: p.getTypeAtLocation(f.node).getText(),
+    }));
+    const returnType = sig.getReturnType().getText();
+    const annots = collectFunctionAnnotations(f.node);
+    const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
+    const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
+    _externs.set(f.name, { qualified: f.name, flat: f.name, params, returnType, requires, ensures });
+  }
+
   // If any function has //@ verify, only extract those (brownfield mode).
   // For expression-body arrows, //@ verify may be on the parent variable statement.
   function hasVerify(f: { node: FunctionDeclaration; parentStmt?: Node }) {
@@ -1263,7 +1665,8 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     return false;
   }
   const hasVerifyDirective = sourceFile.getFullText().includes('//@ verify');
-  const fnsToExtract = hasVerifyDirective ? allFns.filter(hasVerify) : allFns;
+  const nonExternFns = allFns.filter(f => !hasExtern(f));
+  const fnsToExtract = hasVerifyDirective ? nonExternFns.filter(hasVerify) : nonExternFns;
 
   const functions = fnsToExtract.map(f => {
     // For expression-body arrows, annotations come from the parent variable statement
@@ -1466,23 +1869,52 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       }
       continue;
     }
+    // Inline-anon return type — bare `{...}` (no union wrapping).
+    //
+    // ts-morph's `fn.getReturnType()` returns the COMPUTED type, which strips
+    // `| null` in non-strict mode (and sometimes `| undefined`). The source
+    // annotation, however, encodes the user's actual intent. Check the
+    // already-extracted `fn.returnType` string for nullish suffixes to detect
+    // the wrap-in-Optional case.
+    let innerType: Type | null = null;
+    let wrapOptional = false;
+    const sourceReturnText = fn.returnType ?? "";
+    const sourceHadNullish = / \| (null|undefined)$/.test(sourceReturnText)
+      || sourceReturnText.includes(" | null ") || sourceReturnText.includes(" | undefined ")
+      || sourceReturnText.includes(" | null|") || sourceReturnText.includes(" | undefined|");
     const sym = retType.getSymbol();
     if (sym?.getName() === "__type" && retType.isObject() && !retType.isArray()) {
+      innerType = retType;
+      if (sourceHadNullish) wrapOptional = true;
+    } else if (retType.isUnion()) {
+      const arms = retType.getUnionTypes();
+      const nullish = arms.filter(t => t.isNull() || t.isUndefined());
+      const others = arms.filter(t => !t.isNull() && !t.isUndefined());
+      if (nullish.length >= 1 && others.length === 1) {
+        const onlyOther = others[0];
+        const otherSym = onlyOther.getSymbol();
+        if (otherSym?.getName() === "__type" && onlyOther.isObject() && !onlyOther.isArray()) {
+          innerType = onlyOther;
+          wrapOptional = true;
+        }
+      }
+    }
+    if (innerType) {
       // Try typeToString first — it resolves collapsed single-variant unions
-      const resolved = typeToString(retType);
+      const resolved = typeToString(innerType);
       if (resolved !== "__type" && !resolved.includes("__type") && knownTypes.has(resolved)) {
-        fn.returnType = resolved;
+        fn.returnType = wrapOptional ? `${resolved} | undefined` : resolved;
         continue;
       }
       const synName = fn.name.charAt(0).toUpperCase() + fn.name.slice(1) + "Result";
       if (!knownTypes.has(synName)) {
         const extra: TypeDeclInfo[] = [];
-        const info = extractRecord(synName, retType, f.node, undefined, extra);
+        const info = extractRecord(synName, innerType, f.node, undefined, extra);
         if (info) { typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(synName); }
       }
-      fn.returnType = synName;
+      fn.returnType = wrapOptional ? `${synName} | undefined` : synName;
       // Also resolve imported types referenced in the return type's fields
-      for (const prop of retType.getProperties()) {
+      for (const prop of innerType.getProperties()) {
         resolveType(prop.getTypeAtLocation(f.node), f.node);
       }
     }
@@ -1511,6 +1943,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   return {
     file: sourceFile.getFilePath(),
     typeDecls,
+    externs: Array.from(_externs.values()),
     constants,
     functions,
     classes,
