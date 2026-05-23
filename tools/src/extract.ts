@@ -691,6 +691,15 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
       return { name, kind: "alias", aliasOf: `(${params.join(", ")}) => ${ret}` };
     }
   }
+  // Array-type alias: `type Board = number[]` → alias to the seq type, not a
+  // record. Arrays report as object types, so this must precede the record
+  // branch, which would otherwise enumerate the Array prototype as fields.
+  // Build the element type directly: typeToString(type) would return the
+  // alias's own name (via getAliasSymbol), yielding a self-referential alias.
+  if (type.isArray()) {
+    const elem = type.getArrayElementTypeOrThrow();
+    return { name, typeParams: tpField, kind: "alias", aliasOf: `${typeToString(elem)}[]` };
+  }
   if (type.isObject() || type.isIntersection()) return extractRecord(name, type, decl, undefined, extraDecls);
   // Primitive type alias: type TaskId = number → alias
   const tsType = typeToString(type);
