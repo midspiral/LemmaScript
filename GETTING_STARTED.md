@@ -88,7 +88,7 @@ dafny verify --isolate-assertions src/utils/cookie.dfy
 
 ## When LemmaScript itself needs work
 
-LemmaScript is a tech preview. You will hit unsupported TS methods, missed narrowing patterns, or generated Dafny that doesn't typecheck for your particular types. The fix is usually a small change in `../LemmaScript/tools/src/` — most often `transform.ts`, `peephole.ts`, `dafny-emit.ts`, or `types.ts`. See [TOOLS.md](TOOLS.md) for the pipeline. For example, the rallly case study added `s.startsWith()`, `T | null` nullability, `\result` narrowing under `==>`, and `Math.max(...arr)` spread.
+LemmaScript is a tech preview. You will hit unsupported TS methods, missed narrowing patterns, or generated Dafny that doesn't typecheck for your particular types. The fix is usually a small change in `../LemmaScript/tools/src/` — most often `transform.ts`, `peephole.ts`, `dafny-emit.ts`, or `types.ts`. See [TOOLS.md](TOOLS.md) for the pipeline.
 
 `tsx` picks up edits to LemmaScript source automatically — no `npm run build` step when invoking via `npx tsx`. Land toolchain changes in their own PR, separately from the project change.
 
