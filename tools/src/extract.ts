@@ -1120,9 +1120,15 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         }
         // Use the source-level type annotation if present — ts-morph's
         // `d.getType()` strips `| undefined` from optional annotations.
+        // When no annotation, fall back to ts-morph's inferred type — except
+        // when the inference collapses to `any` (e.g. brownfield imports
+        // where the imported declaration's shape is opaque to LS): in that
+        // case leave null so resolve infers from the initializer's IR type
+        // (which sees the declare-type stubs).
         const annotatedText = d.getTypeNode()?.getText();
-        const tsType = havocType
-          ?? (annotatedText ? _eraseGenerics(annotatedText) : _eraseGenerics(typeToString(declType)));
+        const inferred = annotatedText ? null : _eraseGenerics(typeToString(declType));
+        const tsType: string | null = havocType
+          ?? (annotatedText ? _eraseGenerics(annotatedText) : (inferred === "any" ? null : inferred));
         result.push({
           kind: "let",
           name: d.getName(),
@@ -1786,7 +1792,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     const referencedNames = new Set<string>();
     function collectNames(stmts: RawStmt[]) {
       for (const s of stmts) {
-        if (s.kind === "let") { referencedNames.add(s.tsType); collectNamesExpr(s.init); }
+        if (s.kind === "let") { if (s.tsType) referencedNames.add(s.tsType); collectNamesExpr(s.init); }
         if (s.kind === "assign") { collectNamesExpr(s.value); }
         if (s.kind === "return") { collectNamesExpr(s.value); }
         if (s.kind === "if") { collectNamesExpr(s.cond); collectNames(s.then); collectNames(s.else); }

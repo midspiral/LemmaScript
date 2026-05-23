@@ -974,6 +974,13 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
 function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
   switch (s.kind) {
     case "let": {
+      // No source annotation → infer type from initializer (resolved first).
+      if (s.tsType === null) {
+        const init = resolveExpr(s.init, ctx);
+        const ty = init.ty;
+        const mutable = s.mutable || isRefMutableInTS(ty);
+        return [{ kind: "let", name: s.name, ty, mutable, init }, extend(ctx.env, s.name, ty)];
+      }
       const declTy = resolveTsType(s.tsType, ctx.overrides, s.name);
       // Propagate declared type as returnTy so nested record expressions
       // resolve union variants correctly (e.g., EffectState → mode: EffectMode → { kind: 'Idle' })

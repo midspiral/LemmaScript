@@ -236,6 +236,19 @@ function emitExpr(e: Expr): string {
         if (e.method === "has") return `(${args[0]} in ${obj})`;
         if (e.method === "add") return `(${obj} + {${args[0]}})`;
         if (e.method === "delete") return `(${obj} - {${args[0]}})`;
+        // `.filter(pred)` on a set: extract collapses the JS idiom
+        // `new Set([...s].filter(p))` into `s.filter(p)` with set receiver
+        // (the spread → array → set round-trip is identity over set
+        // semantics). Lower to Dafny set-builder: `set x | x in s && p(x)`.
+        if (e.method === "filter" && e.args.length === 1 && e.args[0].kind === "lambda" &&
+            e.args[0].body.length === 1 && e.args[0].body[0].kind === "return") {
+          const lam = e.args[0];
+          const ret = lam.body[0];
+          if (ret.kind !== "return") throw new Error("unreachable");
+          const p = escapeName(lam.params[0]?.name ?? "x");
+          const body = emitExpr(ret.value);
+          return `(set ${p} | ${p} in ${obj} && ${body})`;
+        }
       }
       throw new Error(`Unsupported Dafny method call: .${e.method}() on ${ty}`);
     }

@@ -97,7 +97,7 @@ const parseSimpleOptionalCheck = parseOptionalCheck;
 
 function walkExpr(e: TExpr): TExpr {
   const r = recurseExpr(e);
-  return ruleNullish(r) ?? ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleImplArrayIsArray(r) ?? ruleConditionalArrayIsArray(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalInMap(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
+  return ruleNullish(r) ?? ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleImplArrayIsArray(r) ?? ruleConditionalArrayIsArray(r) ?? ruleConditionalAndArrayIsArray(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalInMap(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
 }
 
 function recurseExpr(e: TExpr): TExpr {
@@ -136,7 +136,7 @@ function walkStmt(s: TStmt): TStmt {
   // && rule fires before simple rule because it produces nested ifs whose
   // inner shape doesn't match simple rule directly. someMatch result needs
   // no further rewriting at this level.
-  return ruleIfAndOptional(r) ?? ruleIfOptionalSimple(r) ?? r;
+  return ruleIfAndArrayIsArray(r) ?? ruleIfAndOptional(r) ?? ruleIfOptionalSimple(r) ?? r;
 }
 
 function walkStmts(stmts: TStmt[]): TStmt[] {
@@ -574,6 +574,31 @@ function isNarrowablePath(e: TExpr): boolean {
   return false;
 }
 
+/** Mirror of `extractLeftmostOptionalCheck` for synth-array-union checks:
+ *  finds `Array.isArray(path)` somewhere in a `&&` chain, returns it plus
+ *  the remaining conjunction. The check must be the positive form (negated
+ *  `!Array.isArray(...)` would narrow to the wrong variant for then-body
+ *  consumers, so we leave those to the existing untouched-conditional path). */
+function extractLeftmostArrayIsArrayCheck(cond: TExpr): {
+  check: NonNullable<ReturnType<typeof parseArrayIsArrayCall>>;
+  restCond: TExpr;
+} | null {
+  if (cond.kind !== "binop" || cond.op !== "&&") return null;
+  const leftCheck = parseArrayIsArrayCall(cond.left);
+  if (leftCheck) return { check: leftCheck, restCond: cond.right };
+  const rightCheck = parseArrayIsArrayCall(cond.right);
+  if (rightCheck) return { check: rightCheck, restCond: cond.left };
+  if (cond.left.kind === "binop" && cond.left.op === "&&") {
+    const inner = extractLeftmostArrayIsArrayCheck(cond.left);
+    if (inner) return { check: inner.check, restCond: { ...cond, left: inner.restCond } as TExpr };
+  }
+  if (cond.right.kind === "binop" && cond.right.op === "&&") {
+    const inner = extractLeftmostArrayIsArrayCheck(cond.right);
+    if (inner) return { check: inner.check, restCond: { ...cond, right: inner.restCond } as TExpr };
+  }
+  return null;
+}
+
 /** Detect `x.kind === "variant"`, `'key' in x`, or `Array.isArray(x)` (synth
  *  array-union) as a positive discriminant check. Returns the scrutinee var
  *  (with its type), type name, and variant. */
@@ -782,6 +807,51 @@ function ruleConditionalAndOptional(e: TExpr): TExpr | null {
     scrutinee: check.scrutinee, binderTy: check.innerTy,
     binder: check.binderHint,
     someBody: walkExpr(innerCond), noneBody: e.else, ty: e.ty,
+  };
+}
+
+/** Rule (statement): `if (<rest> && Array.isArray(path) && <more>) then [else]`
+ *  → `tagMatch path { ArrayBranch => if (<rest && more>) then [else] }`.
+ *  The remaining conjuncts move inside the matched arm so any narrowing the
+ *  `then` body relies on (typed `path` accesses) sees the unwrapped variant.
+ *  Mirrors `ruleIfAndOptional` but for synth array-unions. */
+function ruleIfAndArrayIsArray(s: TStmt): TStmt | null {
+  if (s.kind !== "if") return null;
+  const extracted = extractLeftmostArrayIsArrayCheck(s.cond);
+  if (!extracted) return null;
+  const { check, restCond } = extracted;
+  // Inner if uses the remaining conjunction (or just the then-body if rest is
+  // a tautology — but in practice extractLeftmost leaves at least one other
+  // conjunct). Walk recursively so nested checks compose.
+  const innerThen: TStmt[] = [{ kind: "if", cond: restCond, then: s.then, else: s.else }];
+  return {
+    kind: "tagMatch",
+    scrutinee: check.scrutinee,
+    typeName: check.typeName,
+    cases: [{ variant: check.variant, body: innerThen.map(walkStmt) }],
+    fallthrough: s.else,
+  };
+}
+
+/** Rule (expression): `(<rest> && Array.isArray(path)) ? a : b`
+ *  → `tagMatch path { ArrayBranch => (<rest>) ? a : b } fallthrough b`.
+ *  Mirrors `ruleConditionalAndOptional`. */
+function ruleConditionalAndArrayIsArray(e: TExpr): TExpr | null {
+  if (e.kind !== "conditional") return null;
+  const extracted = extractLeftmostArrayIsArrayCheck(e.cond);
+  if (!extracted) return null;
+  const { check, restCond } = extracted;
+  const innerCond: TExpr = {
+    kind: "conditional",
+    cond: restCond, then: e.then, else: e.else, ty: e.ty,
+  };
+  return {
+    kind: "tagMatch",
+    scrutinee: check.scrutinee,
+    typeName: check.typeName,
+    cases: [{ variant: check.variant, body: walkExpr(innerCond) }],
+    fallthrough: e.else,
+    ty: e.ty,
   };
 }
 
