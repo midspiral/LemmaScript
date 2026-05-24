@@ -467,6 +467,9 @@ function tyToTsStr(ty: Ty): string | undefined {
   if (ty.kind === "string") return "string";
   if (ty.kind === "int" || ty.kind === "nat") return "number";
   if (ty.kind === "bool") return "boolean";
+  // Optional element (e.g. a `.filter` over a `T | undefined`-typed map result):
+  // type the callback param so its `x !== undefined` check narrows correctly.
+  if (ty.kind === "optional") { const inner = tyToTsStr(ty.inner); return inner ? `${inner} | undefined` : undefined; }
   return undefined;
 }
 function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExpr[] {
@@ -555,8 +558,11 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
     if (fn.field === "slice") return objTy;
     if (fn.field === "join" && objTy.elem.kind === "string") return { kind: "string" };
     if (fn.field === "map" && args.length >= 1 && args[0].kind === "lambda") {
-      const retTy = args[0].body.length > 0 && args[0].body[0].kind === "return"
-        ? args[0].body[0].value.ty : { kind: "unknown" as const };
+      const lam = args[0];
+      // Prefer the lambda's declared return type (handles multi-statement bodies
+      // where body[0] is an `if`, not a `return`); fall back to the body's return.
+      const retTy: Ty = lam.ty.kind === "fn" ? lam.ty.result
+        : lam.body.length > 0 && lam.body[0].kind === "return" ? lam.body[0].value.ty : { kind: "unknown" };
       return { kind: "array", elem: retTy };
     }
   } else if (objTy.kind === "string") {
@@ -899,12 +905,21 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // Extend env with lambda params
       let lambdaEnv = ctx.env;
       for (const p of params) lambdaEnv = extend(lambdaEnv, p.name, p.ty);
-      const lambdaCtx = { ...withEnv(ctx, lambdaEnv), inLambda: true };
+      // Set returnTy to the lambda's own return annotation (not the enclosing
+      // function's), so return-position record literals in the body resolve to
+      // their named type rather than an anonymous tuple.
+      const lambdaReturnTy: Ty = e.returnTsType ? parseTsType(e.returnTsType) : { kind: "unknown" };
+      const lambdaCtx = { ...withEnv(ctx, lambdaEnv), inLambda: true, returnTy: lambdaReturnTy };
       // Body: expression (wrap in return stmt) or statement block
       const body = Array.isArray(e.body)
         ? resolveBlock(e.body, lambdaCtx)
         : [{ kind: "return" as const, value: resolveExpr(e.body, lambdaCtx) }];
-      return { kind: "lambda", params, body, ty: { kind: "unknown" } };
+      // Carry the lambda's type as a fn type when its return is known, so chained
+      // array methods (`.map(...).filter(...)`) can infer downstream element types.
+      const lamTy: Ty = e.returnTsType
+        ? { kind: "fn", params: params.map(p => p.ty), result: lambdaReturnTy }
+        : { kind: "unknown" };
+      return { kind: "lambda", params, body, ty: lamTy };
     }
 
     case "conditional": {

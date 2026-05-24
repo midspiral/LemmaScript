@@ -458,12 +458,16 @@ function extractExpr(node: Expression): RawExpr {
       const typeNode = p.getTypeNode();
       return { name: p.getName(), tsType: typeNode ? typeNode.getText() : undefined };
     });
+    // Capture an explicit return annotation (`(x): Out => …`) so resolve can type
+    // return-position record literals to their named type instead of a tuple.
+    const retNode = node.getReturnTypeNode();
+    const returnTsType = retNode ? typeToString(node.getReturnType()) : undefined;
     const body = node.getBody();
     if (Node.isExpression(body)) {
-      return { kind: "lambda", params, body: extractExpr(body) };
+      return { kind: "lambda", params, body: extractExpr(body), returnTsType };
     }
     if (Node.isBlock(body)) {
-      return { kind: "lambda", params, body: extractStmts(body.getStatements()) };
+      return { kind: "lambda", params, body: extractStmts(body.getStatements()), returnTsType };
     }
     throw new Error(`Unsupported arrow function body: ${node.getText().slice(0, 80)}`);
   }
@@ -2108,7 +2112,11 @@ export function extractModule(sourceFile: SourceFile): RawModule {
         for (const f of v.fields)
           for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) markType(m[1]);
     }
-    for (const name of referencedNames) markType(name);
+    // referencedNames holds raw type strings (`Out[]`, `Foo<Bar>`) and spec
+    // identifiers; extract the capitalized type names from each so e.g. a
+    // return type `Out[]` marks `Out` (a bare exact-match would miss it).
+    for (const name of referencedNames)
+      for (const m of name.matchAll(/\b([A-Z]\w*)\b/g)) markType(m[1]);
     typeDecls.splice(0, typeDecls.length, ...typeDecls.filter(d => neededTypes.has(d.name) || declaredNames.has(d.name)));
   }
 
