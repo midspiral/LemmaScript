@@ -666,7 +666,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "arrayLiteral", elems: e.elems.map(el => lowerExpr(el, binds)) };
 
     case "lambda": {
-      const body = transformStmts(e.body, []);
+      // Pass the module typeDecls (not []), so type lookups inside the lambda
+      // body — e.g. a `switch`'s variant fields — resolve. A bare `[]` left a
+      // discriminated-union switch in a lambda with binderless patterns.
+      const body = transformStmts(e.body, _typeDecls);
       // Flatten an if/let/return-shaped multi-statement body into a single
       // `return <expr>` so both backends' single-return-lambda fast path emits
       // it (Dafny lambdas are expression-only; Lean prefers the expression form
