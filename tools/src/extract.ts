@@ -458,12 +458,16 @@ function extractExpr(node: Expression): RawExpr {
       const typeNode = p.getTypeNode();
       return { name: p.getName(), tsType: typeNode ? typeNode.getText() : undefined };
     });
+    // Capture an explicit return annotation (`(x): Out => …`) so resolve can type
+    // return-position record literals to their named type instead of a tuple.
+    const retNode = node.getReturnTypeNode();
+    const returnTsType = retNode ? typeToString(node.getReturnType()) : undefined;
     const body = node.getBody();
     if (Node.isExpression(body)) {
-      return { kind: "lambda", params, body: extractExpr(body) };
+      return { kind: "lambda", params, body: extractExpr(body), returnTsType };
     }
     if (Node.isBlock(body)) {
-      return { kind: "lambda", params, body: extractStmts(body.getStatements()) };
+      return { kind: "lambda", params, body: extractStmts(body.getStatements()), returnTsType };
     }
     throw new Error(`Unsupported arrow function body: ${node.getText().slice(0, 80)}`);
   }
@@ -2083,9 +2087,13 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       if (e.kind === "arrayLiteral") { e.elems.forEach(collectNamesExpr); }
       if (e.kind === "conditional") { collectNamesExpr(e.cond); collectNamesExpr(e.then); collectNamesExpr(e.else); }
     }
+    // Signature types (params + return) get base-name stripping below; body /
+    // spec references stay exact-match (so a body `let xs: Hunk[]` doesn't pull
+    // `Hunk` into the filter early and reorder output that resolveType re-adds).
+    const sigTypes = new Set<string>();
     for (const fn of functions) {
-      for (const p of fn.params) referencedNames.add(p.tsType);
-      referencedNames.add(fn.returnType);
+      for (const p of fn.params) { referencedNames.add(p.tsType); sigTypes.add(p.tsType); }
+      referencedNames.add(fn.returnType); sigTypes.add(fn.returnType);
       collectNames(fn.body);
       // Also scan spec annotations for identifier references
       for (const spec of [...fn.requires, ...fn.ensures]) {
@@ -2109,6 +2117,14 @@ export function extractModule(sourceFile: SourceFile): RawModule {
           for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) markType(m[1]);
     }
     for (const name of referencedNames) markType(name);
+    // Signature types also mark their base after stripping array/optional
+    // WRAPPERS (`Out[]`/`Msg | undefined` → `Out`/`Msg`), so a function returning
+    // a local `Out[]` keeps `Out`. Wrappers only — never dig into generic args
+    // (`Omit<FilePathOptions, …>` must not pull in the inner type).
+    for (const name of sigTypes) {
+      const base = name.replace(/\s*\|\s*(undefined|null)\s*$/, "").replace(/(\[\])+$/, "").trim();
+      if (base !== name && /^[A-Za-z_]\w*$/.test(base)) markType(base);
+    }
     typeDecls.splice(0, typeDecls.length, ...typeDecls.filter(d => neededTypes.has(d.name) || declaredNames.has(d.name)));
   }
 
