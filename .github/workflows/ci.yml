@@ -10,10 +10,10 @@ jobs:
   tools:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
@@ -69,7 +69,7 @@ jobs:
   lean:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: ./.github/actions/setup-lean
 
@@ -119,12 +119,12 @@ jobs:
           - repo: midspiral/quorum-lemmascript
             branch: main
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Clone case study
         run: git clone --branch ${{ matrix.branch }} https://github.com/${{ matrix.repo }}.git ../case-study
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
 
@@ -164,12 +164,12 @@ jobs:
           - repo: midspiral/clear-split-lemmascript
             branch: main
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Clone case study
         run: git clone --branch ${{ matrix.branch }} https://github.com/${{ matrix.repo }}.git ../case-study
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
 
