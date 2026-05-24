@@ -22,6 +22,8 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: site/package-lock.json
       - name: Install
         working-directory: site
         run: npm ci

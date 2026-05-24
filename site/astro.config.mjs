@@ -1,5 +1,6 @@
 import { defineConfig } from "astro/config"
 import starlight from "@astrojs/starlight"
+import starlightLinksValidator from "starlight-links-validator"
 import { visit } from "unist-util-visit"
 import { existsSync, statSync } from "node:fs"
 import { fileURLToPath } from "node:url"
@@ -27,7 +28,9 @@ function rehypeRepoLinks() {
       const path = rawPath.replace(/^\.\//, "")
       const abs = join(REPO_ROOT, path)
       if (!existsSync(abs)) {
-        console.warn(`[rehypeRepoLinks] link target not found in repo: ${href}`)
+        const msg = `[rehypeRepoLinks] link target not found in repo: ${href}`
+        if (process.env.CI) throw new Error(msg) // fail the build in CI; warn locally
+        console.warn(msg)
       }
       const kind = existsSync(abs) && statSync(abs).isDirectory() ? "tree" : "blob"
       node.properties.href = `${GH}/${kind}/${BRANCH}/${path}${anchor ? "#" + anchor : ""}`
@@ -74,6 +77,7 @@ export default defineConfig({
   markdown: { rehypePlugins: [rehypeRepoLinks, rehypeLinkNames] },
   integrations: [
     starlight({
+      plugins: [starlightLinksValidator()],
       title: "LemmaScript",
       description: "A verification toolchain for TypeScript — generate Lean 4 or Dafny from annotated code.",
       social: [{ icon: "github", label: "GitHub", href: "https://github.com/midspiral/LemmaScript" }],
