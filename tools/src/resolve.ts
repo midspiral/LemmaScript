@@ -1427,6 +1427,7 @@ export function resolveModule(raw: RawModule): TModule {
     return {
       qualified: ext.qualified,
       flat: ext.flat,
+      typeParams: ext.typeParams,
       params: ext.params.map((p, i) => ({ name: p.name, ty: sig.params[i] })),
       returnTy: sig.returnTy,
       requires,

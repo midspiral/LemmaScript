@@ -128,6 +128,7 @@ export interface TConst {
 export interface TExtern {
   qualified: string;
   flat: string;
+  typeParams: string[];
   params: TParam[];
   returnTy: Ty;
   requires: TExpr[];

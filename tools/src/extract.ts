@@ -84,6 +84,10 @@ function detectCrossFileExtern(
   if (externalDecl.getSourceFile().getFilePath().endsWith(".d.ts")) return null;
   const sig = callee.getType().getCallSignatures()[0];
   if (!sig) return null;
+  // Generic type parameters (e.g. `step<S, A>`). ts-morph reports param/return
+  // types in the callee's own type-parameter namespace, so these names match
+  // what `params`/`returnType` reference — declare them on the emitted axiom.
+  const typeParams = sig.getTypeParameters().map(tp => tp.getText());
   const params = sig.getParameters().map(p => ({
     name: p.getName(),
     tsType: p.getTypeAtLocation(callee).getText(),
@@ -101,7 +105,7 @@ function detectCrossFileExtern(
   const annots = collectFunctionAnnotations(externalDecl);
   const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
   const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
-  return { qualified, flat, params, returnType, requires, ensures };
+  return { qualified, flat, typeParams, params, returnType, requires, ensures };
 }
 
 /** Build a concat-tree from a mixed list of literal and SpreadElement nodes.
@@ -1854,6 +1858,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     if (_externs.has(f.name)) continue;
     const sig = f.node.getType().getCallSignatures()[0];
     if (!sig) continue;
+    const typeParams = sig.getTypeParameters().map(tp => tp.getText());
     const params = sig.getParameters().map(p => ({
       name: p.getName(),
       tsType: p.getTypeAtLocation(f.node).getText(),
@@ -1862,7 +1867,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     const annots = collectFunctionAnnotations(f.node);
     const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
     const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
-    _externs.set(f.name, { qualified: f.name, flat: f.name, params, returnType, requires, ensures });
+    _externs.set(f.name, { qualified: f.name, flat: f.name, typeParams, params, returnType, requires, ensures });
   }
 
   // If any function has //@ verify, only extract those (brownfield mode).

@@ -196,6 +196,7 @@ export interface RawConst {
 export interface RawExtern {
   qualified: string;       // dotted source name, e.g. "Wildcard.match"
   flat: string;            // emission name, e.g. "Wildcard_match"
+  typeParams: string[];    // generic type parameters, e.g. ["S", "A"] (referenced by params/returnType)
   params: RawParam[];      // typed parameter list (names + TS type strings)
   returnType: string;      // TS type string
   requires: string[];      // copied `//@ requires` annotation strings
