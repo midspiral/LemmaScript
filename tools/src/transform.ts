@@ -228,6 +228,18 @@ function flattenLambdaBody(stmts: Stmt[]): Expr | null {
     const elseExpr = flattenLambdaBody(first.else.length > 0 ? [...first.else, ...rest] : rest);
     return thenExpr === null || elseExpr === null ? null : { kind: "if", cond: first.cond, then: thenExpr, else: elseExpr };
   }
+  // A `switch` lowered to a match-statement: reduce each arm's body to an
+  // expression (an arm that doesn't return falls through into `rest`), giving a
+  // match-expression — same reduction the `if` case does, one level wider.
+  if (first.kind === "match") {
+    const arms: MatchArm[] = [];
+    for (const arm of first.arms) {
+      const armExpr = flattenLambdaBody([...arm.body, ...rest]);
+      if (armExpr === null) return null;
+      arms.push({ pattern: arm.pattern, body: armExpr });
+    }
+    return { kind: "match", scrutinee: first.scrutinee, arms };
+  }
   return null;
 }
 
