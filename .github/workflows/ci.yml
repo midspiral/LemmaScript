@@ -108,6 +108,8 @@ jobs:
             branch: lemmascript
           - repo: midspiral/anthropic-sdk-lemmascript
             branch: lemmascript
+          - repo: midspiral/trace-solo-lemmascript
+            branch: main
     steps:
       - uses: actions/checkout@v4
 
