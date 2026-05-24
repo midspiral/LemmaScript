@@ -1783,6 +1783,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     return {
       kind: "extern" as const,
       name: ext.flat,
+      typeParams: ext.typeParams,
       params: ext.params.map(p => ({ name: p.name, type: p.ty })),
       returnType: ext.returnTy,
       requires: ext.requires.map(transformExpr),

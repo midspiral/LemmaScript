@@ -152,6 +152,7 @@ export interface TypeAlias {
 export interface ExternDecl {
   kind: "extern";
   name: string;                                 // flat name (dots → underscores)
+  typeParams: string[];                         // generic type parameters (e.g. ["S", "A"])
   params: { name: string; type: Ty }[];
   returnType: Ty;
   requires: Expr[];

@@ -627,7 +627,8 @@ function emitDecl(d: Decl): string {
       // Body-less Dafny function — `:axiom` makes Dafny accept the missing body
       // and treats it as an uninterpreted symbol. Any `requires`/`ensures` were
       // lifted from the source declaration's annotations.
-      const lines = [`function {:axiom} ${escapeName(d.name)}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
+      const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
+      const lines = [`function {:axiom} ${escapeName(d.name)}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
       return lines.join("\n");
