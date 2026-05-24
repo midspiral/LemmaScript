@@ -144,6 +144,16 @@ export interface TypeAlias {
   target: Ty;
 }
 
+/** Opaque abstract type: `type Name(==)` in Dafny. Synthesized for a union LS
+ *  can't model as a tagged union (no runtime test maps to a tag). It has no
+ *  constructor and no tag predicate, so a value of it can only be passed
+ *  through — any attempt to build or type-test it fails to lower. That is the
+ *  only sound use of an un-discriminable union, so the opacity is its own guard. */
+export interface OpaqueType {
+  kind: "opaque-type";
+  name: string;
+}
+
 /** Externally-declared pure function: `function {:axiom} name(...): returnType`
  *  in Dafny. No body — the prover treats it as an uninterpreted symbol of the
  *  declared type. Auto-detected during extraction for cross-file calls; any
@@ -159,7 +169,7 @@ export interface ExternDecl {
   ensures: Expr[];
 }
 
-export type Decl = Inductive | Structure | FnDef | FnDefByMethod | FnMethod | Namespace | ClassDecl | ConstDecl | TypeAlias | ExternDecl;
+export type Decl = Inductive | Structure | FnDef | FnDefByMethod | FnMethod | Namespace | ClassDecl | ConstDecl | TypeAlias | OpaqueType | ExternDecl;
 
 export interface Module {
   comment: string;

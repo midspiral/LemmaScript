@@ -430,6 +430,7 @@ function peepholeDecl(d: Decl): Decl {
     case "inductive":
     case "structure":
     case "type-alias":
+    case "opaque-type":
     case "extern":
       return d;
   }

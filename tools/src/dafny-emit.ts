@@ -567,6 +567,12 @@ function emitDecl(d: Decl): string {
       return `type ${d.name} = ${tyToDafny(d.target)}`;
     }
 
+    case "opaque-type": {
+      // Abstract type — no definition. `(==)` so it can sit inside datatypes
+      // that derive structural equality. Never constructed or destructured.
+      return `type ${d.name}(==)`;
+    }
+
     case "def": {
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
       const lines = [`function ${d.name}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
