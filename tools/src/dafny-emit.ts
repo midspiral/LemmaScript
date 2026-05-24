@@ -39,6 +39,15 @@ const DAFNY_KEYWORDS = new Set([
   "datatype", "type", "const", "ghost", "static",
   "reads", "modifies", "assert", "assume", "print",
   "by", "calc", "reveal",
+  // Further reserved words (validated against the Dafny parser) that are also
+  // legal TS identifiers. `this` stays excluded above — class methods emit it
+  // directly. `then`/`else` already covered.
+  "bool", "char", "int", "nat", "real", "string", "object", "array",
+  "as", "is", "label", "modify", "expect", "yield", "yields", "returns",
+  "unchanged", "witness", "constructor", "iterator", "abstract", "extends",
+  "refines", "opened", "provides", "reveals", "include", "newtype",
+  "codatatype", "nameonly", "twostate", "opaque", "replaceable", "colemma",
+  "copredicate", "inductive",
 ]);
 
 function escapeName(name: string): string {
