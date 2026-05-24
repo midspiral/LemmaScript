@@ -116,6 +116,8 @@ jobs:
             branch: lemmascript
           - repo: midspiral/guardians-lemmascript
             branch: main
+          - repo: midspiral/quorum-lemmascript
+            branch: main
     steps:
       - uses: actions/checkout@v4
 
