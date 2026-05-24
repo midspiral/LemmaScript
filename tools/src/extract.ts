@@ -1502,16 +1502,32 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
       const cases: { label: string; body: RawStmt[] }[] = [];
       let defaultBody: RawStmt[] = [];
+      // Two JS-`switch` faithfulness concerns the Dafny `match` doesn't share:
+      //  (1) Fall-through: stacked `case A: case B: body` is several clauses
+      //      where the leading ones have no statements; those labels share the
+      //      next clause's body (we duplicate it per label).
+      //  (2) `break` is the switch exit, not a loop break. We extract the full
+      //      body (extractStmts flattens `{ }` blocks but keeps loop bodies
+      //      nested) and strip the *top-level* breaks — so a `break` written
+      //      inside a `{ }` case block is stripped, while a `break` inside a
+      //      nested loop stays put.
+      const stripExitBreaks = (b: RawStmt[]) => b.filter(st => st.kind !== "break");
+      let fallthrough: string[] = [];
       for (const clause of s.getClauses()) {
         if (Node.isCaseClause(clause)) {
           const label = clause.getExpression().getText().replace(/^["']|["']$/g, "");
-          const bodyStmts = clause.getStatements().filter(st => !Node.isBreakStatement(st));
-          cases.push({ label, body: extractStmts(bodyStmts) });
+          if (clause.getStatements().length === 0) { fallthrough.push(label); continue; }
+          const body = stripExitBreaks(extractStmts(clause.getStatements()));
+          for (const l of fallthrough) cases.push({ label: l, body });
+          cases.push({ label, body });
+          fallthrough = [];
         } else {
-          const bodyStmts = clause.getStatements().filter(st => !Node.isBreakStatement(st));
-          defaultBody = extractStmts(bodyStmts);
+          defaultBody = stripExitBreaks(extractStmts(clause.getStatements()));
+          for (const l of fallthrough) cases.push({ label: l, body: defaultBody });
+          fallthrough = [];
         }
       }
+      for (const l of fallthrough) cases.push({ label: l, body: [] });
       result.push({ kind: "switch", expr: switchExpr, discriminant, cases, defaultBody, line });
       continue;
     }
