@@ -35,10 +35,43 @@ function rehypeRepoLinks() {
   }
 }
 
+// Cross-doc links written lazily as `[SPEC.md](SPEC.md)` in the source markdown
+// arrive here already routed (sync-docs rewrote the href to /spec/) but still
+// showing the bare filename as text. Swap that filename for a human name. We
+// only touch links whose visible text IS a bare *.md filename, so intentional
+// text like `[SPEC.md §2]` or `[TOOLS.md#narrow-rules]` is left untouched.
+const LINK_NAMES = {
+  "/": "Overview",
+  "/getting-started/": "Getting Started",
+  "/tutorials/greenfield/": "Greenfield tutorial",
+  "/spec/": "Specification",
+  "/spec-dafny/": "Dafny backend spec",
+  "/spec-lean/": "Lean backend spec",
+  "/tools/": "Tools",
+  "/design/": "Design",
+  "/architecture-narrowing/": "Narrowing architecture",
+}
+const BARE_FILENAME = /^[A-Za-z0-9_]+\.md$/
+
+function rehypeLinkNames() {
+  return (tree) => {
+    visit(tree, "element", (node) => {
+      if (node.tagName !== "a") return
+      const href = node.properties?.href
+      if (typeof href !== "string" || !href.startsWith("/")) return
+      const name = LINK_NAMES[href.split("#")[0]]
+      if (!name) return
+      const kids = node.children
+      if (kids.length !== 1 || kids[0].type !== "text" || !BARE_FILENAME.test(kids[0].value)) return
+      node.children = [{ type: "text", value: name }]
+    })
+  }
+}
+
 // https://astro.build/config
 export default defineConfig({
   site: "https://lemmascript.com",
-  markdown: { rehypePlugins: [rehypeRepoLinks] },
+  markdown: { rehypePlugins: [rehypeRepoLinks, rehypeLinkNames] },
   integrations: [
     starlight({
       title: "LemmaScript",
