@@ -12,7 +12,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(here, "..", "..") // repo root: site/scripts -> site -> repo
 const OUT = join(here, "..", "src", "content", "docs")
 
-// Which root docs become site pages (AGENTS.md is agent-only — excluded).
+// Which root docs become site pages.
 const DOCS = [
   { src: "README.md", out: "index.md" }, // home / overview
   { src: "GETTING_STARTED.md", out: "getting-started.md" },
@@ -23,6 +23,7 @@ const DOCS = [
   { src: "TOOLS.md", out: "tools.md" },
   { src: "DESIGN.md", out: "design.md" },
   { src: "ARCHITECTURE_NARROWING.md", out: "architecture-narrowing.md" },
+  { src: "AGENTS.md", out: "agents.md" },
 ]
 
 // filename -> site route, for rewriting cross-doc links so site nav works.
@@ -36,6 +37,7 @@ const ROUTES = {
   "TOOLS.md": "/tools/",
   "DESIGN.md": "/design/",
   "ARCHITECTURE_NARROWING.md": "/architecture-narrowing/",
+  "AGENTS.md": "/agents/",
 }
 
 function titleAndBody(md) {

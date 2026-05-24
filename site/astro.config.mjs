@@ -8,7 +8,7 @@ import { join } from "node:path"
 
 // The synced docs (see scripts/sync-docs.mjs) keep their repo-relative links —
 // doc-to-doc links are rewritten to site routes there, but links into the repo
-// itself (e.g. examples/, AGENTS.md) survive as relative paths that would 404
+// itself (e.g. examples/, lakefile.lean) survive as relative paths that would 404
 // on the site. Rewrite those to absolute GitHub URLs at render time. By the
 // time we see an href, routed doc links are already absolute (/spec/), so we
 // only touch genuinely repo-relative targets.
@@ -53,6 +53,7 @@ const LINK_NAMES = {
   "/tools/": "Tools",
   "/design/": "Design",
   "/architecture-narrowing/": "Narrowing architecture",
+  "/agents/": "Agents",
 }
 const BARE_FILENAME = /^[A-Za-z0-9_]+\.md$/
 
@@ -103,6 +104,7 @@ export default defineConfig({
             { label: "Architecture: narrowing", link: "/architecture-narrowing/" },
           ],
         },
+        { label: "Agents", link: "/agents/" },
       ],
     }),
   ],
