@@ -629,6 +629,8 @@ Following TS, the equality/truthiness/`&&`/`||`/`==>` patterns fire only for pur
 
 **Discriminated-union narrowing.** `if (e.kind === "lit") use(e.val)`, `if ('field' in x) use(x.field)`, and `if (x.kind !== "v") return; rest` all lower to `match` constructs that destructure variant-specific fields. Switch on a discriminator works similarly. Detection lives in `narrow.ts` alongside optional-narrowing rules (rewrites to a `tagMatch` IR node); the lowering to backend `match` lives in `transform.ts`.
 
+**Synthesized array-union narrowing.** A plain union `U | T[]` (no shared discriminant) is synthesized at the boundary into a tagged datatype `ArrayBranch(arr: T[]) | NonArrayBranch(val: U)`. `Array.isArray(x)` narrows to the array branch (in `if` / `?:` / `==>`); when the non-array branch `U` is `string`, `typeof x === "string"` narrows to it in `?:` conditionals — the dual discriminator. Inside the matched branch, bare references to `x` use the variant's payload. The `typeof` form fires only when `U` is actually `string`; for any other `U` the runtime `"string"` test can't match that branch, so `lsc` does not narrow (and `typeof` stays unsupported).
+
 See [TOOLS.md](TOOLS.md#narrow-rules) for the full rule list.
 
 **Peephole simplification of `Map.get` ceremony.** The transform produces verbose-looking output for common `Map.get` consumer patterns — the call lowers to `(if k in m then Some(m[k]) else None)` followed by a match. A peephole pass between transform and emit collapses these into idiomatic backend code. See [TOOLS.md](TOOLS.md#peephole-rules) for the full rule list.

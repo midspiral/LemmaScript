@@ -337,13 +337,17 @@ function ruleImplArrayIsArray(e: TExpr): TExpr | null {
 function ruleConditionalArrayIsArray(e: TExpr): TExpr | null {
   if (e.kind !== "conditional") return null;
   const pos = parseArrayIsArrayCall(e.cond);
-  const neg = e.cond.kind === "unop" && e.cond.op === "!"
+  // `typeof x === "string"` is a positive check like `Array.isArray`, but selects
+  // the NonArrayBranch — its then-branch is the matched-variant body.
+  const tof = pos ? null : parseTypeofStringCheck(e.cond);
+  const neg = !pos && !tof && e.cond.kind === "unop" && e.cond.op === "!"
     ? parseArrayIsArrayCall(e.cond.expr)
     : null;
-  const matched = pos ?? (neg ? { scrutinee: neg.scrutinee, typeName: neg.typeName, variant: "NonArrayBranch" as const } : null);
+  const matched = pos ?? tof ?? (neg ? { scrutinee: neg.scrutinee, typeName: neg.typeName, variant: "NonArrayBranch" as const } : null);
   if (!matched) return null;
-  const thenBody = pos ? e.then : e.else;
-  const elseBody = pos ? e.else : e.then;
+  const positive = pos ?? tof;
+  const thenBody = positive ? e.then : e.else;
+  const elseBody = positive ? e.else : e.then;
   return {
     kind: "tagMatch",
     scrutinee: matched.scrutinee,
@@ -567,6 +571,26 @@ function parseArrayIsArrayCall(call: TExpr): { scrutinee: TExpr; typeName: strin
   const decl = _typeDecls.find(d => d.name === baseTyName);
   if (decl?.kind !== "discriminated-union" || decl.discriminant !== "__isArray__") return null;
   return { scrutinee: arg, typeName: arg.ty.name, variant: "ArrayBranch" };
+}
+
+/** Detect `typeof <path> === "string"` where `<path>`'s type is a synth array-
+ *  union (`U | T[]`) AND its `NonArrayBranch` payload `U` is itself `string`.
+ *  The runtime `=== "string"` test matches that branch only when `U` is string —
+ *  for any other non-array payload (`number | T[]`, …) it never holds, so we must
+ *  NOT narrow. Returns the `NonArrayBranch` variant; the dual of `Array.isArray`. */
+function parseTypeofStringCheck(e: TExpr): { scrutinee: TExpr; typeName: string; variant: "NonArrayBranch" } | null {
+  if (e.kind !== "binop" || e.op !== "===") return null;
+  const tof = e.left.kind === "unop" && e.left.op === "typeof" ? e.left.expr
+    : e.right.kind === "unop" && e.right.op === "typeof" ? e.right.expr : null;
+  const lit = e.left.kind === "str" ? e.left.value : e.right.kind === "str" ? e.right.value : null;
+  if (!tof || lit !== "string") return null;
+  if (!isNarrowablePath(tof) || tof.ty.kind !== "user") return null;
+  const baseTyName = tof.ty.name.includes("<") ? tof.ty.name.slice(0, tof.ty.name.indexOf("<")) : tof.ty.name;
+  const decl = _typeDecls.find(d => d.name === baseTyName);
+  if (decl?.kind !== "discriminated-union" || decl.discriminant !== "__isArray__") return null;
+  const valTy = decl.variants?.find(v => v.name === "NonArrayBranch")?.fields.find(f => f.name === "val")?.type;
+  if (valTy?.kind !== "string") return null;   // guard: the non-array branch must actually be `string`
+  return { scrutinee: tof, typeName: tof.ty.name, variant: "NonArrayBranch" };
 }
 
 /** A "narrowable path" is a var or a chain of field accesses rooted at a var

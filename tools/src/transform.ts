@@ -228,6 +228,18 @@ function flattenLambdaBody(stmts: Stmt[]): Expr | null {
     const elseExpr = flattenLambdaBody(first.else.length > 0 ? [...first.else, ...rest] : rest);
     return thenExpr === null || elseExpr === null ? null : { kind: "if", cond: first.cond, then: thenExpr, else: elseExpr };
   }
+  // A `switch` lowered to a match-statement: reduce each arm's body to an
+  // expression (an arm that doesn't return falls through into `rest`), giving a
+  // match-expression — same reduction the `if` case does, one level wider.
+  if (first.kind === "match") {
+    const arms: MatchArm[] = [];
+    for (const arm of first.arms) {
+      const armExpr = flattenLambdaBody([...arm.body, ...rest]);
+      if (armExpr === null) return null;
+      arms.push({ pattern: arm.pattern, body: armExpr });
+    }
+    return { kind: "match", scrutinee: first.scrutinee, arms };
+  }
   return null;
 }
 
@@ -654,7 +666,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "arrayLiteral", elems: e.elems.map(el => lowerExpr(el, binds)) };
 
     case "lambda": {
-      const body = transformStmts(e.body, []);
+      // Pass the module typeDecls (not []), so type lookups inside the lambda
+      // body — e.g. a `switch`'s variant fields — resolve. A bare `[]` left a
+      // discriminated-union switch in a lambda with binderless patterns.
+      const body = transformStmts(e.body, _typeDecls);
       // Flatten an if/let/return-shaped multi-statement body into a single
       // `return <expr>` so both backends' single-return-lambda fast path emits
       // it (Dafny lambdas are expression-only; Lean prefers the expression form
@@ -1376,14 +1391,36 @@ function remainingVariant(typeName: string, cases: { variant: string }[], typeDe
   return remaining[0];
 }
 
+/** `switch(obj.field)` is stripped at extraction to scrutinee `obj` + discriminant
+ *  `field`, assuming `obj` is a discriminated union with `field` as its
+ *  discriminant. When that's NOT so — e.g. `obj` is a plain record with an
+ *  enum-typed `field` — the switch is really on the enum VALUE. This returns the
+ *  enum scrutinee `obj.field` (+ the field's enum type) to match directly; null
+ *  for a genuine discriminant switch or `switch(localVar)`, which callers handle
+ *  their usual way. Shared by emitSwitchStmt and transformPureSwitch. */
+function enumFieldSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): { scrutinee: Expr; enumTyName: string | undefined } | null {
+  if (!s.discriminant) return null;
+  const objBase = s.expr.ty.kind === "user"
+    ? (s.expr.ty.name.includes("<") ? s.expr.ty.name.slice(0, s.expr.ty.name.indexOf("<")) : s.expr.ty.name)
+    : undefined;
+  const objDecl = objBase ? typeDecls.find(d => d.name === objBase) : undefined;
+  if (objDecl?.kind === "discriminated-union" && objDecl.discriminant === s.discriminant) return null;
+  const fieldTy = objDecl?.kind === "record" ? objDecl.fields?.find(f => f.name === s.discriminant)?.type : undefined;
+  return {
+    scrutinee: { kind: "field", obj: transformExpr(s.expr), field: s.discriminant },
+    enumTyName: fieldTy?.kind === "user" ? fieldTy.name : undefined,
+  };
+}
+
 function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Stmt {
-  const varName = s.expr.kind === "var" ? s.expr.name : "?";
-  const typeName = s.expr.ty.kind === "user" ? s.expr.ty.name : undefined;
   const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
-  const arms = buildMatchArms(cases, varName, typeName, typeDecls,
-    (body, vn, fields) => transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls))!;
+  const ef = enumFieldSwitch(s, typeDecls);
+  const arms = ef
+    ? buildMatchArms(cases, undefined, ef.enumTyName, typeDecls, (body) => transformStmts(body, typeDecls))!
+    : buildMatchArms(cases, s.expr.kind === "var" ? s.expr.name : "?", s.expr.ty.kind === "user" ? s.expr.ty.name : undefined, typeDecls,
+        (body, vn, fields) => transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls))!;
   if (s.defaultBody.length > 0) arms.push({ pattern: "_", body: transformStmts(s.defaultBody, typeDecls) });
-  return { kind: "match", scrutinee: varName, arms };
+  return { kind: "match", scrutinee: ef ? ef.scrutinee : (s.expr.kind === "var" ? s.expr.name : "?"), arms };
 }
 
 /** Replace obj.field → replacement var in typed IR.
@@ -1541,6 +1578,18 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
 }
 
 function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Expr | null {
+  const ef = enumFieldSwitch(s, typeDecls);
+  if (ef) {
+    const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
+    const arms = buildMatchArms(cases, undefined, ef.enumTyName, typeDecls, (body) => transformPureBody(body, typeDecls));
+    if (!arms) return null;
+    if (s.defaultBody.length > 0) {
+      const body = transformPureBody(s.defaultBody, typeDecls);
+      if (!body) return null;
+      arms.push({ pattern: "_", body });
+    }
+    return { kind: "match", scrutinee: ef.scrutinee, arms };
+  }
   const typeName = s.expr.ty.kind === "user" ? s.expr.ty.name : "";
   if (!typeDecls.find(d => d.name === typeName)) return null;
   const varName = s.expr.kind === "var" ? s.expr.name : undefined;
