@@ -75,9 +75,7 @@ npx lsc gen --backend=lean src/myModule.ts
 lake build
 ```
 
-## What's Supported
-
-### Annotations
+## Annotations
 
 ```typescript
 //@ requires arr.length > 0
@@ -86,6 +84,8 @@ lake build
 //@ decreases arr.length - i
 //@ type i nat
 ```
+
+For the full surface, see [SPEC.md](SPEC.md).
 
 ## File Structure
 
