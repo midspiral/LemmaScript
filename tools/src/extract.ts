@@ -1917,11 +1917,14 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     const sig = f.node.getType().getCallSignatures()[0];
     if (!sig) continue;
     const typeParams = sig.getTypeParameters().map(tp => tp.getText());
+    // Normalize via typeToString (not raw getText): resolves declare-type
+    // shadows and yields bare names, so a param typed by an unreachable import
+    // becomes `AgentMessage`, not `import("/abs/path").AgentMessage`.
     const params = sig.getParameters().map(p => ({
       name: p.getName(),
-      tsType: p.getTypeAtLocation(f.node).getText(),
+      tsType: typeToString(p.getTypeAtLocation(f.node)),
     }));
-    const returnType = sig.getReturnType().getText();
+    const returnType = typeToString(sig.getReturnType());
     const annots = collectFunctionAnnotations(f.node);
     const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
     const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
