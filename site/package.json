@@ -1,0 +1,18 @@
+{
+  "name": "lemmascript-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "node scripts/sync-docs.mjs",
+    "predev": "node scripts/sync-docs.mjs",
+    "dev": "astro dev",
+    "prebuild": "node scripts/sync-docs.mjs",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.39.2",
+    "astro": "^6.3.7",
+    "sharp": "^0.34.5"
+  }
+}
