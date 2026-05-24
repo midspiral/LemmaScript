@@ -552,7 +552,9 @@ arr.every((x) => x > 0)  // → Lean: arr.all (fun x => x > 0)
 arr.some((x) => x < 0)   // → Lean: arr.any (fun x => x < 0)
 ```
 
-Lambda bodies can be expressions (`(x) => x + 1`) or statement blocks (`(x) => { ... }`).
+Lambda bodies can be expressions (`(x) => x + 1`) or statement blocks (`(x) => { ... }`). A block body is flattened to a single expression when its control flow allows — `if`/`let`/`return` shapes and a `switch` (lowered to a `match`-expression); bodies that can't reduce (loops, bare side effects) stay as statements, which the Dafny backend rejects (its lambdas are expression-only). A record literal returned from a callback is typed by the callback's return annotation, so `(x): Out => ({ ... })` constructs `Out(...)`, not an anonymous tuple.
+
+**filterMap.** `xs.map(x => ... | undefined).filter((x): x is T => x !== undefined)` drops the `undefined`s *and* unwraps to `seq<T>` — lowered to the proven `SeqFilterSome` preamble (a plain `Map(.value, Filter(.Some?, ...))` wouldn't verify, since `.value` is partial).
 
 **Monadic callbacks (Lean):** When the callback calls a method, the HOF call uses the monadic variant (e.g., `arr.mapM f`). Pure callbacks use the non-monadic variant (`arr.map f`). The transform checks the transformed lambda body for monadic binds and selects the variant accordingly.
 
