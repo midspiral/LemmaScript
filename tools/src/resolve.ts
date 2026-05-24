@@ -344,6 +344,38 @@ function getDiscriminant(ctx: Ctx, typeName: string): string | undefined {
   return findDecl(ctx, typeName)?.discriminant;
 }
 
+// ── Equality hazard: structural in the proof vs reference at runtime ─────────
+// `===`/`!==` is modeled as Dafny structural equality, but the SAME TypeScript
+// runs `===` as JS *reference* equality on objects/arrays. The two agree only
+// when the operand is a primitive at runtime: number / string / bool, or a
+// string-union enum (which runs as a plain string). Records, discriminated
+// unions, arrays, maps, sets, and unresolved generics are reference-compared at
+// runtime, so a structural proof over them is unsound. Returns true for those.
+function refEqHazard(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
+  if (ty.kind === "array" || ty.kind === "map" || ty.kind === "set") return true;
+  if (ty.kind === "user") {
+    let decl = typeDecls.find(d => d.name === ty.name);
+    if (!decl && ty.name.includes(".")) {
+      const tail = ty.name.slice(ty.name.lastIndexOf(".") + 1);
+      decl = typeDecls.find(d => d.name === tail);
+    }
+    if (!decl) return true;                          // generic type parameter / unknown → assume reference
+    if (decl.kind === "string-union") return false;  // runs as a JS string → `===` is structural
+    if (decl.kind === "alias") return decl.aliasOfTy ? refEqHazard(decl.aliasOfTy, typeDecls) : false;
+    return true;                                     // record / discriminated-union → reference at runtime
+  }
+  return false;                                      // primitives, optional, unknown, fn, void
+}
+
+const _warnedRefEq = new Set<string>();
+function warnRefEq(op: string, l: Ty, r: Ty): void {
+  const label = (t: Ty) => t.kind === "user" ? t.name : t.kind;
+  const msg = `'${op}' compares non-primitive operands (${label(l)} ${op} ${label(r)}): structural equality in the proof, but reference equality when this TypeScript runs. Sound only if operands are primitives or a canonical (string/number) encoding; otherwise compare via an explicit structural equals.`;
+  if (_warnedRefEq.has(msg)) return;
+  _warnedRefEq.add(msg);
+  console.error(`WARNING: ${msg}`);
+}
+
 /** A type ts-morph handed us that LemmaScript hasn't modeled: contains
  *  `unknown` (TS `any`), or a `user` type whose name isn't a known declaration
  *  (an opaque expanded union like `"AssistantMsg | ToolMsg"` that ts-morph
@@ -605,6 +637,11 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       if (e.op === "===" || e.op === "!==") {
         left = coerceStr(left, right.ty);
         right = coerceStr(right, left.ty);
+        // Spec (`//@`) comparisons are proof-only, so they can't diverge at
+        // runtime; only warn on executable code.
+        if (!ctx.inSpec && refEqHazard(left.ty, ctx.typeDecls) && refEqHazard(right.ty, ctx.typeDecls)) {
+          warnRefEq(e.op, left.ty, right.ty);
+        }
       }
       let ty: Ty = { kind: "unknown" };
       if (["===", "!==", ">=", "<=", ">", "<", "in"].includes(e.op)) ty = { kind: "bool" };
@@ -1384,6 +1421,7 @@ function precomputeFieldTypesInner(typeDecls: TypeDeclInfo[]) {
 }
 
 export function resolveModule(raw: RawModule): TModule {
+  _warnedRefEq.clear();
   precomputeFieldTypes(raw.typeDecls);
   const pureFns = computePureFns(raw.functions);
   // Pre-compute function parameter and return types
