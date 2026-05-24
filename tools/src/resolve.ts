@@ -507,6 +507,20 @@ function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExp
   return rawArgs;
 }
 
+/** A defined-check filter predicate: `(x) => x !== undefined` (expression or
+ *  single-return body). Detected on the raw IR before narrowing rewrites it. */
+function isDefinedCheckRawLambda(raw: RawExpr): boolean {
+  if (raw.kind !== "lambda" || raw.params.length !== 1) return false;
+  const p = raw.params[0].name;
+  const body = Array.isArray(raw.body)
+    ? (raw.body.length === 1 && raw.body[0].kind === "return" ? raw.body[0].value : null)
+    : raw.body;
+  if (!body || body.kind !== "binop" || body.op !== "!==") return false;
+  const isParam = (x: RawExpr) => x.kind === "var" && x.name === p;
+  const isUndef = (x: RawExpr) => x.kind === "var" && x.name === "undefined";
+  return (isParam(body.left) && isUndef(body.right)) || (isParam(body.right) && isUndef(body.left));
+}
+
 /** Coerce call arguments: string literals → user types, non-optional → Some, pad missing optional args. */
 function coerceCallArgs(args: TExpr[], fn: TExpr, ctx: Ctx): TExpr[] {
   if (fn.kind !== "var" || !ctx.fnParams.has(fn.name)) return args;
@@ -712,6 +726,16 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // For same-file function calls, use the known return type
       if (ty.kind === "unknown" && fn.kind === "var" && ctx.fnReturns.has(fn.name)) {
         ty = ctx.fnReturns.get(fn.name)!;
+      }
+      // filterMap: `seqOfOption.filter(x => x !== undefined)` (a defined-check,
+      // typically with an `x is T` type guard) drops the Nones AND unwraps to
+      // seq<T>. Rewrite to a synthetic `filterSome` call lowered to the proven
+      // SeqFilterSome preamble (a plain `Map(.value, Filter(.Some?))` wouldn't
+      // verify — `.value` is partial).
+      if (e.fn.kind === "field" && e.fn.field === "filter" && e.args.length === 1
+          && isDefinedCheckRawLambda(e.args[0])
+          && fn.kind === "field" && fn.obj.ty.kind === "array" && fn.obj.ty.elem.kind === "optional") {
+        return { kind: "call", fn: { ...fn, field: "filterSome" }, args: [], ty: { kind: "array", elem: fn.obj.ty.elem.inner }, callKind: "method" };
       }
       return { kind: "call", fn, args, ty, callKind: classifyCall(e.fn, ctx) };
     }

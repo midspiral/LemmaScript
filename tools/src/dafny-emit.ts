@@ -169,6 +169,8 @@ function emitExpr(e: Expr): string {
         }
         if (e.method === "map")    return `Std.Collections.Seq.Map(${args[0]}, ${obj})`;
         if (e.method === "filter") return `Std.Collections.Seq.Filter(${args[0]}, ${obj})`;
+        // filterMap (synthesized in resolve): drop Nones and unwrap to seq<T>.
+        if (e.method === "filterSome") { needPreamble("SeqFilterSome"); needPreamble("OptionType"); return `SeqFilterSome(${obj})`; }
         if (e.method === "every")  return `Std.Collections.Seq.All(${obj}, ${args[0]})`;
         if (e.method === "findLast") {
           needPreamble("OptionType");
@@ -726,6 +728,13 @@ const CEIL_REAL = `function CeilReal(x: real): int
   else x.Floor + 1
 }`;
 
+const SEQ_FILTER_SOME = `function SeqFilterSome<T>(xs: seq<Option<T>>): seq<T>
+  ensures |SeqFilterSome(xs)| <= |xs|
+{
+  if |xs| == 0 then []
+  else (if xs[0].Some? then [xs[0].value] else []) + SeqFilterSome(xs[1..])
+}`;
+
 const SEQ_FIND_INDEX = `function SeqFindIndex<T>(s: seq<T>, p: T -> bool): int
   ensures -1 <= SeqFindIndex(s, p) < |s|
   ensures SeqFindIndex(s, p) >= 0 ==> p(s[SeqFindIndex(s, p)])
@@ -986,6 +995,7 @@ const PREAMBLE_CODE: [string, string][] = [
   ["FloorReal", FLOOR_REAL],
   ["SeqIndexOf", SEQ_INDEX_OF],
   ["SeqFindIndex", SEQ_FIND_INDEX],
+  ["SeqFilterSome", SEQ_FILTER_SOME],
   ["SeqFindLast", SEQ_FIND_LAST],
   ["SeqFlatten", SEQ_FLATTEN],
   ["SeqJoin", SEQ_JOIN],
