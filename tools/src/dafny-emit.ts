@@ -552,9 +552,25 @@ function emitDecl(d: Decl): string {
   switch (d.kind) {
     case "inductive": {
       const tp = d.typeParams?.length ? `<${d.typeParams.join(", ")}>` : "";
+      // Dafny requires a destructor shared across constructors to have a single
+      // type. Two TS variants can legitimately share a field name with different
+      // types (e.g. label.targetId: string vs leaf.targetId: string?). Detect
+      // such collisions and make those destructors per-constructor unique. Safe:
+      // variant-field reads lower to positional match bindings, never named
+      // destructors on the union (a name shared with differing types isn't even
+      // accessible on the union type in TS), so nothing references the old name.
+      const typesByField = new Map<string, Set<string>>();
+      for (const c of d.constructors)
+        for (const f of c.fields) {
+          let s = typesByField.get(f.name);
+          if (!s) { s = new Set(); typesByField.set(f.name, s); }
+          s.add(tyToDafny(f.type));
+        }
+      const collides = new Set([...typesByField].filter(([, s]) => s.size > 1).map(([n]) => n));
       const ctors = d.constructors.map(c => {
         if (c.fields.length === 0) return escapeName(c.name);
-        return `${escapeName(c.name)}(${paramList(c.fields)})`;
+        const fields = c.fields.map(f => collides.has(f.name) ? { ...f, name: `${f.name}_${c.name}` } : f);
+        return `${escapeName(c.name)}(${paramList(fields)})`;
       });
       return `datatype ${d.name}${tp} = ${ctors.join(" | ")}`;
     }
