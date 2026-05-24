@@ -1738,7 +1738,18 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     }
     const aliasMatch = body.match(/^(\w+)\s*=\s*(.+)$/);
     if (aliasMatch) {
-      typeDecls.push({ name: aliasMatch[1], kind: "alias", aliasOf: aliasMatch[2].trim() });
+      const rhs = aliasMatch[2].trim();
+      // A string-literal union (`= "a" | "b" | …`) becomes an enum datatype —
+      // the same shape a real string-union alias resolves to. Dafny has no
+      // string-literal type, so a plain alias (`type X = "a" | "b"`) would be
+      // invalid. Other RHS forms (`Rule[]`, `number`, `A | B`) fall through.
+      const parts = rhs.split("|").map(s => s.trim());
+      const lits = parts.map(p => p.match(/^["'](.+)["']$/));
+      if (parts.length >= 2 && lits.every(m => m !== null)) {
+        typeDecls.push({ name: aliasMatch[1], kind: "string-union", values: lits.map(m => m![1]) });
+      } else {
+        typeDecls.push({ name: aliasMatch[1], kind: "alias", aliasOf: rhs });
+      }
     }
   }
 
