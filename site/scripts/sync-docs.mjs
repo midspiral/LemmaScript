@@ -56,7 +56,10 @@ function titleAndBody(md) {
 function rewriteLinks(md) {
   let out = md
   for (const [file, route] of Object.entries(ROUTES)) {
-    out = out.split(`](${file})`).join(`](${route})`).split(`](./${file})`).join(`](${route})`)
+    const esc = file.replace(/\./g, "\\.")
+    // ](file) or ](./file), optionally with a #section anchor (preserved)
+    const re = new RegExp(`\\]\\((?:\\./)?${esc}(#[^)]*)?\\)`, "g")
+    out = out.replace(re, (_m, anchor = "") => `](${route}${anchor})`)
   }
   return out
 }
