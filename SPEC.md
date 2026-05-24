@@ -1196,16 +1196,13 @@ Three-way merge when generated code changes. See [SPEC_DAFNY.md](SPEC_DAFNY.md).
 
 ## 8. Pipeline
 
-Four-phase pipeline:
+Six-phase pipeline:
 
 ```
-extract (ts-morph → Raw IR) → resolve (→ Typed IR) → transform (→ IR) → emit (→ text)
+extract → resolve → narrow → transform → peephole → emit
 ```
 
-- **Extract** (`extract.ts`): ts-morph → structured AST. Body expressions are nodes, not strings. Annotations remain as strings. Discovers `tsconfig.json` for import resolution. Extracts inline anonymous object types as named `TypeDeclInfo` records, generates synthetic return types for functions with anonymous return types, and recursively resolves imported types (records, aliases, discriminated unions). Flattens destructured object parameters into individual params. Erases generic type parameters to their constraint bounds (`<T extends Base>` → all occurrences of `T` become `Base` in params, return type, and local variable types). Resolves union parameter types (`A | B`) to the field intersection — if an existing declared type matches, uses it; otherwise generates a synthetic type. In `//@ verify` brownfield mode, filters type declarations to only those transitively referenced by verified functions (including types from body variable declarations); `declare-type` entries are never filtered.
-- **Resolve** (`resolve.ts`): attaches types, classifies calls (pure/method/spec-pure/unknown), identifies discriminants, rejects unsupported patterns. Uses linked environments for lexical scoping. Computes purity via call-graph analysis: a function is pure if it is syntactically pure (no `while`/`for-of`/mutable `let`) AND does not transitively call any non-pure function. Narrows optional types in conditional expressions via synthetic variable substitution. Coerces non-optional values to Optional (wraps in Some) when the target record field is optional. Infers lambda parameter types from array method context (`.map`, `.filter`, etc.). Propagates element type to `.push()` arguments for record type inference.
-- **Transform** (`transform.ts`): Typed IR → backend-neutral IR. Desugars `for-of` to indexed loops. Detects discriminant if-chains → `match`. Lifts embedded method calls to statement-level bindings (selective ANF, §3.6). Generates match expressions for optional conditionals (from resolve-phase `narrowedVar` annotations). Handles `||` on optional, string, and array types. Configured with `TransformOptions` for backend-specific behavior (monadic lifting, method name selection).
-- **Emit** (`lean-emit.ts` / `dafny-emit.ts`): IR → backend text. Dafny emitter pads record constructors with `None` for missing optional fields and adds type annotations for empty collections.
+Each phase (and the three intermediate representations — Raw IR, Typed IR, IR) is documented in [TOOLS.md](TOOLS.md#pipeline).
 
 ---
 
