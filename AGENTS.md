@@ -83,6 +83,20 @@ dafny verify --filter-symbol=lemma_name foo.dfy
 
 For a final whole-file pass, run once and inspect with `tail -50` rather than narrowing with `grep` — the verifier's summary line lives at the end, and a partial grep can hide errors that don't match your filter pattern. Add `--isolate-assertions` when one lemma has many conjuncts and you want a clean breakdown of which conjunct is failing; add `--verification-time-limit=<sec>` when the default 30s isn't enough.
 
+### Nonlinear arithmetic: reach for the standard library, don't hand-roll
+
+Goals involving multiplication/division of variables — `(m*p)/p == m`, `(m*p)%p == 0`, `x <= y ==> x*p <= y*p` — are **nondeterministic in Z3**: they verify on one run and time out the next, even as isolated lemma goals. Hand-rolled inductive helpers don't rescue you, because the inductive *step* needs an equally-flaky div/mod-add fact (`(q+p)%p == q%p`).
+
+The robust fix is Dafny's standard arithmetic library, whose `Mul`/`DivMod` lemmas are proven once, robustly:
+
+```dafny
+import opened Std.Arithmetic.Mul       // LemmaMulInequality(x,y,z): x<=y && z>=0 ==> x*z<=y*z
+import opened Std.Arithmetic.DivMod     // LemmaMulStrictInequality(x,y,z): x<y && z>0 ==> x*z<y*z
+                                        // LemmaModMultiplesBasic(m,p): m>=0 && p>0 ==> (m*p)%p == 0
+```
+
+`lsc`'s `dafnyVerify` (`tools/dist/dafny-commands.js`) **auto-adds `--standard-libraries` whenever the `.dfy` text contains the substring `Std.`** — so an `import opened` is all you need; no CLI flag or config change, and `lsc check` picks it up. The imports go in as an *inserted* block (additions-only — don't touch the generated header). Euclidean identities (`x == x/p*p + x%p`, `0 <= x%p < p`) and small distributivity (`(k+1)*p == k*p + p`) *are* reliable inline; reserve the library for the cancellation and monotonicity goals.
+
 ## Lean verification workflow
 
 `lake build` runs the full chain. `loom_solve` is the default tactic for discharging Velvet VCs, but **it does not automatically apply step lemmas to recursive helpers** — for those, you need an explicit chain (e.g., `loomAbstractionSimp` + the step lemma name) rather than a bare `loom_solve`.
