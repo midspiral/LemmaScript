@@ -585,6 +585,13 @@ function extractExpr(node: Expression): RawExpr {
     return { kind: "var", name: "undefined" };
   }
 
+  // `typeof X` — only meaningful in a `typeof X === "string"` discriminator over
+  // a synth `U | T[]` union (see narrow's parseTypeofStringCheck); any other use
+  // survives to emit and errors there.
+  if (Node.isTypeOfExpression(node)) {
+    return { kind: "unop", op: "typeof", expr: extractExpr(node.getExpression()) };
+  }
+
   throw new Error(`Unsupported expression: ${node.getText()}`);
 }
 

@@ -659,7 +659,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "unop": {
       const expr = resolveExpr(e.expr, ctx);
-      return { kind: "unop", op: e.op, expr, ty: e.op === "!" ? { kind: "bool" } : expr.ty };
+      const ty: Ty = e.op === "!" ? { kind: "bool" } : e.op === "typeof" ? { kind: "string" } : expr.ty;
+      return { kind: "unop", op: e.op, expr, ty };
     }
 
     case "call": {
