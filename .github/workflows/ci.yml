@@ -112,6 +112,8 @@ jobs:
             branch: main
           - repo: midspiral/pi-lemmascript
             branch: lemmascript
+          - repo: midspiral/balanced-match-lemmascript
+            branch: lemmascript
     steps:
       - uses: actions/checkout@v4
 
