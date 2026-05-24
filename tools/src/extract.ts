@@ -168,6 +168,27 @@ function _synthName(elemName: string, otherName: string): string {
 }
 
 /**
+ * Fall-through for a union LS can't model as a tagged union (no runtime type
+ * test maps to a tag — e.g. members are unreachable imports with no visible
+ * discriminant). Registers an opaque-type TypeDeclInfo and returns its name, so
+ * the union becomes one abstract `type` rather than invalid raw-union Dafny.
+ *
+ * Sound because an opaque type has no constructor and no tag predicate: any
+ * attempt to build or type-test the value fails to lower, so it can only be
+ * passed through — the one sound use of a union we can't discriminate. Distinct
+ * from dropping the field (which collapses values and is unsound): the value is
+ * preserved, just uninspectable.
+ */
+function _synthOpaque(memberNames: string[]): string {
+  const sanitize = (s: string) => s.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const name = `Opaque_${memberNames.map(sanitize).join("_or_")}`;
+  if (_synthArrayUnions !== null && !_synthArrayUnions.some(d => d.name === name)) {
+    _synthArrayUnions.push({ name, kind: "opaque" });
+  }
+  return name;
+}
+
+/**
  * String-level fallback for synth detection on a `T[] | U` shape, used by
  * declare-type field parsing (where no ts-morph TypeNode is available). The
  * format inside declare-type is user-controlled and structurally simple, so
@@ -808,7 +829,10 @@ function typeToString(type: Type): string {
   if (type.isNumber() || type.isNumberLiteral()) return "number";
   if (type.isBigInt() || type.isBigIntLiteral()) return "bigint";
   if (type.isString() || type.isStringLiteral()) return "string";
-  if (type.isBoolean()) return "boolean";
+  // TS expands `boolean` to the literal union `false | true`; normalize the
+  // literals back so the union dedupes to a single `boolean` rather than being
+  // mistaken for an unmodelable multi-member union.
+  if (type.isBoolean() || type.isBooleanLiteral()) return "boolean";
   // Named type alias (e.g. Priority = "low" | "medium" | "high") — use the alias name
   if (type.getAliasSymbol()) {
     const name = type.getAliasSymbol()!.getName();
@@ -848,7 +872,14 @@ function typeToString(type: Type): string {
       }
     }
     const parts = [...new Set(unionTypes.map(typeToString))];
-    return parts.join(" | ");
+    // `undefined`/`null` are optional markers; a single real member with them
+    // is an Option, left as `X | undefined` for the optional lowering.
+    const real = parts.filter(p => p !== "undefined" && p !== "null");
+    if (real.length <= 1) return parts.join(" | ");
+    // A genuine multi-member union with no tagged-union shape LS can model →
+    // a single opaque type. (See _synthOpaque.) Preserve an outer optional.
+    const opaque = _synthOpaque(real);
+    return real.length === parts.length ? opaque : `${opaque} | undefined`;
   }
   if (type.isTuple()) {
     return `[${type.getTupleElements().map(t => typeToString(t)).join(", ")}]`;
@@ -1886,11 +1917,14 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     const sig = f.node.getType().getCallSignatures()[0];
     if (!sig) continue;
     const typeParams = sig.getTypeParameters().map(tp => tp.getText());
+    // Normalize via typeToString (not raw getText): resolves declare-type
+    // shadows and yields bare names, so a param typed by an unreachable import
+    // becomes `AgentMessage`, not `import("/abs/path").AgentMessage`.
     const params = sig.getParameters().map(p => ({
       name: p.getName(),
-      tsType: p.getTypeAtLocation(f.node).getText(),
+      tsType: typeToString(p.getTypeAtLocation(f.node)),
     }));
-    const returnType = sig.getReturnType().getText();
+    const returnType = typeToString(sig.getReturnType());
     const annots = collectFunctionAnnotations(f.node);
     const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
     const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);

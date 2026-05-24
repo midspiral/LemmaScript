@@ -27,7 +27,7 @@ export interface UnionTypeInfo {
 export interface TypeDeclInfo {
   name: string;
   typeParams?: string[];
-  kind: "string-union" | "discriminated-union" | "record" | "alias";
+  kind: "string-union" | "discriminated-union" | "record" | "alias" | "opaque";
   /** For string unions: the literal values */
   values?: string[];
   /** For discriminated unions: the discriminant field and variants */

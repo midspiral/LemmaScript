@@ -1628,6 +1628,8 @@ function transformTypeDecl(d: TypeDeclInfo): Decl {
       kind: "type-alias", name: d.name,
       target: d.aliasOfTy!,
     };
+  } else if (d.kind === "opaque") {
+    return { kind: "opaque-type", name: d.name };
   } else {
     return {
       kind: "structure", name: d.name,

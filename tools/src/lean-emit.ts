@@ -404,6 +404,11 @@ function emitDecl(d: Decl): string {
       return `abbrev ${d.name} := ${tyToLean(d.target)}`;
     }
 
+    case "opaque-type": {
+      // Abstract type — no definition. Never constructed or destructured.
+      return `opaque ${d.name} : Type`;
+    }
+
     case "def": {
       const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`).join(" ");
       return `def ${d.name} ${params} : ${tyToLean(d.returnType)} :=\n${emitPureExpr(d.body, 1)}`;
