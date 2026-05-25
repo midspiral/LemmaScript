@@ -7,10 +7,13 @@
 
 // ── Types ────────────────────────────────────────────────────
 
+// `big` marks an int/nat that originated from a TS `bigint` (literal `123n` or
+// declared `bigint`). It rides along arithmetic so division can pick the right
+// JS semantics: `number / number` is real, but `bigint / bigint` is integer.
 export type Ty =
   | { kind: "bool" }
-  | { kind: "nat" }
-  | { kind: "int" }
+  | { kind: "nat"; big?: boolean }
+  | { kind: "int"; big?: boolean }
   | { kind: "real" }
   | { kind: "string" }
   | { kind: "void" }
@@ -21,6 +24,11 @@ export type Ty =
   | { kind: "user"; name: string }
   | { kind: "fn"; params: Ty[]; result: Ty }
   | { kind: "unknown" }
+
+/** True for an int/nat that came from a TS `bigint` (integer division semantics). */
+export function isBigInt(ty: Ty): boolean {
+  return (ty.kind === "int" || ty.kind === "nat") && !!ty.big;
+}
 
 export type CallKind = "pure" | "method" | "spec-pure" | "unknown"
 

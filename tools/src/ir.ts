@@ -20,6 +20,7 @@ export type Expr =
   | { kind: "app"; fn: string; args: Expr[] }            // f a b
   | { kind: "field"; obj: Expr; field: string }           // x.res, arr.size
   | { kind: "toNat"; expr: Expr }                               // expr.toNat
+  | { kind: "toReal"; expr: Expr }                             // int/nat → real coercion
   | { kind: "index"; arr: Expr; idx: Expr }                // arr[idx]!
   | { kind: "record"; spread: Expr | null; fields: { name: string; value: Expr }[] }
   | { kind: "arrayLiteral"; elems: Expr[] }

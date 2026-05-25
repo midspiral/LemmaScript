@@ -30,6 +30,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "app": return { ...e, args: e.args.map(r) };
     case "field": return { ...e, obj: r(e.obj) };
     case "toNat": return { ...e, expr: r(e.expr) };
+    case "toReal": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null,
       fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
@@ -346,6 +347,7 @@ function rewriteChildrenExpr(e: Expr): Expr {
     case "app": return { ...e, args: e.args.map(r) };
     case "field": return { ...e, obj: r(e.obj) };
     case "toNat": return { ...e, expr: r(e.expr) };
+    case "toReal": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null,
       fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };

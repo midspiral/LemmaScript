@@ -21,7 +21,7 @@ export type RawChainStep =
 
 export type RawExpr =
   | { kind: "var"; name: string }
-  | { kind: "num"; value: number }
+  | { kind: "num"; value: number; big?: boolean }   // `big` = BigInt literal (123n)
   | { kind: "str"; value: string }
   | { kind: "bool"; value: boolean }
   | { kind: "binop"; op: string; left: RawExpr; right: RawExpr }

@@ -169,7 +169,7 @@ function midpoint(lo: int, hi: int): int
 }
 
 lemma midpoint_ensures(lo: int, hi: int)
-  ensures (midpoint(lo, hi) == ((lo + hi) / 2))
+  ensures (midpoint(lo, hi) == JSFloorDiv((lo + hi), 2))
 {
 }
 

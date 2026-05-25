@@ -320,16 +320,9 @@ function emitExpr(e: Expr): string {
         needPreamble("BitAnd");
         return `BitAnd(${emitExpr(e.left)}, ${emitExpr(e.right)})`;
       }
-      // int * real coercion: wrap int side with "as real"
-      if (["+", "-", "*", "/"].includes(op)) {
-        const leftIsReal = e.left.kind === "num" && !Number.isInteger(e.left.value);
-        const rightIsReal = e.right.kind === "num" && !Number.isInteger(e.right.value);
-        if (leftIsReal !== rightIsReal) {
-          const left = leftIsReal ? emitExpr(e.left) : `(${emitExpr(e.left)} as real)`;
-          const right = rightIsReal ? emitExpr(e.right) : `(${emitExpr(e.right)} as real)`;
-          return `(${left} ${op} ${right})`;
-        }
-      }
+      // int→real coercion is now injected upstream in transform (toReal nodes),
+      // which has full type information — including real-typed variables, not
+      // just literals — so no literal-based coercion is needed here.
       return `(${wrapQuantifier(e.left)} ${op} ${emitExpr(e.right)})`;
     }
 
@@ -367,6 +360,9 @@ function emitExpr(e: Expr): string {
     case "toNat":
       // Dafny doesn't need toNat — just emit the inner expression
       return emitExpr(e.expr);
+
+    case "toReal":
+      return `(${emitExpr(e.expr)} as real)`;
 
     case "index": {
       const obj = emitExpr(e.arr);

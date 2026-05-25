@@ -12,7 +12,7 @@ function tyToLean(ty: Ty): string {
   switch (ty.kind) {
     case "nat": return "Nat";
     case "int": return "Int";
-    case "real": return "Float";  // Lean doesn't have exact reals; Float is approximate
+    case "real": return "Real";  // Mathlib ℝ — exact reals (matches Dafny `real`)
     case "bool": return "Bool";
     case "string": return "String";
     case "void": return "Unit";
@@ -217,6 +217,10 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       const wrap = e.expr.kind !== "var" && e.expr.kind !== "num";
       return wrap ? `(${inner}).toNat` : `${inner}.toNat`;
     }
+
+    case "toReal":
+      // Int/Nat → ℝ via Mathlib's coercion.
+      return `(${emitExpr(e.expr)} : Real)`;
 
     case "index":
       return `${emitExpr(e.arr)}[${emitExpr(e.idx)}]!`;
