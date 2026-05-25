@@ -1,0 +1,15 @@
+/* Compact code blocks — no window chrome, no copy button, no language badge */
+.expressive-code .frame {
+  box-shadow: none !important;
+}
+
+.expressive-code .frame .header,
+.expressive-code .frame .copy {
+  display: none !important;
+}
+
+.expressive-code .frame pre {
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.375rem;
+  margin-top: 0 !important;
+}

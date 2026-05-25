@@ -68,7 +68,7 @@ function rewriteLinks(md) {
 
 const esc = (s) => s.replace(/"/g, '\\"')
 
-rmSync(OUT, { recursive: true, force: true })
+for (const d of DOCS) rmSync(join(OUT, d.out), { force: true })
 mkdirSync(OUT, { recursive: true })
 
 for (const { src, out } of DOCS) {

@@ -75,9 +75,11 @@ function rehypeLinkNames() {
 // https://astro.build/config
 export default defineConfig({
   site: "https://lemmascript.com",
+  vite: { server: { watch: { usePolling: true, interval: 500 } } },
   markdown: { rehypePlugins: [rehypeRepoLinks, rehypeLinkNames] },
   integrations: [
     starlight({
+      customCss: ["./src/styles/custom.css"],
       plugins: [starlightLinksValidator()],
       title: "LemmaScript",
       description: "A verification toolchain for TypeScript — generate Lean 4 or Dafny from annotated code.",
@@ -86,7 +88,16 @@ export default defineConfig({
         { label: "Getting started", link: "/getting-started/" },
         {
           label: "Tutorials",
-          items: [{ label: "Build a verified app (greenfield)", link: "/tutorials/greenfield/" }],
+          items: [
+            { label: "Build a verified app (greenfield)", link: "/tutorials/greenfield/" },
+            {
+              label: "Quorum (Beginner)",
+              items: [
+                { label: "Introduction", link: "/tutorials/quorum/00-introduction/" },
+                { label: "Step 1: Environment Setup", link: "/tutorials/quorum/01-setup/" },
+              ],
+            },
+          ],
         },
         {
           label: "Specification",
