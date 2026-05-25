@@ -671,7 +671,13 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         ty = (e.right.kind === "var" && e.right.name === "undefined") ? left.ty : left.ty.inner;
       }
       else if (e.op === "||") ty = right.ty;
-      else if (["+", "-", "*", "/", "%"].includes(e.op)) {
+      else if (e.op === "/") {
+        // JS `/` is always real (floating-point) division: 3 / 2 === 1.5, never
+        // 1. An integer quotient requires an explicit Math.floor (which lowers
+        // to the integer-arithmetic helper JSFloorDiv), never bare `/`.
+        ty = { kind: "real" };
+      }
+      else if (["+", "-", "*", "%"].includes(e.op)) {
         ty = (left.ty.kind === "real" || right.ty.kind === "real") ? { kind: "real" } : left.ty;
       }
       return { kind: "binop", op: e.op, left, right, ty };

@@ -155,6 +155,8 @@ function tyFromTypeNode(tn: TypeNode): Ty {
     const name = tn.getTypeName().getText();
     const args = tn.getTypeArguments();
     if (name === "nat" && args.length === 0) return { kind: "nat" };
+    if (name === "real" && args.length === 0) return { kind: "real" };
+    if (name === "int" && args.length === 0) return { kind: "int" };
     if ((name === "Array" || name === "ReadonlyArray") && args.length === 1) return { kind: "array", elem: tyFromTypeNode(args[0]) };
     if (name === "Set" && args.length === 1) return { kind: "set", elem: tyFromTypeNode(args[0]) };
     if ((name === "Map" || name === "Record") && args.length === 2) {
