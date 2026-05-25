@@ -302,10 +302,10 @@ function extractExpr(node: Expression): RawExpr {
     return { kind: "num", value: Number(node.getLiteralValue()) };
   }
 
-  // BigInt literal (e.g. 32n, 0xffffn) — treat as integer
+  // BigInt literal (e.g. 32n, 0xffffn) — integer, with bigint division semantics
   if (Node.isBigIntLiteral(node)) {
     const text = node.getText().replace(/n$/, '');
-    return { kind: "num", value: Number(text) };
+    return { kind: "num", value: Number(text), big: true };
   }
 
   // Template literal: `foo${x}bar` → "foo" + x + "bar"

@@ -138,8 +138,9 @@ function tyFromTypeNode(tn: TypeNode): Ty {
   }
   switch (tn.getKind()) {
     case SyntaxKind.NumberKeyword:
-    case SyntaxKind.BigIntKeyword:
       return { kind: "int" };
+    case SyntaxKind.BigIntKeyword:
+      return { kind: "int", big: true };
     case SyntaxKind.BooleanKeyword:
       return { kind: "bool" };
     case SyntaxKind.StringKeyword:

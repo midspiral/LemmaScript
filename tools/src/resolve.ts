@@ -7,6 +7,7 @@
 
 import type { RawExpr, RawStmt, RawFunction, RawModule } from "./rawir.js";
 import type { Ty, TExpr, TStmt, TFunction, TModule, TParam, CallKind } from "./typedir.js";
+import { isBigInt } from "./typedir.js";
 import { parseTsType } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
@@ -550,6 +551,14 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
   if (fn.obj.kind === "var" && fn.obj.name === "Array" && fn.field === "isArray") {
     return { kind: "bool" };
   }
+  // Math.* numeric builtins: abs/min/max preserve the operand's numeric type
+  // (real if any operand is real); floor/ceil/round/trunc return an integer.
+  if (fn.obj.kind === "var" && fn.obj.name === "Math") {
+    if (fn.field === "abs" && args.length === 1) return args[0].ty;
+    if ((fn.field === "min" || fn.field === "max") && args.length >= 1)
+      return args.some(a => a.ty.kind === "real") ? { kind: "real" } : args[0].ty;
+    if (["floor", "ceil", "round", "trunc"].includes(fn.field)) return { kind: "int" };
+  }
   const objTy = fn.obj.ty;
   if (objTy.kind === "map") {
     if (fn.field === "get") return ctx.inSpec ? objTy.value : { kind: "optional", inner: objTy.value };
@@ -625,6 +634,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "num":
       if (!Number.isInteger(e.value)) return { kind: "num", value: e.value, ty: { kind: "real" } };
+      if (e.big) return { kind: "num", value: e.value, ty: { kind: "int", big: true } };
       return { kind: "num", value: e.value, ty: e.value >= 0 ? { kind: "nat" } : { kind: "int" } };
 
     case "str":
@@ -672,10 +682,11 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       }
       else if (e.op === "||") ty = right.ty;
       else if (e.op === "/") {
-        // JS `/` is always real (floating-point) division: 3 / 2 === 1.5, never
-        // 1. An integer quotient requires an explicit Math.floor (which lowers
-        // to the integer-arithmetic helper JSFloorDiv), never bare `/`.
-        ty = { kind: "real" };
+        // `number / number` is real (floating-point) division: 3 / 2 === 1.5,
+        // never 1 — an integer quotient requires an explicit Math.floor (which
+        // lowers to JSFloorDiv). But `bigint / bigint` is genuinely integer
+        // division in JS (3n / 2n === 1n), so keep it integer.
+        ty = (isBigInt(left.ty) || isBigInt(right.ty)) ? { kind: "int", big: true } : { kind: "real" };
       }
       else if (["+", "-", "*", "%"].includes(e.op)) {
         ty = (left.ty.kind === "real" || right.ty.kind === "real") ? { kind: "real" } : left.ty;
@@ -1100,6 +1111,11 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         ty = declTy.kind === "optional" && init.ty.kind !== "optional"
           ? { kind: "optional", inner: init.ty }
           : init.ty;
+      } else if ((declTy.kind === "int" || declTy.kind === "nat") && init.ty.kind === "real" && !ctx.overrides.has(s.name)) {
+        // TS infers `number` (→ int/nat) for an expression LS computes as `real`
+        // (e.g. `a / b`, now real division). `number` can't tell them apart, so
+        // trust the real-valued initializer — unless the user pinned the type.
+        ty = init.ty;
       } else {
         // Map indexing: TS says T, but access can fail → use Optional<T> from init
         ty = (declTy.kind !== "optional" && init.ty.kind === "optional") ? init.ty : declTy;
