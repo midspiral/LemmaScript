@@ -12,7 +12,22 @@ function tyToLean(ty: Ty): string {
   switch (ty.kind) {
     case "nat": return "Nat";
     case "int": return "Int";
-    case "real": return "Real";  // Mathlib ℝ — exact reals (matches Dafny `real`)
+    case "real":
+      // Real arithmetic isn't supported by the Lean backend yet: ℝ is
+      // noncomputable and needs Mathlib's real-number development, so we fail
+      // fast here rather than emit Lean that can't compile.
+      //
+      // Workarounds, in order of preference:
+      //   1. If integer division was intended, write `Math.floor(a / b)` — it
+      //      lowers to flooring integer division on Lean (no real involved).
+      //   2. For `bigint` operands, `/` is already integer division — declaring
+      //      the value `bigint` instead of `number` keeps it off the real path.
+      //   3. If the file genuinely needs reals, restrict it to Dafny with a
+      //      `//@ backend dafny` directive.
+      // Full Lean real support is feasible but was set aside: it needs
+      // `import Mathlib.Data.Real.Basic`, `noncomputable def`s for real-valued
+      // functions, and the Int→ℝ coercion (see the stashed WIP for a sketch).
+      throw new Error("real arithmetic is not supported by the Lean backend (needs noncomputable ℝ / Mathlib).");
     case "bool": return "Bool";
     case "string": return "String";
     case "void": return "Unit";
@@ -219,8 +234,9 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "toReal":
-      // Int/Nat → ℝ via Mathlib's coercion.
-      return `(${emitExpr(e.expr)} : Real)`;
+      // A real value reached the Lean backend via coercion (e.g. number `/`).
+      // Same unsupported-real story as the `real` type case in tyToLean.
+      throw new Error("real arithmetic is not supported by the Lean backend (needs noncomputable ℝ / Mathlib).");
 
     case "index":
       return `${emitExpr(e.arr)}[${emitExpr(e.idx)}]!`;
