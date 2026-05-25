@@ -35,8 +35,9 @@ mkdir quorum-tutorial && cd quorum-tutorial
 Clone LemmaScript inside it:
 ```bash
 git clone https://github.com/midspiral/LemmaScript.git
-cd LemmaScript && npm install
-cd tools && npm ci && cd ..
+cd LemmaScript 
+npm install && npm run build
+
 ```
 
 Create your app directory next to it:

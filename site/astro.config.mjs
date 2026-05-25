@@ -95,6 +95,7 @@ export default defineConfig({
               items: [
                 { label: "Introduction", link: "/tutorials/quorum/00-introduction/" },
                 { label: "Step 1: Environment Setup", link: "/tutorials/quorum/01-setup/" },
+                { label: "Step 2: Define Your Requirements", link: "/tutorials/quorum/02-requirements/" },
               ],
             },
           ],
