@@ -11,7 +11,6 @@ def countOn (xs : Array Bool) : Int :=
   else
     (if xs[0]! then 1 else 0) + countOn (xs.extract 1 xs.size)
 termination_by xs.size
-decreasing_by all_goals (simp_wf; omega)
 
 def permRefl (xs : Array Bool) : Bool :=
   true

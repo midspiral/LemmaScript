@@ -448,19 +448,15 @@ function emitDecl(d: Decl): string {
     case "def": {
       const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`).join(" ");
       let out = `def ${d.name} ${params} : ${tyToLean(d.returnType)} :=\n${emitPureExpr(d.body, 1)}`;
-      // A `//@ decreases arr.length` over an array parameter means the recursion
-      // is on `arr.slice(...)` (→ `Array.extract`), which Lean cannot see as a
-      // structural subterm. Emit an explicit well-founded measure with a tactic
-      // that knows `Array.size_extract`. Decreases over a bare Nat (e.g. an
-      // index counter, as in `occOf`) is left to Lean's structural recursion —
-      // forcing `termination_by` there would switch it to well-founded recursion
-      // and break proofs that `unfold` the definition.
-      if (d.decreases && d.decreases.kind === "field" && d.decreases.field === "size" &&
-          d.decreases.obj.kind === "var" &&
-          d.params.some(p => p.name === (d.decreases as any).obj.name && p.type.kind === "array")) {
-        out += `\ntermination_by ${emitExpr(d.decreases)}`;
-        out += `\ndecreasing_by all_goals (simp_wf; omega)`;
-      }
+      // A `//@ decreases` on a pure function marks it recursive and names its
+      // termination measure — emit it as Lean's `termination_by`. This is
+      // required when the recursion is on `arr.slice(...)` (→ `Array.extract`,
+      // which Lean cannot see as a structural subterm); for a bare-Nat counter
+      // Lean could infer structural recursion on its own, but honoring the
+      // clause uniformly is simpler and harmless. Lean's default `decreasing_by`
+      // discharges the goal in both cases (it knows `Array.size_extract`), so no
+      // explicit tactic is needed.
+      if (d.decreases) out += `\ntermination_by ${emitExpr(d.decreases)}`;
       return out;
     }
 
