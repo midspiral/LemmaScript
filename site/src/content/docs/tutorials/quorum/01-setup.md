@@ -16,7 +16,7 @@ description: "Install Node.js, Dafny, and LemmaScript. Verify the toolchain work
 brew install dafny
 ```
 
-**Linux / WSL:**
+**Linux / Windows:**
 Download from [github.com/dafny-lang/dafny/releases](https://github.com/dafny-lang/dafny/releases), extract, and add to your PATH.
 
 Confirm:

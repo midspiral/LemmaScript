@@ -57,7 +57,7 @@ Dafny errors point to a specific line in `domain.dfy` and a specific clause that
 ### Postcondition might not hold
 
 ```
-domain.dfy(42,0): Error: a]postcondition might not hold on this return path
+domain.dfy(42,0): Error: a postcondition might not hold on this return path
 ```
 
 The prover can't confirm that an `//@ ensures` clause is satisfied. Causes:
@@ -65,8 +65,8 @@ The prover can't confirm that an `//@ ensures` clause is satisfied. Causes:
 - The annotation is right but the prover needs help (an intermediate assertion or a helper lemma)
 - The function's logic has a subtle bug
 
-[TODO: address the different points made with what to dos]
-**What to do:** Check the annotation against DESIGN.md. If it's correct, the agent may need to add `//@ assert` hints in the TypeScript or proof lemmas in `domain.dfy`.
+**What to do:** The agent should complete the proof in Dafny properly; push it until it does. It could add proof hints directly in the TypeScript (like `//@ invariant` or `//@ assert`).
+
 
 ### Loop invariant might not hold on entry / might not be maintained
 

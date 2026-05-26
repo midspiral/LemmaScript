@@ -5,7 +5,7 @@ description: "Understand the DESIGN.md that drives the verified core."
 
 ## Why a design document?
 
-Before writing any code, a LemmaScript project needs a DESIGN.md. This document captures:
+Before writing any code, a LemmaScript project should have a DESIGN.md. This document captures:
 
 - What the app does
 - What is verified and what is not
@@ -35,7 +35,7 @@ For this tutorial, we've written the DESIGN.md for you. It describes a when2meet
 
 **Note: When building on your own, you can use our design-doc skill. [TODO: link to skill]**
 
-[TODO @nada: are these really the only guarantees it makes?]
+[TODO @fernanda: are these really the only guarantees it makes?]
 1. The heatmap counts are exact
 2. The best-time recommendation flags the actual argmax slots
 3. More availability only helps (monotonicity)
