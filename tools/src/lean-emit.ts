@@ -12,7 +12,22 @@ function tyToLean(ty: Ty): string {
   switch (ty.kind) {
     case "nat": return "Nat";
     case "int": return "Int";
-    case "real": return "Float";  // Lean doesn't have exact reals; Float is approximate
+    case "real":
+      // Real arithmetic isn't supported by the Lean backend yet: ℝ is
+      // noncomputable and needs Mathlib's real-number development, so we fail
+      // fast here rather than emit Lean that can't compile.
+      //
+      // Workarounds, in order of preference:
+      //   1. If integer division was intended, write `Math.floor(a / b)` — it
+      //      lowers to flooring integer division on Lean (no real involved).
+      //   2. For `bigint` operands, `/` is already integer division — declaring
+      //      the value `bigint` instead of `number` keeps it off the real path.
+      //   3. If the file genuinely needs reals, restrict it to Dafny with a
+      //      `//@ backend dafny` directive.
+      // Full Lean real support is feasible but was set aside: it needs
+      // `import Mathlib.Data.Real.Basic`, `noncomputable def`s for real-valued
+      // functions, and the Int→ℝ coercion (see the stashed WIP for a sketch).
+      throw new Error("real arithmetic is not supported by the Lean backend (needs noncomputable ℝ / Mathlib).");
     case "bool": return "Bool";
     case "string": return "String";
     case "void": return "Unit";
@@ -94,6 +109,13 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
     if (method === "with")     return `${obj}.set! ${args[0]} ${args[1]}`;
     if (method === "push")     return `Array.push ${obj} ${args[0]}`;
     if (method === "concat")   return `Array.push ${obj} ${args[0]}`;
+    // arr.slice → Array.extract. No-arg slice is a full copy (Array is a value
+    // type in Lean, so the receiver itself); one arg drops the prefix, two args
+    // give the half-open range. Matches JS for non-negative bounds (negative
+    // indices are unsupported — same caveat as the Dafny backend's direct slice).
+    if (method === "slice" && args.length === 0) return obj;
+    if (method === "slice" && args.length === 1) return `${obj}.extract ${args[0]} ${obj}.size`;
+    if (method === "slice" && args.length === 2) return `${obj}.extract ${args[0]} ${args[1]}`;
   }
   // String methods
   if (tyKind === "string") {
@@ -119,12 +141,17 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
 
 // ── Expression emission ─────────────────────────────────────
 
-// Lean's `∀`/`∃` body extends as far as possible. So `(∃ x, P) <op> Q`
-// (or `∃ x, P → Q`) would parse with the operator absorbed into the body.
-// Wrap a quantifier in parens to terminate its body before the operator.
-function wrapQuantifier(sub: Expr, parentPrec?: number): string {
+// Some Lean term forms extend their body as far as possible: `∀`/`∃` bodies,
+// and `if`/`let` tails. As an operator operand they would swallow the operator
+// — `(if c then 1 else 0) + r` written bare parses as `if c then 1 else (0 + r)`.
+// Wrap these forms in parens so the operand is closed before the operator.
+// (`match` self-parenthesizes in `emitExpr`, and other forms close via
+// precedence, so neither needs wrapping here.)
+function wrapOperand(sub: Expr, parentPrec?: number): string {
   const inner = emitExpr(sub, parentPrec);
-  return (sub.kind === "forall" || sub.kind === "exists") ? `(${inner})` : inner;
+  return (sub.kind === "forall" || sub.kind === "exists" ||
+          sub.kind === "if" || sub.kind === "let")
+    ? `(${inner})` : inner;
 }
 
 function emitExpr(e: Expr, parentPrec?: number): string {
@@ -186,12 +213,12 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         return `${wrap ? `(${recv})` : recv}.contains ${emitExpr(e.left)}`;
       }
       const op = e.op === "arrayConcat" ? "++" : e.op;
-      const s = `${wrapQuantifier(e.left, prec(e.op))} ${op} ${emitExpr(e.right, prec(e.op))}`;
+      const s = `${wrapOperand(e.left, prec(e.op))} ${op} ${wrapOperand(e.right, prec(e.op))}`;
       return (parentPrec !== undefined && prec(e.op) < parentPrec) ? `(${s})` : s;
     }
 
     case "implies": {
-      const parts = [...e.premises.map(p => wrapQuantifier(p)), emitExpr(e.conclusion)];
+      const parts = [...e.premises.map(p => wrapOperand(p)), emitExpr(e.conclusion)];
       const s = parts.join(" → ");
       return parentPrec !== undefined ? `(${s})` : s;
     }
@@ -202,6 +229,11 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       );
       // SetToSeq → .toArray for Lean (HashSet has native toArray)
       if (e.fn === "SetToSeq" && args.length === 1) return `${args[0]}.toArray`;
+      // perm(a, b) → `List.Perm` on the underlying lists. Dafny lowers it to
+      // `multiset(a) == multiset(b)`; the Lean image is `a.toList ~ b.toList`,
+      // which mathlib's `List.Perm` provides (reflexivity, symmetry,
+      // `perm_append_comm`, and `Perm.count_eq` for the count-invariance payoff).
+      if (e.fn === "Perm" && args.length === 2) return `(${args[0]}.toList).Perm (${args[1]}.toList)`;
       return `${e.fn} ${args.join(" ")}`;
     }
 
@@ -217,6 +249,11 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       const wrap = e.expr.kind !== "var" && e.expr.kind !== "num";
       return wrap ? `(${inner}).toNat` : `${inner}.toNat`;
     }
+
+    case "toReal":
+      // A real value reached the Lean backend via coercion (e.g. number `/`).
+      // Same unsupported-real story as the `real` type case in tyToLean.
+      throw new Error("real arithmetic is not supported by the Lean backend (needs noncomputable ℝ / Mathlib).");
 
     case "index":
       return `${emitExpr(e.arr)}[${emitExpr(e.idx)}]!`;
@@ -411,7 +448,17 @@ function emitDecl(d: Decl): string {
 
     case "def": {
       const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`).join(" ");
-      return `def ${d.name} ${params} : ${tyToLean(d.returnType)} :=\n${emitPureExpr(d.body, 1)}`;
+      let out = `def ${d.name} ${params} : ${tyToLean(d.returnType)} :=\n${emitPureExpr(d.body, 1)}`;
+      // A `//@ decreases` on a pure function marks it recursive and names its
+      // termination measure — emit it as Lean's `termination_by`. This is
+      // required when the recursion is on `arr.slice(...)` (→ `Array.extract`,
+      // which Lean cannot see as a structural subterm); for a bare-Nat counter
+      // Lean could infer structural recursion on its own, but honoring the
+      // clause uniformly is simpler and harmless. Lean's default `decreasing_by`
+      // discharges the goal in both cases (it knows `Array.size_extract`), so no
+      // explicit tactic is needed.
+      if (d.decreases) out += `\ntermination_by ${emitExpr(d.decreases)}`;
+      return out;
     }
 
     case "def-by-method":

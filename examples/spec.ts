@@ -89,9 +89,10 @@ function makeHighItem(v: number): PriorityItem {
   return { level: "high", value: v };
 }
 
-// §4.2: Math.floor (identity in Int division)
+// §4.2: Math.floor — integer (floor) division. Bare `/` is real division, so
+// the postcondition must floor too: `(lo + hi) / 2` alone would be the real 1.5.
 function midpoint(lo: number, hi: number): number {
-  //@ ensures \result === (lo + hi) / 2
+  //@ ensures \result === Math.floor((lo + hi) / 2)
   return Math.floor((lo + hi) / 2);
 }
 

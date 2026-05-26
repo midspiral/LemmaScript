@@ -35,7 +35,13 @@ If a generated file is wrong, the fix is in `foo.ts` (or in the emitter under `t
 - `foo.spec.lean` (Lean) — ghost definitions and helper lemmas
 - `foo.proof.lean` (Lean) — `prove_correct` plus tactics
 
-For Dafny, the diff between `foo.dfy.gen` and `foo.dfy` must be **additions-only**. You may insert helper lemmas, ghost predicates, asserts, and loop invariants, but you may not modify or delete generated lines. `lsc check` enforces this.
+For Dafny, the diff between `foo.dfy.gen` and `foo.dfy` must be **additions-only**. You may insert helper lemmas, ghost predicates, asserts, and loop invariants, but you may not modify or delete generated lines. `lsc check` enforces this. (A subtle trap: don't append a trailing comment to a generated line like `{` or `decreases fuel` — that counts as a *modified* generated line. Put your comment on its own new line.)
+
+### Function-level `ensures` for caller composition
+
+A TS `//@ ensures` always emits a separate `<fn>_ensures` **lemma**; the generated Dafny **function** carries only `requires`/`decreases`. Since a Dafny *function* can't invoke a lemma, a *function* caller can't see a callee's postcondition — e.g. `g()` calling `h(f(x))` where `h` requires `arg >= 0` and `f`'s `>= 0` lives only in `f_ensures` will not verify.
+
+Fix: **hand-add the `ensures` to the generated Dafny function** as an addition. Dafny discharges it inline against the body — even recursively (the function's own postcondition serves as the IH, e.g. `ensures scan(...) >= startDay` on a recursive scan). Callers then compose it with no lemma call. Keep it additions-only: put the `ensures` (and any comment) on their own new lines, above the `{`.
 
 ## Regen, don't rm
 
@@ -82,6 +88,20 @@ dafny verify --filter-symbol=lemma_name foo.dfy
 ```
 
 For a final whole-file pass, run once and inspect with `tail -50` rather than narrowing with `grep` — the verifier's summary line lives at the end, and a partial grep can hide errors that don't match your filter pattern. Add `--isolate-assertions` when one lemma has many conjuncts and you want a clean breakdown of which conjunct is failing; add `--verification-time-limit=<sec>` when the default 30s isn't enough.
+
+### Nonlinear arithmetic: reach for the standard library, don't hand-roll
+
+Goals involving multiplication/division of variables — `(m*p)/p == m`, `(m*p)%p == 0`, `x <= y ==> x*p <= y*p` — are **nondeterministic in Z3**: they verify on one run and time out the next, even as isolated lemma goals. Hand-rolled inductive helpers don't rescue you, because the inductive *step* needs an equally-flaky div/mod-add fact (`(q+p)%p == q%p`).
+
+The robust fix is Dafny's standard arithmetic library, whose `Mul`/`DivMod` lemmas are proven once, robustly:
+
+```dafny
+import opened Std.Arithmetic.Mul       // LemmaMulInequality(x,y,z): x<=y && z>=0 ==> x*z<=y*z
+import opened Std.Arithmetic.DivMod     // LemmaMulStrictInequality(x,y,z): x<y && z>0 ==> x*z<y*z
+                                        // LemmaModMultiplesBasic(m,p): m>=0 && p>0 ==> (m*p)%p == 0
+```
+
+`lsc`'s `dafnyVerify` (`tools/dist/dafny-commands.js`) **auto-adds `--standard-libraries` whenever the `.dfy` text contains the substring `Std.`** — so an `import opened` is all you need; no CLI flag or config change, and `lsc check` picks it up. The imports go in as an *inserted* block (additions-only — don't touch the generated header). Euclidean identities (`x == x/p*p + x%p`, `0 <= x%p < p`) and small distributivity (`(k+1)*p == k*p + p`) *are* reliable inline; reserve the library for the cancellation and monotonicity goals.
 
 ## Lean verification workflow
 

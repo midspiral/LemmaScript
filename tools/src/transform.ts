@@ -31,6 +31,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "app": return { ...e, args: e.args.map(r) };
     case "field": return { ...e, obj: r(e.obj) };
     case "toNat": return { ...e, expr: r(e.expr) };
+    case "toReal": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
@@ -164,6 +165,7 @@ function buildMatchPattern(variantName: string, fields: { name: string }[], scop
 
 const _forofCounters = new Map<string, number>();
 function isNat(ty: Ty): boolean { return ty.kind === "nat"; }
+function isIntegral(ty: Ty): boolean { return ty.kind === "int" || ty.kind === "nat"; }
 function isArray(ty: Ty): boolean { return ty.kind === "array"; }
 function isUser(ty: Ty): boolean { return ty.kind === "user"; }
 
@@ -195,6 +197,9 @@ const OP_MAP: Record<string, string> = {
 const BOOL_OP_MAP: Record<string, string> = {
   ...OP_MAP, "===": "==", "!==": "!=",
 };
+
+/** Arithmetic + comparison ops eligible for int→real operand coercion. */
+const NUMERIC_OPS = new Set(["+", "-", "*", "/", "===", "!==", ">=", "<=", ">", "<"]);
 
 function transformExpr(e: TExpr): Expr { return lowerExpr(e, null); }
 
@@ -444,6 +449,20 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             right: { kind: "app", fn: "NatToString", args: [lowerExpr(e.right, binds)] } };
         }
       }
+      // Numeric int→real coercion. After resolve, `/` is always real, and any
+      // arithmetic/comparison mixing real and integral operands is real-valued.
+      // Lift each integral operand to `real` so the backend sees homogeneous
+      // real operations (Dafny `as real`, Lean Int→Float).
+      if (NUMERIC_OPS.has(e.op)) {
+        const realCtx = e.ty.kind === "real" || e.left.ty.kind === "real" || e.right.ty.kind === "real";
+        if (realCtx) {
+          const lift = (operand: TExpr): Expr => {
+            const lowered = lowerExpr(operand, binds);
+            return isIntegral(operand.ty) ? { kind: "toReal", expr: lowered } : lowered;
+          };
+          return { kind: "binop", op: OP_MAP[e.op] ?? e.op, left: lift(e.left), right: lift(e.right) };
+        }
+      }
       return {
         kind: "binop",
         op: OP_MAP[e.op] ?? e.op,
@@ -522,13 +541,23 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           return { kind: "app", fn: "CeilReal", args: [lowerExpr(arg, binds)] };
         return lowerExpr(arg, binds);
       }
-      // Math.floor(x): FloorReal on real args, JSFloorDiv for int division, identity on int
+      // Math.floor(x):
+      //   - a / b on integral operands → integer floor division, kept in
+      //     integer arithmetic (JSFloorDiv on Dafny; native Int/Nat `/` floors
+      //     on Lean). Checked first: after resolve, `a / b` is typed `real`, so
+      //     the real branch below would otherwise drag it into real arithmetic.
+      //   - real arg → FloorReal (Dafny's .Floor)
+      //   - int arg → identity
       if (e.fn.kind === "field" && e.fn.field === "floor" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1) {
         const arg = e.args[0];
+        if (arg.kind === "binop" && arg.op === "/" && isIntegral(arg.left.ty) && isIntegral(arg.right.ty)) {
+          const l = lowerExpr(arg.left, binds), r = lowerExpr(arg.right, binds);
+          return _opts.backend === "dafny"
+            ? { kind: "app", fn: "JSFloorDiv", args: [l, r] }
+            : { kind: "binop", op: "/", left: l, right: r };
+        }
         if (arg.ty.kind === "real")
           return { kind: "app", fn: "FloorReal", args: [lowerExpr(arg, binds)] };
-        if (_opts.backend === "dafny" && arg.kind === "binop" && arg.op === "/")
-          return { kind: "app", fn: "JSFloorDiv", args: [lowerExpr(arg.left, binds), lowerExpr(arg.right, binds)] };
         return lowerExpr(arg, binds);
       }
       // Method call: receiver.method(args) → methodCall node

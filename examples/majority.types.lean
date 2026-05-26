@@ -9,6 +9,7 @@ def occOf (arr : Array Int) (x : Int) (n : Nat) : Int :=
   if n = 0 then
     0
   else
-    occOf arr x (n - 1) + if arr[n - 1]! = x then 1 else 0
+    occOf arr x (n - 1) + (if arr[n - 1]! = x then 1 else 0)
+termination_by n
 
 end Pure

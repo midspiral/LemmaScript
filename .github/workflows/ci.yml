@@ -118,6 +118,8 @@ jobs:
             branch: main
           - repo: midspiral/quorum-lemmascript
             branch: main
+          - repo: midspiral/henri-lemmascript
+            branch: main
     steps:
       - uses: actions/checkout@v6
 

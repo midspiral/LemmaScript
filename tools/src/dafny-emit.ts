@@ -320,16 +320,9 @@ function emitExpr(e: Expr): string {
         needPreamble("BitAnd");
         return `BitAnd(${emitExpr(e.left)}, ${emitExpr(e.right)})`;
       }
-      // int * real coercion: wrap int side with "as real"
-      if (["+", "-", "*", "/"].includes(op)) {
-        const leftIsReal = e.left.kind === "num" && !Number.isInteger(e.left.value);
-        const rightIsReal = e.right.kind === "num" && !Number.isInteger(e.right.value);
-        if (leftIsReal !== rightIsReal) {
-          const left = leftIsReal ? emitExpr(e.left) : `(${emitExpr(e.left)} as real)`;
-          const right = rightIsReal ? emitExpr(e.right) : `(${emitExpr(e.right)} as real)`;
-          return `(${left} ${op} ${right})`;
-        }
-      }
+      // int→real coercion is now injected upstream in transform (toReal nodes),
+      // which has full type information — including real-typed variables, not
+      // just literals — so no literal-based coercion is needed here.
       return `(${wrapQuantifier(e.left)} ${op} ${emitExpr(e.right)})`;
     }
 
@@ -353,6 +346,7 @@ function emitExpr(e: Expr): string {
       if (e.fn === "MathMax") needPreamble("MathMax");
       if (e.fn === "MaxOfSeq") { needPreamble("MathMax"); needPreamble("MaxOfSeq"); }
       if (e.fn === "MinOfSeq") { needPreamble("MathMin"); needPreamble("MinOfSeq"); }
+      if (e.fn === "Perm") needPreamble("Perm");
       return `${escapeName(e.fn)}(${args.join(", ")})`;
     }
 
@@ -367,6 +361,9 @@ function emitExpr(e: Expr): string {
     case "toNat":
       // Dafny doesn't need toNat — just emit the inner expression
       return emitExpr(e.expr);
+
+    case "toReal":
+      return `(${emitExpr(e.expr)} as real)`;
 
     case "index": {
       const obj = emitExpr(e.arr);
@@ -964,6 +961,11 @@ const NAT_TO_STRING = `function NatToString(n: nat): string
 
 const MATH_ABS = `function MathAbs(x: int): nat { if x >= 0 then x else -x }`;
 
+// perm(a, b) — `a` and `b` are reorderings of each other (equal as multisets).
+// Transparent (Dafny unfolds it), so hand-proofs can reason with `multiset`
+// directly. The `(==)` bound requires the element type to support equality.
+const PERM = `predicate Perm<T(==)>(a: seq<T>, b: seq<T>) { multiset(a) == multiset(b) }`;
+
 const SET_TO_SEQ = `method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
   ensures forall x :: x in s <==> x in res
   ensures |res| == |s|
@@ -1011,6 +1013,7 @@ const PREAMBLE_CODE: [string, string][] = [
   ["MathMax", MATH_MAX],
   ["MaxOfSeq", MAX_OF_SEQ],
   ["MinOfSeq", MIN_OF_SEQ],
+  ["Perm", PERM],
 ];
 
 // ── Constructor and record helpers ───────────────────────────
