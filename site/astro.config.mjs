@@ -28,9 +28,13 @@ function rehypeRepoLinks() {
       const path = rawPath.replace(/^\.\//, "")
       const abs = join(REPO_ROOT, path)
       if (!existsSync(abs)) {
-        const msg = `[rehypeRepoLinks] link target not found in repo: ${href}`
-        if (process.env.CI) throw new Error(msg) // fail the build in CI; warn locally
-        console.warn(msg)
+        // Missing targets are the build-failing concern, but a throw here is
+        // useless: it runs inside content rendering, where Starlight's loader
+        // catches it per-page, drops the page, and lets the build limp on to a
+        // misleading link-validator cascade (e.g. "/spec/ invalid"). The real
+        // gate lives in sync-docs.mjs (prebuild), which fails before Astro
+        // starts. This is just a backstop warning.
+        console.warn(`[rehypeRepoLinks] link target not found in repo: ${href}`)
       }
       const kind = existsSync(abs) && statSync(abs).isDirectory() ? "tree" : "blob"
       node.properties.href = `${GH}/${kind}/${BRANCH}/${path}${anchor ? "#" + anchor : ""}`

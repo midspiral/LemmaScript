@@ -4,7 +4,7 @@
 // rewriting cross-doc links to site routes. The root .md files stay the single
 // source of truth, exactly where they are.
 
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs"
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -68,15 +68,43 @@ function rewriteLinks(md) {
 
 const esc = (s) => s.replace(/"/g, '\\"')
 
+// After cross-doc links are rewritten to /routes/, the only remaining relative
+// `](target)` links point into the repo (e.g. examples/foo.ts, lakefile.lean).
+// If such a target doesn't exist (e.g. a doc references a file that was never
+// committed), the failure otherwise surfaces only as a baffling downstream
+// "invalid link" cascade from the link validator: the render-time check in
+// astro.config's rehypeRepoLinks throws, but Starlight's content loader catches
+// that per-page, drops the page, and lets the build continue — so the page that
+// *links to* the dropped page is what gets flagged. We catch it here instead,
+// in the prebuild, where a throw aborts cleanly and names the offending doc.
+const REPO_LINK = /\]\((?!https?:|mailto:|tel:|#|\/)([^)\s]+)\)/g
+function missingRepoLinks(src, md) {
+  const missing = []
+  for (const [, raw] of md.matchAll(REPO_LINK)) {
+    const target = raw.split("#")[0].replace(/^\.\//, "")
+    if (target && !existsSync(join(ROOT, target))) missing.push(`${src} → ${target}`)
+  }
+  return missing
+}
+
 rmSync(OUT, { recursive: true, force: true })
 mkdirSync(OUT, { recursive: true })
 
+const broken = []
 for (const { src, out } of DOCS) {
   const raw = readFileSync(join(ROOT, src), "utf8")
   const { title, body } = titleAndBody(raw)
+  const rewritten = rewriteLinks(body)
+  broken.push(...missingRepoLinks(src, rewritten))
   const target = join(OUT, out)
   mkdirSync(dirname(target), { recursive: true })
-  writeFileSync(target, `---\ntitle: "${esc(title)}"\n---\n\n${rewriteLinks(body)}`)
+  writeFileSync(target, `---\ntitle: "${esc(title)}"\n---\n\n${rewritten}`)
+}
+
+if (broken.length) {
+  const msg = `[sync-docs] ${broken.length} broken repo-relative doc link(s) — target file not found:\n  ${broken.join("\n  ")}`
+  if (process.env.CI) throw new Error(`${msg}\nCommit the missing file or fix the link.`)
+  console.warn(`${msg}\n(warning only; this would fail the build in CI)`)
 }
 
 console.log(`synced ${DOCS.length} docs → site/src/content/docs/`)
