@@ -118,7 +118,7 @@ jobs:
             branch: main
           - repo: midspiral/quorum-lemmascript
             branch: main
-          - repo: metareflection/henri-lemmascript
+          - repo: midspiral/henri-lemmascript
             branch: main
     steps:
       - uses: actions/checkout@v6
