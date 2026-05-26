@@ -65,6 +65,7 @@ cmpOp    := ... | 'in'                        // set/seq/map membership
 atom     := NUMBER | HEX_NUMBER | IDENT | 'true' | 'false' | '\result'
           | 'forall' '(' IDENT (':' TYPE)? ',' expr ')'
           | 'exists' '(' IDENT (':' TYPE)? ',' expr ')'
+          | 'perm' '(' expr ',' expr ')'        // permutation predicate (spec-only; Dafny backend)
           | '(' expr ')'
           | '[' (expr ',')* expr? ']'
           | '{' (IDENT ':' expr ',')* IDENT ':' expr '}'
@@ -74,6 +75,8 @@ TYPE     := IDENT                             // 'nat', 'int', 'string', user ty
 **`\result`** refers to the function's return value (following Frama-C/ACSL convention). It is only valid in `ensures` annotations. The `\` prefix distinguishes it from any TS variable named `result`.
 
 **`forall(k, P)`** infers the type of `k`: explicit `: nat` → `Nat`/`nat`; if `k` is used as a collection key or element (e.g., `map.has(k)`, `set.has(k)`, `arr.includes(k)`) → the collection's key/element type; otherwise `Int`/`int`. Same for `exists`.
+
+**`perm(a, b)`** is a spec-only predicate that holds iff arrays `a` and `b` are reorderings of each other (equal as multisets). Both arguments must be arrays of the same element type. It has no runtime counterpart, so it is rejected outside `//@` annotations. It lowers to Dafny's `multiset(a) == multiset(b)` (a transparent `Perm<T(==)>` predicate, so hand-proofs in the companion `.dfy` can reason with `multiset` directly); the element type must support equality. **Dafny backend only** — restrict files that use it with `//@ backend dafny`. The canonical use is lifting a count's concatenation-homomorphism to full permutation invariance: given `perm(xs, ys)`, an order-insensitive aggregate over `xs` equals the one over `ys`. See [`examples/perm.ts`](examples/perm.ts).
 
 ### 2.3 Ghost Variables and Assertions
 
@@ -413,6 +416,7 @@ The same coercion applies to non-bool conditions in `if`/`while`/`?:` positions:
 | `s.endsWith(p)` | — | `\|s\| >= \|p\| && s[\|s\|-\|p\|..] == p` |
 | `s.length` | `s.length` | `\|s\|` |
 | `Math.max(...s)` / `Math.min(...s)` | — | `MaxOfSeq(s)` / `MinOfSeq(s)` (requires `\|s\| > 0`) |
+| `perm(a, b)` (spec-only) | — | `Perm(a, b)` (preamble: `predicate Perm<T(==)>(a, b) { multiset(a) == multiset(b) }`) |
 | `arr.map((x) => e)` | `arr.map (fun x => e)` | `Seq.Map((x) => e, arr)` |
 | `arr.filter((x) => e)` | `arr.filter (fun x => e)` | `Seq.Filter((x) => e, arr)` |
 | `arr.every((x) => e)` | `arr.all (fun x => e)` | `Seq.All(arr, (x) => e)` |

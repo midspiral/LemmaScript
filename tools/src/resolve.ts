@@ -701,6 +701,19 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "call": {
+      // perm(a, b): spec-only permutation predicate — true iff `a` and `b` are
+      // reorderings of each other (equal as multisets). Lowers to the `Perm`
+      // preamble (Dafny `multiset(a) == multiset(b)`; Lean `a.toList ~ b.toList`).
+      // It has no runtime counterpart, so it is rejected outside `//@` specs.
+      if (e.fn.kind === "var" && e.fn.name === "perm" && e.args.length === 2) {
+        if (!ctx.inSpec) throw new Error("perm(a, b) may only be used in //@ specifications");
+        const a = resolveExpr(e.args[0], ctx);
+        const b = resolveExpr(e.args[1], ctx);
+        if (a.ty.kind !== "array" || b.ty.kind !== "array")
+          throw new Error(`perm(a, b) requires two array arguments (got ${a.ty.kind} and ${b.ty.kind})`);
+        const fn: TExpr = { kind: "var", name: "Perm", ty: { kind: "unknown" } };
+        return { kind: "call", fn, args: [a, b], ty: { kind: "bool" }, callKind: "pure" };
+      }
       // Extern dispatch: `NS.method(args)` where NS.method is declared via
       // `//@ extern`. Rewrite into a flat-name call (`NS_method(args)`) so the
       // rest of the pipeline sees an ordinary pure function. The extern's
