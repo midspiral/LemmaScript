@@ -75,9 +75,9 @@ domain.dfy(58,0): Error: loop invariant might not hold on entry
 domain.dfy(58,0): Error: loop invariant might not be maintained by the loop
 ```
 
-If you're using loops (the greenfield pattern recommends pure recursive functions instead): the invariant doesn't hold when the loop starts, or an iteration breaks it.
+The loop invariant doesn't hold when the loop starts, or an iteration breaks it.
 
-**What to do:** This is why the design conventions recommend recursion over loops. If the agent wrote loops, ask it to refactor to recursive functions with `//@ decreases`.
+**What to do:** The agent can add the loop invariant in TypeScript (via `//@ invariant`) or in Dafny. If the agent wrote loops, you could ask it to refactor to recursive functions with `//@ decreases`.
 
 ### Assertion might not hold
 
@@ -87,7 +87,7 @@ domain.dfy(73,0): Error: assertion might not hold
 
 An `//@ assert` that the prover can't discharge.
 
-**What to do:** The assertion may need to be broken into smaller steps, or a helper lemma may be needed in `domain.dfy`.
+**What to do:** The assertion may need to be broken into smaller steps, or a helper lemma may be needed in `domain.dfy`. The assertion might even not be needed at all for the end goal.
 
 ### Decreases expression might not decrease
 
@@ -152,7 +152,7 @@ npx tsx ../LemmaScript/tools/src/lsc.ts regen --backend=dafny src/domain.ts
 
 Z3 (Dafny's solver) is nondeterministic with multiplication. A proof involving `a * b` may pass locally and fail in CI.
 
-**Fix:** Prove multiplication facts with small inductive helper lemmas instead of relying on Z3 to figure them out.
+**Fix:** Prove multiplication facts with small inductive helper lemmas or with the standard Dafny library instead of relying on Z3 to figure them out.
 
 ### Stale .dfy.base
 
@@ -168,7 +168,7 @@ Then re-run regen.
 
 LemmaScript emits `ensures` as separate lemmas, not Dafny postconditions. A function can't rely on a callee's `ensures` inside its own body.
 
-**Fix:** Keep the counting kernel total (no preconditions) so it composes freely. Discharge callee preconditions structurally.
+**Fix:** Keep the counting kernel total so it composes freely. Discharge callee preconditions structurally. For `ensures` clauses which must be proved by separate lemmas in LemmaScript, you could also try to add them to the functions; they might be simple enough that it works this way with the boosted structure for recursive calls.
 
 [TODO: add more gotchas as we encounter them during the actual build]
 
