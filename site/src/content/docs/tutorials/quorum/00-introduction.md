@@ -18,20 +18,10 @@ You already use one form of verification every day: **types**. When TypeScript t
 
 Formal verification extends that idea to *behavior*. Instead of just "this function returns a number," you can prove "this function returns the index of the slot with the highest vote count" or "this function never allows a member to vote twice."
 
-## Why bother?
-
-For a scheduling poll, the stakes are low. But the technique scales to domains where failure is more expensive:
-
-- Financial calculations that must balance
-- Access control that must never leak
-- State machines that must never reach invalid states
-
-This tutorial uses a low-stakes app so you can focus on learning the process without worrying about the domain complexity.
-
 ## What you'll use
 
 - **LemmaScript**: a toolchain that takes your TypeScript code, reads special comments you've added, and generates a formal model that a theorem prover can check. Your TypeScript runs unchanged; the verification is a parallel process.
-- **Dafny**: the theorem prover that checks your proofs. You won't write Dafny directly (LemmaScript generates it), but you'll see its output when verification succeeds or fails.
+- **Dafny**: the theorem prover that checks your proofs. You won't write Dafny directly (LemmaScript generates it and an agent completes proof), but you'll see its output when verification succeeds or fails.
 - **An AI agent** (like Claude Code or Codex): your partner for this build. You'll describe what you want; the agent will draft code and specifications. You review, modify, and direct.
 
 ## AI use

@@ -75,7 +75,7 @@ function rehypeLinkNames() {
 // https://astro.build/config
 export default defineConfig({
   site: "https://lemmascript.com",
-  vite: { server: { watch: { usePolling: true, interval: 500 } } },
+  vite: { server: { watch: { usePolling: true, interval: 500 }, allowedHosts: ["localhost4323.metareflective.space"] } },
   markdown: { rehypePlugins: [rehypeRepoLinks, rehypeLinkNames] },
   integrations: [
     starlight({
