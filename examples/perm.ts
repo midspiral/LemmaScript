@@ -1,11 +1,10 @@
-//@ backend dafny
 /**
  * perm(a, b) — the spec-only permutation predicate.
  *
  * `perm(a, b)` holds iff `a` and `b` are reorderings of each other (equal as
  * multisets). It exists only inside `//@` annotations; it lowers to
- * `multiset(a) == multiset(b)` in Dafny, and has no runtime counterpart.
- * (Dafny backend only for now.)
+ * `multiset(a) == multiset(b)` in Dafny, and to `a.toList ~ b.toList`
+ * (mathlib's `List.Perm`) in Lean. It has no runtime counterpart.
  *
  * This example shows the two ways it earns its keep:
  *   1. The multiset laws come for free — reflexivity, symmetry, and that

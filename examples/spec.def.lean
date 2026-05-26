@@ -42,7 +42,7 @@ method clampTernary (x : Int) (lo : Int) (hi : Int) return (res : Int)
   require lo ≤ hi
   ensures res ≥ lo
   ensures res ≤ hi
-  ensures res = if x < lo then lo else if x > hi then hi else x
+  ensures res = (if x < lo then lo else if x > hi then hi else x)
   do
     return Pure.clampTernary x lo hi
 
