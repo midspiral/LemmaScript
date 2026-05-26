@@ -393,7 +393,7 @@ No normalization of operators. Both backends handle all comparison directions.
 | `s.slice(start, end)` | `JSString.slice s start end` | `s[start..end]` |
 | `s.trim()` | — | `StringTrim(s)` |
 | `s.trimEnd()` / `s.trimStart()` | — | `StringTrimRight(s)` / `StringTrimLeft(s)` |
-| `s.split(d)` (requires `\|d\| > 0`) | — | `StringSplit(s, d)` (axiomatic preamble: `1 <= \|res\| <= \|s\| + 1`) |
+| `s.split(d)` (requires `\|d\| > 0`) | — | `StringSplit(s, d)` (axiomatic preamble, postconditions transferred from the verified `Split` in `examples/split.dfy`): `1 <= \|res\| <= \|s\| + 1`; `Join(res, d) == s`; `forall p in res :: !Contains(p, d)`; `\|s\| > 0` ⇒ `AllPartsNotPostfixOrEnd(res, d)` (no piece except possibly the last ends in a `d`-postfix). Preamble also defines `Join`, `Contains`, `EndsWithSeparator`, `AllPartsNotPostfixOrEnd` for callers' own contracts. |
 | `s.toLowerCase()` | — | `StringToLower(s)` |
 | `s.toUpperCase()` | — | `StringToUpper(s)` |
 | `s.includes(sub)` | — | `StringIndexOf(s, sub) >= 0` |
