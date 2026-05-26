@@ -109,6 +109,13 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
     if (method === "with")     return `${obj}.set! ${args[0]} ${args[1]}`;
     if (method === "push")     return `Array.push ${obj} ${args[0]}`;
     if (method === "concat")   return `Array.push ${obj} ${args[0]}`;
+    // arr.slice → Array.extract. No-arg slice is a full copy (Array is a value
+    // type in Lean, so the receiver itself); one arg drops the prefix, two args
+    // give the half-open range. Matches JS for non-negative bounds (negative
+    // indices are unsupported — same caveat as the Dafny backend's direct slice).
+    if (method === "slice" && args.length === 0) return obj;
+    if (method === "slice" && args.length === 1) return `${obj}.extract ${args[0]} ${obj}.size`;
+    if (method === "slice" && args.length === 2) return `${obj}.extract ${args[0]} ${args[1]}`;
   }
   // String methods
   if (tyKind === "string") {
@@ -134,12 +141,16 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
 
 // ── Expression emission ─────────────────────────────────────
 
-// Lean's `∀`/`∃` body extends as far as possible. So `(∃ x, P) <op> Q`
-// (or `∃ x, P → Q`) would parse with the operator absorbed into the body.
-// Wrap a quantifier in parens to terminate its body before the operator.
-function wrapQuantifier(sub: Expr, parentPrec?: number): string {
+// Some Lean term forms extend their body as far as possible: `∀`/`∃` bodies,
+// and `if`/`match`/`let` tails. As an operator operand they would swallow the
+// operator — `(if c then 1 else 0) + r` written bare parses as
+// `if c then 1 else (0 + r)`. Wrap these forms in parens so the operand is
+// closed before the operator. Other forms self-parenthesize via precedence.
+function wrapOperand(sub: Expr, parentPrec?: number): string {
   const inner = emitExpr(sub, parentPrec);
-  return (sub.kind === "forall" || sub.kind === "exists") ? `(${inner})` : inner;
+  return (sub.kind === "forall" || sub.kind === "exists" ||
+          sub.kind === "if" || sub.kind === "match" || sub.kind === "let")
+    ? `(${inner})` : inner;
 }
 
 function emitExpr(e: Expr, parentPrec?: number): string {
@@ -201,12 +212,12 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         return `${wrap ? `(${recv})` : recv}.contains ${emitExpr(e.left)}`;
       }
       const op = e.op === "arrayConcat" ? "++" : e.op;
-      const s = `${wrapQuantifier(e.left, prec(e.op))} ${op} ${emitExpr(e.right, prec(e.op))}`;
+      const s = `${wrapOperand(e.left, prec(e.op))} ${op} ${wrapOperand(e.right, prec(e.op))}`;
       return (parentPrec !== undefined && prec(e.op) < parentPrec) ? `(${s})` : s;
     }
 
     case "implies": {
-      const parts = [...e.premises.map(p => wrapQuantifier(p)), emitExpr(e.conclusion)];
+      const parts = [...e.premises.map(p => wrapOperand(p)), emitExpr(e.conclusion)];
       const s = parts.join(" → ");
       return parentPrec !== undefined ? `(${s})` : s;
     }
@@ -217,6 +228,11 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       );
       // SetToSeq → .toArray for Lean (HashSet has native toArray)
       if (e.fn === "SetToSeq" && args.length === 1) return `${args[0]}.toArray`;
+      // perm(a, b) → `List.Perm` on the underlying lists. Dafny lowers it to
+      // `multiset(a) == multiset(b)`; the Lean image is `a.toList ~ b.toList`,
+      // which mathlib's `List.Perm` provides (reflexivity, symmetry,
+      // `perm_append_comm`, and `Perm.count_eq` for the count-invariance payoff).
+      if (e.fn === "Perm" && args.length === 2) return `(${args[0]}.toList).Perm (${args[1]}.toList)`;
       return `${e.fn} ${args.join(" ")}`;
     }
 
@@ -431,7 +447,21 @@ function emitDecl(d: Decl): string {
 
     case "def": {
       const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`).join(" ");
-      return `def ${d.name} ${params} : ${tyToLean(d.returnType)} :=\n${emitPureExpr(d.body, 1)}`;
+      let out = `def ${d.name} ${params} : ${tyToLean(d.returnType)} :=\n${emitPureExpr(d.body, 1)}`;
+      // A `//@ decreases arr.length` over an array parameter means the recursion
+      // is on `arr.slice(...)` (→ `Array.extract`), which Lean cannot see as a
+      // structural subterm. Emit an explicit well-founded measure with a tactic
+      // that knows `Array.size_extract`. Decreases over a bare Nat (e.g. an
+      // index counter, as in `occOf`) is left to Lean's structural recursion —
+      // forcing `termination_by` there would switch it to well-founded recursion
+      // and break proofs that `unfold` the definition.
+      if (d.decreases && d.decreases.kind === "field" && d.decreases.field === "size" &&
+          d.decreases.obj.kind === "var" &&
+          d.params.some(p => p.name === (d.decreases as any).obj.name && p.type.kind === "array")) {
+        out += `\ntermination_by ${emitExpr(d.decreases)}`;
+        out += `\ndecreasing_by all_goals (simp_wf; omega)`;
+      }
+      return out;
     }
 
     case "def-by-method":
