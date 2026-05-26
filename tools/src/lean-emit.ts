@@ -142,14 +142,15 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
 // ── Expression emission ─────────────────────────────────────
 
 // Some Lean term forms extend their body as far as possible: `∀`/`∃` bodies,
-// and `if`/`match`/`let` tails. As an operator operand they would swallow the
-// operator — `(if c then 1 else 0) + r` written bare parses as
-// `if c then 1 else (0 + r)`. Wrap these forms in parens so the operand is
-// closed before the operator. Other forms self-parenthesize via precedence.
+// and `if`/`let` tails. As an operator operand they would swallow the operator
+// — `(if c then 1 else 0) + r` written bare parses as `if c then 1 else (0 + r)`.
+// Wrap these forms in parens so the operand is closed before the operator.
+// (`match` self-parenthesizes in `emitExpr`, and other forms close via
+// precedence, so neither needs wrapping here.)
 function wrapOperand(sub: Expr, parentPrec?: number): string {
   const inner = emitExpr(sub, parentPrec);
   return (sub.kind === "forall" || sub.kind === "exists" ||
-          sub.kind === "if" || sub.kind === "match" || sub.kind === "let")
+          sub.kind === "if" || sub.kind === "let")
     ? `(${inner})` : inner;
 }
 

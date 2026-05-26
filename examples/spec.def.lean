@@ -203,37 +203,37 @@ method clampedMidpoint (a : Int) (b : Int) return (res : Int)
 
 method deepAccess (t : Tree) return (res : Int)
   ensures (match t.middle with | .some _t_middle_val => (match _t_middle_val.leaf with | .some _t_middle_leaf_val => res = _t_middle_leaf_val.value | .none => true) | .none => true)
-  ensures ((match t.middle with | .some _ => false | .none => true)) → res = 0
+  ensures (match t.middle with | .some _ => false | .none => true) → res = 0
   do
     return Pure.deepAccess t
 
 method ocField (o : Option Outer) return (res : Option Inner)
-  ensures ((match o with | .some _ => false | .none => true)) → (match res with | .some _ => false | .none => true)
+  ensures (match o with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true)
   ensures (match o with | .some _o_val => res = _o_val.inner | .none => true)
   do
     return Pure.ocField o
 
 method ocChain (o : Option Outer) return (res : Option Int)
-  ensures ((match o with | .some _ => false | .none => true)) → (match res with | .some _ => false | .none => true)
-  ensures (match o with | .some _o_val => ((match _o_val.inner with | .some _ => false | .none => true)) → (match res with | .some _ => false | .none => true) | .none => true)
+  ensures (match o with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true)
+  ensures (match o with | .some _o_val => (match _o_val.inner with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) | .none => true)
   ensures (match o with | .some _o_val => (match _o_val.inner with | .some _o_inner_val => (match res with | .some _value => _value == _o_inner_val.val | .none => false) | .none => true) | .none => true)
   do
     return Pure.ocChain o
 
 method ocMethodCall (s : Option (Std.HashSet String)) (k : String) return (res : Option Bool)
-  ensures ((match s with | .some _ => false | .none => true)) → (match res with | .some _ => false | .none => true)
+  ensures (match s with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true)
   ensures (match s with | .some _s_val => (match res with | .some _value => _value == _s_val.contains k | .none => false) | .none => true)
   do
     return Pure.ocMethodCall s k
 
 method ocIndex (m : Option (Std.HashMap String String)) (k : String) return (res : Option String)
-  ensures ((match m with | .some _ => false | .none => true)) → (match res with | .some _ => false | .none => true)
+  ensures (match m with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true)
   ensures (match m with | .some _m_val => res = _m_val.get? k | .none => true)
   do
     return Pure.ocIndex m k
 
 method nullishVar (o : Option Inner) (fallback : Int) return (res : Int)
-  ensures ((match o with | .some _ => false | .none => true)) → res = fallback
+  ensures (match o with | .some _ => false | .none => true) → res = fallback
   ensures (match o with | .some _o_val => res = _o_val.val | .none => true)
   do
     return Pure.nullishVar o fallback
@@ -298,26 +298,26 @@ method whileInvariantInMap (m : Std.HashMap String Int) (k : String) (reps : Nat
     return total
 
 method negVar (o : Option Inner) (fallback : Int) return (res : Int)
-  ensures ((match o with | .some _ => false | .none => true)) → res = fallback
+  ensures (match o with | .some _ => false | .none => true) → res = fallback
   ensures (match o with | .some _o_val => res = _o_val.val | .none => true)
   do
     return Pure.negVar o fallback
 
 method negField (o : Outer) (fallback : Int) return (res : Int)
-  ensures ((match o.inner with | .some _ => false | .none => true)) → res = fallback
+  ensures (match o.inner with | .some _ => false | .none => true) → res = fallback
   ensures (match o.inner with | .some _o_inner_val => res = _o_inner_val.val | .none => true)
   do
     return Pure.negField o fallback
 
 method truthyVar (o : Option Inner) (fallback : Int) return (res : Int)
   ensures (match o with | .some _o_val => res = _o_val.val | .none => true)
-  ensures ((match o with | .some _ => false | .none => true)) → res = fallback
+  ensures (match o with | .some _ => false | .none => true) → res = fallback
   do
     return Pure.truthyVar o fallback
 
 method nestedAndTernary (o : Option Outer) (fallback : Int) return (res : Int)
-  ensures ((match o with | .some _ => false | .none => true)) → res = fallback
-  ensures (match o with | .some _o_val => ((match _o_val.inner with | .some _ => false | .none => true)) → res = fallback | .none => true)
+  ensures (match o with | .some _ => false | .none => true) → res = fallback
+  ensures (match o with | .some _o_val => (match _o_val.inner with | .some _ => false | .none => true) → res = fallback | .none => true)
   ensures (match o with | .some _o_val => (match _o_val.inner with | .some _o_inner_val => res = _o_inner_val.val | .none => true) | .none => true)
   do
     return Pure.nestedAndTernary o fallback
@@ -335,6 +335,6 @@ method describeIfCircle (s : Shape) (fallback : Int) return (res : Int)
     return Pure.describeIfCircle s fallback
 
 method ternarySpecOpt (o : Option Inner) (fallback : Int) return (res : Int)
-  ensures res = ((match o with | .some _o_val => _o_val.val | .none => fallback))
+  ensures res = (match o with | .some _o_val => _o_val.val | .none => fallback)
   do
     return Pure.ternarySpecOpt o fallback
