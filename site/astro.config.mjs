@@ -95,7 +95,12 @@ export default defineConfig({
               items: [
                 { label: "Introduction", link: "/tutorials/quorum/00-introduction/" },
                 { label: "Step 1: Environment Setup", link: "/tutorials/quorum/01-setup/" },
-                { label: "Step 2: Define Your Requirements", link: "/tutorials/quorum/02-requirements/" },
+                { label: "Step 2: The Design Document", link: "/tutorials/quorum/02-design/" },
+                { label: "Step 3: Build the Domain Core", link: "/tutorials/quorum/03-domain-core/" },
+                { label: "Step 4: Verify the Domain", link: "/tutorials/quorum/04-verify/" },
+                { label: "Step 5: Check Your Guarantees", link: "/tutorials/quorum/05-proof-review/" },
+                { label: "Step 6: The UI Layer", link: "/tutorials/quorum/06-ui-layer/" },
+                { label: "Step 7: Adding a Verified Feature", link: "/tutorials/quorum/07-iteration/" },
               ],
             },
           ],

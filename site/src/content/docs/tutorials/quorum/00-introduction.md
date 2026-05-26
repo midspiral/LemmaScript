@@ -12,7 +12,6 @@ The core logic of your app will be **formally verified**. That means you'll have
 
 The mental model you should go into this tutorial with is this: your app has a small, proven-correct **core**. Everything else is normal software with normal bugs. The value is that an entire class of bugs — often some of the *most critical* — are eliminated entirely.
 
-
 ## What is formal verification?
 
 You already use one form of verification every day: **types**. When TypeScript tells you a function returns `string`, you trust it. You don't write a test asserting the return value isn't a number. The compiler proved it for you.
@@ -35,16 +34,9 @@ This tutorial uses a low-stakes app so you can focus on learning the process wit
 - **Dafny**: the theorem prover that checks your proofs. You won't write Dafny directly (LemmaScript generates it), but you'll see its output when verification succeeds or fails.
 - **An AI agent** (like Claude Code or Codex): your partner for this build. You'll describe what you want; the agent will draft code and specifications. You review, modify, and direct.
 
-## How this tutorial works
+## AI use
 
-Each step follows the same pattern:
-
-1. **You tell your agent what you want** in plain language
-2. **The agent drafts it**: code, specs, or configuration
-3. **You review and iterate**: add what's missing, fix what's wrong
-4. **You verify**: run the toolchain and see it pass (or fail, and fix)
-
-You don't need to memorize LemmaScript syntax or Dafny internals. Your job is knowing what your app *should* and *should not* do. The agent translates that intent into verified code.
+LemmaScript was created for use with AI. Of course, you can manually write annotations, review the model against the TypeScript... you could even write your own proofs! But the idea is that you don't have to. Throughout the tutorial, you will be provided with prompts and skills that help guide your agent through each step. We do recommend careful review of the output at first to gain a thorough understanding of how the system works.    
 
 ## What we'll build
 
@@ -57,7 +49,7 @@ By the end of this tutorial, Quorum will:
 - **Prove** that no one can vote twice on the same slot
 - **Prove** that vote counts are always consistent with actual votes cast
 
-The app will have a React frontend, verified domain logic, and a Supabase backend: a real, deployable application with a core that guarantees the underlying logic.
+The app will have a React frontend, verified domain logic, and will be login-free.
 
 ## Where bugs can still live
 

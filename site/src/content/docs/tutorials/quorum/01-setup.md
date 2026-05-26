@@ -81,6 +81,12 @@ Clean up:
 rm hello.ts hello.dfy hello.dfy.gen
 ```
 
+## What you've done
+
+- Installed Dafny (the theorem prover) and LemmaScript (the toolchain)
+- Set up a sibling directory layout: `LemmaScript/` next to `quorum/`
+- Verified the full pipeline works: annotated TypeScript → generated Dafny → proof passes
+
 ## Next step
 
-You'll define what Quorum should do: its state, actions, and rules, in plain English, before writing any code.
+You'll read through the Quorum design document: the spec that drives everything the agent builds from here.
