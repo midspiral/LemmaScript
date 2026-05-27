@@ -50,6 +50,7 @@ npm install typescript --save-dev
 Your file structure:
 ```
 quorum-tutorial/
+├── .claude/skills  ← the skills for AI (cloned)
 ├── LemmaScript/    ← the toolchain (cloned)
 └── quorum/         ← your app (you are here)
 ```
