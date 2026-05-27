@@ -5,7 +5,9 @@ description: "Translate the design document into a verified domain model."
 
 ## What this step produces
 
-A single file: `src/domain.ts`. This is the verified core. Everything else in the app (UI, network, storage) will import from this file and should never duplicate its logic.
+A single file: `src/domain.ts`.
+[Sample.](https://github.com/midspiral/quorum-tutorial-lemmascript/blob/main/src/domain.dfy)
+This is the verified core. Everything else in the app (UI, network, storage) will import from this file and should never duplicate its logic.
 
 ## Tell your agent what to do
 
@@ -19,7 +21,6 @@ With your DESIGN.md in place, tell your agent:
 
 Since LLMs are non-deterministic, from here on out your output — the exact TypeScript, the annotations, the UI, even the proofs — may differ from ours. However, regardless of the implementation, the core guarantees will hold. 
 
-[TODO: review for accuracy]
 ### Data model → interfaces
 
 The data model from DESIGN.md becomes TypeScript interfaces. For Quorum, the core works in abstract slot indices `[0, numSlots)`:

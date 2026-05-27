@@ -13,7 +13,7 @@ Proofs passing doesn't mean you've proven everything the design promised. Dafny 
 
 ## Open a fresh agent
 
-This works best in a **new agent with no context** from the build process. A clean agent reads the files from scratch and isn't biased by the iteration it just went through. We recommend using this skill [TODO: add link to skill] to guide the agent. 
+This works best in a **new agent with no context** from the build process. A clean agent reads the files from scratch and isn't biased by the iteration it just went through. We recommend using this `proof-review` skill to guide the agent. 
 
 If you use the skill, simply call it from the agent; no further instructions needed. 
 
@@ -26,8 +26,7 @@ If not using the skill, tell it:
 
 ## What the agent produces
 
-[TODO: link to example proof_findings doc]
-`PROOF_FINDINGS.md` in the project root. It contains:
+`PROOF_FINDINGS.md` in the project root. [Sample.](https://github.com/midspiral/quorum-tutorial-lemmascript/blob/main/PROOF_FINDINGS.md) It contains:
 
 ### Executive summary
 What is proven, what is not, overall assessment.

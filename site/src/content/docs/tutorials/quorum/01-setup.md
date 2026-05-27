@@ -29,18 +29,18 @@ dafny --version
 LemmaScript needs to be a sibling directory to your project. Create a parent folder that holds both:
 
 ```bash
-mkdir quorum-tutorial && cd quorum-tutorial
+git clone --recursive https://github.com/midspiral/lemmascript-kit quorum-tutorial
+cd quorum-tutorial
 ```
 
-Clone LemmaScript inside it:
+LemmaScript (https://github.com/midspiral/LemmaScript.git) should already be cloned inside it:
 ```bash
-git clone https://github.com/midspiral/LemmaScript.git
 cd LemmaScript 
 npm install && npm run build
-
+cd ..
 ```
 
-Create your app directory next to it:
+Create your app directory next to it, as a sibling:
 ```bash
 mkdir quorum && cd quorum
 npm init -y

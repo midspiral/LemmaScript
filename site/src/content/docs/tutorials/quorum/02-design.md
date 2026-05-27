@@ -33,7 +33,7 @@ The document has a consistent structure:
 
 For this tutorial, we've written the DESIGN.md for you. It describes a when2meet-style scheduling app whose verified core guarantees:
 
-**Note: When building on your own, you can use our design-doc skill. [TODO: link to skill]**
+**Note: When building on your own, you can use our design-doc skill, which is in `quorum-tutorial/.claude/skills/design-doc`**
 
 [TODO @fernanda: are these really the only guarantees it makes?]
 1. The heatmap counts are exact
@@ -45,7 +45,7 @@ For this tutorial, we've written the DESIGN.md for you. It describes a when2meet
 Copy it into your project root:
 
 ```bash
-cp ../LemmaScript/templates/DESIGN_QUORUM.md ./DESIGN.md
+cp ../.claude/skills/design-doc/DESIGN_QUORUM.md ./DESIGN.md
 ```
 
 Read through it. The sections you'll interact with most in the next steps:
@@ -56,7 +56,7 @@ Read through it. The sections you'll interact with most in the next steps:
 
 ## For your own app
 
-When building your own verified app, use the skill provided [TODO: link to skill] to tell your agent:
+When building your own verified app, use the `design-doc` skill provided to tell your agent:
 
 > I want to build [description of your app]. Write a DESIGN.md following the LemmaScript
 > design document format.

@@ -170,15 +170,12 @@ LemmaScript emits `ensures` as separate lemmas, not Dafny postconditions. A func
 
 **Fix:** Keep the counting kernel total so it composes freely. Discharge callee preconditions structurally. For `ensures` clauses which must be proved by separate lemmas in LemmaScript, you could also try to add them to the functions; they might be simple enough that it works this way with the boosted structure for recursive calls.
 
-[TODO: add more gotchas as we encounter them during the actual build]
-
-[TODO: rewrite this to be more accurate]
 ## What you've done
 
 - Run `lsc check` on domain.ts for the first time
 - Read and interpreted Dafny's error output
 - Iterated: fixed annotations or added proof helpers until verification passes
-- Understood the two-file system: `.dfy.gen` (generated) vs `.dfy` (proofs)
+- Understood the two-file system: `.dfy.gen` (generated) vs `.dfy` (with completed proofs)
 
 ## Next step
 
