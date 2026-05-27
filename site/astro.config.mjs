@@ -50,7 +50,7 @@ function rehypeRepoLinks() {
 const LINK_NAMES = {
   "/": "Overview",
   "/getting-started/": "Getting Started",
-  "/tutorials/greenfield/": "Greenfield tutorial",
+  "/howto_greenfield/": "Greenfield tutorial",
   "/spec/": "Specification",
   "/spec-dafny/": "Dafny backend spec",
   "/spec-lean/": "Lean backend spec",
@@ -88,11 +88,16 @@ export default defineConfig({
       description: "A verification toolchain for TypeScript — generate Lean 4 or Dafny from annotated code.",
       social: [{ icon: "github", label: "GitHub", href: "https://github.com/midspiral/LemmaScript" }],
       sidebar: [
-        { label: "Getting started", link: "/getting-started/" },
+        {
+          label: "Getting started",
+          items: [
+            { label: "Overview (Brownfield)", link: "/getting-started/" },
+            { label: "Howto (Greenfield)", link: "/howto_greenfield/" },
+          ],
+        },
         {
           label: "Tutorials",
           items: [
-            { label: "Build a verified app (greenfield)", link: "/tutorials/greenfield/" },
             {
               label: "Quorum (Beginner)",
               items: [

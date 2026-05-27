@@ -16,7 +16,7 @@ const OUT = join(here, "..", "src", "content", "docs")
 const DOCS = [
   { src: "README.md", out: "index.md" }, // home / overview
   { src: "GETTING_STARTED.md", out: "getting-started.md" },
-  { src: "TUTORIAL_GREENFIELD.md", out: "tutorials/greenfield.md" },
+  { src: "TUTORIAL_GREENFIELD.md", out: "howto_greenfield.md" },
   { src: "SPEC.md", out: "spec.md" },
   { src: "SPEC_DAFNY.md", out: "spec-dafny.md" },
   { src: "SPEC_LEAN.md", out: "spec-lean.md" },
@@ -30,7 +30,7 @@ const DOCS = [
 const ROUTES = {
   "README.md": "/",
   "GETTING_STARTED.md": "/getting-started/",
-  "TUTORIAL_GREENFIELD.md": "/tutorials/greenfield/",
+  "TUTORIAL_GREENFIELD.md": "/howto_greenfield/",
   "SPEC.md": "/spec/",
   "SPEC_DAFNY.md": "/spec-dafny/",
   "SPEC_LEAN.md": "/spec-lean/",
