@@ -1,6 +1,6 @@
 # LemmaScript website
 
-The [lemmascript.com](https://lemmascript.com) site — [Astro](https://astro.build) +
+The [docs.lemmascript.com](https://docs.lemmascript.com) site — [Astro](https://astro.build) +
 [Starlight](https://starlight.astro.build), deployed to GitHub Pages.
 
 ## The docs are the repo's root markdown
@@ -33,12 +33,9 @@ npm run build      # static site → dist/
 Pushing to `main` triggers `.github/workflows/site.yml`, which builds and deploys to GitHub
 Pages. No manual step.
 
-## Custom domain (lemmascript.com)
+## Custom domain (docs.lemmascript.com)
 
 `public/CNAME` pins the domain. One-time DNS + repo setup:
 
-- **Apex `A`** → `185.199.108.153`, `185.199.109.153`, `185.199.110.153`, `185.199.111.153`
-- **Apex `AAAA`** → `2606:50c0:8000::153`, `2606:50c0:8001::153`, `2606:50c0:8002::153`, `2606:50c0:8003::153`
-- **`www` `CNAME`** → `midspiral.github.io`
-- Repo **Settings → Pages**: set the custom domain to `lemmascript.com` and tick **Enforce HTTPS** (`.dev`/`.com` both served over HTTPS via the auto-provisioned cert).
-- At your registrar, **301-redirect** `lemmascript.dev` and `lemmascript.org` → `lemmascript.com`.
+- **`docs` `CNAME`** → `midspiral.github.io`
+- Repo **Settings → Pages**: set the custom domain to `docs.lemmascript.com` and tick **Enforce HTTPS** (served over HTTPS via the auto-provisioned cert).

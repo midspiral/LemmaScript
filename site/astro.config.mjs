@@ -78,7 +78,7 @@ function rehypeLinkNames() {
 
 // https://astro.build/config
 export default defineConfig({
-  site: "https://lemmascript.com",
+  site: "https://docs.lemmascript.com",
   markdown: { rehypePlugins: [rehypeRepoLinks, rehypeLinkNames] },
   integrations: [
     starlight({
