@@ -35,7 +35,6 @@ For this tutorial, we've written the DESIGN.md for you. It describes a when2meet
 
 **Note: When building on your own, you can use our design-doc skill, which is in `quorum-tutorial/.claude/skills/design-doc`**
 
-[TODO @fernanda: are these really the only guarantees it makes?]
 1. The heatmap counts are exact
 2. The best-time recommendation flags the actual argmax slots
 3. More availability only helps (monotonicity)
