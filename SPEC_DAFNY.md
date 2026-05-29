@@ -1,7 +1,7 @@
 # LemmaScript — Dafny Backend Specification
 
-**Version:** 0.1
-**Date:** April 2026
+**Version:** 0.5.2
+**Date:** May 2026
 
 This document covers what is unique to the Dafny backend. See [SPEC.md](SPEC.md) for the shared annotation language, translation rules, type mapping, and pipeline.
 
@@ -65,14 +65,47 @@ On merge conflict, the original `foo.dfy` is restored and the merged result is s
 
 ## 4. Helper Preambles
 
-The Dafny emitter auto-injects helper functions when needed:
+The Dafny emitter auto-injects helper functions when needed. Each is emitted at most once, only when a construct that requires it appears (registry: `PREAMBLE_CODE` in `dafny-emit.ts`).
+
+**Core:**
 
 | Helper | When | Purpose |
 |--------|------|---------|
-| `JSFloorDiv` | `Math.floor(a/b)` | JS-compatible floor division |
-| `StringIndexOf` / `StringIndexOfFrom` | `s.indexOf(sub)` | Recursive string search |
-| `SetToSeq` | `for (x of set)` | Convert set to sequence for iteration |
-| `datatype Option<T>` | `Map.get` returns optional | Option type (None / Some) |
+| `Option<T>` | `Map.get`, optional types | `datatype Option<T> = None \| Some(value: T)` |
+| `SetToSeq` | `for (x of set)`, map/record iteration | Convert set to sequence for iteration |
+
+**Numeric:**
+
+| Helper | When | Purpose |
+|--------|------|---------|
+| `JSFloorDiv` | `Math.floor(a/b)` (int args) | JS-compatible floor division |
+| `FloorReal` / `CeilReal` | `Math.floor(x)` / `Math.ceil(x)` (real arg) | `real → int` via `.Floor` |
+| `MathAbs` / `MathMin` / `MathMax` | `Math.abs/min/max(a, b)` | Scalar abs/min/max |
+| `MaxOfSeq` / `MinOfSeq` | `Math.max(...s)` / `Math.min(...s)` | Aggregate over a sequence (requires `\|s\| > 0`) |
+| `Pow2` / `BitAnd` | `<<` / `>>` / `&` on `bigint` | Bitwise ops as arithmetic |
+| `NatToString` | `` `${n}` `` template literal | Int-to-string for interpolation |
+
+**Sequence:**
+
+| Helper | When | Purpose |
+|--------|------|---------|
+| `SeqIndexOf` | `arr.indexOf(x)` | First-index search (`-1` if absent) |
+| `SeqFindIndex` | `arr.findIndex(f)` | Predicate first-index search |
+| `SeqFindLast` | `arr.findLast(f)` | Predicate last-match search |
+| `SeqFilterSome` | filterMap pattern (§3.7) | Drop `None`s and unwrap to `seq<T>` |
+| `SeqFlatten` | `arr.flat()` | Flatten one level |
+| `SeqJoin` | `arr.join(sep)` | Join into a string |
+| `SafeSlice` | `arr.slice(lo, hi)` under `//@ safe-slice` | Bounds-clamping slice |
+| `Perm` | `perm(a, b)` (spec-only) | `predicate Perm<T(==)>(a, b) { multiset(a) == multiset(b) }` |
+
+**String:**
+
+| Helper | When | Purpose |
+|--------|------|---------|
+| `StringIndexOf` | `s.indexOf(sub)`, `s.indexOf(sub, from)`, `s.includes(sub)` | Recursive string search (also provides `StringIndexOfFrom`) |
+| `StringSplit` | `s.split(d)` | Axiomatic split (`1 <= \|res\| <= \|s\| + 1`) |
+| `StringTrim` | `s.trim()` / `s.trimEnd()` / `s.trimStart()` | Trim (also provides `StringTrimRight` / `StringTrimLeft`) |
+| `StringToLower` / `StringToUpper` | `s.toLowerCase()` / `s.toUpperCase()` | Case folding |
 
 ---
 
@@ -85,5 +118,7 @@ The Dafny emitter auto-injects helper functions when needed:
 3. Run `dafny verify foo.dfy`
 
 Standard libraries are auto-detected: if `foo.dfy` contains `import Std.`, the `--standard-libraries` flag is added.
+
+The shared `--time-limit=<seconds>` flag (SPEC.md §7) maps to Dafny's `--verification-time-limit`; `--extra-flags=<string>` is forwarded verbatim to `dafny verify`.
 
 
