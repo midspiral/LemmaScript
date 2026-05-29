@@ -50,10 +50,16 @@ const DAFNY_KEYWORDS = new Set([
   "copredicate", "inductive",
 ]);
 
+// The Dafny out-parameter name for the method currently being emitted. Default
+// `res`, but bumped (e.g. `res_`) when a parameter is named `res` — set by
+// methodHeader and reset per decl. `\result` in an ensures must use the *same*
+// name, so escapeName routes it here.
+let _resultName = "res";
+
 function escapeName(name: string): string {
   // \result is carried through the IR as the var name "\\result"; render it
-  // as Dafny's canonical return-value identifier.
-  if (name === "\\result") return "res";
+  // as the current method's out-parameter name.
+  if (name === "\\result") return _resultName;
   if (DAFNY_KEYWORDS.has(name)) return `${name}_`;
   // Dafny doesn't allow identifiers starting with _
   if (name.startsWith("_")) return `i${name}`;
@@ -72,10 +78,12 @@ function methodHeader(prefix: string, params: { name: string; type: Ty }[], retu
   const sig = `${prefix}(${paramList(params)})`;
   if (returnType.kind === "void") return sig;
   // The out-parameter is `res` by default, but a parameter named `res` (e.g. an
-  // Express handler's `(req, res)`) would collide; pick a fresh name.
+  // Express handler's `(req, res)`) would collide; pick a fresh name and record
+  // it so `\result` references in the ensures/body resolve to the same name.
   const taken = new Set(params.map(p => escapeName(p.name)));
   let resName = "res";
   while (taken.has(resName)) resName += "_";
+  _resultName = resName;
   return `${sig} returns (${resName}: ${tyToDafny(returnType)})`;
 }
 
@@ -557,6 +565,7 @@ function emitStmt(s: Stmt, indent: number): string {
 // ── Declaration emission ────────────────────────────────────
 
 function emitDecl(d: Decl): string {
+  _resultName = "res";  // default; methodHeader bumps it if a param is named `res`
   switch (d.kind) {
     case "inductive": {
       const tp = d.typeParams?.length ? `<${d.typeParams.join(", ")}>` : "";
