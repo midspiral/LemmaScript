@@ -118,12 +118,92 @@ function stmtContainsBad(s: TStmt): boolean {
 // hoist it to a discard statement so the precondition is still verified.
 
 let _guarded = new Set<string>();
+// Every name LemmaScript models: local functions + all externs. A call to
+// anything else with an unknown callee is "opaque" — abstracted by havoc.
+let _known = new Set<string>();
 
 function calleeName(e: TExpr): string | null {
   if (e.kind !== "call") return null;
   if (e.fn.kind === "var") return e.fn.name;
   if (e.fn.kind === "field") return e.fn.field;
   return null;
+}
+
+/** Root variable a receiver chain bottoms out at (`fs.x.y` → `fs`,
+ *  `res.status(400).send` → `res`, `templateJson.variables.map` → `templateJson`). */
+function rootVar(e: TExpr): string | null {
+  let cur = e;
+  for (;;) {
+    if (cur.kind === "var") return cur.name;
+    if (cur.kind === "field") cur = cur.obj;
+    else if (cur.kind === "call") cur = cur.fn;
+    else if (cur.kind === "index") cur = cur.obj;
+    else return null;
+  }
+}
+
+/** Display name of an *opaque external* call this pass abstracts away — a call
+ *  on an unknown receiver rooted at a module/global (`fs.readFileSync`,
+ *  `JSON.parse`) or an unknown free function (`uuidv4`). Returns null for
+ *  modelled calls (local functions, contracted/dispatched externs, methods on
+ *  known receivers) and for calls rooted at a function-local/param (e.g.
+ *  `templateJson.variables.map`, `res.status().send` — framework objects and
+ *  havoc'd locals, not external sinks). These are the calls a completeness
+ *  reviewer must confirm are not unguarded sinks. */
+function opaqueCallName(e: TExpr, locals: Set<string>): string | null {
+  if (e.kind !== "call") return null;
+  if (e.fn.kind === "var") {
+    if (e.fn.ty.kind !== "unknown" || _known.has(e.fn.name) || locals.has(e.fn.name)) return null;
+    return e.fn.name;
+  }
+  if (e.fn.kind === "field" && e.fn.obj.ty.kind === "unknown") {
+    const root = rootVar(e.fn.obj);
+    if (root && locals.has(root)) return null;  // method on a param / local value, not a sink
+    const display = e.fn.obj.kind === "var" ? `${e.fn.obj.name}.${e.fn.field}` : e.fn.field;
+    if (_known.has(display) || _known.has(e.fn.field)) return null;
+    return display;
+  }
+  return null;
+}
+
+/** Every binder in scope anywhere in a function body — params (seed) + let /
+ *  forof / lambda parameters — so a call rooted at any of them is treated as a
+ *  local value, not an external sink. A call rooted at a *free* name (a module
+ *  or global like `fs`/`JSON`/`console`, or a free function like `uuidv4`) is
+ *  what the report keeps. Still descends into lambdas so a sink hidden in a
+ *  callback (`arr.forEach(x => fs.writeFileSync(x))`) is not missed. */
+function localNames(stmts: TStmt[], seed: Set<string>): Set<string> {
+  const out = new Set(seed);
+  const inExpr = (e: TExpr): void => {
+    if (e.kind === "lambda") { e.params.forEach(p => out.add(p.name)); inStmts(e.body); return; }
+    forEachChildExpr(e, inExpr);
+  };
+  const inStmts = (ss: TStmt[]): void => {
+    for (const s of ss) {
+      if (s.kind === "let" || s.kind === "ghostLet") out.add(s.name);
+      if (s.kind === "forof") s.names.forEach(n => out.add(n));
+      forEachChildExprInStmt(s, inExpr);
+      if (s.kind === "if") { inStmts(s.then); inStmts(s.else); }
+      else if (s.kind === "while" || s.kind === "forof") inStmts(s.body);
+      else if (s.kind === "switch") { s.cases.forEach(c => inStmts(c.body)); inStmts(s.defaultBody); }
+      else if (s.kind === "someMatch") { inStmts(s.someBody); inStmts(s.noneBody); }
+      else if (s.kind === "tagMatch") { s.cases.forEach(c => inStmts(c.body)); inStmts(s.fallthrough); }
+    }
+  };
+  inStmts(stmts);
+  return out;
+}
+
+/** All opaque external calls in a function body (deduped, sorted). */
+function collectOpaqueCalls(stmts: TStmt[], locals: Set<string>): string[] {
+  const found = new Set<string>();
+  const visit = (e: TExpr): void => {
+    const n = opaqueCallName(e, locals);
+    if (n) found.add(n);
+    forEachChildExpr(e, visit);
+  };
+  for (const s of stmts) forEachChildExprInStmt(s, visit);
+  return [...found].sort();
 }
 
 /** Outermost contracted calls inside `e`'s subtree (excluding `e` itself, which
@@ -264,11 +344,22 @@ export function autoHavocModule(mod: TModule): TModule {
   _guarded = new Set<string>();
   for (const e of mod.externs) if (e.requires.length > 0) { _guarded.add(e.qualified); _guarded.add(e.flat); }
   for (const f of mod.functions) if (f.requires.length > 0) _guarded.add(f.name);
+  _known = new Set<string>();
+  for (const f of mod.functions) _known.add(f.name);
+  for (const e of mod.externs) { _known.add(e.qualified); _known.add(e.flat); }
   return {
     ...mod,
     constants: mod.constants.filter(c => !containsBad(c.value)),
     functions: mod.functions.map(f => {
       if (!f.autohavoc) return f;
+      // Completeness transparency: surface the opaque external calls this pass
+      // abstracts away, so a forgotten sink (e.g. a raw `fs.readFileSync`) is
+      // visible rather than silently havoc'd behind a green check.
+      const locals = localNames(f.body, new Set(f.params.map(p => p.name)));
+      const opaque = collectOpaqueCalls(f.body, locals);
+      if (opaque.length > 0) {
+        console.error(`autohavoc: ${f.name} abstracts ${opaque.length} external call(s) — confirm none is an unguarded sink: ${opaque.join(", ")}`);
+      }
       const body = rewriteStmts(f.body);
       // Havoc forces Dafny `method` emission (`*` is invalid in a `function`).
       const isPure = f.isPure && !bodyHasHavoc(body);
