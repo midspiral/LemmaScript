@@ -1910,6 +1910,33 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       }
     }
   }
+  // Top-level inline closures: a handler passed directly to a module-level call,
+  // e.g. `app.get("/x", (req, res) => { //@ verify ... })`. "Move" each such
+  // closure to the top level by extracting it as a synthetic named function.
+  // Only top-level call arguments are considered (not nested lambdas), and only
+  // closures carrying a //@ verify (so ordinary callbacks aren't pulled in). The
+  // name is derived from the call's method and route literal (e.g. get_x).
+  const usedNames = new Set(allFns.map(f => f.name));
+  const sanitizeIdent = (s: string) => s.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "handler";
+  for (const stmt of sourceFile.getStatements()) {
+    if (!Node.isExpressionStatement(stmt)) continue;
+    const call = stmt.getExpression();
+    if (!Node.isCallExpression(call)) continue;
+    const callee = call.getExpression();
+    const method = Node.isPropertyAccessExpression(callee) ? callee.getName()
+      : Node.isIdentifier(callee) ? callee.getText() : "handler";
+    const routeArg = call.getArguments().find(a => Node.isStringLiteral(a));
+    const route = routeArg && Node.isStringLiteral(routeArg) ? routeArg.getLiteralValue() : "";
+    for (const arg of call.getArguments()) {
+      if (!Node.isArrowFunction(arg)) continue;
+      if (!hasLineDirective(arg.getFullText(), "verify")) continue;
+      const base = sanitizeIdent(route ? `${method}_${route}` : method);
+      let name = base, n = 2;
+      while (usedNames.has(name)) name = `${base}_${n++}`;
+      usedNames.add(name);
+      allFns.push({ name, node: arg as unknown as FunctionDeclaration, parentStmt: stmt });
+    }
+  }
 
   // `//@ extern` on a same-file declaration: register the function as an
   // opaque axiom (signature + any //@ requires/ensures), skip its body. Use

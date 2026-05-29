@@ -70,7 +70,13 @@ function paramList(params: { name: string; type: Ty }[]): string {
  *  `returns (res: ())` on a void method fails verification. */
 function methodHeader(prefix: string, params: { name: string; type: Ty }[], returnType: Ty): string {
   const sig = `${prefix}(${paramList(params)})`;
-  return returnType.kind === "void" ? sig : `${sig} returns (res: ${tyToDafny(returnType)})`;
+  if (returnType.kind === "void") return sig;
+  // The out-parameter is `res` by default, but a parameter named `res` (e.g. an
+  // Express handler's `(req, res)`) would collide; pick a fresh name.
+  const taken = new Set(params.map(p => escapeName(p.name)));
+  let resName = "res";
+  while (taken.has(resName)) resName += "_";
+  return `${sig} returns (${resName}: ${tyToDafny(returnType)})`;
 }
 
 // ── Lean op → Dafny op ─────────────────────────────────────
