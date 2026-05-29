@@ -1,7 +1,7 @@
 # LemmaScript — Implementation Specification
 
-**Version:** 0.3
-**Date:** April 2026
+**Version:** 0.5.2
+**Date:** May 2026
 
 Backend-specific details:
 - [SPEC_LEAN.md](SPEC_LEAN.md) — Lean backend (Velvet/Loom, four-file scheme, proof workflow)
@@ -28,6 +28,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | Keyword | Placement | Meaning |
 |---------|-----------|---------|
 | `backend` | Top of file | Restrict file to a specific backend (see §2.6) |
+| `safe-slice` | Top of file | Opt into JS-clamping semantics for two-arg `arr.slice(lo, hi)` (see §2.7) |
 | `verify` | Before first statement of function/method body | Mark function for verification (see §2.5) |
 | `requires` | Before first statement of function body | Precondition |
 | `ensures` | Before first statement of function body | Postcondition (`\result` refers to return value) |
@@ -438,6 +439,8 @@ The same coercion applies to non-bool conditions in `if`/`while`/`?:` positions:
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
 | `s.indexOf(sub, from)` | — | `StringIndexOfFrom(s, sub, from)` (negative `from` clamps to 0) |
 | `s.slice(start, end)` | `JSString.slice s start end` | `s[start..end]` |
+| `s.substring(start)` / `s.substring(start, end)` | — | `s[start..]` / `s[start..end]` |
+| `s.charCodeAt(i)` | — | `(s[i] as int)` |
 | `s.trim()` | — | `StringTrim(s)` |
 | `s.trimEnd()` / `s.trimStart()` | — | `StringTrimRight(s)` / `StringTrimLeft(s)` |
 | `s.split(d)` (requires `\|d\| > 0`) | — | `StringSplit(s, d)` (axiomatic preamble: `1 <= \|res\| <= \|s\| + 1`) |
@@ -449,14 +452,17 @@ The same coercion applies to non-bool conditions in `if`/`while`/`?:` positions:
 | `s.length` | `s.length` | `\|s\|` |
 | `Math.max(...s)` / `Math.min(...s)` | — | `MaxOfSeq(s)` / `MinOfSeq(s)` (requires `\|s\| > 0`) |
 | `perm(a, b)` (spec-only) | — | `Perm(a, b)` (preamble: `predicate Perm<T(==)>(a, b) { multiset(a) == multiset(b) }`) |
-| `arr.map((x) => e)` | `arr.map (fun x => e)` | `Seq.Map((x) => e, arr)` |
-| `arr.filter((x) => e)` | `arr.filter (fun x => e)` | `Seq.Filter((x) => e, arr)` |
-| `arr.every((x) => e)` | `arr.all (fun x => e)` | `Seq.All(arr, (x) => e)` |
+| `arr.map((x) => e)` | `arr.map (fun x => e)` | `Std.Collections.Seq.Map((x) => e, arr)` |
+| `arr.filter((x) => e)` | `arr.filter (fun x => e)` | `Std.Collections.Seq.Filter((x) => e, arr)` |
+| `arr.every((x) => e)` | `arr.all (fun x => e)` | `Std.Collections.Seq.All(arr, (x) => e)` |
 | `arr.some((x) => e)` | `arr.any (fun x => e)` | `exists x :: x in arr && e` |
 | `arr.includes(x)` | `arr.contains x` | `(x in arr)` |
 | `arr.indexOf(x)` | — | `SeqIndexOf(arr, x)` (preamble) |
 | `arr.find((x) => e)` | `arr.find? (fun x => e)` | — |
 | `arr.findIndex((x) => e)` | — | `SeqFindIndex(arr, (x) => e)` (preamble: `-1 ⇔ no match`, `≥0 ⇔ first match with no earlier match`) |
+| `arr.findLast((x) => e)` | — | `SeqFindLast(arr, (x) => e)` (preamble) |
+| `arr.flat()` | — | `SeqFlatten(arr)` (preamble) |
+| `arr.join(sep)` | — | `SeqJoin(arr, sep)` (preamble) |
 | `arr.shift()` | — | `arr[0]` + `arr := arr[1..]` |
 | `arr.pop()` | — | `(if \|arr\|>0 then Some(arr[\|arr\|-1]) else None)` + `arr := (if \|arr\|>0 then arr[..\|arr\|-1] else arr)` |
 | `arr.slice(start)` | — | `arr[start..]` |
@@ -617,9 +623,9 @@ The transform uses two strategies for translating `receiver.method(args)`:
 | `s.slice(start, end)` | `stringSlice` | `JSString.slice s start end` | `s[start..end]` |
 | `[...arr, e]` | `arrayPush` | `Array.push arr e` | `(arr + [e])` |
 | `arr.with(i, v)` | `arraySet` | `arr.set! i v` | `arr[i := v]` |
-| `arr.map(f)` | `map` | `arr.map f` | `Seq.Map(f, arr)` |
-| `arr.filter(f)` | `filter` | `arr.filter f` | `Seq.Filter(f, arr)` |
-| `arr.every(f)` | `every` | `arr.all f` | `Seq.All(arr, f)` |
+| `arr.map(f)` | `map` | `arr.map f` | `Std.Collections.Seq.Map(f, arr)` |
+| `arr.filter(f)` | `filter` | `arr.filter f` | `Std.Collections.Seq.Filter(f, arr)` |
+| `arr.every(f)` | `every` | `arr.all f` | `Std.Collections.Seq.All(arr, f)` |
 | `arr.some(f)` | `some` | `arr.any f` | `exists x :: x in arr && ...` |
 | `arr.includes(x)` | `includes` | `arr.contains x` | `(x in arr)` |
 | `arr.indexOf(x)` | `indexOf` | — | `SeqIndexOf(arr, x)` |
@@ -1210,9 +1216,14 @@ lsc gen [--backend=lean|dafny] <file.ts>      — generate verification artifact
 lsc check [--backend=lean|dafny] <file.ts>    — gen + verify
 lsc regen --backend=dafny <file.ts>           — regenerate with three-way merge (Dafny only)
 lsc extract <file.ts>                          — print Raw IR JSON (debugging)
+lsc info <file.ts>                             — write a JSON summary of verified functions (backend-neutral)
 ```
 
-Default backend is Dafny.
+Default backend is Dafny. `extract` and `info` are backend-neutral and always run, regardless of any `//@ backend` directive.
+
+**Flags** (passed through to the prover on `check`):
+- `--time-limit=<seconds>` — per-VC verification time limit (Dafny: `--verification-time-limit`).
+- `--extra-flags=<string>` — extra flags forwarded verbatim to the backend prover.
 
 ### 7.1 `gen`
 
@@ -1227,6 +1238,10 @@ Default backend is Dafny.
 ### 7.3 `regen` (Dafny only)
 
 Three-way merge when generated code changes. See [SPEC_DAFNY.md](SPEC_DAFNY.md).
+
+### 7.4 `info`
+
+Extract-only (no resolve/transform/emit). Writes `foo.ts.json` next to the source, mapping each top-level function and class method (`ClassName.method`) to its signature and original `//@ requires` / `//@ ensures` / `//@ decreases` clause text. Backend-neutral.
 
 ---
 
@@ -1247,6 +1262,6 @@ Each phase (and the three intermediate representations — Raw IR, Typed IR, IR)
 The following TS features are not yet handled by the toolchain:
 
 - Compound pattern matching (nested match on multiple discriminated unions)
-- async/await
+- `await` / true async — a `Promise<T>`-returning function with an `await` in its body is unmodellable. An `async` function with **no** `await` is supported: its `Promise<T>` return type is unwrapped to `T` (the wrapper is just calling convention), so the body verifies normally.
 - Error reporting (mapping prover errors to TS source locations)
 - VS Code extension
