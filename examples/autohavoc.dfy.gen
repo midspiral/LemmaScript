@@ -49,3 +49,23 @@ method loadEntry(req: int) returns (res: string)
   var entry: Entry := *;
   return entry.name;
 }
+
+method mergeEntries(req: int) returns (res: string)
+{
+  var a: string := *;
+  var b: string := *;
+  var pa := (("./data/" + a) + ".json");
+  var pb := (("./data/" + b) + ".json");
+  var i_t1 := validPath(pa);
+  if !(i_t1) {
+    return "invalid a";
+  }
+  var i_t2 := validPath(pb);
+  if !(i_t2) {
+    return "invalid b";
+  }
+  var _ := readFileSafe(pa);
+  var _ := readFileSafe(pb);
+  var merged: string := *;
+  return merged;
+}

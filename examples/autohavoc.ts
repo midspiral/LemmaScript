@@ -12,6 +12,12 @@
  * become arbitrary values and the only obligation left is that the validPath
  * guard dominates readFileSafe — discharging its precondition.
  *
+ * mergeEntries shows that this stays sound when a contracted call is *nested*
+ * inside an havoc'd expression: the reads sit inside an opaque JSON.parse(...),
+ * and the pass hoists each readFileSafe to its own checked statement (transitive
+ * to any depth) so both validPath preconditions are still discharged — rather
+ * than being silently dropped with the surrounding havoc.
+ *
  * Soundness: havoc is a nondeterministic over-approximation (assume nothing), so
  * this can only make a proof fail, never spuriously pass. The trust boundary is
  * the declared sink: a real filesystem call must go through readFileSafe.
@@ -47,4 +53,26 @@ function loadEntry(req: any): string {
   const raw = readFileSafe(filePath);    // requires validPath(filePath) — discharged by the guard above
   const entry: Entry = JSON.parse(raw);  // opaque → arbitrary Entry
   return entry.name;                     // a typed field of a havoc'd value is still modellable
+}
+
+function mergeEntries(req: any): string {
+  //@ verify
+  //@ autohavoc
+  const a: string = req.query.a;
+  const b: string = req.query.b;
+  const pa = "./data/" + a + ".json";
+  const pb = "./data/" + b + ".json";
+
+  if (!validPath(pa)) {
+    return "invalid a";
+  }
+  if (!validPath(pb)) {
+    return "invalid b";
+  }
+
+  // Both reads are nested inside an unmodellable JSON.parse(...); the pass
+  // hoists each to a checked `readFileSafe` statement so neither precondition
+  // is lost to the havoc.
+  const merged: string = JSON.parse(readFileSafe(pa) + readFileSafe(pb));
+  return merged;
 }
