@@ -1974,9 +1974,28 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     }
     return false;
   }
+  // `//@ extern NS.method` registers the extern under a *dotted* qualified name,
+  // so a real `NS.method(args)` call dispatches to it (resolve.ts) with no
+  // wrapper — e.g. `//@ extern fs.readFileSync` lets you call `fs.readFileSync`
+  // directly while still discharging its `//@ requires`. The function declaration
+  // just carries the signature/contract; its own name is unused.
+  function externName(f: { node: FunctionDeclaration; parentStmt?: Node }): string | null {
+    const re = /^[ \t]*\/\/@ extern[ \t]+(\S+)/m;
+    const m = f.node.getFullText().match(re);
+    if (m) return m[1];
+    if (f.parentStmt) {
+      for (const r of f.parentStmt.getLeadingCommentRanges()) {
+        const m2 = r.getText().match(re);
+        if (m2) return m2[1];
+      }
+    }
+    return null;
+  }
   for (const f of allFns) {
     if (!hasExtern(f)) continue;
-    if (_externs.has(f.name)) continue;
+    const qualified = externName(f) ?? f.name;
+    const flat = qualified.replace(/\./g, "_");
+    if (_externs.has(qualified)) continue;
     const sig = f.node.getType().getCallSignatures()[0];
     if (!sig) continue;
     const typeParams = sig.getTypeParameters().map(tp => tp.getText());
@@ -1991,7 +2010,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     const annots = collectFunctionAnnotations(f.node);
     const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
     const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
-    _externs.set(f.name, { qualified: f.name, flat: f.name, typeParams, params, returnType, requires, ensures });
+    _externs.set(qualified, { qualified, flat, typeParams, params, returnType, requires, ensures });
   }
 
   // If any function has //@ verify, only extract those (brownfield mode).
