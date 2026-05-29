@@ -1914,11 +1914,17 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // regex — but its callers should still be verifiable against an
   // uninterpreted predicate. Parallel to auto-extern for cross-file calls,
   // and emitted the same way (`function {:axiom} foo(...)` in Dafny).
+  // Match a `//@ <kw>` directive only as the first non-whitespace on a line, so
+  // a mention mid-line in prose or inside a block/JSDoc comment (e.g. "the
+  // `//@ extern` annotation", or ` * //@ extern`) doesn't falsely trigger it.
+  function hasLineDirective(text: string, kw: string): boolean {
+    return new RegExp(String.raw`^[ \t]*//@ ${kw}\b`, "m").test(text);
+  }
   function hasExtern(f: { node: FunctionDeclaration; parentStmt?: Node }) {
-    if (f.node.getFullText().includes('//@ extern')) return true;
+    if (hasLineDirective(f.node.getFullText(), "extern")) return true;
     if (f.parentStmt) {
       for (const r of f.parentStmt.getLeadingCommentRanges()) {
-        if (r.getText().includes('//@ extern')) return true;
+        if (hasLineDirective(r.getText(), "extern")) return true;
       }
     }
     return false;
@@ -1946,15 +1952,15 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // If any function has //@ verify, only extract those (brownfield mode).
   // For expression-body arrows, //@ verify may be on the parent variable statement.
   function hasVerify(f: { node: FunctionDeclaration; parentStmt?: Node }) {
-    if (f.node.getFullText().includes('//@ verify')) return true;
+    if (hasLineDirective(f.node.getFullText(), "verify")) return true;
     if (f.parentStmt) {
       for (const r of f.parentStmt.getLeadingCommentRanges()) {
-        if (r.getText().includes('//@ verify')) return true;
+        if (hasLineDirective(r.getText(), "verify")) return true;
       }
     }
     return false;
   }
-  const hasVerifyDirective = sourceFile.getFullText().includes('//@ verify');
+  const hasVerifyDirective = hasLineDirective(sourceFile.getFullText(), "verify");
   const nonExternFns = allFns.filter(f => !hasExtern(f));
   const fnsToExtract = hasVerifyDirective ? nonExternFns.filter(hasVerify) : nonExternFns;
 
@@ -1965,10 +1971,10 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   const fileAutohavoc = /^\/\/@ autohavoc\b/m.test(sourceFile.getFullText());
   function hasAutohavoc(f: { node: FunctionDeclaration; parentStmt?: Node }) {
     if (fileAutohavoc) return true;
-    if (f.node.getFullText().includes('//@ autohavoc')) return true;
+    if (hasLineDirective(f.node.getFullText(), "autohavoc")) return true;
     if (f.parentStmt) {
       for (const r of f.parentStmt.getLeadingCommentRanges()) {
-        if (r.getText().includes('//@ autohavoc')) return true;
+        if (hasLineDirective(r.getText(), "autohavoc")) return true;
       }
     }
     return false;
