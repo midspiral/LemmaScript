@@ -43,7 +43,8 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `havoc` | Before a variable declaration | Nondeterministic value — skip init expression (see §2.9). |
 | `havoc <key>` | Before a variable declaration | Nondeterministic subexpression — replace calls matching `<key>` (see §2.10). |
 | `declare-type N { f: T, ... }` | Before any statement | Declare a record type for cross-file types (see §2.5). |
-| `extern` | Before function declaration | Treat function as a body-less axiom — extract signature only, skip body (see §2.11). |
+| `extern` | Before function declaration | Treat function as a body-less axiom — extract signature only, skip body (see §2.11). `//@ extern NS.method` registers it under a dotted name. |
+| `autohavoc` | File-level, or before a `//@ verify` function | Abstract every unmodellable expression to a nondeterministic value, so verification rests only on declared contracts (see §2.12). Dafny only. |
 | `skip` | Before any statement | Omit statement from verification model (for side-effect-only code). |
 
 ### 2.2 Spec Expression Grammar
@@ -351,6 +352,37 @@ Same machinery as cross-file auto-extern (§2.9): registered in the same externs
 In brownfield `//@ verify` mode (§2.6), `//@ extern` declarations are still extracted as externs; only their bodies are skipped.
 
 Bare-name `//@ extern` calls are classified as pure (since they emit as `function {:axiom}`), so they are not lifted out of enclosing expressions by the method-call-lifting pass (§3.6). This means a bare-name extern call can appear inside a lambda body without producing a multi-statement lambda. Dotted externs (cross-file `NS.method` calls) go through a separate dispatch and are also pure.
+
+**Dotted name.** Write `//@ extern fs.readFileSync` to give the extern a dotted name. A real `fs.readFileSync(...)` call in the code then resolves to this extern (§2.9) and is checked against its contract — so you can contract a library function directly, without writing a wrapper. Use a body-less `declare function` to carry the signature and the `//@ requires`/`//@ ensures`. (A function defined in the current file always wins over a same-named one in another file.)
+
+### 2.12 Auto-havoc: `//@ autohavoc`
+
+To verify a function, LemmaScript translates its whole body to the backend. That fails when the body mixes the property you care about (say, a path-traversal guard) with code that is out of model: framework I/O (`res.status()`, `req.query`), parsing (`JSON.parse`), env access (`process.env.X ?? y`), `uuidv4()`, anonymous object literals.
+
+`//@ autohavoc` makes such a function verifiable by replacing each out-of-model expression with an arbitrary value of its type (a `//@ havoc`, §2.10). The verifier then assumes nothing about those values and checks only what remains — the control flow and the contracts of the functions called. So it proves the property while ignoring the surrounding plumbing. It is the complement of `//@ extern` (§2.11): `extern` gives an out-of-model function a contract to reason *against*; `autohavoc` discards out-of-model code *entirely*.
+
+Enable it file-wide (a `//@ autohavoc` line at column 0) or on one function (next to its `//@ verify`). Dafny only (havoc is Dafny-only).
+
+```typescript
+app.get("/x", async (req, res) => {
+  //@ verify
+  //@ autohavoc
+  const id: string = req.query.id;                       // out of model → arbitrary string
+  const filePath = "./data/" + id + ".json";
+  if (!validPath(filePath)) return res.status(400);      // guard: kept and checked
+  return res.status(200).send(readFileSafe(filePath));   // readFileSafe contracted; its requires checked
+});
+```
+
+Here `req.query.id` and the `res.status(...).send(...)` calls are havoc'd away; the one thing verified is that `validPath` guards the contracted `readFileSafe` call.
+
+Three properties make this safe and useful:
+
+- **It cannot hide a failure.** Havoc over-approximates — the verifier considers *every* value an abstracted expression could take — so a proof can only *fail* under autohavoc, never spuriously pass. (The pass only havocs; it never `assume`s.)
+- **Contracts are still enforced.** A call to a function or extern with a `//@ requires` (a *sink*) is never discarded, even inside a havoc'd expression: it is pulled out to a `var _ := sink(...)` statement so its precondition is still checked, at any nesting depth.
+- **Discarded calls are reported**, so a sink you forgot to contract can't vanish silently. The pass prints every out-of-model call it abstracted — `autohavoc: get_x abstracts 2 external call(s) — confirm none is an unguarded sink: JSON.parse, uuidv4` — where a raw `fs.readFileSync` on a user path would show up for review.
+
+**Trust boundary:** the guarantee is "every *contracted* sink is reached only under its guard," not "every dangerous call is contracted." An out-of-model call with no contract is havoc'd (and reported); giving it a contract (§2.11) brings it under verification.
 
 ---
 
