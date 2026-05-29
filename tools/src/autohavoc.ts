@@ -151,19 +151,22 @@ function rootVar(e: TExpr): string | null {
  *  havoc'd locals, not external sinks). These are the calls a completeness
  *  reviewer must confirm are not unguarded sinks. */
 function opaqueCallName(e: TExpr, locals: Set<string>): string | null {
-  if (e.kind !== "call") return null;
-  if (e.fn.kind === "var") {
-    if (e.fn.ty.kind !== "unknown" || _known.has(e.fn.name) || locals.has(e.fn.name)) return null;
-    return e.fn.name;
-  }
-  if (e.fn.kind === "field" && e.fn.obj.ty.kind === "unknown") {
-    const root = rootVar(e.fn.obj);
-    if (root && locals.has(root)) return null;  // method on a param / local value, not a sink
-    const display = e.fn.obj.kind === "var" ? `${e.fn.obj.name}.${e.fn.field}` : e.fn.field;
-    if (_known.has(display) || _known.has(e.fn.field)) return null;
-    return display;
-  }
-  return null;
+  // Report exactly the calls the pass abstracts. A call is havoc'd iff its
+  // result type is unknown (the same `isBadNode`/`mustHavoc` criterion the pass
+  // uses) — keying on that, rather than re-matching the callee's syntax, makes
+  // the report complete: it can't miss an unusual form like `fs["read"](p)`.
+  if (e.kind !== "call" || e.ty.kind !== "unknown") return null;
+  const root = rootVar(e.fn);
+  // Not an external sink: rooted at a parameter/local value (framework objects,
+  // havoc'd locals) or at a known function/extern (already modelled).
+  if (root && (locals.has(root) || _known.has(root))) return null;
+  // Best display we can give the callee.
+  const f = e.fn;
+  if (f.kind === "field" && f.obj.kind === "var") return `${f.obj.name}.${f.field}`;
+  if (f.kind === "field") return f.field;
+  if (f.kind === "index" && f.obj.kind === "var" && f.idx.kind === "str") return `${f.obj.name}.${f.idx.value}`;
+  if (f.kind === "var") return f.name;
+  return root ?? "<computed call>";
 }
 
 /** Every binder in scope anywhere in a function body — params (seed) + let /
