@@ -1744,6 +1744,21 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
       return [{ name: p.getName(), tsType }];
     }),
     returnType: (() => {
+      // `async` with no `await`: the `Promise<T>` wrapper is just the calling
+      // convention (the body returns T-typed values), so unwrap to T. Gated on
+      // no `await` — that's the suspension point we can't model, and it only
+      // type-checks inside `async`, so the gate is self-justifying. With `await`
+      // present we leave `Promise<...>` (unmodellable) rather than atomize it.
+      const isAsync = (fn as { isAsync?: () => boolean }).isAsync?.() ?? false;
+      const noAwait = fn.getDescendantsOfKind(SyntaxKind.AwaitExpression).length === 0;
+      if (isAsync && noAwait) {
+        const args = fn.getReturnType().getTypeArguments();
+        if (args.length === 1) {
+          if (args[0].isAny()) return "unknown";
+          return _eraseGenerics(typeToString(args[0]));
+        }
+        return "void";  // Promise<void>
+      }
       const node = fn.getReturnTypeNode();
       if (node && Node.isUnionTypeNode(node)) return _eraseGenerics(_tsTypeFromUnionNode(node));
       if (node) return _eraseGenerics(node.getText());
