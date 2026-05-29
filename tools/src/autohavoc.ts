@@ -111,28 +111,70 @@ function stmtContainsBad(s: TStmt): boolean {
   return found;
 }
 
-// ── rewrite ──────────────────────────────────────────────────
+// ── contracted-call ("sink") detection ──────────────────────
+// A call whose callee carries a `//@ requires` precondition. When we havoc an
+// unmodellable expression we must NOT silently discard such a call nested
+// inside it — its precondition would go unchecked (a false pass). Instead we
+// hoist it to a discard statement so the precondition is still verified.
 
-function rewriteExpr(e: TExpr): TExpr {
-  if (mustHavoc(e)) return { kind: "havoc", ty: e.ty };
+let _guarded = new Set<string>();
+
+function calleeName(e: TExpr): string | null {
+  if (e.kind !== "call") return null;
+  if (e.fn.kind === "var") return e.fn.name;
+  if (e.fn.kind === "field") return e.fn.field;
+  return null;
+}
+
+/** Outermost contracted calls inside `e`'s subtree (excluding `e` itself, which
+ *  is the havoc'd wrapper). Does not descend into lambdas — a sink there would
+ *  reference the lambda's binder and can't be hoisted to the enclosing scope. */
+function collectSinks(e: TExpr): TExpr[] {
+  const out: TExpr[] = [];
+  const walk = (n: TExpr): void => {
+    if (n.kind === "lambda") return;
+    const name = calleeName(n);
+    if (name && _guarded.has(name)) { out.push(n); return; }  // outermost: don't descend
+    forEachChildExpr(n, walk);
+  };
+  forEachChildExpr(e, walk);
+  return out;
+}
+
+// ── rewrite ──────────────────────────────────────────────────
+// `hoisted` accumulates discard statements (preserved contracted calls) to be
+// emitted, in order, immediately before the statement being rewritten.
+
+function rewriteExpr(e: TExpr, hoisted: TStmt[]): TExpr {
+  if (mustHavoc(e)) {
+    // Preserve any contracted call nested inside the discarded value so its
+    // precondition is still checked. transform lowers the `expr` discard to
+    // `var _ := call(...)` (and lifts any havoc'd args), so we lean on it.
+    for (const sink of collectSinks(e)) {
+      hoisted.push({ kind: "expr", expr: rewriteExpr(sink, hoisted) });
+    }
+    return { kind: "havoc", ty: e.ty };
+  }
   switch (e.kind) {
     case "var": case "num": case "str": case "bool": case "havoc": return e;
-    case "binop": return { ...e, left: rewriteExpr(e.left), right: rewriteExpr(e.right) };
-    case "unop": return { ...e, expr: rewriteExpr(e.expr) };
-    case "call": return { ...e, fn: rewriteExpr(e.fn), args: e.args.map(rewriteExpr) };
-    case "index": return { ...e, obj: rewriteExpr(e.obj), idx: rewriteExpr(e.idx) };
-    case "field": return { ...e, obj: rewriteExpr(e.obj) };
-    case "record": return { ...e, spread: e.spread ? rewriteExpr(e.spread) : null,
-      fields: e.fields.map(fl => ({ ...fl, value: rewriteExpr(fl.value) })) };
-    case "arrayLiteral": return { ...e, elems: e.elems.map(rewriteExpr) };
-    case "conditional": return { ...e, cond: rewriteExpr(e.cond), then: rewriteExpr(e.then), else: rewriteExpr(e.else) };
-    case "optChain": return { ...e, obj: rewriteExpr(e.obj) };
-    case "nullish": return { ...e, left: rewriteExpr(e.left), right: rewriteExpr(e.right) };
-    case "forall": case "exists": return { ...e, body: rewriteExpr(e.body) };
-    case "someMatch": return { ...e, scrutinee: rewriteExpr(e.scrutinee), someBody: rewriteExpr(e.someBody), noneBody: rewriteExpr(e.noneBody) };
-    case "tagMatch": return { ...e, scrutinee: rewriteExpr(e.scrutinee),
-      cases: e.cases.map(c => ({ ...c, body: rewriteExpr(c.body) })),
-      fallthrough: e.fallthrough ? rewriteExpr(e.fallthrough) : null };
+    case "binop": return { ...e, left: rewriteExpr(e.left, hoisted), right: rewriteExpr(e.right, hoisted) };
+    case "unop": return { ...e, expr: rewriteExpr(e.expr, hoisted) };
+    case "call": return { ...e, fn: rewriteExpr(e.fn, hoisted), args: e.args.map(a => rewriteExpr(a, hoisted)) };
+    case "index": return { ...e, obj: rewriteExpr(e.obj, hoisted), idx: rewriteExpr(e.idx, hoisted) };
+    case "field": return { ...e, obj: rewriteExpr(e.obj, hoisted) };
+    case "record": return { ...e, spread: e.spread ? rewriteExpr(e.spread, hoisted) : null,
+      fields: e.fields.map(fl => ({ ...fl, value: rewriteExpr(fl.value, hoisted) })) };
+    case "arrayLiteral": return { ...e, elems: e.elems.map(el => rewriteExpr(el, hoisted)) };
+    case "conditional": return { ...e, cond: rewriteExpr(e.cond, hoisted), then: rewriteExpr(e.then, hoisted), else: rewriteExpr(e.else, hoisted) };
+    case "optChain": return { ...e, obj: rewriteExpr(e.obj, hoisted) };
+    case "nullish": return { ...e, left: rewriteExpr(e.left, hoisted), right: rewriteExpr(e.right, hoisted) };
+    case "forall": case "exists": return { ...e, body: rewriteExpr(e.body, hoisted) };
+    case "someMatch": return { ...e, scrutinee: rewriteExpr(e.scrutinee, hoisted), someBody: rewriteExpr(e.someBody, hoisted), noneBody: rewriteExpr(e.noneBody, hoisted) };
+    case "tagMatch": return { ...e, scrutinee: rewriteExpr(e.scrutinee, hoisted),
+      cases: e.cases.map(c => ({ ...c, body: rewriteExpr(c.body, hoisted) })),
+      fallthrough: e.fallthrough ? rewriteExpr(e.fallthrough, hoisted) : null };
+    // A lambda body is its own statement scope; rewrite it independently
+    // (its hoists belong inside the lambda, not the enclosing statement).
     case "lambda": return { ...e, body: rewriteStmts(e.body) };
   }
 }
@@ -141,44 +183,59 @@ function rewriteExpr(e: TExpr): TExpr {
  *  (`!fs.existsSync(...)`), the whole condition becomes a nondeterministic
  *  `bool` — havocing a subexpression would leave a non-bool `*` under `!`/`if`.
  *  A fully modellable guard (`!validPath(x)`, `s === ""`) is left intact, so
- *  the verifier still reasons about it. */
-function rewriteCond(e: TExpr): TExpr {
-  if (containsBad(e)) return { kind: "havoc", ty: { kind: "bool" } };
-  return rewriteExpr(e);
+ *  the verifier still reasons about it. Contracted calls inside an havoc'd
+ *  condition are still hoisted. */
+function rewriteCond(e: TExpr, hoisted: TStmt[]): TExpr {
+  if (containsBad(e)) {
+    for (const sink of collectSinks(e)) {
+      hoisted.push({ kind: "expr", expr: rewriteExpr(sink, hoisted) });
+    }
+    return { kind: "havoc", ty: { kind: "bool" } };
+  }
+  return rewriteExpr(e, hoisted);
 }
 
 function rewriteStmts(stmts: TStmt[]): TStmt[] {
   const out: TStmt[] = [];
   for (const s of stmts) {
-    // A side-effecting statement whose value is unmodellable (e.g.
-    // `xs.forEach(...)`, `console.log(x)`) carries no verification content —
-    // drop it. Value-binding statements keep their binding but havoc the RHS.
-    if (s.kind === "expr" && mustHavoc(s.expr)) continue;
-    out.push(rewriteStmt(s));
+    // A side-effecting statement whose value is unmodellable (`xs.forEach(...)`,
+    // `console.log(x)`) carries no verification content — drop it, but still
+    // preserve any contracted call nested inside it.
+    if (s.kind === "expr" && mustHavoc(s.expr)) {
+      const h: TStmt[] = [];
+      for (const sink of collectSinks(s.expr)) {
+        h.push({ kind: "expr", expr: rewriteExpr(sink, h) });
+      }
+      out.push(...h);
+      continue;
+    }
+    out.push(...rewriteStmt(s));
   }
   return out;
 }
 
-function rewriteStmt(s: TStmt): TStmt {
+function rewriteStmt(s: TStmt): TStmt[] {
+  const h: TStmt[] = [];
+  const rw = (e: TExpr) => rewriteExpr(e, h);
   switch (s.kind) {
-    case "let": return { ...s, init: rewriteExpr(s.init) };
-    case "ghostLet": return { ...s, init: rewriteExpr(s.init) };
-    case "assign": return { ...s, value: rewriteExpr(s.value) };
-    case "ghostAssign": return { ...s, value: rewriteExpr(s.value) };
-    case "return": return { ...s, value: rewriteExpr(s.value) };
-    case "expr": return { ...s, expr: rewriteExpr(s.expr) };
-    case "assert": return { ...s, expr: rewriteExpr(s.expr) };
-    case "if": return { ...s, cond: rewriteCond(s.cond), then: rewriteStmts(s.then), else: rewriteStmts(s.else) };
-    case "while": return { ...s, cond: rewriteCond(s.cond), body: rewriteStmts(s.body) };
-    case "forof": return { ...s, iterable: rewriteExpr(s.iterable), body: rewriteStmts(s.body) };
-    case "switch": return { ...s, expr: rewriteExpr(s.expr),
+    case "let": { const init = rw(s.init); return [...h, { ...s, init }]; }
+    case "ghostLet": { const init = rw(s.init); return [...h, { ...s, init }]; }
+    case "assign": { const value = rw(s.value); return [...h, { ...s, value }]; }
+    case "ghostAssign": { const value = rw(s.value); return [...h, { ...s, value }]; }
+    case "return": { const value = rw(s.value); return [...h, { ...s, value }]; }
+    case "expr": { const expr = rw(s.expr); return [...h, { ...s, expr }]; }
+    case "assert": { const expr = rw(s.expr); return [...h, { ...s, expr }]; }
+    case "if": { const cond = rewriteCond(s.cond, h); return [...h, { ...s, cond, then: rewriteStmts(s.then), else: rewriteStmts(s.else) }]; }
+    case "while": { const cond = rewriteCond(s.cond, h); return [...h, { ...s, cond, body: rewriteStmts(s.body) }]; }
+    case "forof": { const iterable = rw(s.iterable); return [...h, { ...s, iterable, body: rewriteStmts(s.body) }]; }
+    case "switch": { const expr = rw(s.expr); return [...h, { ...s, expr,
       cases: s.cases.map(c => ({ ...c, body: rewriteStmts(c.body) })),
-      defaultBody: rewriteStmts(s.defaultBody) };
-    case "someMatch": return { ...s, scrutinee: rewriteExpr(s.scrutinee), someBody: rewriteStmts(s.someBody), noneBody: rewriteStmts(s.noneBody) };
-    case "tagMatch": return { ...s, scrutinee: rewriteExpr(s.scrutinee),
+      defaultBody: rewriteStmts(s.defaultBody) }]; }
+    case "someMatch": { const scrutinee = rw(s.scrutinee); return [...h, { ...s, scrutinee, someBody: rewriteStmts(s.someBody), noneBody: rewriteStmts(s.noneBody) }]; }
+    case "tagMatch": { const scrutinee = rw(s.scrutinee); return [...h, { ...s, scrutinee,
       cases: s.cases.map(c => ({ ...c, body: rewriteStmts(c.body) })),
-      fallthrough: rewriteStmts(s.fallthrough) };
-    case "break": case "continue": case "throw": return s;
+      fallthrough: rewriteStmts(s.fallthrough) }]; }
+    case "break": case "continue": case "throw": return [s];
   }
 }
 
@@ -202,6 +259,11 @@ function bodyHasHavoc(stmts: TStmt[]): boolean {
  *  unmodellable (e.g. `const fs = require("fs")` pulled in by reachability). */
 export function autoHavocModule(mod: TModule): TModule {
   if (!mod.functions.some(f => f.autohavoc)) return mod;
+  // Names of calls carrying a `//@ requires` precondition — these must never be
+  // silently discarded by havoc (see collectSinks / rewriteExpr).
+  _guarded = new Set<string>();
+  for (const e of mod.externs) if (e.requires.length > 0) { _guarded.add(e.qualified); _guarded.add(e.flat); }
+  for (const f of mod.functions) if (f.requires.length > 0) _guarded.add(f.name);
   return {
     ...mod,
     constants: mod.constants.filter(c => !containsBad(c.value)),
