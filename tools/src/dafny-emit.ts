@@ -475,6 +475,9 @@ function emitStmt(s: Stmt, indent: number): string {
         return `${pad}var ${escapeName(s.name)}: ${tyToDafny(s.type)} := ${emitExpr(s.value)};`;
       return `${pad}var ${escapeName(s.name)} := ${emitExpr(s.value)};`;
     case "assign":
+      // Transform.ts lowers a bare expression statement to an assign with target _
+      // so special case this to Dafny's anonymous binding.
+      if (s.target === "_") return `${pad}var _ := ${emitExpr(s.value)};`;
       return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)};`;
     case "ghostLet":
       return `${pad}ghost var ${escapeName(s.name)}: ${tyToDafny(s.type)} := ${emitExpr(s.value)};`;
