@@ -169,6 +169,7 @@ export interface RawFunction {
   ensures: string[];
   decreases: string | null;
   pure: boolean;           // //@ pure — force pure even if syntactically impure
+  autohavoc: boolean;      // //@ autohavoc — abstract unmodellable exprs to havoc (file-level or per-fn)
   typeAnnotations: { name: string; type: string }[];
   body: RawStmt[];
   line: number;

@@ -77,6 +77,9 @@ function detectCrossFileExtern(
   const decls = symbol.getDeclarations();
   if (decls.length === 0) return null;
   const currentPath = sourceFile.getFilePath();
+  // A declaration in the current file is authoritative — don't resolve to a
+  // same-named definition in another file.
+  if (decls.some(d => d.getSourceFile().getFilePath() === currentPath)) return null;
   const externalDecl = decls.find(d => d.getSourceFile().getFilePath() !== currentPath);
   if (!externalDecl) return null;
   // Skip stdlib / typings — those have built-in dispatch elsewhere or are
@@ -1741,6 +1744,21 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
       return [{ name: p.getName(), tsType }];
     }),
     returnType: (() => {
+      // `async` with no `await`: the `Promise<T>` wrapper is just the calling
+      // convention (the body returns T-typed values), so unwrap to T. Gated on
+      // no `await` — that's the suspension point we can't model, and it only
+      // type-checks inside `async`, so the gate is self-justifying. With `await`
+      // present we leave `Promise<...>` (unmodellable) rather than atomize it.
+      const isAsync = (fn as { isAsync?: () => boolean }).isAsync?.() ?? false;
+      const noAwait = fn.getDescendantsOfKind(SyntaxKind.AwaitExpression).length === 0;
+      if (isAsync && noAwait) {
+        const args = fn.getReturnType().getTypeArguments();
+        if (args.length === 1) {
+          if (args[0].isAny()) return "unknown";
+          return _eraseGenerics(typeToString(args[0]));
+        }
+        return "void";  // Promise<void>
+      }
       const node = fn.getReturnTypeNode();
       if (node && Node.isUnionTypeNode(node)) return _eraseGenerics(_tsTypeFromUnionNode(node));
       if (node) return _eraseGenerics(node.getText());
@@ -1752,6 +1770,7 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
     ensures: annots.filter(a => a.kind === "ensures").map(a => a.expr),
     decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
     pure: hasPureAnnotation(fn, body && Node.isBlock(body) ? body.getStatements() as Node[] : undefined),
+    autohavoc: false,  // set in extractModule (file-level directive or per-function)
     typeAnnotations,
     body: extractedBody,
     line: fn.getStartLineNumber(),
@@ -1906,6 +1925,33 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       }
     }
   }
+  // Top-level inline closures: a handler passed directly to a module-level call,
+  // e.g. `app.get("/x", (req, res) => { //@ verify ... })`. "Move" each such
+  // closure to the top level by extracting it as a synthetic named function.
+  // Only top-level call arguments are considered (not nested lambdas), and only
+  // closures carrying a //@ verify (so ordinary callbacks aren't pulled in). The
+  // name is derived from the call's method and route literal (e.g. get_x).
+  const usedNames = new Set(allFns.map(f => f.name));
+  const sanitizeIdent = (s: string) => s.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "handler";
+  for (const stmt of sourceFile.getStatements()) {
+    if (!Node.isExpressionStatement(stmt)) continue;
+    const call = stmt.getExpression();
+    if (!Node.isCallExpression(call)) continue;
+    const callee = call.getExpression();
+    const method = Node.isPropertyAccessExpression(callee) ? callee.getName()
+      : Node.isIdentifier(callee) ? callee.getText() : "handler";
+    const routeArg = call.getArguments().find(a => Node.isStringLiteral(a));
+    const route = routeArg && Node.isStringLiteral(routeArg) ? routeArg.getLiteralValue() : "";
+    for (const arg of call.getArguments()) {
+      if (!Node.isArrowFunction(arg)) continue;
+      if (!hasLineDirective(arg.getFullText(), "verify")) continue;
+      const base = sanitizeIdent(route ? `${method}_${route}` : method);
+      let name = base, n = 2;
+      while (usedNames.has(name)) name = `${base}_${n++}`;
+      usedNames.add(name);
+      allFns.push({ name, node: arg as unknown as FunctionDeclaration, parentStmt: stmt });
+    }
+  }
 
   // `//@ extern` on a same-file declaration: register the function as an
   // opaque axiom (signature + any //@ requires/ensures), skip its body. Use
@@ -1913,18 +1959,43 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // regex — but its callers should still be verifiable against an
   // uninterpreted predicate. Parallel to auto-extern for cross-file calls,
   // and emitted the same way (`function {:axiom} foo(...)` in Dafny).
+  // Match a `//@ <kw>` directive only as the first non-whitespace on a line, so
+  // a mention mid-line in prose or inside a block/JSDoc comment (e.g. "the
+  // `//@ extern` annotation", or ` * //@ extern`) doesn't falsely trigger it.
+  function hasLineDirective(text: string, kw: string): boolean {
+    return new RegExp(String.raw`^[ \t]*//@ ${kw}\b`, "m").test(text);
+  }
   function hasExtern(f: { node: FunctionDeclaration; parentStmt?: Node }) {
-    if (f.node.getFullText().includes('//@ extern')) return true;
+    if (hasLineDirective(f.node.getFullText(), "extern")) return true;
     if (f.parentStmt) {
       for (const r of f.parentStmt.getLeadingCommentRanges()) {
-        if (r.getText().includes('//@ extern')) return true;
+        if (hasLineDirective(r.getText(), "extern")) return true;
       }
     }
     return false;
   }
+  // `//@ extern NS.method` registers the extern under a *dotted* qualified name,
+  // so a real `NS.method(args)` call dispatches to it (resolve.ts) with no
+  // wrapper — e.g. `//@ extern fs.readFileSync` lets you call `fs.readFileSync`
+  // directly while still discharging its `//@ requires`. The function declaration
+  // just carries the signature/contract; its own name is unused.
+  function externName(f: { node: FunctionDeclaration; parentStmt?: Node }): string | null {
+    const re = /^[ \t]*\/\/@ extern[ \t]+(\S+)/m;
+    const m = f.node.getFullText().match(re);
+    if (m) return m[1];
+    if (f.parentStmt) {
+      for (const r of f.parentStmt.getLeadingCommentRanges()) {
+        const m2 = r.getText().match(re);
+        if (m2) return m2[1];
+      }
+    }
+    return null;
+  }
   for (const f of allFns) {
     if (!hasExtern(f)) continue;
-    if (_externs.has(f.name)) continue;
+    const qualified = externName(f) ?? f.name;
+    const flat = qualified.replace(/\./g, "_");
+    if (_externs.has(qualified)) continue;
     const sig = f.node.getType().getCallSignatures()[0];
     if (!sig) continue;
     const typeParams = sig.getTypeParameters().map(tp => tp.getText());
@@ -1939,29 +2010,46 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     const annots = collectFunctionAnnotations(f.node);
     const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
     const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
-    _externs.set(f.name, { qualified: f.name, flat: f.name, typeParams, params, returnType, requires, ensures });
+    _externs.set(qualified, { qualified, flat, typeParams, params, returnType, requires, ensures });
   }
 
   // If any function has //@ verify, only extract those (brownfield mode).
   // For expression-body arrows, //@ verify may be on the parent variable statement.
   function hasVerify(f: { node: FunctionDeclaration; parentStmt?: Node }) {
-    if (f.node.getFullText().includes('//@ verify')) return true;
+    if (hasLineDirective(f.node.getFullText(), "verify")) return true;
     if (f.parentStmt) {
       for (const r of f.parentStmt.getLeadingCommentRanges()) {
-        if (r.getText().includes('//@ verify')) return true;
+        if (hasLineDirective(r.getText(), "verify")) return true;
       }
     }
     return false;
   }
-  const hasVerifyDirective = sourceFile.getFullText().includes('//@ verify');
+  const hasVerifyDirective = hasLineDirective(sourceFile.getFullText(), "verify");
   const nonExternFns = allFns.filter(f => !hasExtern(f));
   const fnsToExtract = hasVerifyDirective ? nonExternFns.filter(hasVerify) : nonExternFns;
+
+  // `//@ autohavoc` — enable the auto-havoc abstraction (see autohavoc.ts).
+  // File-level: a directive at column 0 (top of file) enables it for every
+  // function. Per-function: the annotation attached to a function (or its
+  // parent variable statement), mirroring `//@ verify`.
+  const fileAutohavoc = /^\/\/@ autohavoc\b/m.test(sourceFile.getFullText());
+  function hasAutohavoc(f: { node: FunctionDeclaration; parentStmt?: Node }) {
+    if (fileAutohavoc) return true;
+    if (hasLineDirective(f.node.getFullText(), "autohavoc")) return true;
+    if (f.parentStmt) {
+      for (const r of f.parentStmt.getLeadingCommentRanges()) {
+        if (hasLineDirective(r.getText(), "autohavoc")) return true;
+      }
+    }
+    return false;
+  }
 
   const functions = fnsToExtract.map(f => {
     // For expression-body arrows, annotations come from the parent variable statement
     const parentAnnots = f.parentStmt ? parseAnnotations(f.parentStmt) : undefined;
     const raw = extractFunction(f.node, parentAnnots);
     raw.name = f.name;  // use the const name, not "<anonymous>"
+    raw.autohavoc = hasAutohavoc(f);
     return raw;
   });
 
