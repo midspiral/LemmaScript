@@ -1454,6 +1454,7 @@ function resolveFunction(
     decreases: fn.decreases ? resolveSpec(fn.decreases, requiresCtx) : null,
     isPure: opts?.forcePure !== undefined ? opts.forcePure : pureFns.has(fn.name),
     forcePure: fn.pure,
+    autohavoc: fn.autohavoc,
     body: resolveBlock(fn.body, bodyCtx),
   };
 }

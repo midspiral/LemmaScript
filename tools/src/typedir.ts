@@ -117,6 +117,7 @@ export interface TFunction {
   decreases: TExpr | null;
   isPure: boolean;          // no while, no mutable let
   forcePure: boolean;       // //@ pure — emit function by method if body can't be pure
+  autohavoc: boolean;       // //@ autohavoc — abstract unmodellable exprs to havoc
   body: TStmt[];
 }
 

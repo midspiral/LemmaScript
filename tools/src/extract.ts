@@ -1752,6 +1752,7 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
     ensures: annots.filter(a => a.kind === "ensures").map(a => a.expr),
     decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
     pure: hasPureAnnotation(fn, body && Node.isBlock(body) ? body.getStatements() as Node[] : undefined),
+    autohavoc: false,  // set in extractModule (file-level directive or per-function)
     typeAnnotations,
     body: extractedBody,
     line: fn.getStartLineNumber(),
@@ -1957,11 +1958,28 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   const nonExternFns = allFns.filter(f => !hasExtern(f));
   const fnsToExtract = hasVerifyDirective ? nonExternFns.filter(hasVerify) : nonExternFns;
 
+  // `//@ autohavoc` — enable the auto-havoc abstraction (see autohavoc.ts).
+  // File-level: a directive at column 0 (top of file) enables it for every
+  // function. Per-function: the annotation attached to a function (or its
+  // parent variable statement), mirroring `//@ verify`.
+  const fileAutohavoc = /^\/\/@ autohavoc\b/m.test(sourceFile.getFullText());
+  function hasAutohavoc(f: { node: FunctionDeclaration; parentStmt?: Node }) {
+    if (fileAutohavoc) return true;
+    if (f.node.getFullText().includes('//@ autohavoc')) return true;
+    if (f.parentStmt) {
+      for (const r of f.parentStmt.getLeadingCommentRanges()) {
+        if (r.getText().includes('//@ autohavoc')) return true;
+      }
+    }
+    return false;
+  }
+
   const functions = fnsToExtract.map(f => {
     // For expression-body arrows, annotations come from the parent variable statement
     const parentAnnots = f.parentStmt ? parseAnnotations(f.parentStmt) : undefined;
     const raw = extractFunction(f.node, parentAnnots);
     raw.name = f.name;  // use the const name, not "<anonymous>"
+    raw.autohavoc = hasAutohavoc(f);
     return raw;
   });
 
