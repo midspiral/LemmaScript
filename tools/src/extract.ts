@@ -77,6 +77,9 @@ function detectCrossFileExtern(
   const decls = symbol.getDeclarations();
   if (decls.length === 0) return null;
   const currentPath = sourceFile.getFilePath();
+  // A declaration in the current file is authoritative — don't resolve to a
+  // same-named definition in another file.
+  if (decls.some(d => d.getSourceFile().getFilePath() === currentPath)) return null;
   const externalDecl = decls.find(d => d.getSourceFile().getFilePath() !== currentPath);
   if (!externalDecl) return null;
   // Skip stdlib / typings — those have built-in dispatch elsewhere or are
