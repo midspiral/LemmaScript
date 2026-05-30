@@ -164,12 +164,12 @@ lemma insertAt_ensures<T>(s: seq<T>, i: int, x: T)
 
 function ok(m: Model): Result<Model, Err>
 {
-  true_(m)
+  Result.true_(m)
 }
 
 function err(e: Err): Result<Model, Err>
 {
-  false_(e)
+  Result.false_(e)
 }
 
 function init(): Model
@@ -276,7 +276,7 @@ function rebaseOther(remote: Action, local: Action): Action
         if (remote.taskId == local.taskId) then
           local
         else
-          MoveTask(local.taskId, local.toList, degradeIfAnchorMoved(remote.taskId, local.taskPlace))
+          Action.MoveTask(local.taskId, local.toList, degradeIfAnchorMoved(remote.taskId, local.taskPlace))
       else
         local
 }
