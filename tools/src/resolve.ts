@@ -945,7 +945,13 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "arrayLiteral": {
-      const elems = e.elems.map(el => resolveExpr(el, ctx));
+      // Thread the expected element type into each element, so a record/union
+      // literal in an array resolves to its named datatype rather than an
+      // anonymous tuple (mirrors return-position and call-argument records, which
+      // get their type via ctx.returnTy). Only narrow when the context type is an
+      // array; otherwise leave ctx untouched.
+      const elemCtx = ctx.returnTy.kind === "array" ? { ...ctx, returnTy: ctx.returnTy.elem } : ctx;
+      const elems = e.elems.map(el => resolveExpr(el, elemCtx));
       const elemTy: Ty = elems.length > 0 ? elems[0].ty : { kind: "unknown" };
       return { kind: "arrayLiteral", elems, ty: { kind: "array", elem: elemTy } };
     }
@@ -1111,9 +1117,11 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // to its underlying type, so array methods / index-assignment on the
       // local dispatch correctly (params get the same treatment, see makeParams).
       const declTy = expandAlias(resolveTsType(s.tsType, ctx.overrides, s.name), ctx.typeDecls);
-      // Propagate declared type as returnTy so nested record expressions
-      // resolve union variants correctly (e.g., EffectState → mode: EffectMode → { kind: 'Idle' })
-      const initCtx = declTy.kind === "user" ? { ...ctx, returnTy: declTy } : ctx;
+      // Propagate declared type as returnTy so nested record expressions resolve
+      // union variants correctly (e.g., EffectState → mode: EffectMode → { kind:
+      // 'Idle' }). Arrays too, so `const xs: Foo[] = [{...}]` threads the element
+      // type into the array literal (see the arrayLiteral case).
+      const initCtx = (declTy.kind === "user" || declTy.kind === "array") ? { ...ctx, returnTy: declTy } : ctx;
       const init = coerceStr(resolveExpr(s.init, initCtx), declTy);
       let ty: Ty;
       if (isUnmodeledTy(declTy, ctx.typeDecls) && !isUnmodeledTy(init.ty, ctx.typeDecls)) {

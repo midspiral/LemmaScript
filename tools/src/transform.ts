@@ -622,12 +622,17 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
               if (nonDiscFields.length === 0) {
                 return { kind: "constructor", name: variantName, type: tyName };
               }
-              // Constructor with args: match variant field order
+              // Constructor with args: match variant field order. Emit a bare `app`
+              // (Dafny renders `variantName(args)`, a valid unqualified constructor
+              // call — unchanged output) tagged with `ctorOf` so the Lean emitter,
+              // which CANNOT take a bare constructor name, qualifies it as
+              // `BaseType.variantName args`. Use the BASE type name (no generic args):
+              // `Result.true_` is valid in Lean; `Result<Model,Err>.true_` is not.
               const args = variant.fields.map(vf => {
                 const ef = nonDiscFields.find(f => f.name === vf.name);
                 return ef ? lowerExpr(ef.value, binds) : { kind: "var" as const, name: "None" };
               });
-              return { kind: "app", fn: variantName, args };
+              return { kind: "app", fn: variantName, args, ctorOf: baseName };
             }
           }
         }

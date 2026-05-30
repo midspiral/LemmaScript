@@ -227,6 +227,10 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       const args = e.args.map(a =>
         (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall") ? `(${emitExpr(a)})` : emitExpr(a)
       );
+      // Datatype constructor (tagged by transform): Lean needs the qualified name
+      // `BaseType.variant`; a bare `variant` is an unknown identifier. (Dafny keeps
+      // the bare form, so its output is unaffected.)
+      if (e.ctorOf) return args.length ? `${e.ctorOf}.${e.fn} ${args.join(" ")}` : `${e.ctorOf}.${e.fn}`;
       // SetToSeq → .toArray for Lean (HashSet has native toArray)
       if (e.fn === "SetToSeq" && args.length === 1) return `${args[0]}.toArray`;
       // perm(a, b) → `List.Perm` on the underlying lists. Dafny lowers it to
