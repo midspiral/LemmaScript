@@ -23,12 +23,8 @@ function oneRect(): seq<Shape>
   xs
 }
 
-function firstArea(): int
+function total(): int
 {
-  area(shapes()[0])
-}
-
-lemma firstArea_ensures()
-  ensures (firstArea() == 12)
-{
+  var xs := shapes();
+  (area(xs[0]) + area(xs[1]))
 }

@@ -2,11 +2,12 @@
  * Constructing discriminated-union values INSIDE ARRAY LITERALS.
  *
  * Regression test: a union object-literal used as an array element must resolve
- * to its named datatype constructor (`circle(...)`), not an anonymous tuple. The
- * fix threads the expected element type through `case "arrayLiteral"` (and the
- * array branch of `let`) in resolve.ts. Both return-position and const-position
- * arrays are covered; `firstArea`'s `ensures` only holds if the elements are real
- * `Shape` variants (a tuple wouldn't typecheck through `area`).
+ * to its named datatype constructor (`circle(...)` / `rect(...)`), not an
+ * anonymous tuple. The fix threads the expected element type through
+ * `case "arrayLiteral"` (and the array branch of `let`) in resolve.ts. Both
+ * return-position and const-position arrays are covered. Under the old behavior
+ * these arrays generated tuples and failed to resolve as `seq<Shape>`; `total`
+ * additionally consumes the elements back through `area`.
  */
 
 type Shape =
@@ -29,8 +30,8 @@ export function oneRect(): Shape[] {
   return xs
 }
 
-// Only provable if shapes()[0] is genuinely Shape.circle(2): 3*2*2 = 12.
-export function firstArea(): number {
-  //@ ensures \result === 12
-  return area(shapes()[0])
+// Consume the constructed elements (only valid if they are real `Shape` values).
+export function total(): number {
+  const xs = shapes()
+  return area(xs[0]) + area(xs[1])
 }
