@@ -17,7 +17,7 @@ export type Expr =
   | { kind: "constructor"; name: string; type?: string; args?: Expr[] }   // .idle / .some x — name is lowercase; emitters capitalize per backend
   | { kind: "binop"; op: string; left: Expr; right: Expr }
   | { kind: "unop"; op: string; expr: Expr }
-  | { kind: "app"; fn: string; args: Expr[] }            // f a b
+  | { kind: "app"; fn: string; args: Expr[]; ctorOf?: string }  // f a b; ctorOf set ⇒ fn is a datatype constructor of that (base) type. Dafny takes the bare name `fn(args)`; Lean must qualify it as `ctorOf.fn args`.
   | { kind: "field"; obj: Expr; field: string }           // x.res, arr.size
   | { kind: "toNat"; expr: Expr }                               // expr.toNat
   | { kind: "toReal"; expr: Expr }                             // int/nat → real coercion

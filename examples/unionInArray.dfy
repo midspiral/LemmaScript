@@ -14,12 +14,12 @@ function area(s: Shape): int
 
 function shapes(): seq<Shape>
 {
-  [Shape.circle(2), Shape.rect(3, 4)]
+  [circle(2), rect(3, 4)]
 }
 
 function oneRect(): seq<Shape>
 {
-  var xs := [Shape.rect(1, 5)];
+  var xs := [rect(1, 5)];
   xs
 }
 
