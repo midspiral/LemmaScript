@@ -334,6 +334,12 @@ function emitExpr(e: Expr): string {
         needPreamble("BitAnd");
         return `BitAnd(${emitExpr(e.left)}, ${emitExpr(e.right)})`;
       }
+      // x | y → BitOr(x, y) (recursive, mirrors BitAnd). Dafny has no `|` on int,
+      // only on bitvectors.
+      if (e.op === "|") {
+        needPreamble("BitOr");
+        return `BitOr(${emitExpr(e.left)}, ${emitExpr(e.right)})`;
+      }
       // int→real coercion is now injected upstream in transform (toReal nodes),
       // which has full type information — including real-typed variables, not
       // just literals — so no literal-based coercion is needed here.
@@ -721,6 +727,15 @@ const BIT_AND = `function BitAnd(x: int, y: int): int
   else 2 * BitAnd(x / 2, y / 2) + (if x % 2 == 1 && y % 2 == 1 then 1 else 0)
 }`;
 
+const BIT_OR = `function BitOr(x: int, y: int): int
+  requires x >= 0 && y >= 0
+  decreases x
+{
+  if x == 0 then y
+  else if y == 0 then x
+  else 2 * BitOr(x / 2, y / 2) + (if x % 2 == 1 || y % 2 == 1 then 1 else 0)
+}`;
+
 const JS_FLOOR_DIV = `function JSFloorDiv(a: int, b: int): int
   requires b != 0
 {
@@ -1010,6 +1025,7 @@ const PREAMBLE_CODE: [string, string][] = [
   ["SetToSeq", SET_TO_SEQ],
   ["Pow2", POW2],
   ["BitAnd", BIT_AND],
+  ["BitOr", BIT_OR],
   ["JSFloorDiv", JS_FLOOR_DIV],
   ["CeilReal", CEIL_REAL],
   ["FloorReal", FLOOR_REAL],
