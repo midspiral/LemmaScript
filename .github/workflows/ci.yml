@@ -124,6 +124,8 @@ jobs:
             branch: main
           - repo: midspiral/eventab-lemmascript
             branch: main
+          - repo: midspiral/eslint-plugin-with-lemmascript
+            branch: main
     steps:
       - uses: actions/checkout@v6
 
