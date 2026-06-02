@@ -32,6 +32,7 @@
     "url": "https://github.com/midspiral/LemmaScript"
   },
   "keywords": [
+    "lemmascript",
     "verification",
     "typescript",
     "lean4",
