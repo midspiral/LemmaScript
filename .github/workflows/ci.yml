@@ -92,6 +92,8 @@ jobs:
             branch: main
           - repo: midspiral/hono-lemmascript
             branch: lemmascript
+          - repo: midspiral/hono-rate-limiter-with-lemmascript
+            branch: main
           - repo: CHARM-BDF/charmchat
             branch: lemma
           - repo: midspiral/xyflow-lemmascript
