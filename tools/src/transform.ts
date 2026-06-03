@@ -689,7 +689,14 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           })),
         };
       }
-      return { kind: "record", spread: null, fields: e.fields.map(f => ({ name: f.name, value: lowerExpr(f.value, binds) })) };
+      // Carry the resolved record type so the emitter can pick the right
+      // constructor when two datatypes share a field-name set (Event vs
+      // SparseEvent) — structural matching alone would take the first-declared.
+      const recName = e.ty.kind === "user"
+        ? (e.ty.name.includes("<") ? e.ty.name.slice(0, e.ty.name.indexOf("<")) : e.ty.name)
+        : undefined;
+      const ctor = recName && _typeDecls.find(d => d.name === recName && d.kind === "record") ? recName : undefined;
+      return { kind: "record", spread: null, ctor, fields: e.fields.map(f => ({ name: f.name, value: lowerExpr(f.value, binds) })) };
     }
 
     case "arrayLiteral":

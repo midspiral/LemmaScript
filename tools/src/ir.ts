@@ -22,7 +22,7 @@ export type Expr =
   | { kind: "toNat"; expr: Expr }                               // expr.toNat
   | { kind: "toReal"; expr: Expr }                             // int/nat → real coercion
   | { kind: "index"; arr: Expr; idx: Expr }                // arr[idx]!
-  | { kind: "record"; spread: Expr | null; fields: { name: string; value: Expr }[] }
+  | { kind: "record"; spread: Expr | null; fields: { name: string; value: Expr }[]; ctor?: string }
   | { kind: "arrayLiteral"; elems: Expr[] }
   | { kind: "emptyMap" }
   | { kind: "emptySet" }

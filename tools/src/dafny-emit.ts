@@ -406,11 +406,17 @@ function emitExpr(e: Expr): string {
       let ctorName: string | undefined;
       if (e.fields.length > 0) {
         const fieldNames = new Set(e.fields.map(f => f.name));
+        const matches: string[] = [];
         for (const [name, fields] of _structureDecls) {
           if (fields.length >= e.fields.length && fields.every(f => fieldNames.has(f.name) || f.type.kind === "optional")) {
-            ctorName = name; break;
+            matches.push(name);
           }
         }
+        // When several datatypes share this field-name set (e.g. Event vs
+        // SparseEvent), disambiguate by the resolved record type carried from
+        // transform; otherwise take the sole structural match.
+        if (e.ctor && matches.includes(e.ctor)) ctorName = e.ctor;
+        else if (matches.length > 0) ctorName = matches[0];
         if (!ctorName) ctorName = _recordCtors.get(e.fields[0].name);
       }
       if (ctorName) {
