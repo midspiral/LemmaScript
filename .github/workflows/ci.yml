@@ -120,6 +120,8 @@ jobs:
             branch: main
           - repo: midspiral/quorum-lemmascript
             branch: main
+          - repo: midspiral/quorum-tutorial-lemmascript
+            branch: main
           - repo: midspiral/quota-lemmascript
             branch: main
           - repo: midspiral/henri-lemmascript
