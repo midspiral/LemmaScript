@@ -130,6 +130,8 @@ jobs:
             branch: main
           - repo: midspiral/eslint-plugin-with-lemmascript
             branch: main
+          - repo: midspiral/infisical-lemmascript
+            branch: lemmascript
     steps:
       - uses: actions/checkout@v6
 
