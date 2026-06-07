@@ -658,6 +658,7 @@ function emitDecl(d: Decl): string {
       const lines = [methodHeader(`method ${d.name}${tp}`, d.params, d.returnType)];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
+      if (d.decreases) lines.push(`  decreases ${emitExpr(d.decreases)}`);
       lines.push(`{`);
       lines.push(emitStmts(d.body, 1));
       lines.push(`}`);

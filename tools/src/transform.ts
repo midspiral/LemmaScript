@@ -1934,6 +1934,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
       returnType: fn.returnTy,
       requires: fn.requires.map(transformExpr),
       ensures,
+      decreases: fn.decreases ? transformExpr(fn.decreases) : null,
       body,
     };
   });
@@ -1952,6 +1953,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
         returnType: fn.returnTy,
         requires: fn.requires.map(transformExpr),
         ensures,
+        decreases: fn.decreases ? transformExpr(fn.decreases) : null,
         body,
       };
     });
