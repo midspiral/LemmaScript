@@ -425,7 +425,8 @@ function peepholeDecl(d: Decl): Decl {
         decreases: d.decreases ? peepholeExpr(d.decreases) : null };
     case "method":
       return { ...d, body: peepholeStmts(d.body),
-        requires: d.requires.map(peepholeExpr), ensures: d.ensures.map(peepholeExpr) };
+        requires: d.requires.map(peepholeExpr), ensures: d.ensures.map(peepholeExpr),
+        decreases: d.decreases ? peepholeExpr(d.decreases) : null };
     case "namespace": return { ...d, decls: d.decls.map(peepholeDecl) };
     case "class": return { ...d, methods: d.methods.map(m => peepholeDecl(m) as typeof m) };
     case "const": return { ...d, value: peepholeExpr(d.value) };

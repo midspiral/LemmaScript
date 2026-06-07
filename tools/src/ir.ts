@@ -116,6 +116,7 @@ export interface FnMethod {
   returnType: Ty;
   requires: Expr[];
   ensures: Expr[];
+  decreases: Expr | null;
   body: Stmt[];
 }
 
