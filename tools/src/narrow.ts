@@ -50,31 +50,35 @@ let _typeDecls: TypeDeclInfo[] = [];
 /** Detect optional checks: `e !== undefined`, `e === undefined`, or `!e` for a
  *  pure-access-path optional-typed e. `!e` is equivalent to `=== undefined`.
  *  Following TS, only pure access paths narrow; complex scrutinees return null. */
-function parseOptionalCheck(cond: TExpr): { scrutinee: TExpr; innerTy: Ty; negated: boolean; binderHint: string } | null {
-  // `!e` where e is optional — same as `e === undefined` (negated: true).
+function parseOptionalCheck(cond: TExpr): { scrutinee: TExpr; innerTy: Ty; negated: boolean; binderHint: string; truthiness: boolean } | null {
+  // `!e` where e is optional — a truthiness form: false iff e is absent OR its
+  // inner value is itself falsy (so `Some(0)`/`Some("")` count as falsy too).
   if (cond.kind === "unop" && cond.op === "!" && cond.expr.ty.kind === "optional") {
     const e = cond.expr;
     const innerTy = cond.expr.ty.inner;
     const hint = binderHintFor(e);
     if (hint === null) return null;
-    return { scrutinee: e, innerTy, negated: true, binderHint: hint };
+    return { scrutinee: e, innerTy, negated: true, binderHint: hint, truthiness: true };
   }
   if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) {
-    // Bare optional truthiness: `if (e)` where e: T | undefined — same as `e !== undefined`.
+    // Bare optional truthiness: `if (e)` where e: T | undefined — true iff e is
+    // present AND its inner value is truthy.
     if (cond.ty.kind === "optional") {
       const hint = binderHintFor(cond);
       if (hint === null) return null;
-      return { scrutinee: cond, innerTy: cond.ty.inner, negated: false, binderHint: hint };
+      return { scrutinee: cond, innerTy: cond.ty.inner, negated: false, binderHint: hint, truthiness: true };
     }
     return null;
   }
+  // Explicit `e === undefined` / `e !== undefined` — a pure presence check,
+  // independent of the inner value (so NOT a truthiness form).
   let e: TExpr | null = null;
   if (cond.right.kind === "var" && cond.right.name === "undefined") e = cond.left;
   if (cond.left.kind === "var" && cond.left.name === "undefined") e = cond.right;
   if (!e || e.ty.kind !== "optional") return null;
   const hint = binderHintFor(e);
   if (hint === null) return null;
-  return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binderHint: hint };
+  return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binderHint: hint, truthiness: false };
 }
 
 function binderHintFor(e: TExpr): string | null {
@@ -205,6 +209,14 @@ function recurseStmt(s: TStmt): TStmt {
   }
 }
 
+// `Some(0)` / `Some("")` / `Some(false)` are falsy, so a truthiness check
+// (`if (o)`, `!o`, `o ? :`) over a nullable primitive must still test the bound
+// value. Nullable objects/arrays are always truthy, and `!== undefined` is a pure
+// presence check — neither needs the gate.
+type Check = NonNullable<ReturnType<typeof parseOptionalCheck>>;
+const canBeFalsy = (c: Check) => c.truthiness && ["int", "nat", "string", "bool"].includes(c.innerTy.kind);
+const bound = (c: Check): TExpr => ({ kind: "var", name: c.binderHint, ty: c.innerTy });
+
 // ── Rules ───────────────────────────────────────────────────
 
 /** Rule: `if (e !== undefined) then else` where e is a simple optional var or
@@ -221,7 +233,8 @@ function ruleIfOptionalSimple(s: TStmt): TStmt | null {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
     binder: check.binderHint,
-    someBody, noneBody,
+    someBody: canBeFalsy(check) ? [{ kind: "if", cond: bound(check), then: someBody, else: noneBody }] : someBody,
+    noneBody,
   };
 }
 
@@ -241,7 +254,7 @@ function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[]): TStmt | null {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
     binder: check.binderHint,
-    someBody: rest,
+    someBody: canBeFalsy(check) ? [{ kind: "if", cond: bound(check), then: rest, else: noneBranch }] : rest,
     noneBody: noneBranch,
   };
 }
@@ -297,7 +310,8 @@ function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
     binder: check.binderHint,
-    someBody, noneBody,
+    someBody: canBeFalsy(check) ? { kind: "conditional", cond: bound(check), then: someBody, else: noneBody, ty: e.ty } : someBody,
+    noneBody,
     ty: e.ty,
   };
 }
