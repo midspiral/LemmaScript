@@ -1590,7 +1590,7 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
         const elseStmts = s.else.length > 0 ? [...s.else, ...rest] : rest;
         const elseExpr = transformPureBody(elseStmts, typeDecls);
         if (!elseExpr) return null;
-        return { kind: "if", cond: transformExpr(s.cond), then: thenExpr, else: elseExpr };
+        return { kind: "if", cond: coerceCondToBool(transformExpr(s.cond), s.cond.ty), then: thenExpr, else: elseExpr };
       }
       case "switch": return transformPureSwitch(s, typeDecls);
       case "someMatch": {
