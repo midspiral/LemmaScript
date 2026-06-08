@@ -259,14 +259,17 @@ function flattenLambdaBody(stmts: Stmt[]): Expr | null {
  */
 
 /** JS truthiness coercion for `if`/`while`/`?:` conditions.
- *  Dafny requires bool; coerce number→`≠0`, string/array→length>0.
+ *  Dafny requires bool; coerce number→`≠0`, string→non-empty, array→`true`
+ *  (every array, even `[]`, is truthy in JS).
  *  Optional conds are handled separately by narrow.ts (rewritten to someMatch). */
 function coerceCondToBool(cond: Expr, ty: Ty): Expr {
   if (ty.kind === "bool") return cond;
   if (ty.kind === "int" || ty.kind === "nat")
     return { kind: "binop", op: "≠", left: cond, right: { kind: "num", value: 0 } };
-  if (ty.kind === "string" || ty.kind === "array")
+  if (ty.kind === "string")
     return { kind: "binop", op: ">", left: { kind: "field", obj: cond, field: "size" }, right: { kind: "num", value: 0 } };
+  if (ty.kind === "array")
+    return { kind: "bool", value: true };
   return cond;
 }
 
@@ -320,6 +323,14 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             { pattern: ".none", body: { kind: "bool", value: true } },
           ],
         };
+      }
+      // Number truthiness: !n → n == 0
+      if (e.op === "!" && (e.expr.ty.kind === "int" || e.expr.ty.kind === "nat"))
+        return { kind: "binop", op: "=", left: lowerExpr(e.expr, binds), right: { kind: "num", value: 0 } };
+      // Array truthiness: every array is truthy in JS, so !xs is always false.
+      if (e.op === "!" && e.expr.ty.kind === "array") {
+        lowerExpr(e.expr, binds);  // preserve any lifted side effects; value is the constant false
+        return { kind: "bool", value: false };
       }
       return { kind: "unop", op: e.op === "!" ? "¬" : e.op, expr: lowerExpr(e.expr, binds) };
 
