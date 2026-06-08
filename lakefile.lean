@@ -121,6 +121,7 @@ lean_lib Examples where
     `«toposort.spec», `«toposort.def», `«toposort.proof»,
     `«majority.types», `«majority.spec», `«majority.def», `«majority.proof»,
     `«perm.types», `«perm.def», `«perm.proof»,
-    `«unionInArray.types», `«unionInArray.def»
+    `«unionInArray.types», `«unionInArray.def»,
+    `«truthiness.types», `«truthiness.def», `«truthiness.proof»
   ]
   extraDepTargets := #[``downloadDependencies]

@@ -267,7 +267,7 @@ function coerceCondToBool(cond: Expr, ty: Ty): Expr {
   if (ty.kind === "int" || ty.kind === "nat")
     return { kind: "binop", op: "≠", left: cond, right: { kind: "num", value: 0 } };
   if (ty.kind === "string")
-    return { kind: "binop", op: ">", left: { kind: "field", obj: cond, field: "size" }, right: { kind: "num", value: 0 } };
+    return { kind: "binop", op: ">", left: { kind: "field", obj: cond, field: "length" }, right: { kind: "num", value: 0 } };
   if (ty.kind === "array")
     return { kind: "bool", value: true };
   return cond;
@@ -434,7 +434,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const rightIsUndef = e.right.kind === "var" && e.right.name === "undefined";
         return {
           kind: "if",
-          cond: { kind: "binop", op: ">", left: { kind: "field", obj: left, field: "size" }, right: { kind: "num", value: 0 } },
+          // strings carry the `length` marker, arrays `size` — both render to `|x|`
+          // in Dafny, but Lean's String has no `.size` field (it's `.length`).
+          cond: { kind: "binop", op: ">", left: { kind: "field", obj: left, field: e.left.ty.kind === "string" ? "length" : "size" }, right: { kind: "num", value: 0 } },
           then: rightIsUndef ? { kind: "app", fn: "Some", args: [left] } : left,
           else: right,
         };
