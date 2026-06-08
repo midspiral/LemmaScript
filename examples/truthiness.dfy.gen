@@ -167,17 +167,8 @@ function optStrCond(o: Option<string>): int
 
 lemma optStrCond_ensures(o: Option<string>)
   ensures ((match o { case Some(i_) => false case None => true }) ==> (optStrCond(o) == 0))
+  ensures ((match o { case Some(i_value) => (i_value == "") case None => false }) ==> (optStrCond(o) == 0))
   ensures (match o { case Some(i_o_val) => ((i_o_val != "") ==> (optStrCond(o) == 1)) case None => true })
-{
-}
-
-function emptyStrFalsy(): int
-{
-  optStrCond(Some(""))
-}
-
-lemma emptyStrFalsy_ensures()
-  ensures (emptyStrFalsy() == 0)
 {
 }
 

@@ -351,8 +351,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           right: { kind: "constructor", name: e.right.value, type: objTy },
         };
       }
-      // String literal comparison — constructor if user type, string literal if string
-      if ((e.op === "===" || e.op === "!==") && e.right.kind === "str") {
+      // String literal comparison — constructor if user type, string literal if string.
+      // Skip when the left is optional: fall through to the optional-comparison rule,
+      // which unwraps and compares the inner value (`Some(v) => v == "")`.
+      if ((e.op === "===" || e.op === "!==") && e.right.kind === "str" && e.left.ty.kind !== "optional") {
         const left = lowerExpr(e.left, binds);
         const leftTy = e.left.ty.kind === "user" ? e.left.ty.name : undefined;
         const right: Expr = isUser(e.left.ty)
@@ -376,7 +378,13 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             ],
           };
         }
-        const valExpr = lowerExpr(valSide, binds);
+        // A string literal compared against an optional user type is the variant
+        // constructor (`o === "red"` → `Some(v) => v == Color.red`), mirroring the
+        // non-optional string-literal rule above.
+        const innerTy = optSide.ty.kind === "optional" ? optSide.ty.inner : optSide.ty;
+        const valExpr: Expr = valSide.kind === "str" && innerTy.kind === "user"
+          ? { kind: "constructor", name: valSide.value, type: innerTy.name }
+          : lowerExpr(valSide, binds);
         const cmpOp = BOOL_OP_MAP[e.op] ?? e.op;
         const noneVal = e.op === "!==" ? true : false;
         const bound = matchBinder("value");

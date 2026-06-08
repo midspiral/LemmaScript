@@ -86,15 +86,10 @@ function optNumNot(o: number | undefined): number {
 // ── optional string: falsy iff absent OR empty ──────────────
 function optStrCond(o: string | undefined): number {
   //@ ensures o === undefined ==> \result === 0
+  //@ ensures o === "" ==> \result === 0
   //@ ensures (o !== undefined && o !== "") ==> \result === 1
   if (o) return 1;
   return 0;
-}
-
-// Some("") is falsy too — not just absence.
-function emptyStrFalsy(): number {
-  //@ ensures \result === 0
-  return optStrCond("");
 }
 
 // ── explicit presence is NOT truthiness: Some(0) is present ──
