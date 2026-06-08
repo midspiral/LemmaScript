@@ -76,7 +76,7 @@ TYPE     := IDENT                             // 'nat', 'int', 'string', user ty
 
 **`\result`** refers to the function's return value (following Frama-C/ACSL convention). It is only valid in `ensures` annotations. The `\` prefix distinguishes it from any TS variable named `result`.
 
-**`forall(k, P)`** infers the type of `k`: explicit `: nat` → `Nat`/`nat`; if `k` is used as a collection key or element (e.g., `map.has(k)`, `set.has(k)`, `arr.includes(k)`) → the collection's key/element type; otherwise `Int`/`int`. Same for `exists`.
+**`forall(k, P)`** accepts an optional explicit type annotation, which may be **any** type — `forall(k: nat, …)`, `forall(s: string, …)`, `forall(x: MyType, …)`. When `k` is unannotated, its type is inferred: if `k` is used as a collection key or element (e.g., `map.has(k)`, `set.has(k)`, `arr.includes(k)`) → the collection's key/element type; otherwise `Int`/`int`. Same for `exists`.
 
 **`perm(a, b)`** is a spec-only predicate that holds iff arrays `a` and `b` are reorderings of each other (equal as multisets). Both arguments must be arrays of the same element type. It has no runtime counterpart, so it is rejected outside `//@` annotations. It lowers to Dafny's `multiset(a) == multiset(b)` (a transparent `Perm<T(==)>` predicate, so hand-proofs in the companion `.dfy` can reason with `multiset` directly); the element type must support equality. **Dafny backend only** — restrict files that use it with `//@ backend dafny`. The canonical use is lifting a count's concatenation-homomorphism to full permutation invariance: given `perm(xs, ys)`, an order-insensitive aggregate over `xs` equals the one over `ys`. See [`examples/perm.ts`](examples/perm.ts).
 
