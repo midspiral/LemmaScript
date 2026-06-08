@@ -259,12 +259,12 @@ function flattenLambdaBody(stmts: Stmt[]): Expr | null {
  */
 
 /** JS truthiness coercion for `if`/`while`/`?:` conditions.
- *  Dafny requires bool; TS treats number/string/array as truthy when non-empty.
+ *  Dafny requires bool; coerce number→`≠0`, string/array→length>0.
  *  Optional conds are handled separately by narrow.ts (rewritten to someMatch). */
 function coerceCondToBool(cond: Expr, ty: Ty): Expr {
   if (ty.kind === "bool") return cond;
   if (ty.kind === "int" || ty.kind === "nat")
-    return { kind: "binop", op: ">", left: cond, right: { kind: "num", value: 0 } };
+    return { kind: "binop", op: "≠", left: cond, right: { kind: "num", value: 0 } };
   if (ty.kind === "string" || ty.kind === "array")
     return { kind: "binop", op: ">", left: { kind: "field", obj: cond, field: "size" }, right: { kind: "num", value: 0 } };
   return cond;
