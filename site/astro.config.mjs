@@ -49,6 +49,7 @@ function rehypeRepoLinks() {
 // text like `[SPEC.md §2]` or `[TOOLS.md#narrow-rules]` is left untouched.
 const LINK_NAMES = {
   "/": "Overview",
+  "/subset/": "Overview (Subset)",
   "/getting-started/": "Getting Started",
   "/howto_greenfield/": "Greenfield tutorial",
   "/spec/": "Specification",
@@ -91,6 +92,7 @@ export default defineConfig({
         {
           label: "Getting started",
           items: [
+            { label: "Overview (Subset)", link: "/subset/" },
             { label: "Overview (Brownfield)", link: "/getting-started/" },
             { label: "Howto (Greenfield)", link: "/howto_greenfield/" },
           ],

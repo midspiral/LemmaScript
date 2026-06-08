@@ -15,6 +15,7 @@ const OUT = join(here, "..", "src", "content", "docs")
 // Which root docs become site pages.
 const DOCS = [
   { src: "README.md", out: "index.md" }, // home / overview
+  { src: "SUBSET.md", out: "subset.md" },
   { src: "GETTING_STARTED.md", out: "getting-started.md" },
   { src: "TUTORIAL_GREENFIELD.md", out: "howto_greenfield.md" },
   { src: "SPEC.md", out: "spec.md" },
@@ -29,6 +30,7 @@ const DOCS = [
 // filename -> site route, for rewriting cross-doc links so site nav works.
 const ROUTES = {
   "README.md": "/",
+  "SUBSET.md": "/subset/",
   "GETTING_STARTED.md": "/getting-started/",
   "TUTORIAL_GREENFIELD.md": "/howto_greenfield/",
   "SPEC.md": "/spec/",
