@@ -7,6 +7,7 @@
  * below pins the modeled semantics with an `ensures`, so the proof IS the
  * faithfulness check: regress a coercion and verification fails.
  */
+//@ backend dafny
 
 // ── boolean: identity ───────────────────────────────────────
 function boolCond(b: boolean): number {
