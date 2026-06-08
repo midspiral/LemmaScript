@@ -50,8 +50,6 @@ User-defined types referenced from a verified function are pulled in automatical
 
 All the usual operators carry over with their normal meaning: `=== !== < <= > >= + - * / % && || !` and the ternary `c ? a : b`. Integer `/` is integer division.
 
-**Truthiness works as you'd expect.** A non-boolean in an `if`/`while`/`?:`/`!` position coerces the JavaScript way: `!s` means "empty string," `!xs` means "empty array," a bare number means `> 0`, an optional means "is present." So `if (xs.length)` and `if (!name)` both do the right thing.
-
 Supported literal forms include number/bigint/hex literals, string and template literals (`` `${n} items` `` concatenates), array literals with spread (`[...xs, e]`), object literals with spread (`{ ...obj, f: v }`), and `Record`/`Map` object literals.
 
 A handful of `Math.*` helpers are understood: `abs`, `min`, `max`, `floor`, `ceil` (and `Math.max(...arr)` over an array).
