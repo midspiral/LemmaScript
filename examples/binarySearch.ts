@@ -4,7 +4,6 @@
 
 export function binarySearch(arr: number[], target: number): number {
   //@ requires sorted(arr)
-  //@ requires arr.length > 0
   //@ ensures \result >= -1 && \result < arr.length
   //@ ensures \result >= 0 ==> arr[\result] === target
   //@ ensures \result === -1 ==> forall(k, 0 <= k && k < arr.length ==> arr[k] !== target)

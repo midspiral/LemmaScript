@@ -9,7 +9,6 @@ set_option loom.semantics.choice "demonic"
 
 method binarySearch (arr : Array Int) (target : Int) return (res : Int)
   require sorted arr
-  require arr.size > 0
   ensures res ≥ -1
   ensures res < arr.size
   ensures res ≥ 0 → arr[res.toNat]! = target

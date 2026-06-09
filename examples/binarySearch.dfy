@@ -17,7 +17,6 @@ predicate sorted(s: seq<int>) {
 
 method binarySearch(arr: seq<int>, target: int) returns (res: int)
   requires sorted(arr)
-  requires (|arr| > 0)
   ensures (res >= -1)
   ensures (res < |arr|)
   ensures ((res >= 0) ==> (arr[res] == target))
