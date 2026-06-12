@@ -5,7 +5,7 @@
  * The only strings are //@ annotation expressions (parsed later by specparser).
  */
 
-import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration } from "ts-morph";
+import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
@@ -91,11 +91,17 @@ function detectCrossFileExtern(
   // types in the callee's own type-parameter namespace, so these names match
   // what `params`/`returnType` reference — declare them on the emitted axiom.
   const typeParams = sig.getTypeParameters().map(tp => tp.getText());
+  // Print types relative to the call site (enclosingNode = callee, alias names
+  // kept): a bare `TMsg`, not `import("/abs/path/transcript").TMsg` — the
+  // importing module declares the datatype locally, so the axiom must use the
+  // local name.
+  const externTypeText = (t: Type) =>
+    t.getText(callee, ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope);
   const params = sig.getParameters().map(p => ({
     name: p.getName(),
-    tsType: p.getTypeAtLocation(callee).getText(),
+    tsType: externTypeText(p.getTypeAtLocation(callee)),
   }));
-  const returnType = sig.getReturnType().getText();
+  const returnType = externTypeText(sig.getReturnType());
   let qualified: string;
   if (Node.isPropertyAccessExpression(callee)) {
     qualified = `${callee.getExpression().getText()}.${callee.getName()}`;
