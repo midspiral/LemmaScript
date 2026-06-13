@@ -534,6 +534,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.op === "%" && e.left.ty.kind === "int") {
         return { kind: "app", fn: "JSRem", args: [lowerExpr(e.left, binds), lowerExpr(e.right, binds)] };
       }
+      // JS bigint `/` truncates toward zero (`-3n / 2n === -1n`); it differs from the
+      // floored `/` of Dafny/Lean, so route it through JSTruncDiv (Lean: `Int.tdiv`).
+      if (e.op === "/" && e.ty.kind === "int") {
+        return { kind: "app", fn: "JSTruncDiv", args: [lowerExpr(e.left, binds), lowerExpr(e.right, binds)] };
+      }
       // Numeric int→real coercion. After resolve, `/` is always real, and any
       // arithmetic/comparison mixing real and integral operands is real-valued.
       // Lift each integral operand to `real` so the backend sees homogeneous
