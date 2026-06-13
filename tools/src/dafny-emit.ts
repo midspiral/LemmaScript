@@ -360,6 +360,7 @@ function emitExpr(e: Expr): string {
       if (e.fn === "JSFloorDiv") needPreamble("JSFloorDiv");
       if (e.fn === "JSRem") needPreamble("JSRem");
       if (e.fn === "JSTruncDiv") needPreamble("JSTruncDiv");
+      if (e.fn === "JSStringLt") needPreamble("JSStringLt");
       if (e.fn === "CeilReal") needPreamble("CeilReal");
       if (e.fn === "FloorReal") needPreamble("FloorReal");
       if (e.fn === "NatToString") needPreamble("NatToString");
@@ -770,6 +771,15 @@ const JS_TRUNC_DIV = `function JSTruncDiv(a: int, b: int): int
   if (a < 0) != (b < 0) then -q else q
 }`;
 
+const JS_STRING_LT = `predicate JSStringLt(s: string, t: string)
+  decreases |s|
+{
+  if |s| == 0 then |t| > 0
+  else if |t| == 0 then false
+  else if s[0] != t[0] then s[0] < t[0]
+  else JSStringLt(s[1..], t[1..])
+}`;
+
 const FLOOR_REAL = `function FloorReal(x: real): int
 {
   x.Floor
@@ -1052,6 +1062,7 @@ const PREAMBLE_CODE: [string, string][] = [
   ["JSFloorDiv", JS_FLOOR_DIV],
   ["JSRem", JS_REM],
   ["JSTruncDiv", JS_TRUNC_DIV],
+  ["JSStringLt", JS_STRING_LT],
   ["CeilReal", CEIL_REAL],
   ["FloorReal", FLOOR_REAL],
   ["SeqIndexOf", SEQ_INDEX_OF],

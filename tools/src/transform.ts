@@ -539,6 +539,17 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.op === "/" && e.ty.kind === "int") {
         return { kind: "app", fn: "JSTruncDiv", args: [lowerExpr(e.left, binds), lowerExpr(e.right, binds)] };
       }
+      // JS string ordering is lexicographic vs Dafny's seq prefix order, so route
+      // through JSStringLt. Dafny-only: Lean's native `<` is already lexicographic.
+      if (_opts.backend === "dafny" && ["<", "<=", ">", ">="].includes(e.op) && e.left.ty.kind === "string") {
+        const l = lowerExpr(e.left, binds), r = lowerExpr(e.right, binds);
+        const lt = (x: Expr, y: Expr): Expr => ({ kind: "app", fn: "JSStringLt", args: [x, y] });
+        const not = (x: Expr): Expr => ({ kind: "unop", op: "¬", expr: x });
+        if (e.op === "<") return lt(l, r);
+        if (e.op === ">") return lt(r, l);
+        if (e.op === "<=") return not(lt(r, l));
+        return not(lt(l, r));  // >=
+      }
       // Numeric int→real coercion. After resolve, `/` is always real, and any
       // arithmetic/comparison mixing real and integral operands is real-valued.
       // Lift each integral operand to `real` so the backend sees homogeneous
