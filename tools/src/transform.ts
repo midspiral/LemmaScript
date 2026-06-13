@@ -303,6 +303,44 @@ function wrapOptionalBranch(expr: Expr, raw: TExpr): Expr {
   return { kind: "constructor", name: "some", type: "Option", args: [expr] };
 }
 
+/** Lean needs `let mut` for any local that is later reassigned. A const local
+ *  whose collection field is mutated (`b.items.push(v)` → `b := b.(items := …)`)
+ *  becomes an assign in the lowered body, so scan for assign targets and flip
+ *  matching lets to mutable. Harmless on Dafny (method locals are `var`); and an
+ *  assigned let already forces a method, so purity is unaffected. */
+function promoteAssignedLets(stmts: Stmt[]): Stmt[] {
+  const assigned = new Set<string>();
+  const collect = (ss: Stmt[]) => {
+    for (const s of ss) {
+      if (s.kind === "assign") assigned.add(s.target);
+      else if (s.kind === "if") { collect(s.then); collect(s.else); }
+      else if (s.kind === "while" || s.kind === "forin") collect(s.body);
+      else if (s.kind === "match") s.arms.forEach(a => collect(a.body));
+    }
+  };
+  collect(stmts);
+  if (assigned.size === 0) return stmts;
+  const fix = (ss: Stmt[]): Stmt[] => ss.map(s => {
+    const s2: Stmt = s.kind === "let" && !s.mutable && assigned.has(s.name) ? { ...s, mutable: true } : s;
+    if (s2.kind === "if") return { ...s2, then: fix(s2.then), else: fix(s2.else) };
+    if (s2.kind === "while" || s2.kind === "forin") return { ...s2, body: fix(s2.body) };
+    if (s2.kind === "match") return { ...s2, arms: s2.arms.map(a => ({ ...a, body: fix(a.body) })) };
+    return s2;
+  });
+  return fix(stmts);
+}
+
+/** Build a nested record-update assigning `newVal` to a field-path receiver
+ *  rooted at a var: `b.a.items` → `b := b.(a := b.a.(items := newVal))`.
+ *  Returns null if the path isn't a chain of field accesses ending at a var. */
+function buildNestedFieldUpdate(recv: TExpr, newVal: Expr): { root: string; value: Expr } | null {
+  if (recv.kind !== "field") return null;
+  const upd: Expr = { kind: "record", spread: lowerExpr(recv.obj, null), fields: [{ name: recv.field, value: newVal }] };
+  if (recv.obj.kind === "var") return { root: recv.obj.name, value: upd };
+  if (recv.obj.kind === "field") return buildNestedFieldUpdate(recv.obj, upd);
+  return null;
+}
+
 function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
   // Monadic lifting: extract embedded method calls to let-binds.
   // `callKind: "method"` means a global var-fn call (classifyCall returns
@@ -1320,18 +1358,24 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     case "break": return [{ kind: "break" }];
     case "continue": return [{ kind: "continue" }];
     case "expr": {
-      // Mutating collection call: m.set(k, v) → m := m.set(k, v)
-      // Same for s.add(x) on sets, arr.push(x)
-      if (s.expr.kind === "call" && s.expr.fn.kind === "field" &&
-          s.expr.fn.obj.kind === "var" &&
-          ((s.expr.fn.obj.ty.kind === "map" || s.expr.fn.obj.ty.kind === "set") &&
-           (s.expr.fn.field === "set" || s.expr.fn.field === "add" || s.expr.fn.field === "delete")) ||
-          (s.expr.kind === "call" && s.expr.fn.kind === "field" &&
-           s.expr.fn.obj.kind === "var" && s.expr.fn.obj.ty.kind === "array" &&
-           s.expr.fn.field === "push")) {
-        const receiver = (s.expr as any).fn.obj.name;
-        const { binds, expr } = liftMethodCalls(s.expr);
-        return [...binds, { kind: "assign", target: receiver, value: expr }];
+      // Mutating collection call: m.set(k, v) → m := m.set(k, v) (same for set
+      // .add/.delete and array .push). The receiver may be a bare var, or a
+      // field path rooted at a var (b.items.push(v) → b := b.(items := b.items + [v])).
+      if (s.expr.kind === "call" && s.expr.fn.kind === "field") {
+        const recv = s.expr.fn.obj;
+        const f = s.expr.fn.field;
+        const isMutating =
+          ((recv.ty.kind === "map" || recv.ty.kind === "set") && (f === "set" || f === "add" || f === "delete")) ||
+          (recv.ty.kind === "array" && f === "push");
+        if (isMutating && recv.kind === "var") {
+          const { binds, expr } = liftMethodCalls(s.expr);
+          return [...binds, { kind: "assign", target: recv.name, value: expr }];
+        }
+        if (isMutating && recv.kind === "field") {
+          const { binds, expr } = liftMethodCalls(s.expr);
+          const upd = buildNestedFieldUpdate(recv, expr);
+          if (upd) return [...binds, { kind: "assign", target: upd.root, value: upd.value }];
+        }
       }
       // Optional chaining on map.get at statement level: m.get(k)?.push(v)
       // → if k in m { m[k] := m[k] + [v] } (actual mutation, not value-discard).
@@ -1954,7 +1998,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     } else if (fn.forcePure) {
       // //@ pure but body can't be auto-converted — emit function by method
       _forofCounters.clear();
-      const methodBody = transformStmts(fn.body, mod.typeDecls);
+      const methodBody = promoteAssignedLets(transformStmts(fn.body, mod.typeDecls));
       defByMethods.push({
         kind: "def-by-method",
         name: fn.name,
@@ -2019,7 +2063,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     _forofCounters.clear();
     let body = pureDefNames.has(fn.name)
       ? [{ kind: "return" as const, value: { kind: "app" as const, fn: `Pure.${fn.name}`, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) } }]
-      : transformStmts(fn.body, mod.typeDecls);
+      : promoteAssignedLets(transformStmts(fn.body, mod.typeDecls));
 
     // Shadow reassigned parameters with mutable locals
     const paramNames = new Set(fn.params.map(p => p.name));
@@ -2049,7 +2093,7 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     const classMethods: FnMethod[] = cls.methods.map(fn => {
       const ensures: Expr[] = fn.ensures.map(transformExpr);
       _forofCounters.clear();
-      const body = transformStmts(fn.body, mod.typeDecls);
+      const body = promoteAssignedLets(transformStmts(fn.body, mod.typeDecls));
       return {
         kind: "method" as const,
         name: fn.name,
