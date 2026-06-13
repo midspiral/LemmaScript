@@ -667,14 +667,20 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         let method = e.fn.field;
         const args = e.args.map((a, i) => {
           const lowered = lowerExpr(a, binds);
-          // arr.with index (first arg) needs .toNat when Int-typed
-          if (e.fn.kind === "field" && e.fn.field === "with" && e.fn.obj.ty.kind === "array" && i === 0 && !isNat(a.ty))
-            return { kind: "toNat" as const, expr: lowered };
+          // Array index args must be nat in Lean: `with`'s index (0), includes/indexOf `from` (1).
+          const isArrIdxArg = e.fn.kind === "field" && e.fn.obj.ty.kind === "array" &&
+            ((e.fn.field === "with" && i === 0) || ((e.fn.field === "includes" || e.fn.field === "indexOf") && i === 1));
+          if (isArrIdxArg && !isNat(a.ty)) return { kind: "toNat" as const, expr: lowered };
           return lowered;
         });
-        // arr.concat(otherArr): array argument → real concatenation, not push
-        if (method === "concat" && e.fn.obj.ty.kind === "array" && e.args.length === 1 && e.args[0].ty.kind === "array") {
-          return { kind: "binop", op: "arrayConcat", left: recv, right: args[0] };
+        // arr.concat(...args): each array arg is spread, each value arg appended.
+        if (method === "concat" && e.fn.obj.ty.kind === "array") {
+          let acc = recv;
+          for (let k = 0; k < args.length; k++) {
+            const piece: Expr = e.args[k].ty.kind === "array" ? args[k] : { kind: "arrayLiteral", elems: [args[k]] };
+            acc = { kind: "binop", op: "arrayConcat", left: acc, right: piece };
+          }
+          return acc;
         }
         // Spec-context map get: result type is non-optional → direct access
         if (method === "get" && e.fn.obj.ty.kind === "map" && e.ty.kind !== "optional") {
