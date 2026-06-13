@@ -169,6 +169,24 @@ function isIntegral(ty: Ty): boolean { return ty.kind === "int" || ty.kind === "
 function isArray(ty: Ty): boolean { return ty.kind === "array"; }
 function isUser(ty: Ty): boolean { return ty.kind === "user"; }
 
+/** Truthiness test for a *lowered* value of source type `ty`, used by `||`
+ *  falsiness lowering. Mirrors narrow.ts's `canBeFalsy`: only int/nat/string/bool
+ *  values can be falsy in JS (`0`, `""`, `false`); every other value (array, user
+ *  type, …) is always truthy. Returns null for the always-truthy types so callers
+ *  can unwrap directly instead of emitting a redundant guard. */
+function valueTruthyCond(value: Expr, ty: Ty): Expr | null {
+  switch (ty.kind) {
+    case "int": case "nat":
+      return { kind: "binop", op: "≠", left: value, right: { kind: "num", value: 0 } };
+    case "string":
+      return { kind: "binop", op: ">", left: { kind: "field", obj: value, field: "length" }, right: { kind: "num", value: 0 } };
+    case "bool":
+      return value;
+    default:
+      return null;
+  }
+}
+
 /** Check if transformed lambda body contains monadic binds. */
 function isMonadicBody(stmts: Stmt[]): boolean {
   for (const s of stmts) {
@@ -313,13 +331,17 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // String truthiness: !str → str == ""
       if (e.op === "!" && e.expr.ty.kind === "string")
         return { kind: "binop", op: "=", left: lowerExpr(e.expr, binds), right: { kind: "str", value: "" } };
-      // Optional truthiness: !opt → opt is None
+      // Optional truthiness: !opt → None negates to `true`. The Some branch is
+      // `!(value truthy)`: always-truthy inners (array/user) give a plain `false`,
+      // while falsy-capable inners re-test the wrapped value (`!Some(0)` is `true`).
+      // Mirrors the `||` falsiness rule.
       if (e.op === "!" && e.expr.ty.kind === "optional") {
         const bound = matchBinder("value");
+        const truthy = valueTruthyCond({ kind: "var", name: bound }, e.expr.ty.inner);
         return {
           kind: "match", scrutinee: lowerExpr(e.expr, binds),
           arms: [
-            { pattern: `.some ${bound}`, body: { kind: "bool", value: false } },
+            { pattern: `.some ${bound}`, body: truthy ? { kind: "unop", op: "¬", expr: truthy } : { kind: "bool", value: false } },
             { pattern: ".none", body: { kind: "bool", value: true } },
           ],
         };
@@ -396,37 +418,74 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           ],
         };
       }
-      // || undefined on optional → identity (no-op: x || undefined = x)
+      // || undefined on optional → identity (no-op: x || undefined = x) when the
+      // inner type is always truthy. When it can be falsy, JS still drops the
+      // wrapped value: `Some(0) || undefined === undefined`, so the Some arm
+      // re-tests and falls back to None.
       if (e.op === "||" && e.left.ty.kind === "optional" &&
           e.right.kind === "var" && e.right.name === "undefined") {
-        return lowerExpr(e.left, binds);
+        const optExpr = lowerExpr(e.left, binds);
+        const bound = matchBinder("value");
+        const truthy = valueTruthyCond({ kind: "var", name: bound }, e.left.ty.inner);
+        if (!truthy) return optExpr;
+        return {
+          kind: "match", scrutinee: optExpr,
+          arms: [
+            { pattern: `.some ${bound}`, body: {
+              kind: "if", cond: truthy,
+              then: { kind: "app", fn: "Some", args: [{ kind: "var", name: bound }] },
+              else: { kind: "var", name: "undefined" } } },
+            { pattern: ".none", body: { kind: "var", name: "undefined" } },
+          ],
+        };
       }
-      // || on optional → match Some/None with default
+      // || on optional → match Some/None with default. JS `||` tests falsiness of
+      // the *unwrapped* value, so when the inner type can be falsy the Some arm must
+      // re-test (`Some(0) || 1 === 1`); array/user inners are always truthy and
+      // unwrap directly. Mirrors narrow.ts's canBeFalsy gate.
       if (e.op === "||" && e.left.ty.kind === "optional") {
         const optExpr = lowerExpr(e.left, binds);
         const defaultExpr = lowerExpr(e.right, binds);
         const bound = matchBinder("value");
+        const truthy = valueTruthyCond({ kind: "var", name: bound }, e.left.ty.inner);
+        const someBody: Expr = truthy
+          ? { kind: "if", cond: truthy, then: { kind: "var", name: bound }, else: defaultExpr }
+          : { kind: "var", name: bound };
         return {
           kind: "match", scrutinee: optExpr,
           arms: [
-            { pattern: `.some ${bound}`, body: { kind: "var", name: bound } },
+            { pattern: `.some ${bound}`, body: someBody },
             { pattern: ".none", body: defaultExpr },
           ],
         };
       }
-      // || on map index → if key in map then map[key] else default
+      // || on map index → if key in map then map[key] else default. The stored
+      // value is still subject to JS falsiness (`counts.get(k) || 1` returns 1 when
+      // the stored value is 0), so for falsy-capable value types the present branch
+      // re-tests the value too. Always-truthy value types unwrap directly.
       if (e.op === "||" && e.left.kind === "index" && e.left.obj.ty.kind === "map") {
         const map = lowerExpr(e.left.obj, binds);
         const key = lowerExpr(e.left.idx, binds);
         const right = lowerExpr(e.right, binds);
+        const got: Expr = { kind: "index", arr: map, idx: key };
+        const truthy = valueTruthyCond(got, e.left.obj.ty.value);
         return {
           kind: "if",
           cond: { kind: "binop", op: "in", left: key, right: map },
-          then: { kind: "index", arr: map, idx: key }, else: right,
+          then: truthy ? { kind: "if", cond: truthy, then: got, else: right } : got,
+          else: right,
         };
       }
-      // || on non-optional string/array/user → if non-empty then x else default
-      if (e.op === "||" && (e.left.ty.kind === "string" || e.left.ty.kind === "array" ||
+      // || on non-optional array → `xs` itself: every array (even `[]`) is truthy
+      // in JS, so `xs || ys` short-circuits to `xs` and `ys` is never evaluated.
+      // resolve types the whole `||` as the array, so any optional context (e.g.
+      // `xs || undefined`) gets its single Some-wrap from the standard coercion at
+      // the use site — this rule must not add one. Mirrors the `!array` rule above.
+      if (e.op === "||" && e.left.ty.kind === "array") {
+        return lowerExpr(e.left, binds);
+      }
+      // || on non-optional string/user → if non-empty then x else default
+      if (e.op === "||" && (e.left.ty.kind === "string" ||
           (e.left.ty.kind === "user" && e.right.ty.kind === "string"))) {
         const left = lowerExpr(e.left, binds);
         const right = lowerExpr(e.right, binds);
@@ -434,8 +493,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const rightIsUndef = e.right.kind === "var" && e.right.name === "undefined";
         return {
           kind: "if",
-          // strings carry the `length` marker, arrays `size` — both render to `|x|`
-          // in Dafny, but Lean's String has no `.size` field (it's `.length`).
+          // strings carry the `length` marker — it renders to `|x|` in Dafny and
+          // `.length` in Lean (whose String has no `.size` field).
           cond: { kind: "binop", op: ">", left: { kind: "field", obj: left, field: e.left.ty.kind === "string" ? "length" : "size" }, right: { kind: "num", value: 0 } },
           then: rightIsUndef ? { kind: "app", fn: "Some", args: [left] } : left,
           else: right,

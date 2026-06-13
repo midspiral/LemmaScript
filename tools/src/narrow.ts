@@ -288,11 +288,14 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[]): TStmt | null {
   let inner: TStmt[] = rest;
   for (let i = checks.length - 1; i >= 0; i--) {
     const check = checks[i]!;
+    const someBody: TStmt[] = canBeFalsy(check)
+      ? [{ kind: "if", cond: bound(check), then: inner, else: s.then }]
+      : inner;
     inner = [{
       kind: "someMatch",
       scrutinee: check.scrutinee, binderTy: check.innerTy,
       binder: check.binderHint,
-      someBody: inner,
+      someBody,
       noneBody: s.then,
     }];
   }
@@ -558,11 +561,14 @@ function ruleIfAndOptional(s: TStmt): TStmt | null {
   if (!extracted) return null;
   const { check, restCond } = extracted;
   const innerIf: TStmt = { kind: "if", cond: restCond, then: s.then, else: [] };
+  const someBody: TStmt[] = canBeFalsy(check)
+    ? [{ kind: "if", cond: bound(check), then: [walkStmt(innerIf)], else: [] }]
+    : [walkStmt(innerIf)];
   return {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
     binder: check.binderHint,
-    someBody: [walkStmt(innerIf)],
+    someBody,
     noneBody: [],
   };
 }
@@ -768,12 +774,16 @@ function ruleLetCondAndOptional(s: TStmt): TStmt[] | null {
   const extracted = extractLeftmostOptionalCheck(s.init.cond);
   if (!extracted) return null;
   const { check, restCond } = extracted;
+  const assignIf: TStmt = { kind: "if", cond: restCond,
+    then: [{ kind: "assign", target: s.name, value: s.init.then }], else: [] };
+  const someBody: TStmt[] = canBeFalsy(check)
+    ? [{ kind: "if", cond: bound(check), then: [assignIf], else: [] }]
+    : [assignIf];
   const sm: TStmt = {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
     binder: check.binderHint,
-    someBody: [{ kind: "if", cond: restCond,
-      then: [{ kind: "assign", target: s.name, value: s.init.then }], else: [] }],
+    someBody,
     noneBody: [],
   };
   return [
@@ -844,11 +854,15 @@ function ruleConditionalAndOptional(e: TExpr): TExpr | null {
     kind: "conditional",
     cond: restCond, then: e.then, else: e.else, ty: e.ty,
   };
+  const someExpr = walkExpr(innerCond);
+  const someBody: TExpr = canBeFalsy(check)
+    ? { kind: "conditional", cond: bound(check), then: someExpr, else: e.else, ty: e.ty }
+    : someExpr;
   return {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
     binder: check.binderHint,
-    someBody: walkExpr(innerCond), noneBody: e.else, ty: e.ty,
+    someBody, noneBody: e.else, ty: e.ty,
   };
 }
 
