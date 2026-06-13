@@ -17,7 +17,7 @@ type Token =
   | { type: "punc"; value: string }
   | { type: "result"; value: undefined };
 
-const MULTI_OPS = ["==>", "===", "!==", "==", "!=", ">=", "<=", "&&", "||"];
+const MULTI_OPS = ["<==>", "==>", "===", "!==", "==", "!=", ">=", "<=", "&&", "||"];
 
 function tokenize(input: string): Token[] {
   const tokens: Token[] = [];
@@ -113,9 +113,17 @@ class Parser {
   }
 
   parse(): Expr {
-    const r = this.parseImplies();
+    const r = this.parseIff();
     if (this.pos < this.tokens.length) throw new Error(`Unexpected: ${JSON.stringify(this.peek())}`);
     return r;
+  }
+
+  // <==> binds loosest (Dafny precedence: a ==> b <==> c is (a ==> b) <==> c),
+  // right-associative like ==> — immaterial semantically, iff is associative.
+  parseIff(): Expr {
+    const left = this.parseImplies();
+    if (this.match("op", "<==>")) return { kind: "binop", op: "<==>", left, right: this.parseIff() };
+    return left;
   }
 
   parseImplies(): Expr {
@@ -127,9 +135,9 @@ class Parser {
   parseTernary(): Expr {
     const cond = this.parseOr();
     if (this.match("op", "?")) {
-      const then_ = this.parseImplies();
+      const then_ = this.parseIff();
       this.expect("punc", ":");
-      const else_ = this.parseImplies();
+      const else_ = this.parseIff();
       return { kind: "conditional", cond, then: then_, else: else_ };
     }
     return cond;
@@ -200,14 +208,14 @@ class Parser {
       if (this.match("punc", ".")) {
         expr = { kind: "field", obj: expr, field: (this.expect("ident").value as string) };
       } else if (this.match("punc", "[")) {
-        const idx = this.parseImplies();
+        const idx = this.parseIff();
         this.expect("punc", "]");
         expr = { kind: "index", obj: expr, idx };
       } else if (this.match("punc", "(")) {
         const args: Expr[] = [];
         if (!this.match("punc", ")")) {
-          args.push(this.parseImplies());
-          while (this.match("punc", ",")) args.push(this.parseImplies());
+          args.push(this.parseIff());
+          while (this.match("punc", ",")) args.push(this.parseIff());
           this.expect("punc", ")");
         }
         expr = { kind: "call", fn: expr, args };
@@ -261,7 +269,7 @@ class Parser {
           varType = ty;
         }
         this.expect("punc", ",");
-        const body = this.parseImplies();
+        const body = this.parseIff();
         this.expect("punc", ")");
         return { kind: q, var: v, varType, body };
       }
@@ -270,7 +278,7 @@ class Parser {
     }
     if (t.type === "punc" && t.value === "(") {
       this.advance();
-      const expr = this.parseImplies();
+      const expr = this.parseIff();
       this.expect("punc", ")");
       return expr;
     }
@@ -278,8 +286,8 @@ class Parser {
       this.advance();
       const elems: Expr[] = [];
       if (!this.match("punc", "]")) {
-        elems.push(this.parseImplies());
-        while (this.match("punc", ",")) elems.push(this.parseImplies());
+        elems.push(this.parseIff());
+        while (this.match("punc", ",")) elems.push(this.parseIff());
         this.expect("punc", "]");
       }
       return { kind: "arrayLiteral", elems };
@@ -290,11 +298,11 @@ class Parser {
       if (!this.match("punc", "}")) {
         const name = this.expect("ident").value as string;
         this.expect("punc", ":");
-        fields.push({ name, value: this.parseImplies() });
+        fields.push({ name, value: this.parseIff() });
         while (this.match("punc", ",")) {
           const n = this.expect("ident").value as string;
           this.expect("punc", ":");
-          fields.push({ name: n, value: this.parseImplies() });
+          fields.push({ name: n, value: this.parseIff() });
         }
         this.expect("punc", "}");
       }

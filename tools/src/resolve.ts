@@ -674,7 +674,9 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         }
       }
       let ty: Ty = { kind: "unknown" };
-      if (["===", "!==", ">=", "<=", ">", "<", "in"].includes(e.op)) ty = { kind: "bool" };
+      // <==> is bool like the comparisons; unlike ==>, neither side narrows
+      // the other (no premise to assume).
+      if (["===", "!==", ">=", "<=", ">", "<", "in", "<==>"].includes(e.op)) ty = { kind: "bool" };
       else if (e.op === "&&") ty = right.ty;
       else if (e.op === "||" && left.ty.kind === "optional") {
         // || undefined is identity for optionals — keep the optional type

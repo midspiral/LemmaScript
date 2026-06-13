@@ -190,7 +190,7 @@ function isMonadicBody(stmts: Stmt[]): boolean {
 const OP_MAP: Record<string, string> = {
   "===": "=", "!==": "≠", ">=": "≥", "<=": "≤", ">": ">", "<": "<",
   "&&": "∧", "||": "∨", "+": "+", "-": "-", "*": "*", "/": "/", "%": "%",
-  "==": "=", "!=": "≠",
+  "==": "=", "!=": "≠", "<==>": "↔",
 };
 
 /** Bool-valued operators (for code-level conditions needing Decidable). */

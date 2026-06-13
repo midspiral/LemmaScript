@@ -91,7 +91,7 @@ function methodHeader(prefix: string, params: { name: string; type: Ty }[], retu
 
 const OP_MAP: Record<string, string> = {
   "=": "==", "≠": "!=", "≥": ">=", "≤": "<=",
-  "∧": "&&", "∨": "||", "¬": "!",
+  "∧": "&&", "∨": "||", "¬": "!", "↔": "<==>",
   "arrayConcat": "+",
 };
 

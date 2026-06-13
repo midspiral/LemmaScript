@@ -86,6 +86,7 @@ function escapeName(name: string): string {
 // ── Operator precedence (for parenthesization) ──────────────
 
 const PREC: Record<string, number> = {
+  "↔": 0,  // Lean: Iff (20) binds looser than → (25)
   "→": 1, "∨": 2, "∧": 3,
   "=": 4, "≠": 4, "≥": 4, "≤": 4, ">": 4, "<": 4,
   "+": 5, "-": 5, "++": 5, "arrayConcat": 5, "*": 6, "/": 6, "%": 6,
@@ -213,12 +214,16 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         return `${wrap ? `(${recv})` : recv}.contains ${emitExpr(e.left)}`;
       }
       const op = e.op === "arrayConcat" ? "++" : e.op;
-      const s = `${wrapOperand(e.left, prec(e.op))} ${op} ${wrapOperand(e.right, prec(e.op))}`;
+      // ↔ does not chain in Lean — a nested iff operand needs parens.
+      const childPrec = e.op === "↔" ? prec(e.op) + 1 : prec(e.op);
+      const s = `${wrapOperand(e.left, childPrec)} ${op} ${wrapOperand(e.right, childPrec)}`;
       return (parentPrec !== undefined && prec(e.op) < parentPrec) ? `(${s})` : s;
     }
 
     case "implies": {
-      const parts = [...e.premises.map(p => wrapOperand(p)), emitExpr(e.conclusion)];
+      // ↔ binds looser than → in Lean, so iff operands need parens here.
+      const wrapIff = (x: Expr) => x.kind === "binop" && x.op === "↔" ? `(${emitExpr(x)})` : undefined;
+      const parts = [...e.premises.map(p => wrapIff(p) ?? wrapOperand(p)), wrapIff(e.conclusion) ?? emitExpr(e.conclusion)];
       const s = parts.join(" → ");
       return parentPrec !== undefined ? `(${s})` : s;
     }
