@@ -1568,12 +1568,16 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       //      inside a `{ }` case block is stripped, while a `break` inside a
       //      nested loop stays put.
       const stripExitBreaks = (b: RawStmt[]) => b.filter(st => st.kind !== "break");
+      const isExit = (st: RawStmt | undefined) => !!st && ["break", "return", "throw", "continue"].includes(st.kind);
       let fallthrough: string[] = [];
       for (const clause of s.getClauses()) {
         if (Node.isCaseClause(clause)) {
           const label = clause.getExpression().getText().replace(/^["']|["']$/g, "");
           if (clause.getStatements().length === 0) { fallthrough.push(label); continue; }
-          const body = stripExitBreaks(extractStmts(clause.getStatements()));
+          const raw = extractStmts(clause.getStatements());
+          if (!isExit(raw[raw.length - 1]))
+            throw new Error(`switch case "${label}" at line ${line}: a non-empty case must end with break/return/throw; fall-through into the next case is not supported`);
+          const body = stripExitBreaks(raw);
           for (const l of fallthrough) cases.push({ label: l, body });
           cases.push({ label, body });
           fallthrough = [];
