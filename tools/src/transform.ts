@@ -514,20 +514,18 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           else: { kind: "var", name: "undefined" },
         };
       }
-      // int + string → NatToString(int) + string (string concatenation)
-      if (e.op === "+" && _opts.backend === "dafny") {
-        const isIntL = e.left.ty.kind === "int" || e.left.ty.kind === "nat";
-        const isIntR = e.right.ty.kind === "int" || e.right.ty.kind === "nat";
-        if (isIntL && e.right.ty.kind === "string") {
-          return { kind: "binop", op: "+",
-            left: { kind: "app", fn: "NatToString", args: [lowerExpr(e.left, binds)] },
-            right: lowerExpr(e.right, binds) };
-        }
-        if (e.left.ty.kind === "string" && isIntR) {
-          return { kind: "binop", op: "+",
-            left: lowerExpr(e.left, binds),
-            right: { kind: "app", fn: "NatToString", args: [lowerExpr(e.right, binds)] } };
-        }
+      // String concatenation: `+` with a string operand. Stringify int/nat
+      // operands (Dafny NatToString, Lean toString) and join with arrayConcat
+      // (rendered `+` in Dafny, `++` in Lean).
+      if (e.op === "+" && (e.left.ty.kind === "string" || e.right.ty.kind === "string")) {
+        const strify = (o: TExpr): Expr => {
+          if (o.ty.kind !== "int" && o.ty.kind !== "nat") return lowerExpr(o, binds);
+          // Lean `toString` handles any Int; Dafny needs IntToString for signed
+          // ints (NatToString is nat-only).
+          const fn = _opts.backend !== "dafny" ? "ToString" : o.ty.kind === "nat" ? "NatToString" : "IntToString";
+          return { kind: "app", fn, args: [lowerExpr(o, binds)] };
+        };
+        return { kind: "binop", op: "arrayConcat", left: strify(e.left), right: strify(e.right) };
       }
       // JS `%` is truncated (sign of the dividend); a signed `int` differs from the
       // Euclidean `%` of Dafny/Lean, so route it through JSRem (Lean: `Int.tmod`).

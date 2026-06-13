@@ -247,6 +247,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // SetToSeq → .toArray for Lean (HashSet has native toArray)
       if (e.fn === "SetToSeq" && args.length === 1) return `${args[0]}.toArray`;
       if (e.fn === "SetFromSeq" && args.length === 1) return `Std.HashSet.ofList ${args[0]}.toList`;
+      if (e.fn === "ToString" && args.length === 1) return `toString ${args[0]}`;
       // JSRem (JS truncated remainder) → Lean's native truncated `Int.tmod`
       if (e.fn === "JSRem" && args.length === 2) return `Int.tmod ${args[0]} ${args[1]}`;
       // JSTruncDiv (JS truncated bigint division) → Lean's native `Int.tdiv`

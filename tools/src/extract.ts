@@ -320,8 +320,10 @@ function extractExpr(node: Expression): RawExpr {
   // Template literal: `foo${x}bar` → "foo" + x + "bar"
   if (Node.isTemplateExpression(node)) {
     const parts: RawExpr[] = [];
-    const head = node.getHead().getLiteralText();
-    if (head) parts.push({ kind: "str", value: head });
+    // Always push the head, even when empty: a leading string literal anchors the
+    // whole chain as string-typed so each interpolated value is stringified (not
+    // added numerically — `${a}${b}` is concatenation, not `a + b`).
+    parts.push({ kind: "str", value: node.getHead().getLiteralText() });
     for (const span of node.getTemplateSpans()) {
       parts.push(extractExpr(span.getExpression()));
       const text = span.getLiteral().getLiteralText();

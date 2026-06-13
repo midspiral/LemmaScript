@@ -364,6 +364,7 @@ function emitExpr(e: Expr): string {
       if (e.fn === "CeilReal") needPreamble("CeilReal");
       if (e.fn === "FloorReal") needPreamble("FloorReal");
       if (e.fn === "NatToString") needPreamble("NatToString");
+      if (e.fn === "IntToString") { needPreamble("NatToString"); needPreamble("IntToString"); }
       if (e.fn === "MathAbs") needPreamble("MathAbs");
       if (e.fn === "MathMin") needPreamble("MathMin");
       if (e.fn === "MathMax") needPreamble("MathMax");
@@ -1026,6 +1027,11 @@ const NAT_TO_STRING = `function NatToString(n: nat): string
   else NatToString(n / 10) + [digit]
 }`;
 
+const INT_TO_STRING = `function IntToString(n: int): string
+{
+  if n < 0 then "-" + NatToString(-n) else NatToString(n)
+}`;
+
 const MATH_ABS = `function MathAbs(x: int): nat { if x >= 0 then x else -x }`;
 
 // perm(a, b) — `a` and `b` are reorderings of each other (equal as multisets).
@@ -1081,6 +1087,7 @@ const PREAMBLE_CODE: [string, string][] = [
   ["StringToLower", STRING_TO_LOWER],
   ["StringToUpper", STRING_TO_UPPER],
   ["NatToString", NAT_TO_STRING],
+  ["IntToString", INT_TO_STRING],
   ["MathAbs", MATH_ABS],
   ["MathMin", MATH_MIN],
   ["MathMax", MATH_MAX],
