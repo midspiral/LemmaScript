@@ -216,7 +216,12 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       const op = e.op === "arrayConcat" ? "++" : e.op;
       // ↔ does not chain in Lean — a nested iff operand needs parens.
       const childPrec = e.op === "↔" ? prec(e.op) + 1 : prec(e.op);
-      const s = `${wrapOperand(e.left, childPrec)} ${op} ${wrapOperand(e.right, childPrec)}`;
+      // `-`, `/`, `%` are left-associative and non-associative, so an equal-
+      // precedence right operand must be parenthesized: `a - (b - c)` would
+      // otherwise emit as `a - b - c`, i.e. `(a - b) - c`.
+      const rightPrec = e.op === "↔" ? childPrec
+        : ["-", "/", "%"].includes(e.op) ? prec(e.op) + 1 : childPrec;
+      const s = `${wrapOperand(e.left, childPrec)} ${op} ${wrapOperand(e.right, rightPrec)}`;
       return (parentPrec !== undefined && prec(e.op) < parentPrec) ? `(${s})` : s;
     }
 
