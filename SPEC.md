@@ -53,7 +53,8 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 The expression language is a subset of TypeScript with verification extensions.
 
 ```
-expr     := implies
+expr     := iff
+iff      := implies ('<==>' iff)?        // right-associative; binds loosest
 implies  := or ('==>' implies)?          // right-associative
 or       := and ('||' and)*
 and      := compare ('&&' compare)*
@@ -404,6 +405,7 @@ The translation is purely syntactic. `lsc` does not infer types beyond what `//@
 | `\|\|` | `∨` | `\|\|` |
 | `!` | `¬` | `!` |
 | `==>` | `→` | `==>` |
+| `<==>` | `↔` | `<==>` |
 | `+`, `-`, `*`, `/`, `%` | `+`, `-`, `*`, `/`, `%` | `+`, `-`, `*`, `/`, `%` |
 
 No normalization of operators. Both backends handle all comparison directions.
