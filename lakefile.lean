@@ -126,6 +126,7 @@ lean_lib Examples where
     `«iff.types», `«iff.def», `«iff.proof»,
     `«setFromArray.types», `«setFromArray.def», `«setFromArray.proof»,
     `«templateConcat.types», `«templateConcat.def», `«templateConcat.proof»,
-    `«nestedPush.types», `«nestedPush.def», `«nestedPush.proof»
+    `«nestedPush.types», `«nestedPush.def», `«nestedPush.proof»,
+    `«discriminantTrailing.types», `«discriminantTrailing.def», `«discriminantTrailing.proof»
   ]
   extraDepTargets := #[``downloadDependencies]
