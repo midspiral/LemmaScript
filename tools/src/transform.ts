@@ -331,10 +331,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // String truthiness: !str → str == ""
       if (e.op === "!" && e.expr.ty.kind === "string")
         return { kind: "binop", op: "=", left: lowerExpr(e.expr, binds), right: { kind: "str", value: "" } };
-      // Optional truthiness: !opt → None is always truthy-negation `true`. The Some
-      // branch is `!(value truthy)`: for always-truthy inners (array/user) that is a
-      // plain `false`, but falsy-capable inners must re-test the wrapped value
-      // (`!Some(0)` is `true`, not `false`). Mirrors the `||` falsiness rule.
+      // Optional truthiness: !opt → None negates to `true`. The Some branch is
+      // `!(value truthy)`: always-truthy inners (array/user) give a plain `false`,
+      // while falsy-capable inners re-test the wrapped value (`!Some(0)` is `true`).
+      // Mirrors the `||` falsiness rule.
       if (e.op === "!" && e.expr.ty.kind === "optional") {
         const bound = matchBinder("value");
         const truthy = valueTruthyCond({ kind: "var", name: bound }, e.expr.ty.inner);
@@ -476,8 +476,16 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           else: right,
         };
       }
-      // || on non-optional string/array/user → if non-empty then x else default
-      if (e.op === "||" && (e.left.ty.kind === "string" || e.left.ty.kind === "array" ||
+      // || on non-optional array → `xs` itself: every array (even `[]`) is truthy
+      // in JS, so `xs || ys` short-circuits to `xs` and `ys` is never evaluated.
+      // Mirrors the `!array` always-false rule above.
+      if (e.op === "||" && e.left.ty.kind === "array") {
+        const left = lowerExpr(e.left, binds);
+        const rightIsUndef = e.right.kind === "var" && e.right.name === "undefined";
+        return rightIsUndef ? { kind: "app", fn: "Some", args: [left] } : left;
+      }
+      // || on non-optional string/user → if non-empty then x else default
+      if (e.op === "||" && (e.left.ty.kind === "string" ||
           (e.left.ty.kind === "user" && e.right.ty.kind === "string"))) {
         const left = lowerExpr(e.left, binds);
         const right = lowerExpr(e.right, binds);
@@ -485,8 +493,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const rightIsUndef = e.right.kind === "var" && e.right.name === "undefined";
         return {
           kind: "if",
-          // strings carry the `length` marker, arrays `size` — both render to `|x|`
-          // in Dafny, but Lean's String has no `.size` field (it's `.length`).
+          // strings carry the `length` marker — it renders to `|x|` in Dafny and
+          // `.length` in Lean (whose String has no `.size` field).
           cond: { kind: "binop", op: ">", left: { kind: "field", obj: left, field: e.left.ty.kind === "string" ? "length" : "size" }, right: { kind: "num", value: 0 } },
           then: rightIsUndef ? { kind: "app", fn: "Some", args: [left] } : left,
           else: right,
