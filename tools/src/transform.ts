@@ -478,11 +478,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       }
       // || on non-optional array → `xs` itself: every array (even `[]`) is truthy
       // in JS, so `xs || ys` short-circuits to `xs` and `ys` is never evaluated.
-      // Mirrors the `!array` always-false rule above.
+      // resolve types the whole `||` as the array, so any optional context (e.g.
+      // `xs || undefined`) gets its single Some-wrap from the standard coercion at
+      // the use site — this rule must not add one. Mirrors the `!array` rule above.
       if (e.op === "||" && e.left.ty.kind === "array") {
-        const left = lowerExpr(e.left, binds);
-        const rightIsUndef = e.right.kind === "var" && e.right.name === "undefined";
-        return rightIsUndef ? { kind: "app", fn: "Some", args: [left] } : left;
+        return lowerExpr(e.left, binds);
       }
       // || on non-optional string/user → if non-empty then x else default
       if (e.op === "||" && (e.left.ty.kind === "string" ||
