@@ -221,9 +221,12 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "implies": {
-      // ↔ binds looser than → in Lean, so iff operands need parens here.
+      // Premises bind at →'s level: a nested-implication premise must keep its
+      // parens (→ is right-associative, so `(a → b) → c` ≠ `a → b → c`), and
+      // ↔ binds looser than → in Lean. The conclusion is the right-assoc tail,
+      // where a nested implication is safe bare — only ↔ needs parens there.
       const wrapIff = (x: Expr) => x.kind === "binop" && x.op === "↔" ? `(${emitExpr(x)})` : undefined;
-      const parts = [...e.premises.map(p => wrapIff(p) ?? wrapOperand(p)), wrapIff(e.conclusion) ?? emitExpr(e.conclusion)];
+      const parts = [...e.premises.map(p => wrapOperand(p, prec("→"))), wrapIff(e.conclusion) ?? emitExpr(e.conclusion)];
       const s = parts.join(" → ");
       return parentPrec !== undefined ? `(${s})` : s;
     }
