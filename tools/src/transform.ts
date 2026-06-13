@@ -331,13 +331,17 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // String truthiness: !str → str == ""
       if (e.op === "!" && e.expr.ty.kind === "string")
         return { kind: "binop", op: "=", left: lowerExpr(e.expr, binds), right: { kind: "str", value: "" } };
-      // Optional truthiness: !opt → opt is None
+      // Optional truthiness: !opt → None is always truthy-negation `true`. The Some
+      // branch is `!(value truthy)`: for always-truthy inners (array/user) that is a
+      // plain `false`, but falsy-capable inners must re-test the wrapped value
+      // (`!Some(0)` is `true`, not `false`). Mirrors the `||` falsiness rule.
       if (e.op === "!" && e.expr.ty.kind === "optional") {
         const bound = matchBinder("value");
+        const truthy = valueTruthyCond({ kind: "var", name: bound }, e.expr.ty.inner);
         return {
           kind: "match", scrutinee: lowerExpr(e.expr, binds),
           arms: [
-            { pattern: `.some ${bound}`, body: { kind: "bool", value: false } },
+            { pattern: `.some ${bound}`, body: truthy ? { kind: "unop", op: "¬", expr: truthy } : { kind: "bool", value: false } },
             { pattern: ".none", body: { kind: "bool", value: true } },
           ],
         };
