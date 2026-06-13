@@ -22,6 +22,13 @@ method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
   }
 }
 
+function JSRem(a: int, b: int): int
+  requires b != 0
+{
+  var r := (if a < 0 then -a else a) % (if b < 0 then -b else b);
+  if a < 0 then -r else r
+}
+
 function StringToLower(s: string): string
   ensures |StringToLower(s)| == |s|
   decreases |s|
@@ -65,7 +72,7 @@ datatype Action = NoOp | AddList(name: string) | RenameList(listId: int, newName
 
 function isLeapYear(year: int): bool
 {
-  ((((year % 4) == 0) && ((year % 100) != 0)) || ((year % 400) == 0))
+  (((JSRem(year, 4) == 0) && (JSRem(year, 100) != 0)) || (JSRem(year, 400) == 0))
 }
 
 function daysInMonth(month: int, year: int): int

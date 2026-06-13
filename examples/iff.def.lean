@@ -9,13 +9,13 @@ set_option loom.semantics.choice "demonic"
 
 method isEven (x : Int) return (res : Bool)
   require x ≥ 0
-  ensures res ↔ x % 2 = 0
+  ensures res ↔ Int.tmod x 2 = 0
   do
     return Pure.isEven x
 
 method sameParity (x : Int) (y : Int) return (res : Bool)
   require x ≥ 0
   require y ≥ 0
-  ensures res ↔ (x % 2 = 0 ↔ y % 2 = 0)
+  ensures res ↔ (Int.tmod x 2 = 0 ↔ Int.tmod y 2 = 0)
   do
     return Pure.sameParity x y

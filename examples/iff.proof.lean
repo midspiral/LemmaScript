@@ -10,4 +10,5 @@ prove_correct isEven by
 prove_correct sameParity by
   loom_solve
   simp only [Pure.sameParity, decide_eq_true_eq]
+  rw [Int.tmod_eq_emod_of_nonneg require_2, Int.tmod_eq_emod_of_nonneg require_1]
   omega

@@ -246,6 +246,10 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       if (e.ctorOf) return args.length ? `${e.ctorOf}.${e.fn} ${args.join(" ")}` : `${e.ctorOf}.${e.fn}`;
       // SetToSeq → .toArray for Lean (HashSet has native toArray)
       if (e.fn === "SetToSeq" && args.length === 1) return `${args[0]}.toArray`;
+      // JSRem (JS truncated remainder) → Lean's native truncated `Int.tmod`
+      if (e.fn === "JSRem" && args.length === 2) return `Int.tmod ${args[0]} ${args[1]}`;
+      // JSTruncDiv (JS truncated bigint division) → Lean's native `Int.tdiv`
+      if (e.fn === "JSTruncDiv" && args.length === 2) return `Int.tdiv ${args[0]} ${args[1]}`;
       // perm(a, b) → `List.Perm` on the underlying lists. Dafny lowers it to
       // `multiset(a) == multiset(b)`; the Lean image is `a.toList ~ b.toList`,
       // which mathlib's `List.Perm` provides (reflexivity, symmetry,

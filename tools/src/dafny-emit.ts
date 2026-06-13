@@ -358,6 +358,8 @@ function emitExpr(e: Expr): string {
       // Set literal: {a, b, c}
       if (e.fn === "SetLiteral") return `{${args.join(", ")}}`;
       if (e.fn === "JSFloorDiv") needPreamble("JSFloorDiv");
+      if (e.fn === "JSRem") needPreamble("JSRem");
+      if (e.fn === "JSTruncDiv") needPreamble("JSTruncDiv");
       if (e.fn === "CeilReal") needPreamble("CeilReal");
       if (e.fn === "FloorReal") needPreamble("FloorReal");
       if (e.fn === "NatToString") needPreamble("NatToString");
@@ -754,6 +756,20 @@ const JS_FLOOR_DIV = `function JSFloorDiv(a: int, b: int): int
     else -((a - 1) / (-b)) - 1
 }`;
 
+const JS_REM = `function JSRem(a: int, b: int): int
+  requires b != 0
+{
+  var r := (if a < 0 then -a else a) % (if b < 0 then -b else b);
+  if a < 0 then -r else r
+}`;
+
+const JS_TRUNC_DIV = `function JSTruncDiv(a: int, b: int): int
+  requires b != 0
+{
+  var q := (if a < 0 then -a else a) / (if b < 0 then -b else b);
+  if (a < 0) != (b < 0) then -q else q
+}`;
+
 const FLOOR_REAL = `function FloorReal(x: real): int
 {
   x.Floor
@@ -1034,6 +1050,8 @@ const PREAMBLE_CODE: [string, string][] = [
   ["BitAnd", BIT_AND],
   ["BitOr", BIT_OR],
   ["JSFloorDiv", JS_FLOOR_DIV],
+  ["JSRem", JS_REM],
+  ["JSTruncDiv", JS_TRUNC_DIV],
   ["CeilReal", CEIL_REAL],
   ["FloorReal", FLOOR_REAL],
   ["SeqIndexOf", SEQ_INDEX_OF],
