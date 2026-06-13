@@ -489,7 +489,7 @@ The same coercion applies to non-bool conditions in `if`/`while`/`?:` positions:
 | `const { [k]: _, ...rest } = map` | — | `var rest := (map k' \| k' in map && k' != k :: map[k'])` (desugared to `.delete()` in extract) |
 | `const [a, , c, ...rest] = arr` | — | `var a := arr[0]; var c := arr[2]; var rest := arr[3..]` (omits skipped, rest emits as slice) |
 | `arr.with(i, v)` | `arr.set! i v` | `arr[i := v]` |
-| `` `${n} items` `` (int+string) | — | `NatToString(n) + " items"` |
+| `` `${a}/${b}` `` (template literal) | `toString a ++ "/" ++ toString b` | `IntToString(a) + "/" + IntToString(b)` |
 | `{ k1: v1, ... }: Record<K,V>` | — | `map["k1" := v1, ...]` |
 | `new Map<K,V>()` | `Std.HashMap.empty` | `map[]` |
 | `Object.fromEntries(m)` | identity | identity |
@@ -500,6 +500,7 @@ The same coercion applies to non-bool conditions in `if`/`while`/`?:` positions:
 | `m.delete(k)` | `m := m.erase k` | `m := (map k' \| k' in m && k' != k :: m[k'])` |
 | `m.size` | `m.size` | `\|m\|` |
 | `new Set<T>()` | `Std.HashSet.empty` | `{}` |
+| `new Set(arr)` | `Std.HashSet.ofList arr.toList` | `(set x \| x in arr)` |
 | `s.has(x)` | `s.contains x` | `(x in s)` |
 | `x in S` | `x ∈ S` | `(x in S)` |
 | `s.add(x)` | `s := s.insert x` | `s := (s + {x})` |
@@ -858,6 +859,8 @@ match pkt {
 **Detection:** ts-morph provides the variable's type (discriminated union), the discriminant field name, and the variant field types. `lsc` uses this — no guessing.
 
 **Field binding:** Property accesses on the matched variable (`pkt.seq`, `pkt.len`) become bound variables from the match pattern. Unused fields get `_`.
+
+**Switch fall-through:** a non-empty `case` must end in `break`/`return`/`throw` — C-style fall-through into the next case's body is rejected. Empty `case A: case B: body` stacking (leading labels sharing the next body) is supported.
 
 **Enum-like types** (string literal unions, no data fields) stay as `if` with constructor equality. Only discriminated unions with data fields trigger the if-chain → match transformation.
 

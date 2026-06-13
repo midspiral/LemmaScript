@@ -364,12 +364,14 @@ function emitExpr(e: Expr): string {
       if (e.fn === "CeilReal") needPreamble("CeilReal");
       if (e.fn === "FloorReal") needPreamble("FloorReal");
       if (e.fn === "NatToString") needPreamble("NatToString");
+      if (e.fn === "IntToString") { needPreamble("NatToString"); needPreamble("IntToString"); }
       if (e.fn === "MathAbs") needPreamble("MathAbs");
       if (e.fn === "MathMin") needPreamble("MathMin");
       if (e.fn === "MathMax") needPreamble("MathMax");
       if (e.fn === "MaxOfSeq") { needPreamble("MathMax"); needPreamble("MaxOfSeq"); }
       if (e.fn === "MinOfSeq") { needPreamble("MathMin"); needPreamble("MinOfSeq"); }
       if (e.fn === "Perm") needPreamble("Perm");
+      if (e.fn === "SetFromSeq") needPreamble("SetFromSeq");
       return `${escapeName(e.fn)}(${args.join(", ")})`;
     }
 
@@ -1025,12 +1027,19 @@ const NAT_TO_STRING = `function NatToString(n: nat): string
   else NatToString(n / 10) + [digit]
 }`;
 
+const INT_TO_STRING = `function IntToString(n: int): string
+{
+  if n < 0 then "-" + NatToString(-n) else NatToString(n)
+}`;
+
 const MATH_ABS = `function MathAbs(x: int): nat { if x >= 0 then x else -x }`;
 
 // perm(a, b) — `a` and `b` are reorderings of each other (equal as multisets).
 // Transparent (Dafny unfolds it), so hand-proofs can reason with `multiset`
 // directly. The `(==)` bound requires the element type to support equality.
 const PERM = `predicate Perm<T(==)>(a: seq<T>, b: seq<T>) { multiset(a) == multiset(b) }`;
+
+const SET_FROM_SEQ = `function SetFromSeq<T(==)>(s: seq<T>): set<T> { set x | x in s }`;
 
 const SET_TO_SEQ = `method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
   ensures forall x :: x in s <==> x in res
@@ -1078,12 +1087,14 @@ const PREAMBLE_CODE: [string, string][] = [
   ["StringToLower", STRING_TO_LOWER],
   ["StringToUpper", STRING_TO_UPPER],
   ["NatToString", NAT_TO_STRING],
+  ["IntToString", INT_TO_STRING],
   ["MathAbs", MATH_ABS],
   ["MathMin", MATH_MIN],
   ["MathMax", MATH_MAX],
   ["MaxOfSeq", MAX_OF_SEQ],
   ["MinOfSeq", MIN_OF_SEQ],
   ["Perm", PERM],
+  ["SetFromSeq", SET_FROM_SEQ],
 ];
 
 // ── Constructor and record helpers ───────────────────────────

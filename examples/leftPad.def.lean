@@ -23,6 +23,6 @@ method leftPad (str : String) (len : Nat) (ch : String) return (res : String)
       invariant len ≤ 0 → result = str
       decreasing len - i
     do
-      result := ch + result
+      result := ch ++ result
       i := i + 1
     return result

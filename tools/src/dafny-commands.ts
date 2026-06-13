@@ -29,7 +29,9 @@ export function dafnyCheckDiff(genPath: string, dfyPath: string): boolean {
     if (e && e.stdout != null) {
       diff = typeof e.stdout === "string" ? e.stdout : e.stdout.toString("utf-8");
     } else {
-      return true;
+      // git couldn't be spawned: the check never ran, so fail loud, don't green-pass.
+      console.error(`ERROR: could not run \`git diff\` to verify ${path.basename(dfyPath)} is additions-only (is git installed?)`);
+      return false;
     }
   }
   const deletions = diff.split("\n").filter(l => l.startsWith("-") && !l.startsWith("---"));

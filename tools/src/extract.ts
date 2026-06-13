@@ -320,8 +320,10 @@ function extractExpr(node: Expression): RawExpr {
   // Template literal: `foo${x}bar` → "foo" + x + "bar"
   if (Node.isTemplateExpression(node)) {
     const parts: RawExpr[] = [];
-    const head = node.getHead().getLiteralText();
-    if (head) parts.push({ kind: "str", value: head });
+    // Always push the head, even when empty: a leading string literal anchors the
+    // whole chain as string-typed so each interpolated value is stringified (not
+    // added numerically — `${a}${b}` is concatenation, not `a + b`).
+    parts.push({ kind: "str", value: node.getHead().getLiteralText() });
     for (const span of node.getTemplateSpans()) {
       parts.push(extractExpr(span.getExpression()));
       const text = span.getLiteral().getLiteralText();
@@ -569,8 +571,11 @@ function extractExpr(node: Expression): RawExpr {
         if (Node.isArrayLiteralExpression(arg)) {
           return { kind: "emptyCollection", collectionType: "Set", tsType, initElems: arg.getElements().map(e => extractExpr(e as Expression)) };
         }
-        // new Set(existingSet) — pass through
-        return extractExpr(arg);
+        const argSymbol = arg.getType().getSymbol()?.getName() ?? arg.getType().getAliasSymbol()?.getName();
+        // new Set(existingSet) — identity (sets are value types)
+        if (argSymbol === "Set") return extractExpr(arg);
+        // new Set(arr) — build a deduplicated set from the array's elements
+        return { kind: "call", fn: { kind: "var", name: "__setFromArray" }, args: [extractExpr(arg)] };
       }
       return { kind: "emptyCollection", collectionType: name as "Map" | "Set", tsType };
     }
@@ -1563,12 +1568,16 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       //      inside a `{ }` case block is stripped, while a `break` inside a
       //      nested loop stays put.
       const stripExitBreaks = (b: RawStmt[]) => b.filter(st => st.kind !== "break");
+      const isExit = (st: RawStmt | undefined) => !!st && ["break", "return", "throw", "continue"].includes(st.kind);
       let fallthrough: string[] = [];
       for (const clause of s.getClauses()) {
         if (Node.isCaseClause(clause)) {
           const label = clause.getExpression().getText().replace(/^["']|["']$/g, "");
           if (clause.getStatements().length === 0) { fallthrough.push(label); continue; }
-          const body = stripExitBreaks(extractStmts(clause.getStatements()));
+          const raw = extractStmts(clause.getStatements());
+          if (!isExit(raw[raw.length - 1]))
+            throw new Error(`switch case "${label}" at line ${line}: a non-empty case must end with break/return/throw; fall-through into the next case is not supported`);
+          const body = stripExitBreaks(raw);
           for (const l of fallthrough) cases.push({ label: l, body });
           cases.push({ label, body });
           fallthrough = [];

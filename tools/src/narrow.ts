@@ -250,6 +250,7 @@ function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[]): TStmt | null {
   const someBranch = check.negated ? s.else : s.then;
   const noneBranch = check.negated ? s.then : s.else;
   if (someBranch.length !== 0) return null;
+  if (!isTerminating(noneBranch)) return null;
   return {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
@@ -746,8 +747,16 @@ function ruleDiscriminantChain(stmts: TStmt[]): { stmt: TStmt; consumed: number 
     }
   }
   if (cases.length === 0) return null;
+  // If every case terminates, the trailing statements are the default arm
+  // (preserving the clean dispatch-as-expression shape). Otherwise the tail runs
+  // after the match for every variant, so leave it to the caller (empty default)
+  // rather than mis-routing it into the default arm only.
+  if (cases.every(c => isTerminating(c.body))) {
+    return { stmt: { kind: "tagMatch", scrutinee: first.scrutinee, typeName: first.typeName,
+      cases, fallthrough: stmts.slice(consumed) }, consumed: stmts.length };
+  }
   return { stmt: { kind: "tagMatch", scrutinee: first.scrutinee, typeName: first.typeName,
-    cases, fallthrough: stmts.slice(consumed) }, consumed: stmts.length };
+    cases, fallthrough: [] }, consumed };
 }
 
 /** Rule (list-level): `if (x.kind !== "v") terminate; rest` → tagMatch
