@@ -667,9 +667,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         let method = e.fn.field;
         const args = e.args.map((a, i) => {
           const lowered = lowerExpr(a, binds);
-          // arr.with index (first arg) needs .toNat when Int-typed
-          if (e.fn.kind === "field" && e.fn.field === "with" && e.fn.obj.ty.kind === "array" && i === 0 && !isNat(a.ty))
-            return { kind: "toNat" as const, expr: lowered };
+          // Array index args must be nat in Lean: `with`'s index (0), includes/indexOf `from` (1).
+          const isArrIdxArg = e.fn.kind === "field" && e.fn.obj.ty.kind === "array" &&
+            ((e.fn.field === "with" && i === 0) || ((e.fn.field === "includes" || e.fn.field === "indexOf") && i === 1));
+          if (isArrIdxArg && !isNat(a.ty)) return { kind: "toNat" as const, expr: lowered };
           return lowered;
         });
         // arr.concat(...args): each array arg is spread, each value arg appended.

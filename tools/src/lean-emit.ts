@@ -105,7 +105,7 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
     if (method === "filter")   return `${obj}.${monadic ? "filterM" : "filter"} ${args[0]}`;
     if (method === "every")    return `${obj}.${monadic ? "allM" : "all"} ${args[0]}`;
     if (method === "some")     return `${obj}.${monadic ? "anyM" : "any"} ${args[0]}`;
-    if (method === "includes") return `${obj}.contains ${args[0]}`;
+    if (method === "includes") return args.length > 1 ? `(${obj}.extract ${args[1]} ${obj}.size).contains ${args[0]}` : `${obj}.contains ${args[0]}`;
     if (method === "find")     return `${obj}.find? ${args[0]}`;
     if (method === "with")     return `${obj}.set! ${args[0]} ${args[1]}`;
     if (method === "push")     return args.length === 1 ? `Array.push ${obj} ${args[0]}` : `${obj} ++ #[${args.join(", ")}]`;
