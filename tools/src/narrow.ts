@@ -250,6 +250,7 @@ function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[]): TStmt | null {
   const someBranch = check.negated ? s.else : s.then;
   const noneBranch = check.negated ? s.then : s.else;
   if (someBranch.length !== 0) return null;
+  if (!isTerminating(noneBranch)) return null;
   return {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
