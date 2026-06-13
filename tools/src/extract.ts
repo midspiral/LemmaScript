@@ -569,8 +569,11 @@ function extractExpr(node: Expression): RawExpr {
         if (Node.isArrayLiteralExpression(arg)) {
           return { kind: "emptyCollection", collectionType: "Set", tsType, initElems: arg.getElements().map(e => extractExpr(e as Expression)) };
         }
-        // new Set(existingSet) — pass through
-        return extractExpr(arg);
+        const argSymbol = arg.getType().getSymbol()?.getName() ?? arg.getType().getAliasSymbol()?.getName();
+        // new Set(existingSet) — identity (sets are value types)
+        if (argSymbol === "Set") return extractExpr(arg);
+        // new Set(arr) — build a deduplicated set from the array's elements
+        return { kind: "call", fn: { kind: "var", name: "__setFromArray" }, args: [extractExpr(arg)] };
       }
       return { kind: "emptyCollection", collectionType: name as "Map" | "Set", tsType };
     }

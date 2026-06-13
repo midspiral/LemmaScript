@@ -370,6 +370,7 @@ function emitExpr(e: Expr): string {
       if (e.fn === "MaxOfSeq") { needPreamble("MathMax"); needPreamble("MaxOfSeq"); }
       if (e.fn === "MinOfSeq") { needPreamble("MathMin"); needPreamble("MinOfSeq"); }
       if (e.fn === "Perm") needPreamble("Perm");
+      if (e.fn === "SetFromSeq") needPreamble("SetFromSeq");
       return `${escapeName(e.fn)}(${args.join(", ")})`;
     }
 
@@ -1032,6 +1033,8 @@ const MATH_ABS = `function MathAbs(x: int): nat { if x >= 0 then x else -x }`;
 // directly. The `(==)` bound requires the element type to support equality.
 const PERM = `predicate Perm<T(==)>(a: seq<T>, b: seq<T>) { multiset(a) == multiset(b) }`;
 
+const SET_FROM_SEQ = `function SetFromSeq<T(==)>(s: seq<T>): set<T> { set x | x in s }`;
+
 const SET_TO_SEQ = `method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
   ensures forall x :: x in s <==> x in res
   ensures |res| == |s|
@@ -1084,6 +1087,7 @@ const PREAMBLE_CODE: [string, string][] = [
   ["MaxOfSeq", MAX_OF_SEQ],
   ["MinOfSeq", MIN_OF_SEQ],
   ["Perm", PERM],
+  ["SetFromSeq", SET_FROM_SEQ],
 ];
 
 // ── Constructor and record helpers ───────────────────────────

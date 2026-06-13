@@ -716,6 +716,16 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         const fn: TExpr = { kind: "var", name: "Perm", ty: { kind: "unknown" } };
         return { kind: "call", fn, args: [a, b], ty: { kind: "bool" }, callKind: "pure" };
       }
+      // new Set(arr): build a deduplicated set from the array's elements (extract
+      // marks the array form `__setFromArray`). Lowers to the SetFromSeq preamble
+      // (Dafny `set x | x in s`); size/membership are then set semantics.
+      if (e.fn.kind === "var" && e.fn.name === "__setFromArray" && e.args.length === 1) {
+        const arr = resolveExpr(e.args[0], ctx);
+        if (arr.ty.kind !== "array")
+          throw new Error(`new Set(...) expects an array argument (got ${arr.ty.kind})`);
+        const fn: TExpr = { kind: "var", name: "SetFromSeq", ty: { kind: "unknown" } };
+        return { kind: "call", fn, args: [arr], ty: { kind: "set", elem: arr.ty.elem }, callKind: "pure" };
+      }
       // Extern dispatch: `NS.method(args)` where NS.method is declared via
       // `//@ extern`. Rewrite into a flat-name call (`NS_method(args)`) so the
       // rest of the pipeline sees an ordinary pure function. The extern's

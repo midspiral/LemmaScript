@@ -123,6 +123,7 @@ lean_lib Examples where
     `«perm.types», `«perm.def», `«perm.proof»,
     `«unionInArray.types», `«unionInArray.def»,
     `«truthiness.types», `«truthiness.def», `«truthiness.proof»,
-    `«iff.types», `«iff.def», `«iff.proof»
+    `«iff.types», `«iff.def», `«iff.proof»,
+    `«setFromArray.types», `«setFromArray.def», `«setFromArray.proof»
   ]
   extraDepTargets := #[``downloadDependencies]
