@@ -35,7 +35,20 @@ function tokenize(input: string): Token[] {
       const quote = input[i];
       i++;
       let s = "";
-      while (i < input.length && input[i] !== quote) s += input[i++];
+      while (i < input.length && input[i] !== quote) {
+        if (input[i] === "\\") {
+          // Standard escapes, where TS source, Dafny, and Lean all agree.
+          // The emitters re-escape on output, so the round trip is faithful.
+          const esc = input[i + 1];
+          const mapped = esc === "n" ? "\n" : esc === "r" ? "\r" : esc === "t" ? "\t"
+            : esc === "0" ? "\0" : esc === "\\" || esc === '"' || esc === "'" ? esc : null;
+          if (mapped === null) throw new Error(`Unsupported string escape '\\${esc}' at ${i} in: ${input}`);
+          s += mapped;
+          i += 2;
+        } else {
+          s += input[i++];
+        }
+      }
       if (i < input.length) i++;
       tokens.push({ type: "str", value: s });
       continue;
