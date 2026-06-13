@@ -108,8 +108,8 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
     if (method === "includes") return `${obj}.contains ${args[0]}`;
     if (method === "find")     return `${obj}.find? ${args[0]}`;
     if (method === "with")     return `${obj}.set! ${args[0]} ${args[1]}`;
-    if (method === "push")     return `Array.push ${obj} ${args[0]}`;
-    if (method === "concat")   return `Array.push ${obj} ${args[0]}`;
+    if (method === "push")     return args.length === 1 ? `Array.push ${obj} ${args[0]}` : `${obj} ++ #[${args.join(", ")}]`;
+    if (method === "concat")   return args.length === 1 ? `Array.push ${obj} ${args[0]}` : `${obj} ++ #[${args.join(", ")}]`;
     // arr.slice → Array.extract. No-arg slice is a full copy (Array is a value
     // type in Lean, so the receiver itself); one arg drops the prefix, two args
     // give the half-open range. Matches JS for non-negative bounds (negative

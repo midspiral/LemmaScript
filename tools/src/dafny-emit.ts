@@ -165,8 +165,8 @@ function emitExpr(e: Expr): string {
         if (e.method === "with")     return `${obj}[${args[0]} := ${args[1]}]`;
         if (e.method === "includes") return `(${args[0]} in ${obj})`;
         if (e.method === "indexOf") { needPreamble("SeqIndexOf"); return `SeqIndexOf(${obj}, ${args[0]})`; }
-        if (e.method === "push")     return `(${obj} + [${args[0]}])`;
-        if (e.method === "concat")   return `(${obj} + [${args[0]}])`;
+        if (e.method === "push")     return `(${obj} + [${args.join(", ")}])`;
+        if (e.method === "concat")   return `(${obj} + [${args.join(", ")}])`;
         // No-arg slice is a full copy; Dafny seq is an immutable value type, so
         // the copy is just the seq itself (the idiom for "copy then mutate").
         if (e.method === "slice" && args.length === 0) return obj;
