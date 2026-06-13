@@ -73,6 +73,7 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 |--------|------|---------|
 | `Option<T>` | `Map.get`, optional types | `datatype Option<T> = None \| Some(value: T)` |
 | `SetToSeq` | `for (x of set)`, map/record iteration | Convert set to sequence for iteration |
+| `SetFromSeq` | `new Set(arr)` | Build a deduplicated set from a sequence (`set x \| x in s`) |
 
 **Numeric:**
 
@@ -83,7 +84,7 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | `MathAbs` / `MathMin` / `MathMax` | `Math.abs/min/max(a, b)` | Scalar abs/min/max |
 | `MaxOfSeq` / `MinOfSeq` | `Math.max(...s)` / `Math.min(...s)` | Aggregate over a sequence (requires `\|s\| > 0`) |
 | `Pow2` / `BitAnd` | `<<` / `>>` / `&` on `bigint` | Bitwise ops as arithmetic |
-| `NatToString` | `` `${n}` `` template literal | Int-to-string for interpolation |
+| `NatToString` / `IntToString` | `` `${n}` `` template literal (nat / signed int) | Number-to-digit-string for interpolation (`IntToString` prefixes `-`) |
 
 **Sequence:**
 
