@@ -529,6 +529,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             right: { kind: "app", fn: "NatToString", args: [lowerExpr(e.right, binds)] } };
         }
       }
+      // JS `%` is truncated (sign of the dividend); a signed `int` differs from the
+      // Euclidean `%` of Dafny/Lean, so route it through JSRem (Lean: `Int.tmod`).
+      if (e.op === "%" && e.left.ty.kind === "int") {
+        return { kind: "app", fn: "JSRem", args: [lowerExpr(e.left, binds), lowerExpr(e.right, binds)] };
+      }
       // Numeric int→real coercion. After resolve, `/` is always real, and any
       // arithmetic/comparison mixing real and integral operands is real-valued.
       // Lift each integral operand to `real` so the backend sees homogeneous

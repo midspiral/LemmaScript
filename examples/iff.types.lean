@@ -6,9 +6,9 @@ import LemmaScript
 namespace Pure
 
 def isEven (x : Int) : Bool :=
-  x % 2 = 0
+  Int.tmod x 2 = 0
 
 def sameParity (x : Int) (y : Int) : Bool :=
-  x % 2 = y % 2
+  Int.tmod x 2 = Int.tmod y 2
 
 end Pure
