@@ -182,7 +182,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
 
     case "methodCall": {
       const obj = emitExpr(e.obj);
-      const wrap = e.obj.kind === "binop" || e.obj.kind === "app" || e.obj.kind === "methodCall";
+      const wrap = e.obj.kind === "binop" || e.obj.kind === "app" || e.obj.kind === "methodCall" || e.obj.kind === "if" || e.obj.kind === "let";
       const receiver = wrap ? `(${obj})` : obj;
       const args = e.args.map(a =>
         (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall") ? `(${emitExpr(a)})` : emitExpr(a)
