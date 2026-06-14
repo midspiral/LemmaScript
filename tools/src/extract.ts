@@ -1730,6 +1730,14 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
     name: (fn as any).getName?.() ?? "<anonymous>",
     exported: false,  // set in extractModule against the source file's export surface
     typeParams: unboundedTypeParams,
+    // Original TS parameter grouping, before the flatten below loses it.
+    tsParams: fn.getParameters().map(p => {
+      const nameNode = p.getNameNode();
+      if (Node.isObjectBindingPattern(nameNode))
+        return { kind: "object" as const, binds: nameNode.getElements().map(el => el.getName()) };
+      if (p.isRestParameter()) return { kind: "rest" as const, binds: [p.getName()] };
+      return { kind: "simple" as const, binds: [p.getName()] };
+    }),
     params: fn.getParameters().flatMap(p => {
       // Flatten destructured object params into individual params
       const nameNode = p.getNameNode();
