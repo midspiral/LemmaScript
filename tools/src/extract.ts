@@ -1728,6 +1728,7 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
 
   return {
     name: (fn as any).getName?.() ?? "<anonymous>",
+    exported: false,  // set in extractModule against the source file's export surface
     typeParams: unboundedTypeParams,
     params: fn.getParameters().flatMap(p => {
       // Flatten destructured object params into individual params
@@ -2057,11 +2058,16 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     return false;
   }
 
+  // The module's export surface, by name — covers inline `export function`,
+  // `export { a, b }`, re-exports, and `export const`. Consumers (e.g. the guard
+  // plugin) use this to wrap only the boundary, not internal helpers.
+  const exportedNames = new Set<string>(sourceFile.getExportedDeclarations().keys());
   const functions = fnsToExtract.map(f => {
     // For expression-body arrows, annotations come from the parent variable statement
     const parentAnnots = f.parentStmt ? parseAnnotations(f.parentStmt) : undefined;
     const raw = extractFunction(f.node, parentAnnots);
     raw.name = f.name;  // use the const name, not "<anonymous>"
+    raw.exported = exportedNames.has(f.name);
     raw.autohavoc = hasAutohavoc(f);
     return raw;
   });
