@@ -160,11 +160,20 @@ export interface RawParam {
   tsType: string;
 }
 
+/** One original TS parameter, before `params` flattens it for the provers
+ *  (destructured object → N scalars, rest → one). `params == tsParams.flatMap(p => p.binds)`. */
+export interface RawTsParam {
+  kind: "simple" | "object" | "rest";
+  binds: string[];   // spec-param names (entries in `params`) this TS parameter contributes
+}
+
 export interface RawFunction {
   name: string;
   exported: boolean;      // part of the module's export surface (inline `export`, `export { }`, or re-export)
   typeParams: string[];   // unbounded generic type parameters (e.g. ["T"])
   params: RawParam[];
+  tsParams: RawTsParam[]; // original TS signature grouping (params = flatten of this); see RawTsParam
+
   returnType: string;
   requires: string[];     // //@ annotation strings
   ensures: string[];
