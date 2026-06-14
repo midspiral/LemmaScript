@@ -162,6 +162,7 @@ export interface RawParam {
 
 export interface RawFunction {
   name: string;
+  exported: boolean;      // part of the module's export surface (inline `export`, `export { }`, or re-export)
   typeParams: string[];   // unbounded generic type parameters (e.g. ["T"])
   params: RawParam[];
   returnType: string;
