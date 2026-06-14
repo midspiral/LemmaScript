@@ -1730,13 +1730,22 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
     name: (fn as any).getName?.() ?? "<anonymous>",
     exported: false,  // set in extractModule against the source file's export surface
     typeParams: unboundedTypeParams,
-    // Original TS parameter grouping, before the flatten below loses it.
+    // Original TS parameter grouping, before the flatten below loses it. `defaults` carries
+    // each bound name's default initializer text (omitted when none) for TS-targeting consumers.
     tsParams: fn.getParameters().map(p => {
       const nameNode = p.getNameNode();
-      if (Node.isObjectBindingPattern(nameNode))
-        return { kind: "object" as const, binds: nameNode.getElements().map(el => el.getName()) };
+      if (Node.isObjectBindingPattern(nameNode)) {
+        const els = nameNode.getElements();
+        const defaults: Record<string, string> = {};
+        for (const el of els) { const init = el.getInitializer(); if (init) defaults[el.getName()] = init.getText(); }
+        const binds = els.map(el => el.getName());
+        return Object.keys(defaults).length ? { kind: "object" as const, binds, defaults } : { kind: "object" as const, binds };
+      }
       if (p.isRestParameter()) return { kind: "rest" as const, binds: [p.getName()] };
-      return { kind: "simple" as const, binds: [p.getName()] };
+      const init = p.getInitializer();
+      return init
+        ? { kind: "simple" as const, binds: [p.getName()], defaults: { [p.getName()]: init.getText() } }
+        : { kind: "simple" as const, binds: [p.getName()] };
     }),
     params: fn.getParameters().flatMap(p => {
       // Flatten destructured object params into individual params

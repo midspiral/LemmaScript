@@ -165,6 +165,7 @@ export interface RawParam {
 export interface RawTsParam {
   kind: "simple" | "object" | "rest";
   binds: string[];   // spec-param names (entries in `params`) this TS parameter contributes
+  defaults?: Record<string, string>;  // bind-name → default source text (TS-only, ignored by provers), for binds that have one
 }
 
 export interface RawFunction {
