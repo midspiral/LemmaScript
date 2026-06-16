@@ -614,7 +614,7 @@ function extractExpr(node: Expression): RawExpr {
 // ── Annotation parsing ───────────────────────────────────────
 
 const PREFIX = "//@ ";
-const KEYWORDS = ["requires", "ensures", "invariant", "decreases", "done_with", "type"] as const;
+const KEYWORDS = ["requires", "ensures", "contract", "invariant", "decreases", "done_with", "type"] as const;
 type AnnotKind = (typeof KEYWORDS)[number];
 interface Annotation { kind: AnnotKind; expr: string }
 
@@ -1799,6 +1799,7 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
     })(),
     requires: annots.filter(a => a.kind === "requires").map(a => a.expr),
     ensures: annots.filter(a => a.kind === "ensures").map(a => a.expr),
+    contract: annots.filter(a => a.kind === "contract").map(a => a.expr),
     decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
     pure: hasPureAnnotation(fn, body && Node.isBlock(body) ? body.getStatements() as Node[] : undefined),
     autohavoc: false,  // set in extractModule (file-level directive or per-function)
