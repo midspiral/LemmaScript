@@ -178,6 +178,7 @@ export interface RawFunction {
   returnType: string;
   requires: string[];     // //@ annotation strings
   ensures: string[];
+  contract: string[];     // //@ contract — natural-language description of intent (NOT a spec; provers ignore it)
   decreases: string | null;
   pure: boolean;           // //@ pure — force pure even if syntactically impure
   autohavoc: boolean;      // //@ autohavoc — abstract unmodellable exprs to havoc (file-level or per-fn)
