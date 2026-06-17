@@ -1,6 +1,6 @@
 # LemmaScript — Implementation Specification
 
-**Version:** 0.5.6
+**Version:** 0.5.7
 **Date:** June 2026
 
 Backend-specific details:
@@ -32,6 +32,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `verify` | Before first statement of function/method body | Mark function for verification (see §2.5) |
 | `requires` | Before first statement of function body | Precondition |
 | `ensures` | Before first statement of function body | Postcondition (`\result` refers to return value) |
+| `contract` | Before first statement of function body | Natural-language description of intent — prover-ignored; surfaced by `lsc extract` for vetting against the formal `requires`/`ensures` (see §2.13) |
 | `invariant` | Before first statement of loop body | Loop invariant |
 | `decreases` | Before first statement of loop or function body | Termination metric |
 | `done_with` | Before first statement of loop body | Post-loop condition (see §5.2) |
@@ -385,6 +386,19 @@ Three properties make this safe and useful:
 - **Discarded calls are reported**, so a sink you forgot to contract can't vanish silently. The pass prints every out-of-model call it abstracted — `autohavoc: get_x abstracts 2 external call(s) — confirm none is an unguarded sink: JSON.parse, uuidv4` — where a raw `fs.readFileSync` on a user path would show up for review.
 
 **Trust boundary:** the guarantee is "every *contracted* sink is reached only under its guard," not "every dangerous call is contracted." An out-of-model call with no contract is havoc'd (and reported); giving it a contract (§2.11) brings it under verification.
+
+### 2.13 Informal Contracts: `//@ contract`
+
+`//@ contract <text>` attaches a plain-English description of what a function is *meant* to do, beside its formal `//@ requires`/`//@ ensures`:
+
+```ts
+//@ contract Clamps x into the inclusive range [lo, hi]; the result never falls outside it.
+//@ requires lo <= hi
+//@ ensures \result >= lo && \result <= hi
+export function clamp(x: number, lo: number, hi: number): number { ... }
+```
+
+The text is natural language, not a spec expression: the provers ignore it entirely (it never reaches the generated Dafny or Lean). `lsc extract` surfaces it per function in the Raw IR (`RawFunction.contract`); multiple `//@ contract` lines are collected in order, like `//@ requires`. Its purpose is to catch the gap between *intent* and *proof* — a spec can be verified yet guarantee less, or other, than the prose claims. The external [`lemmascript-claimcheck`](https://github.com/midspiral/lemmascript-claimcheck) tool checks `//@ contract` against the formal `//@ ensures` by an LLM round-trip.
 
 ---
 
