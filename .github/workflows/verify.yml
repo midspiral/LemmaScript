@@ -1,0 +1,91 @@
+name: LemmaScript
+
+# Reusable workflow: regenerate LemmaScript artifacts, verify them, and enforce
+# that committed generated files are up to date. Case studies call it with:
+#
+#   jobs:
+#     verify:
+#       uses: midspiral/LemmaScript/.github/workflows/verify.yml@main
+#       with:
+#         backend: dafny      # dafny | lean | dafny-slow
+
+on:
+  workflow_call:
+    inputs:
+      backend:
+        description: 'Backend to verify with: dafny | lean | dafny-slow'
+        type: string
+        default: dafny
+      node-version:
+        description: 'Node.js version'
+        type: string
+        default: '20'
+      ls-ref:
+        description: 'LemmaScript ref to verify against'
+        type: string
+        default: main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Clone LemmaScript
+        run: git clone --branch ${{ inputs.ls-ref }} https://github.com/midspiral/LemmaScript.git ../LemmaScript
+
+      - name: Install LemmaScript tools
+        run: cd ../LemmaScript/tools && npm ci
+
+      # --- Dafny toolchain ---
+      - name: Setup .NET
+        if: inputs.backend != 'lean'
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Setup Dafny
+        if: inputs.backend != 'lean'
+        uses: dafny-lang/setup-dafny-action@v1
+        with:
+          dafny-version: '4.11.0'
+
+      # --- Lean toolchain (Loom/Velvet forks + Lean) ---
+      - name: Clone Loom fork
+        if: inputs.backend == 'lean'
+        run: test -d ../loom || git clone https://github.com/namin/loom.git -b lemma ../loom
+
+      - name: Clone Velvet fork
+        if: inputs.backend == 'lean'
+        run: test -d ../velvet || git clone https://github.com/namin/velvet.git -b lemma ../velvet
+
+      - name: Setup Lean
+        if: inputs.backend == 'lean'
+        uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: 'true'
+          lake-package-directory: '.'
+          build-args: ''
+
+      - name: Regenerate and verify
+        run: ../LemmaScript/tools/check.sh ${{ inputs.backend }}
+
+      - name: Verify extra Dafny files
+        if: inputs.backend != 'lean'
+        run: |
+          if [ -f ./check-extra.sh ]; then ./check-extra.sh; fi
+
+      - name: Check generated files are up to date
+        run: |
+          git diff --exit-code -- '*.dfy.gen' '*.dfy' '*.def.lean' '*.types.lean'
+          untracked=$(git ls-files --others --exclude-standard -- '*.dfy.gen' '*.def.lean' '*.types.lean')
+          if [ -n "$untracked" ]; then
+            echo "ERROR: Untracked generated files:"
+            echo "$untracked"
+            exit 1
+          fi
