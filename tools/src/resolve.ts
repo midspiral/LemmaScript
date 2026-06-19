@@ -396,6 +396,14 @@ function isUnmodeledTy(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
   return false;
 }
 
+/** A `user` type that resolves to a string-union declare-type — runs as a plain
+ *  string at runtime, so it's a refinement of `string`, not an opaque blob. */
+function isStringUnionTy(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
+  if (ty.kind !== "user") return false;
+  const base = ty.name.includes("<") ? ty.name.slice(0, ty.name.indexOf("<")) : ty.name;
+  return typeDecls.some(d => d.name === base && d.kind === "string-union");
+}
+
 /** Infer quantifier variable type from usage in body.
  *  If the variable is used as a map/set key (e.g. map.has(k), map.get(k)),
  *  return the collection's key type. Otherwise return null (default to int). */
@@ -1144,6 +1152,10 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         ty = declTy.kind === "optional" && init.ty.kind !== "optional"
           ? { kind: "optional", inner: init.ty }
           : init.ty;
+      } else if (declTy.kind === "string" && isStringUnionTy(init.ty, ctx.typeDecls) && !ctx.overrides.has(s.name)) {
+        // ts-morph widened a string-union to `string`; keep the initializer's
+        // datatype so `local === "lit"` lowers to a discriminant test.
+        ty = init.ty;
       } else if ((declTy.kind === "int" || declTy.kind === "nat") && init.ty.kind === "real" && !ctx.overrides.has(s.name)) {
         // TS infers `number` (→ int/nat) for an expression LS computes as `real`
         // (e.g. `a / b`, now real division). `number` can't tell them apart, so
