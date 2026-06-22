@@ -101,7 +101,7 @@ const parseSimpleOptionalCheck = parseOptionalCheck;
 
 function walkExpr(e: TExpr): TExpr {
   const r = recurseExpr(e);
-  return ruleNullish(r) ?? ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleImplArrayIsArray(r) ?? ruleConditionalArrayIsArray(r) ?? ruleConditionalAndArrayIsArray(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalInMap(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
+  return ruleNullish(r) ?? ruleNullishIndex(r) ?? ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleImplArrayIsArray(r) ?? ruleConditionalArrayIsArray(r) ?? ruleConditionalAndArrayIsArray(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalInMap(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
 }
 
 function recurseExpr(e: TExpr): TExpr {
@@ -422,6 +422,24 @@ function ruleNullish(e: TExpr): TExpr | null {
     noneBody: e.right,
     ty: e.ty,
   };
+}
+
+/** Rule (expression): `arr[i] ?? right` — nullish coalescing on an array index.
+ *  Under noUncheckedIndexedAccess `arr[i]` is `T | undefined`, undefined exactly
+ *  when out of bounds, so → `(0 <= i && i < arr.length) ? arr[i] : right`. The
+ *  guarded `then` keeps the seq index in bounds for the backend. (Map index is
+ *  already optional-typed and handled by ruleNullish above; this is the array
+ *  case, whose element type stays non-optional in expression position.) */
+function ruleNullishIndex(e: TExpr): TExpr | null {
+  if (e.kind !== "nullish") return null;
+  if (e.left.kind !== "index") return null;
+  if (e.left.obj.ty.kind !== "array") return null;
+  const idx = e.left.idx;
+  const len: TExpr = { kind: "field", obj: e.left.obj, field: "length", ty: { kind: "int" } };
+  const lo: TExpr = { kind: "binop", op: "<=", left: { kind: "num", value: 0, ty: { kind: "int" } }, right: idx, ty: { kind: "bool" } };
+  const hi: TExpr = { kind: "binop", op: "<", left: idx, right: len, ty: { kind: "bool" } };
+  const cond: TExpr = { kind: "binop", op: "&&", left: lo, right: hi, ty: { kind: "bool" } };
+  return { kind: "conditional", cond, then: e.left, else: e.right, ty: e.ty };
 }
 
 /** Rule (expression): `obj?.<chain>` — single-eval optional chain.
