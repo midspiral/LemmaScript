@@ -100,6 +100,15 @@ function tyFromTypeNode(tn: TypeNode): Ty {
         : arms.map(node => ({ node }));
     if (normalized.length === 1 && "syntheticBool" in normalized[0]) return { kind: "bool" };
     const nonNullish = normalized.filter(a => "syntheticBool" in a || !isNullish(a.node));
+    // Inline string-literal union (`"a" | "b"`, not a //@ declare-type): no datatype
+    // to resolve against, so lower to plain string (the arms are strings; == holds).
+    const isStrLit = (a: { node: TypeNode } | { syntheticBool: true }) =>
+      !("syntheticBool" in a) && Node.isLiteralTypeNode(a.node) && a.node.getLiteral().getKind() === SyntaxKind.StringLiteral;
+    if (nonNullish.length >= 2 && nonNullish.every(isStrLit)) {
+      return normalized.some(a => !("syntheticBool" in a) && isNullish(a.node))
+        ? { kind: "optional", inner: { kind: "string" } }
+        : { kind: "string" };
+    }
     if (nonNullish.length === 1 && normalized.length >= 2) {
       const sole = nonNullish[0];
       const inner: Ty = "syntheticBool" in sole ? { kind: "bool" } : tyFromTypeNode(sole.node);
