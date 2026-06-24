@@ -497,9 +497,9 @@ function extractExpr(node: Expression): RawExpr {
 
   // Object literal: { res: true, done: false } or { ...obj, res: true }
   if (Node.isObjectLiteralExpression(node)) {
-    // Fold properties in source order: a later spread overrides everything before
-    // it, a named field is a record-update on the accumulator, a computed key is a
-    // map `.set`. Order matters: if `a` has `k`, `{ k: v, ...a }` is `a`, not `a.(k := v)`.
+    // Fold properties in source order: a spread on top of existing content is a
+    // field-wise merge (resolve expands it against the result type), a named field
+    // is a record-update on the accumulator, a computed key is a map `.set`.
     let acc: RawExpr | null = null;
     const update = (name: string, value: RawExpr) => {
       acc = acc && acc.kind === "record"
@@ -508,7 +508,8 @@ function extractExpr(node: Expression): RawExpr {
     };
     for (const prop of node.getProperties()) {
       if (Node.isSpreadAssignment(prop)) {
-        acc = extractExpr(prop.getExpression());
+        const s = extractExpr(prop.getExpression());
+        acc = acc === null ? s : { kind: "recordMerge", base: acc, override: s };
       } else if (Node.isShorthandPropertyAssignment(prop)) {
         const name = prop.getName();
         update(name, { kind: "var", name });
@@ -1049,6 +1050,7 @@ function renameRawExpr(e: RawExpr, from: string, to: string): RawExpr {
     case "index": return { ...e, obj: r(e.obj), idx: r(e.idx) };
     case "field": return { ...e, obj: r(e.obj) };
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(f => ({ ...f, value: r(f.value) })) };
+    case "recordMerge": return { ...e, base: r(e.base), override: r(e.override) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
     case "conditional": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
     case "nullish": return { ...e, left: r(e.left), right: r(e.right) };
@@ -2228,6 +2230,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       if (e.kind === "field") { collectNamesExpr(e.obj); }
       if (e.kind === "index") { collectNamesExpr(e.obj); collectNamesExpr(e.idx); }
       if (e.kind === "record") { if (e.spread) collectNamesExpr(e.spread); e.fields.forEach(f => collectNamesExpr(f.value)); }
+      if (e.kind === "recordMerge") { collectNamesExpr(e.base); collectNamesExpr(e.override); }
       if (e.kind === "arrayLiteral") { e.elems.forEach(collectNamesExpr); }
       if (e.kind === "conditional") { collectNamesExpr(e.cond); collectNamesExpr(e.then); collectNamesExpr(e.else); }
       if (e.kind === "nullish") { collectNamesExpr(e.left); collectNamesExpr(e.right); }
