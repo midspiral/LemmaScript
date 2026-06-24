@@ -1691,11 +1691,20 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
   }
 }
 function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
-  // Keep every type param; drop any `extends B` bound. Dropping a constraint
-  // over-approximates (sound), and a body reading T's structure won't typecheck.
+  // A `<T extends B>` bound is handled one of two ways. When B is a modelable
+  // type (a record/nominal), substitute T with B — a body that reads T's fields
+  // (e.g. `x.id`) then typechecks against B. When B is a union/intersection we
+  // can't model as one Dafny type (e.g. `string & {}` tricks), keep T as a Dafny
+  // type param instead; such a T must be phantom (any field read won't typecheck).
   _typeParamMap = new Map();
   _reservedForCounterNames = new Set();
-  const typeParams = (fn.getTypeParameters?.() ?? []).map(tp => tp.getName());
+  const typeParams: string[] = [];
+  for (const tp of fn.getTypeParameters?.() ?? []) {
+    const constraint = tp.getConstraint();
+    const ct = constraint?.getType();
+    if (constraint && !ct?.isUnion() && !ct?.isIntersection()) _typeParamMap.set(tp.getName(), constraint.getText());
+    else typeParams.push(tp.getName());
+  }
 
   const body = fn.getBody();
 
