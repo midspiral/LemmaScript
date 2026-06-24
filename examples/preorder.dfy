@@ -111,7 +111,24 @@ lemma Lemma_PreserveInvariant(prefix: seq<Tree>, current: Tree)
   var children := childStack(current);
   Lemma_StackToPreorder_App(prefix, children);
   Lemma_StackToPreorder_App(prefix, [current]);
-  assert [current] + StackToPreorder(children) == preorderTraversal(current);
+  // Reduce to [current] + StackToPreorder(childStack) == preorderTraversal(current),
+  // case-split on childStack's four shapes so the small StackToPreorder unfoldings
+  // are explicit (avoids a blind seq-concat search — was the file's slow VC).
+  assert [current] + StackToPreorder(children) == preorderTraversal(current) by {
+    if current.right.Node? && current.left.Node? {
+      assert children == [current.right, current.left];
+      assert [current.right, current.left][..1] == [current.right];
+      assert [current.right][..0] == [];
+    } else if current.right.Node? {
+      assert children == [current.right];
+      assert [current.right][..0] == [];
+    } else if current.left.Node? {
+      assert children == [current.left];
+      assert [current.left][..0] == [];
+    } else {
+      assert children == [];
+    }
+  }
 }
 
 lemma Lemma_UnionNodes_App(a: seq<Tree>, b: seq<Tree>)
@@ -130,6 +147,26 @@ lemma TreeUnionLemma(nodes: seq<Tree>)
     exists k :: 0 <= k < |nodes| && x in nodeSet(nodes[k])
 { }
 
+// The prefix's union is disjoint from the last element's nodeSet. Extracted from
+// TreeUnionMaint (its forall+exists batched into one heavy VC); the explicit index
+// witness `k` lets AllDisjoint instantiate directly instead of searching.
+lemma UnionDisjointFromLast(stack: seq<Tree>, current: Tree)
+  requires |stack| > 0
+  requires current == stack[|stack| - 1]
+  requires AllDisjoint(stack)
+  ensures UnionNodes(stack[..|stack| - 1]) !! nodeSet(current)
+{
+  var prefix := stack[..|stack| - 1];
+  forall x | x in UnionNodes(prefix)
+    ensures x !in nodeSet(current)
+  {
+    TreeUnionLemma(prefix);
+    var xx :| xx in prefix && x in nodeSet(xx);
+    var k :| 0 <= k < |prefix| && prefix[k] == xx;
+    assert nodeSet(stack[k]) !! nodeSet(current);
+  }
+}
+
 lemma TreeUnionMaint(stack: seq<Tree>, current: Tree, unvisited: set<Tree>)
   requires |stack| > 0
   requires current.Node?
@@ -144,14 +181,7 @@ lemma TreeUnionMaint(stack: seq<Tree>, current: Tree, unvisited: set<Tree>)
   assert stack == stack[..|stack| - 1] + [stack[|stack| - 1]];
   Lemma_UnionNodes_App(stack[..|stack| - 1], [stack[|stack| - 1]]);
   assert UnionNodes([stack[|stack| - 1]]) == nodeSet(current);
-  assert UnionNodes(stack[..|stack| - 1]) !! nodeSet(current) by {
-    forall x | x in UnionNodes(stack[..|stack| - 1])
-      ensures x !in nodeSet(current)
-    {
-      TreeUnionLemma(stack[..|stack| - 1]);
-      var xx :| xx in stack[..|stack| - 1] && x in nodeSet(xx);
-    }
-  }
+  UnionDisjointFromLast(stack, current);
   if current.left != Nil && current.right != Nil {
     assert nodeSet(current.right) + nodeSet(current.left) + {current} == nodeSet(current);
     assert nodeSet(current.right) + nodeSet(current.left) == nodeSet(current) - {current};
