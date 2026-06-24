@@ -610,7 +610,8 @@ function emitDecl(d: Decl): string {
     }
 
     case "structure": {
-      return `datatype ${d.name} = ${d.name}(${paramList(d.fields)})`;
+      const tp = d.typeParams?.length ? `<${d.typeParams.join(", ")}>` : "";
+      return `datatype ${d.name}${tp} = ${d.name}(${paramList(d.fields)})`;
     }
 
     case "type-alias": {

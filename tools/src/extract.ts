@@ -1691,15 +1691,19 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
   }
 }
 function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
-  // Generic bounds erasure: <T extends Base> → substitute T with Base everywhere
-  // Unbounded type params are preserved as Dafny type parameters
+  // A `<T extends B>` bound is handled one of two ways. When B is a modelable
+  // type (a record/nominal), substitute T with B — a body that reads T's fields
+  // (e.g. `x.id`) then typechecks against B. When B is a union/intersection we
+  // can't model as one Dafny type (e.g. `string & {}` tricks), keep T as a Dafny
+  // type param instead; such a T must be phantom (any field read won't typecheck).
   _typeParamMap = new Map();
   _reservedForCounterNames = new Set();
-  const unboundedTypeParams: string[] = [];
+  const typeParams: string[] = [];
   for (const tp of fn.getTypeParameters?.() ?? []) {
     const constraint = tp.getConstraint();
-    if (constraint) _typeParamMap.set(tp.getName(), constraint.getText());
-    else unboundedTypeParams.push(tp.getName());
+    const ct = constraint?.getType();
+    if (constraint && !ct?.isUnion() && !ct?.isIntersection()) _typeParamMap.set(tp.getName(), constraint.getText());
+    else typeParams.push(tp.getName());
   }
 
   const body = fn.getBody();
@@ -1729,7 +1733,7 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
   return {
     name: (fn as any).getName?.() ?? "<anonymous>",
     exported: false,  // set in extractModule against the source file's export surface
-    typeParams: unboundedTypeParams,
+    typeParams,
     // Original TS parameter grouping, before the flatten below loses it. `defaults` carries
     // each bound name's default initializer text (omitted when none) for TS-targeting consumers.
     tsParams: fn.getParameters().map(p => {
@@ -1834,15 +1838,17 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // `//@ declare-type Name { f1: T1, ... }` — record form.
   // `//@ declare-type Name = TsType`         — alias form (e.g. `Ruleset = Rule[]`).
   function parseDeclareType(body: string) {
-    const recordMatch = body.match(/^(\w+)\s*\{(.+)\}$/);
+    const recordMatch = body.match(/^(\w+)\s*(?:<([^>]+)>)?\s*\{(.+)\}$/);
     if (recordMatch) {
       const name = recordMatch[1];
-      const fields = recordMatch[2].split(",").map(f => f.trim()).filter(Boolean).map(f => {
+      // `<T extends B>` → bare `T`: a Dafny type param, like the def path.
+      const typeParams = recordMatch[2]?.split(",").map(s => s.trim().split(/\s+extends\s+/)[0].trim()).filter(Boolean);
+      const fields = recordMatch[3].split(",").map(f => f.trim()).filter(Boolean).map(f => {
         const [fname, ftype] = f.split(":").map(s => s.trim());
         const synth = _synthFromTsTypeString(ftype);
         return { name: fname, tsType: synth ?? ftype };
       });
-      typeDecls.push({ name, kind: "record", fields });
+      typeDecls.push({ name, kind: "record", fields, ...(typeParams?.length ? { typeParams } : {}) });
       return;
     }
     const aliasMatch = body.match(/^(\w+)\s*=\s*(.+)$/);
@@ -2030,7 +2036,8 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     if (_externs.has(qualified)) continue;
     const sig = f.node.getType().getCallSignatures()[0];
     if (!sig) continue;
-    const typeParams = sig.getTypeParameters().map(tp => tp.getText());
+    // Bare names, dropping `extends B` — same as the def path.
+    const typeParams = sig.getTypeParameters().map(tp => tp.getText().split(/\s+extends\s+/)[0].trim());
     // Normalize via typeToString (not raw getText): resolves declare-type
     // shadows and yields bare names, so a param typed by an unreachable import
     // becomes `AgentMessage`, not `import("/abs/path").AgentMessage`.
