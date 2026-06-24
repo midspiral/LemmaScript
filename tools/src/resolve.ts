@@ -8,7 +8,7 @@
 import type { RawExpr, RawStmt, RawFunction, RawModule } from "./rawir.js";
 import type { Ty, TExpr, TStmt, TFunction, TModule, TParam, CallKind } from "./typedir.js";
 import { isBigInt } from "./typedir.js";
-import { parseTsType } from "./types.js";
+import { parseTsType, tyToCanonical } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 
@@ -634,6 +634,60 @@ function lookupFieldTy(objTy: Ty, field: string, ctx: Ctx): { ty: Ty; isDiscrimi
 
 // ── Resolve expressions ──────────────────────────────────────
 
+// Fresh-binder counter for the someMatches synthesized by object-spread merge.
+let mergeBinder = 0;
+
+/** Expand `{ ...base, ...override }` into a faithful field-wise merge. Driven by
+ *  the result record type's fields: an override field wins when present, else the
+ *  base's field shows through. Optional fields decide presence at runtime
+ *  (`Some?`); an `Option`-typed override is the whole merge guarded by its tag. */
+function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
+  const tbase = resolveExpr(base, ctx);
+  const tover = resolveExpr(override, ctx);
+  const overInner = tover.ty.kind === "optional" ? tover.ty.inner : tover.ty;
+  // Result record type: prefer the override's (an optional override still merges
+  // into its inner type), else the base's.
+  const rTy = overInner.kind === "user" ? overInner
+            : tbase.ty.kind === "user" ? tbase.ty : null;
+  const decl = rTy ? ctx.typeDecls.find(d => d.name === rTy.name && d.kind === "record") : undefined;
+  if (!rTy || !decl?.fields) {
+    throw new Error(`object spread merge { ...a, ...b } needs a known record type for both operands ` +
+      `(base: ${tyToCanonical(tbase.ty)}, override: ${tyToCanonical(tover.ty)})`);
+  }
+  if (tbase.ty.kind === "optional") {
+    throw new Error(`object spread merge with an optional base operand is not supported (base: ${tyToCanonical(tbase.ty)})`);
+  }
+  const userTy = rTy;
+  const fields = decl.fields;
+  // Build the merged literal from concrete base/override values, both : userTy.
+  const merged = (bv: TExpr, ov: TExpr): TExpr => ({
+    kind: "record", spread: null, ty: userTy,
+    fields: fields.map(f => {
+      const ft = f.type!;
+      const ovf: TExpr = { kind: "field", obj: ov, field: f.name, ty: ft };
+      if (ft.kind !== "optional") return { name: f.name, value: ovf };  // required: override always provides
+      // optional: override field wins iff present, else base's field
+      const bvf: TExpr = { kind: "field", obj: bv, field: f.name, ty: ft };
+      const binder = `_m${mergeBinder++}`;
+      // someBody is the unwrapped present value; transform re-wraps each arm in
+      // the backend's Some constructor (Dafny `Some`, Lean `Option.some`).
+      return { name: f.name, value: {
+        kind: "someMatch", scrutinee: ovf, binder, binderTy: ft.inner,
+        someBody: { kind: "var", name: binder, ty: ft.inner }, noneBody: bvf, ty: ft,
+      } };
+    }),
+  });
+  if (tover.ty.kind === "optional") {
+    // override may be absent (undefined spreads nothing) → base unchanged
+    const binder = `_mo${mergeBinder++}`;
+    return {
+      kind: "someMatch", scrutinee: tover, binder, binderTy: userTy,
+      someBody: merged(tbase, { kind: "var", name: binder, ty: userTy }), noneBody: tbase, ty: userTy,
+    };
+  }
+  return merged(tbase, tover);
+}
+
 function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
   switch (e.kind) {
     case "var":
@@ -946,6 +1000,9 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       });
       return { kind: "record", spread, fields, ty: recordTy ?? ty };
     }
+
+    case "recordMerge":
+      return resolveRecordMerge(e.base, e.override, ctx);
 
     case "result":
       // \result desugars to a regular var so all the variable-narrowing
@@ -1344,6 +1401,10 @@ function collectCallsExpr(e: RawExpr, fns: Set<string>, out: Set<string>): void 
     case "record":
       if (e.spread) collectCallsExpr(e.spread, fns, out);
       for (const f of e.fields) collectCallsExpr(f.value, fns, out);
+      return;
+    case "recordMerge":
+      collectCallsExpr(e.base, fns, out);
+      collectCallsExpr(e.override, fns, out);
       return;
     case "arrayLiteral": for (const el of e.elems) collectCallsExpr(el, fns, out); return;
     case "lambda":
