@@ -138,7 +138,7 @@ export function countBadPairsNaive(nums: number[]): number {
     i = i + 1;
   }
 
-  const pairs = (n - 1) * n / 2 - count;
+  const pairs = Math.floor((n - 1) * n / 2) - count;
   return pairs;
 }
 
@@ -161,5 +161,5 @@ export function countBadPairs(nums: number[]): number {
     diffMap.set(diff, count + 1);
     i = i + 1;
   }
-  return ((n - 1) * n / 2) - goodCount;
+  return Math.floor((n - 1) * n / 2) - goodCount;
 }

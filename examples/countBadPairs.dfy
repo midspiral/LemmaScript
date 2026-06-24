@@ -10,6 +10,19 @@
 // Equivalence lemmas bridge `xImpl(nums) == X(nums)` since each impl's
 // spec body delegates to the matching hand-written predicate.
 
+import opened Std.Arithmetic.Mul
+
+function JSFloorDiv(a: int, b: int): int
+  requires b != 0
+{
+  if b > 0 then
+    if a >= 0 then a / b
+    else -((-a - 1) / b) - 1
+  else
+    if a <= 0 then (-a) / (-b)
+    else -((a - 1) / (-b)) - 1
+}
+
 datatype Pair = Pair(i: nat, j: nat)
 
 // ═════════════════════ Iterative impls (function by method) ═════════════════════
@@ -243,31 +256,35 @@ lemma SetSizes<T>(s1: set<T>, s2: set<T>)
   }
 }
 
-lemma {:vcs_split_on_every_assert} AllPairsSize(nums: seq<int>)
-  ensures |AllPairs(nums)| == |nums| * (|nums| - 1) / 2
+// Doubled form: a degree-2 polynomial identity (no division), proven by induction;
+// AllPairsSize divides once at the end. Avoids nonlinear division reasoning.
+lemma AllPairsSizeTimes2(nums: seq<int>)
+  ensures 2 * |AllPairs(nums)| == |nums| * (|nums| - 1)
 {
   if |nums| <= 1 {
     assert |AllPairs(nums)| == 0;
   } else {
+    var n := |nums|;
     assert nums == [nums[0]] + nums[1..];
-    AllPairsSize(nums[1..]);
+    AllPairsSizeTimes2(nums[1..]);
     AllPairsEqual(nums);
     IncrementPairsSize(AllPairs(nums[1..]));
     ZeroPairsSize(|nums| - 1);
     assert ZeroPairs(|nums| - 1) !! IncrementPairs(AllPairs(nums[1..]));
-    calc {
-      |AllPairs(nums)|;
-      |ZeroPairs(|nums| - 1)| + |IncrementPairs(AllPairs(nums[1..]))|;
-      |nums| - 1 + |IncrementPairs(AllPairs(nums[1..]))|;
-      |nums| - 1 + (|nums| - 1) * (|nums| - 2) / 2;
-      |nums| - 1 + (|nums| * |nums| - 3 * |nums| + 2) / 2;
-      2 * (|nums| - 1) / 2 + (|nums| * |nums| - 3 * |nums| + 2) / 2;
-      (2 * |nums| - 2) / 2 + (|nums| * |nums| - 3 * |nums| + 2) / 2;
-      (2 * |nums| - 2 + |nums| * |nums| - 3 * |nums| + 2) / 2;
-      (|nums| * |nums| - 1 * |nums|) / 2;
-      |nums| * (|nums| - 1) / 2;
-    }
+    assert |AllPairs(nums)| == (n - 1) + |AllPairs(nums[1..])|;
+    // 2(n-1) + (n-1)(n-2) == n(n-1) — distributivity/commutativity via Std (Z3's
+    // own nonlinear search times out on this degree-2 identity).
+    LemmaMulIsDistributiveAdd(n - 1, 2, n - 2);
+    LemmaMulIsCommutative(n - 1, 2);
+    LemmaMulIsCommutative(n - 1, n);
+    assert 2 + (n - 2) == n;
   }
+}
+
+lemma AllPairsSize(nums: seq<int>)
+  ensures |AllPairs(nums)| == |nums| * (|nums| - 1) / 2
+{
+  AllPairsSizeTimes2(nums);
 }
 
 lemma GoodPairsIkNextPos(nums: seq<int>, idx: nat, k: nat)
@@ -540,7 +557,7 @@ method countBadPairsNaive(nums: seq<int>) returns (res: int)
   GoodPairsSize(nums);
   AllPairsSize(nums);
   BadPairsImplEqBadPairs(nums);
-  var pairs := ((((n - 1) * n) / 2) - count);
+  var pairs := (JSFloorDiv(((n - 1) * n), 2) - count);
   return pairs;
 }
 
@@ -603,5 +620,5 @@ method countBadPairs(nums: seq<int>) returns (res: int)
   GoodPairsSize(nums);
   AllPairsSize(nums);
   BadPairsImplEqBadPairs(nums);
-  return ((((n - 1) * n) / 2) - goodCount);
+  return (JSFloorDiv(((n - 1) * n), 2) - goodCount);
 }
