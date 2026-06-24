@@ -999,6 +999,14 @@ function forCounterRename(decl: VariableDeclaration, forStmt: Node): string | nu
 
   const isScope = (a: Node) => Node.isBlock(a) || Node.isSourceFile(a) ||
     Node.isForStatement(a) || Node.isForOfStatement(a) || Node.isForInStatement(a);
+  // A counting-`for` counter is hoisted out of its `for`, so its real scope is
+  // the nearest enclosing block, not the `for` itself.
+  const hoistScope = (d: VariableDeclaration): Node | undefined => {
+    const owner = d.getParent()?.getParent();
+    return owner && Node.isForStatement(owner) && owner.getInitializer() === d.getParent()
+      ? d.getFirstAncestor(a => Node.isBlock(a) || Node.isSourceFile(a))
+      : undefined;
+  };
   // Scopes that enclose this loop — its counter, once hoisted, lives in one of
   // these, so a same-named binding scoped here would collide.
   const enclosing = new Set<Node>(forStmt.getAncestors());
@@ -1006,6 +1014,10 @@ function forCounterRename(decl: VariableDeclaration, forStmt: Node): string | nu
   const paramClash = (fnLike as any)?.getParameters?.().some((p: any) => p.getName() === name) ?? false;
   const declClash = scopeRoot.getDescendantsOfKind(SyntaxKind.VariableDeclaration).some(d => {
     if (d === decl || d.getName() !== name) return false;
+    // Two sibling for-counters hoisting into the same block: rename only the
+    // later loop, so the first keeps its name. Any other clash (e.g. a `let`) yields.
+    const counterScope = hoistScope(d);
+    if (counterScope) return enclosing.has(counterScope) && d.getStart() < decl.getStart();
     const scope = d.getFirstAncestor(isScope);
     return !!scope && enclosing.has(scope);
   });

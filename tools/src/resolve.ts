@@ -842,8 +842,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // left ?? right — result type is left's inner (when left is optional)
       // or just left's type, unified with right's type.
       const left = resolveExpr(e.left, ctx);
-      const right = resolveExpr(e.right, ctx);
       const ty: Ty = left.ty.kind === "optional" ? left.ty.inner : left.ty;
+      // The default shares the result type, so coerce a string literal to a
+      // string-union enum (e.g. `availableLevels[0] ?? "off"`).
+      const right = coerceStr(resolveExpr(e.right, ctx), ty);
       return { kind: "nullish", left, right, ty };
     }
 
@@ -970,8 +972,14 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // anonymous tuple (mirrors return-position and call-argument records, which
       // get their type via ctx.returnTy). Only narrow when the context type is an
       // array; otherwise leave ctx untouched.
-      const elemCtx = ctx.returnTy.kind === "array" ? { ...ctx, returnTy: ctx.returnTy.elem } : ctx;
-      const elems = e.elems.map(el => resolveExpr(el, elemCtx));
+      const expectedElem = ctx.returnTy.kind === "array" ? ctx.returnTy.elem : null;
+      const elemCtx = expectedElem ? { ...ctx, returnTy: expectedElem } : ctx;
+      const elems = e.elems.map(el => {
+        const r = resolveExpr(el, elemCtx);
+        // Coerce a bare string-literal element to a string-union enum (e.g.
+        // `["off", …]: ModelThinkingLevel[]`), like return/arg positions.
+        return expectedElem ? coerceStr(r, expectedElem) : r;
+      });
       const elemTy: Ty = elems.length > 0 ? elems[0].ty : { kind: "unknown" };
       return { kind: "arrayLiteral", elems, ty: { kind: "array", elem: elemTy } };
     }
