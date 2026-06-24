@@ -580,7 +580,7 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
     if (fn.field === "indexOf") return { kind: "int" };
     if (fn.field === "shift") return objTy.elem;
     if (fn.field === "pop") return { kind: "optional", inner: objTy.elem };
-    if (fn.field === "push" || fn.field === "concat") return objTy;
+    if (fn.field === "push" || fn.field === "unshift" || fn.field === "concat") return objTy;
     if (fn.field === "filter") return objTy;
     if (fn.field === "every" || fn.field === "some") return { kind: "bool" };
     if (fn.field === "find" || fn.field === "findLast") return { kind: "optional", inner: objTy.elem };
