@@ -1872,6 +1872,7 @@ function transformTypeDecl(d: TypeDeclInfo): Decl {
   } else {
     return {
       kind: "structure", name: d.name,
+      typeParams: d.typeParams,
       fields: d.fields!.map(f => ({ name: f.name, type: f.type! })),
       deriving: ["Repr", "Inhabited", "DecidableEq"],
     };
