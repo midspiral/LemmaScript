@@ -2230,6 +2230,11 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       if (e.kind === "record") { if (e.spread) collectNamesExpr(e.spread); e.fields.forEach(f => collectNamesExpr(f.value)); }
       if (e.kind === "arrayLiteral") { e.elems.forEach(collectNamesExpr); }
       if (e.kind === "conditional") { collectNamesExpr(e.cond); collectNamesExpr(e.then); collectNamesExpr(e.else); }
+      if (e.kind === "nullish") { collectNamesExpr(e.left); collectNamesExpr(e.right); }
+      if (e.kind === "nonNull") { collectNamesExpr(e.expr); }
+      if (e.kind === "optChain") { collectNamesExpr(e.obj); for (const c of e.chain) { if (c.kind === "call") c.args.forEach(collectNamesExpr); if (c.kind === "index") collectNamesExpr(c.idx); } }
+      if (e.kind === "lambda") { if (Array.isArray(e.body)) collectNames(e.body); else collectNamesExpr(e.body); }
+      if (e.kind === "forall" || e.kind === "exists") { collectNamesExpr(e.body); }
     }
     // Signature types (params + return) get base-name stripping below; body /
     // spec references stay exact-match (so a body `let xs: Hunk[]` doesn't pull
