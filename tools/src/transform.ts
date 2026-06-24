@@ -1366,7 +1366,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
         const f = s.expr.fn.field;
         const isMutating =
           ((recv.ty.kind === "map" || recv.ty.kind === "set") && (f === "set" || f === "add" || f === "delete")) ||
-          (recv.ty.kind === "array" && f === "push");
+          (recv.ty.kind === "array" && (f === "push" || f === "unshift"));
         if (isMutating && recv.kind === "var") {
           const { binds, expr } = liftMethodCalls(s.expr);
           return [...binds, { kind: "assign", target: recv.name, value: expr }];
@@ -1891,7 +1891,7 @@ function findReassignedNames(stmts: TStmt[], names: Set<string>): Set<string> {
       // Mutating collection calls: s.add(x), m.set(k,v), s.delete(x), arr.push(x)
       if (s.kind === "expr" && s.expr.kind === "call" && s.expr.fn.kind === "field" &&
           s.expr.fn.obj.kind === "var" && names.has(s.expr.fn.obj.name) &&
-          ["add", "set", "delete", "push"].includes(s.expr.fn.field)) {
+          ["add", "set", "delete", "push", "unshift"].includes(s.expr.fn.field)) {
         found.add(s.expr.fn.obj.name);
       }
       if (s.kind === "if") { scan(s.then); scan(s.else); }
