@@ -688,23 +688,47 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
   return merged(tbase, tover);
 }
 
-/** `rec[k]` where `rec` is a record and `k` an enum (string-union) of its field
- *  names → a `match k { case f => rec.f }`, each arm the corresponding field.
- *  Returns null if the shape doesn't apply (caller falls back to plain index). */
+/** `rec[k]` where `rec` is a record and `k` an enum of its field names. A *named*
+ *  string-union key is a datatype → `match k { case f => rec.f }`; an *inline*
+ *  union (`"a" | "b"`, a bare string carrying its members) → an equality chain
+ *  `if k === "a" then rec.a else …`. Either way the chain/match covers exactly
+ *  the key's values, so a subset key stays sound. Returns null if the shape
+ *  doesn't apply (caller falls back to plain index). */
 function tryRecordIndexByEnum(obj: TExpr, idx: TExpr, ctx: Ctx): TExpr | null {
   const objTy = obj.ty, keyTy = idx.ty;
-  if (objTy.kind !== "user" || keyTy.kind !== "user") return null;
+  if (objTy.kind !== "user") return null;
   const rec = ctx.typeDecls.find(d => d.name === objTy.name && d.kind === "record");
-  const keyEnum = ctx.typeDecls.find(d => d.name === keyTy.name && d.kind === "string-union");
-  if (!rec?.fields || !keyEnum?.values?.length) return null;
+  if (!rec?.fields) return null;
   const fieldByName = new Map(rec.fields.map(f => [f.name, f]));
-  if (!keyEnum.values.every(v => fieldByName.has(v))) return null;  // key isn't a subset of fields
   const fieldTy = (v: string): Ty => fieldByName.get(v)!.type ?? { kind: "unknown" };
-  return {
-    kind: "tagMatch", scrutinee: idx, typeName: keyEnum.name,
-    cases: keyEnum.values.map(v => ({ variant: v, body: { kind: "field", obj, field: v, ty: fieldTy(v) } as TExpr })),
-    fallthrough: null, ty: fieldTy(keyEnum.values[0]),
-  };
+  const field = (v: string): TExpr => ({ kind: "field", obj, field: v, ty: fieldTy(v) });
+
+  // The key's members, and whether it's a datatype (named) or a bare string (inline).
+  let values: string[] | null = null;
+  let datatype: string | null = null;
+  if (keyTy.kind === "user") {
+    const keyEnum = ctx.typeDecls.find(d => d.name === keyTy.name && d.kind === "string-union");
+    if (keyEnum?.values?.length) { values = keyEnum.values; datatype = keyEnum.name; }
+  } else if (keyTy.kind === "string" && keyTy.values?.length) {
+    values = keyTy.values;
+  }
+  if (!values || !values.every(v => fieldByName.has(v))) return null;  // key isn't a subset of fields
+
+  if (datatype) {
+    return {
+      kind: "tagMatch", scrutinee: idx, typeName: datatype,
+      cases: values.map(v => ({ variant: v, body: field(v) })), fallthrough: null, ty: fieldTy(values[0]),
+    };
+  }
+  // Inline union: fold right into an equality chain, last member as the bare else.
+  let expr: TExpr = field(values[values.length - 1]);
+  for (let i = values.length - 2; i >= 0; i--) {
+    expr = {
+      kind: "conditional", ty: fieldTy(values[i]), then: field(values[i]), else: expr,
+      cond: { kind: "binop", op: "===", left: idx, right: { kind: "str", value: values[i], ty: { kind: "string" } }, ty: { kind: "bool" } },
+    };
+  }
+  return expr;
 }
 
 function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {

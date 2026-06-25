@@ -15,7 +15,7 @@ export type Ty =
   | { kind: "nat"; big?: boolean }
   | { kind: "int"; big?: boolean }
   | { kind: "real" }
-  | { kind: "string" }
+  | { kind: "string"; values?: string[] }   // values: members of an inline string-union (`"a" | "b"`), kept for record-index-by-enum
   | { kind: "void" }
   | { kind: "array"; elem: Ty }
   | { kind: "map"; key: Ty; value: Ty }
