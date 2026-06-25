@@ -168,6 +168,7 @@ function emitExpr(e: Expr): string {
         if (e.method === "push")     return `(${obj} + [${args.join(", ")}])`;
         if (e.method === "unshift")  return `([${args.join(", ")}] + ${obj})`;
         if (e.method === "concat")   return `(${obj} + [${args.join(", ")}])`;
+        if (e.method === "sort")     { needPreamble("SeqSortBy"); return `SeqSortBy(${obj}, ${args[0]})`; }
         // No-arg slice is a full copy; Dafny seq is an immutable value type, so
         // the copy is just the seq itself (the idiom for "copy then mutate").
         if (e.method === "slice" && args.length === 0) return obj;
@@ -923,6 +924,18 @@ const STRING_SPLIT = `function {:axiom} StringSplit(s: string, d: string): seq<s
   ensures |StringSplit(s, d)| <= |s| + 1
   ensures forall k :: 0 <= k < |StringSplit(s, d)| ==> |StringSplit(s, d)[k]| <= |s|`;
 
+// `xs.sort(cmp)` in TS sorts in place by a comparator (negative ⟺ a before b).
+// Modeled here as an axiom returning a permutation sorted by cmp. The `requires`
+// is the soundness condition — cmp must be a total preorder, otherwise no sorted
+// permutation exists and the axiom would be vacuous. Callers discharge it (e.g.
+// `(a,b) => a.k - b.k` is total + transitive by linear arithmetic).
+const SEQ_SORT_BY = `function {:axiom} SeqSortBy<T(==,!new)>(s: seq<T>, cmp: (T, T) -> int): seq<T>
+  requires forall a: T, b: T :: cmp(a, b) <= 0 || cmp(b, a) <= 0
+  requires forall a: T, b: T, c: T :: cmp(a, b) <= 0 && cmp(b, c) <= 0 ==> cmp(a, c) <= 0
+  ensures multiset(SeqSortBy(s, cmp)) == multiset(s)
+  ensures |SeqSortBy(s, cmp)| == |s|
+  ensures forall i: int, j: int :: 0 <= i <= j < |SeqSortBy(s, cmp)| ==> cmp(SeqSortBy(s, cmp)[i], SeqSortBy(s, cmp)[j]) <= 0`;
+
 const STRING_TRIM = `function StringTrimLeft(s: string): string
   ensures |StringTrimLeft(s)| <= |s|
   ensures StringTrimLeft(s) == "" || (|StringTrimLeft(s)| > 0 && StringTrimLeft(s)[0] != ' ')
@@ -1085,6 +1098,7 @@ const PREAMBLE_CODE: [string, string][] = [
   ["SafeSlice", SAFE_SLICE],
   ["StringIndexOf", STRING_INDEX_OF],
   ["StringSplit", STRING_SPLIT],
+  ["SeqSortBy", SEQ_SORT_BY],
   ["StringTrim", STRING_TRIM],
   ["StringToLower", STRING_TO_LOWER],
   ["StringToUpper", STRING_TO_UPPER],

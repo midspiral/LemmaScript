@@ -482,6 +482,16 @@ function tyToTsStr(ty: Ty): string | undefined {
   return undefined;
 }
 function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExpr[] {
+  // sort's comparator takes two params, both the element type.
+  if (fn.kind === "field" && fn.obj.ty.kind === "array" && fn.field === "sort" &&
+      rawArgs.length >= 1 && rawArgs[0].kind === "lambda" && rawArgs[0].params.length >= 1) {
+    const tsType = tyToTsStr(fn.obj.ty.elem);
+    if (tsType) {
+      const lam = rawArgs[0];
+      const updatedParams = lam.params.map(p => (p.tsType ? p : { ...p, tsType }));
+      return [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
+    }
+  }
   if (fn.kind === "field" && fn.obj.ty.kind === "array" &&
       ["map", "filter", "every", "some", "find", "findLast", "findIndex"].includes(fn.field) &&
       rawArgs.length >= 1 && rawArgs[0].kind === "lambda" &&
@@ -581,6 +591,7 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
     if (fn.field === "shift") return objTy.elem;
     if (fn.field === "pop") return { kind: "optional", inner: objTy.elem };
     if (fn.field === "push" || fn.field === "unshift" || fn.field === "concat") return objTy;
+    if (fn.field === "sort") return objTy;
     if (fn.field === "filter") return objTy;
     if (fn.field === "every" || fn.field === "some") return { kind: "bool" };
     if (fn.field === "find" || fn.field === "findLast") return { kind: "optional", inner: objTy.elem };
