@@ -1366,7 +1366,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
         const f = s.expr.fn.field;
         const isMutating =
           ((recv.ty.kind === "map" || recv.ty.kind === "set") && (f === "set" || f === "add" || f === "delete")) ||
-          (recv.ty.kind === "array" && (f === "push" || f === "unshift"));
+          (recv.ty.kind === "array" && (f === "push" || f === "unshift" || f === "sort"));
         if (isMutating && recv.kind === "var") {
           const { binds, expr } = liftMethodCalls(s.expr);
           return [...binds, { kind: "assign", target: recv.name, value: expr }];
