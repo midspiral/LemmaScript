@@ -481,6 +481,8 @@ The same coercion applies to non-bool conditions in `if`/`while`/`?:` positions:
 | `arr.join(sep)` | — | `SeqJoin(arr, sep)` (preamble) |
 | `arr.shift()` | — | `arr[0]` + `arr := arr[1..]` |
 | `arr.pop()` | — | `(if \|arr\|>0 then Some(arr[\|arr\|-1]) else None)` + `arr := (if \|arr\|>0 then arr[..\|arr\|-1] else arr)` |
+| `arr.unshift(e)` | — | `([e] + arr)` (mutating → reassignment) |
+| `arr.sort(cmp)` | — | `SeqSortBy(arr, cmp)` (preamble axiom: permutation + length-preserving + sorted; mutating; `requires` cmp a total preorder) |
 | `arr.slice(start)` | — | `arr[start..]` |
 | `arr.slice(start, end)` | — | `arr[start..end]` |
 | `expr!` (non-null) | unwrap Option | unwrap Option / direct map access |
@@ -682,7 +684,7 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 - Composition: `v && rest` or `rest && v` (optional check on either side), `a === undefined || b === undefined`
 - Spec implication: `path !== undefined && rest ==> B` (premise narrows conclusion)
 - Optional chaining: `obj?.field`, `obj?.foo()`, `obj?.[i]`, chained `obj?.a?.b?.c` and `obj?.a.b.c`
-- Nullish coalescing: `x ?? default`
+- Nullish coalescing: `x ?? default`; array index `arr[i] ?? default` (undefined ⟺ out of bounds under `noUncheckedIndexedAccess`) → `(0 <= i && i < arr.length) ? arr[i] : default`
 
 The narrow pass (`narrow.ts`) detects these on the typed IR and rewrites them into a single `someMatch` IR node with a fresh binder. Transform lowers `someMatch` into Dafny `match` Some/None (or `if .Some? { ... .value ... }` after the peephole pass).
 
@@ -959,7 +961,8 @@ The spec body is purely additive — `regen` three-way-merges and preserves user
 | `(a: T1, b: T2) => R` (function type) | — | `(T1, T2) -> R` (typically used in a `type Foo = (...) => R` alias; lambda params passed to a callee with a `Foo`-typed parameter get inferred types) |
 | `unknown` | `Int` | `int` |
 | `[T, T, ...]` (tuple) | `Array T'` | `seq<T'>` |
-| `<T extends Base>` (generic) | `T` erased to `Base` | `T` erased to `Base` |
+| `<T extends Base>` (record/nominal bound) | `T` erased to `Base` | `T` erased to `Base` |
+| `<T>` / `<T extends U>` (unbounded, or union/intersection bound) | `T` kept as type param (bound dropped) | `T` kept as type param (bound dropped) |
 | `A \| B` (union param) | field intersection type | field intersection type |
 | Anything else | Pass through | Pass through |
 
@@ -1150,7 +1153,9 @@ return { res: true, done: true, rec: true };
 → Lean: `return { res := true, done := true, rec := true }`
 → Dafny: `return EffectState(true, true, true);`
 
-**Spread update** (`{ ...obj, f: v }`) maps to functional record update in both backends.
+**Spread update** (`{ ...obj, f: v }`) maps to functional record update in both backends. **Object-spread merge** (`{ ...base, ...over }`, multiple sources) expands field-wise against the result record type: an override field wins when present, else the base shows through; for optional fields presence is decided at runtime (`Some?`), and an optional override operand guards the whole merge. Both operands need a known record type. See [`examples/spreadMerge.ts`](examples/spreadMerge.ts).
+
+**Record index by enum key** (`rec[k]`, `k` ranging over field names) lowers so the dynamic access verifies like a static one: a named string-union key becomes `match k { case f => rec.f }`; an inline union key (`"a" | "b"`) becomes an equality chain `if k === "a" then rec.a else …`. The chain/match covers exactly the key's members, so a key that is a subset of the fields stays sound. See [`examples/recordIndexByEnum.ts`](examples/recordIndexByEnum.ts).
 
 **Inline object types:** Anonymous object types in interface fields (e.g., `decision?: { decision: string; rationale: string }`) are extracted as named datatypes with synthetic names (e.g., `SpecEntryDecision`). The parent field references the generated name.
 
