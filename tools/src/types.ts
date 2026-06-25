@@ -105,9 +105,15 @@ function tyFromTypeNode(tn: TypeNode): Ty {
     const isStrLit = (a: { node: TypeNode } | { syntheticBool: true }) =>
       !("syntheticBool" in a) && Node.isLiteralTypeNode(a.node) && a.node.getLiteral().getKind() === SyntaxKind.StringLiteral;
     if (nonNullish.length >= 2 && nonNullish.every(isStrLit)) {
+      // Keep the literal members so `rec[k]` can lower to an equality chain.
+      const values = nonNullish.map(a => {
+        const lit = (a as { node: TypeNode }).node;
+        const inner = Node.isLiteralTypeNode(lit) ? lit.getLiteral() : lit;
+        return Node.isStringLiteral(inner) ? inner.getLiteralValue() : inner.getText();
+      });
       return normalized.some(a => !("syntheticBool" in a) && isNullish(a.node))
-        ? { kind: "optional", inner: { kind: "string" } }
-        : { kind: "string" };
+        ? { kind: "optional", inner: { kind: "string", values } }
+        : { kind: "string", values };
     }
     if (nonNullish.length === 1 && normalized.length >= 2) {
       const sole = nonNullish[0];

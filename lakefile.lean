@@ -128,6 +128,7 @@ lean_lib Examples where
     `«templateConcat.types», `«templateConcat.def», `«templateConcat.proof»,
     `«nestedPush.types», `«nestedPush.def», `«nestedPush.proof»,
     `«discriminantTrailing.types», `«discriminantTrailing.def», `«discriminantTrailing.proof»,
-    `«spreadMerge.types», `«spreadMerge.def»
+    `«spreadMerge.types», `«spreadMerge.def»,
+    `«recordIndexByEnum.types», `«recordIndexByEnum.def»
   ]
   extraDepTargets := #[``downloadDependencies]
