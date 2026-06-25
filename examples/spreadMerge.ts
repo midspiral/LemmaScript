@@ -1,7 +1,7 @@
 // Faithful object-spread merge `{ ...a, ...b }`. Later sources override earlier
 // ones field by field, so a base default survives exactly when the override
 // omits that field. Resolve expands the merge against the result type's fields
-// (an optional field's presence decides at runtime); see DESIGN_MERGE.md.
+// (an optional field's presence decides at runtime).
 
 export interface Budgets {
 	low: number;
