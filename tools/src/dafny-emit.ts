@@ -913,16 +913,55 @@ function StringIndexOfFromN(s: string, sub: string, from: nat): int
   else StringIndexOfFromN(s, sub, from + 1)
 }`;
 
-// `s.split(d)` in TS returns a non-empty sequence of segments. Modeled here as
-// an axiom — defining it recursively would force StringIndexOf to grow ensures
-// clauses that callers don't need. The two ensures cover what verification
-// usually wants: result has at least one element, and every element fits
-// within the source length.
-const STRING_SPLIT = `function {:axiom} StringSplit(s: string, d: string): seq<string>
+// `s.split(d)` in TS is emitted as native `StringSplit(s, d)` — modeled as
+// an axiom so the verifier doesn't chase a recursive body, but with the same
+// strong postconditions that `examples/split.dfy` proves for a verified
+// recursive `Split`. The helpers `Join`, `Contains`, `EndsWithSeparator`,
+// and `AllPartsNotPostfixOrEnd` come along in this preamble so the ensures
+// are expressible and so callers can mention them in their own contracts.
+const STRING_SPLIT = `function Join(ss: seq<string>, separator: string): string {
+  if |ss| == 0 then ""
+  else if |ss| == 1 then ss[0]
+  else ss[0] + separator + Join(ss[1..], separator)
+}
+
+predicate Contains(haystack: string, needle: string)
+  ensures Contains(haystack, needle) <==>
+    exists k :: 0 <= k <= |haystack| && needle <= haystack[k..]
+  ensures !Contains(haystack, needle) <==>
+    forall i :: 0 <= i <= |haystack| ==> !(needle <= haystack[i..])
+{
+  if needle <= haystack then
+    assert haystack[0..] == haystack;
+    true
+  else if |haystack| > 0 then
+    assert forall i :: 1 <= i <= |haystack| ==> haystack[i..] == haystack[1..][(i-1)..];
+    Contains(haystack[1..], needle)
+  else
+    false
+}
+
+predicate EndsWithSeparator(s: string, separator: string)
+  requires |separator| > 0
+{
+  Contains((s + separator)[..|s| + |separator| - 1], separator)
+}
+
+predicate AllPartsNotPostfixOrEnd(results: seq<string>, separator: string)
+  requires |separator| > 0
+  requires |results| > 0
+{
+  forall i :: 0 <= i < |results| - 1 ==> !EndsWithSeparator(results[i], separator)
+}
+
+function {:axiom} StringSplit(s: string, d: string): seq<string>
   requires |d| > 0
   ensures |StringSplit(s, d)| >= 1
   ensures |StringSplit(s, d)| <= |s| + 1
-  ensures forall k :: 0 <= k < |StringSplit(s, d)| ==> |StringSplit(s, d)[k]| <= |s|`;
+  ensures forall k :: 0 <= k < |StringSplit(s, d)| ==> |StringSplit(s, d)[k]| <= |s|
+  ensures Join(StringSplit(s, d), d) == s
+  ensures forall piece :: piece in StringSplit(s, d) ==> !Contains(piece, d)
+  ensures |s| > 0 && |StringSplit(s, d)| > 0 ==> AllPartsNotPostfixOrEnd(StringSplit(s, d), d)`;
 
 // `xs.sort(cmp)` in TS sorts in place by a comparator (negative ⟺ a before b).
 // Modeled here as an axiom returning a permutation sorted by cmp. The `requires`
