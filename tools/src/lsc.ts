@@ -9,6 +9,7 @@ import { Project, ScriptTarget } from "ts-morph";
 import { existsSync } from "fs";
 import path from "path";
 import { extractModule } from "./extract.js";
+import { liftClosures } from "./liftclosures.js";
 import { resolveModule } from "./resolve.js";
 import { narrowModule } from "./narrow.js";
 import { autoHavocModule } from "./autohavoc.js";
@@ -92,7 +93,9 @@ function main() {
   const safeSlice = /\/\/@ safe-slice\b/.test(fullText);
 
   // Extract: ts-morph → Raw IR
-  const raw = extractModule(sourceFile);
+  const raw0 = extractModule(sourceFile);
+  // Lift non-escaping mutating thunks to top-level routines (Raw IR → Raw IR).
+  const raw = liftClosures(raw0);
 
   if (cmd === "extract") {
     console.log(JSON.stringify(raw, null, 2));
