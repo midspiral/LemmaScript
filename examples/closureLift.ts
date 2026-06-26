@@ -1,5 +1,5 @@
 /**
- * Lean gate for the targeted closure lift (DESIGN_CLOSURE_TARGET.md §6).
+ * Lean gate for the targeted closure lift.
  *
  * This is the *post-lift* shape, written by hand (the lift pass doesn't exist yet):
  * a record-returning routine with a loop — which emits as a Velvet `method` returning
