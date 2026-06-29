@@ -1581,25 +1581,35 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       //      nested loop stays put.
       const stripExitBreaks = (b: RawStmt[]) => b.filter(st => st.kind !== "break");
       const isExit = (st: RawStmt | undefined) => !!st && ["break", "return", "throw", "continue"].includes(st.kind);
-      let fallthrough: string[] = [];
-      for (const clause of s.getClauses()) {
-        if (Node.isCaseClause(clause)) {
-          const label = clause.getExpression().getText().replace(/^["']|["']$/g, "");
-          if (clause.getStatements().length === 0) { fallthrough.push(label); continue; }
-          const raw = extractStmts(clause.getStatements());
-          if (!isExit(raw[raw.length - 1]))
-            throw new Error(`switch case "${label}" at line ${line}: a non-empty case must end with break/return/throw; fall-through into the next case is not supported`);
-          const body = stripExitBreaks(raw);
-          for (const l of fallthrough) cases.push({ label: l, body });
-          cases.push({ label, body });
-          fallthrough = [];
-        } else {
-          defaultBody = stripExitBreaks(extractStmts(clause.getStatements()));
-          for (const l of fallthrough) cases.push({ label: l, body: defaultBody });
-          fallthrough = [];
+      // Resolve JS fall-through positionally: a clause's effective body is its
+      // own statements concatenated with each following clause's statements up
+      // to and including the first clause that ends in break/return/throw (or
+      // the switch end). This covers both empty stacked labels (`case A: case
+      // B: body`) and a *non-empty* case that falls through (`case A: sA; case
+      // B: ...`) — the stripped breaks are the switch exits.
+      const clauseInfos = s.getClauses().map(clause => {
+        const stmts = extractStmts(clause.getStatements());
+        return {
+          label: Node.isCaseClause(clause)
+            ? clause.getExpression().getText().replace(/^["']|["']$/g, "")
+            : null,
+          stmts,
+          exits: isExit(stmts[stmts.length - 1]),
+        };
+      });
+      const fallThroughBody = (start: number): RawStmt[] => {
+        let body: RawStmt[] = [];
+        for (let j = start; j < clauseInfos.length; j++) {
+          body = body.concat(clauseInfos[j]!.stmts);
+          if (clauseInfos[j]!.exits) break;
         }
+        return stripExitBreaks(body);
+      };
+      for (let i = 0; i < clauseInfos.length; i++) {
+        const c = clauseInfos[i]!;
+        if (c.label === null) defaultBody = fallThroughBody(i);
+        else cases.push({ label: c.label, body: fallThroughBody(i) });
       }
-      for (const l of fallthrough) cases.push({ label: l, body: [] });
       result.push({ kind: "switch", expr: switchExpr, discriminant, cases, defaultBody, line });
       continue;
     }
