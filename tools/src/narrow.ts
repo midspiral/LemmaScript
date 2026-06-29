@@ -101,7 +101,7 @@ const parseSimpleOptionalCheck = parseOptionalCheck;
 
 function walkExpr(e: TExpr): TExpr {
   const r = recurseExpr(e);
-  return ruleNullish(r) ?? ruleNullishIndex(r) ?? ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleImplArrayIsArray(r) ?? ruleConditionalArrayIsArray(r) ?? ruleConditionalAndArrayIsArray(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalInMap(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
+  return ruleNullish(r) ?? ruleNullishIndex(r) ?? ruleOptChainIndex(r) ?? ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleImplArrayIsArray(r) ?? ruleConditionalArrayIsArray(r) ?? ruleConditionalAndArrayIsArray(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalInMap(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
 }
 
 function recurseExpr(e: TExpr): TExpr {
@@ -440,6 +440,37 @@ function ruleNullishIndex(e: TExpr): TExpr | null {
   const hi: TExpr = { kind: "binop", op: "<", left: idx, right: len, ty: { kind: "bool" } };
   const cond: TExpr = { kind: "binop", op: "&&", left: lo, right: hi, ty: { kind: "bool" } };
   return { kind: "conditional", cond, then: e.left, else: e.right, ty: e.ty };
+}
+
+/** Rule (expression): `arr[i]?.<chain>` — optional chaining on an array index,
+ *  the optChain sibling of ruleNullishIndex. `arr[i]` is `T | undefined`,
+ *  undefined exactly out of bounds, so → `(0 <= i && i < arr.length) ? <chain on
+ *  arr[i]> : undefined`. The conditional's optional type makes transform wrap the
+ *  in-bounds chain result in Some and the OOB branch in None — the same Option<…>
+ *  a directly-optional scrutinee yields via ruleOptChain, just bounds-guarded.
+ *  (ruleOptChain itself bails here: an array index is typed as the non-optional
+ *  element type, so its `?.` never reaches that rule.) */
+function ruleOptChainIndex(e: TExpr): TExpr | null {
+  if (e.kind !== "optChain") return null;
+  if (e.obj.kind !== "index") return null;
+  if (e.obj.obj.ty.kind !== "array") return null;
+  const idx = e.obj.idx;
+  const len: TExpr = { kind: "field", obj: e.obj.obj, field: "length", ty: { kind: "int" } };
+  const lo: TExpr = { kind: "binop", op: "<=", left: { kind: "num", value: 0, ty: { kind: "int" } }, right: idx, ty: { kind: "bool" } };
+  const hi: TExpr = { kind: "binop", op: "<", left: idx, right: len, ty: { kind: "bool" } };
+  const cond: TExpr = { kind: "binop", op: "&&", left: lo, right: hi, ty: { kind: "bool" } };
+  let body: TExpr = e.obj; // arr[i] — in bounds under `cond`
+  for (const step of e.chain) {
+    if (step.kind === "field") {
+      body = { kind: "field", obj: body, field: step.name, ty: step.ty };
+    } else if (step.kind === "index") {
+      body = { kind: "index", obj: body, idx: step.idx, ty: step.ty };
+    } else {
+      body = { kind: "call", fn: body, args: step.args, ty: step.ty, callKind: step.callKind };
+    }
+  }
+  const undef: TExpr = { kind: "var", name: "undefined", ty: { kind: "void" } };
+  return { kind: "conditional", cond, then: body, else: undef, ty: e.ty };
 }
 
 /** Rule (expression): `obj?.<chain>` — single-eval optional chain.
