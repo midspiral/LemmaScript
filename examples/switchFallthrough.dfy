@@ -30,3 +30,21 @@ method collect(items: seq<Item>) returns (res: seq<int>)
   }
   return out;
 }
+
+method score(tag: Tag) returns (res: int)
+  ensures (res >= 0)
+{
+  var r := 0;
+  match tag {
+    case a =>
+      r := (r + 1);
+      r := (r + 10);
+    case b =>
+      r := (r + 10);
+    case c =>
+      r := (r + 100);
+    case skip =>
+
+  }
+  return r;
+}
