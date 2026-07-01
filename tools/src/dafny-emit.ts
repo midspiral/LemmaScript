@@ -21,7 +21,9 @@ function tyToDafny(ty: Ty): string {
     case "optional": { needPreamble("OptionType"); return `Option<${tyToDafny(ty.inner)}>`; }
     case "user": return ty.name;
     case "fn": return `(${ty.params.map(tyToDafny).join(", ")}) -> ${tyToDafny(ty.result)}`;
-    case "unknown": return "int";
+    // Out-of-subset (`any`/`unknown`); opaque so real ops on it fail loudly
+    // rather than silently verify as `int`. Mirrors the Lean backend's `_`.
+    case "unknown": needPreamble("UnknownType"); return "Unknown";
   }
 }
 
@@ -1079,6 +1081,9 @@ const SET_TO_SEQ = `method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
 /** Preamble code keyed by name. Emitted in this order when needed. */
 const PREAMBLE_CODE: [string, string][] = [
   ["OptionType", "datatype Option<T> = None | Some(value: T)"],
+  // Opaque carrier for `unknown`-typed values. `(==)` for compare/map-key/match;
+  // `(0)` (auto-init ⇒ nonempty) so `havoc` (`:= *`) is well-formed.
+  ["UnknownType", "type Unknown(==, 0)"],
   ["SetToSeq", SET_TO_SEQ],
   ["Pow2", POW2],
   ["BitAnd", BIT_AND],
