@@ -1187,6 +1187,22 @@ export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSl
   // skipped when the corresponding pure def was actually emitted.
   const emittedPureDefs = new Set<string>();
 
+  // Emit a decl, rolling back any preamble requirements it registered if it
+  // throws. A skipped decl must contribute neither text nor preambles — else a
+  // side-effecting `needPreamble` from a half-emitted decl leaves an unused
+  // preamble (e.g. `type Unknown` from a skipped const whose head is
+  // `unknown`-typed but whose value expr is unsupported).
+  const emitDeclTx = (d: Decl): string => {
+    const saved = new Set(_neededPreambles);
+    try {
+      return emitDecl(d);
+    } catch (e) {
+      _neededPreambles.clear();
+      for (const k of saved) _neededPreambles.add(k);
+      throw e;
+    }
+  };
+
   // Emit declarations
   const declLines: string[] = [];
   const skipped: string[] = [];
@@ -1198,7 +1214,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSl
       for (const inner of decl.decls) {
         try {
           declLines.push("");
-          declLines.push(emitDecl(inner));
+          declLines.push(emitDeclTx(inner));
           if (inner.kind === "def") emittedPureDefs.add(inner.name);
         } catch (e) {
           const name = "name" in inner ? inner.name : "unknown";
@@ -1212,7 +1228,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSl
     }
     try {
       declLines.push("");
-      declLines.push(emitDecl(decl));
+      declLines.push(emitDeclTx(decl));
       if (decl.kind === "def-by-method") emittedPureDefs.add(decl.name);
     } catch (e) {
       const name = "name" in decl ? decl.name : "unknown";
