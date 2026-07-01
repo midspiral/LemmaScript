@@ -1780,10 +1780,19 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
       const nameNode = p.getNameNode();
       if (Node.isObjectBindingPattern(nameNode)) {
         const type = p.getType();
+        // `//@ declare-type` types are invisible to the TS checker, so
+        // `type.getProperty` finds nothing for them and the bindings would
+        // collapse to `unknown`. Fall back to the declared record's field types.
+        const declTypeName = p.getTypeNode()?.getText();
+        const declFields = declTypeName
+          ? _synthArrayUnions?.find(d => d.name === declTypeName && d.kind === "record")?.fields
+          : undefined;
         return nameNode.getElements().map(el => {
           const name = el.getName();
           const propType = type.getProperty(name)?.getTypeAtLocation(p);
-          return { name, tsType: propType ? typeToString(propType) : "unknown" };
+          if (propType) return { name, tsType: typeToString(propType) };
+          const declTy = declFields?.find(f => f.name === name)?.tsType;
+          return { name, tsType: declTy ?? "unknown" };
         });
       }
       // Syntactic union nodes go through _tsTypeFromUnionNode so synth fires

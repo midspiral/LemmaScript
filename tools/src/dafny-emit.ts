@@ -21,7 +21,9 @@ function tyToDafny(ty: Ty): string {
     case "optional": { needPreamble("OptionType"); return `Option<${tyToDafny(ty.inner)}>`; }
     case "user": return ty.name;
     case "fn": return `(${ty.params.map(tyToDafny).join(", ")}) -> ${tyToDafny(ty.result)}`;
-    case "unknown": return "int";
+    // Out-of-subset (`any`/`unknown`); opaque so real ops on it fail loudly
+    // rather than silently verify as `int`. Mirrors the Lean backend's `_`.
+    case "unknown": needPreamble("UnknownType"); return "Unknown";
   }
 }
 
@@ -1079,6 +1081,9 @@ const SET_TO_SEQ = `method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
 /** Preamble code keyed by name. Emitted in this order when needed. */
 const PREAMBLE_CODE: [string, string][] = [
   ["OptionType", "datatype Option<T> = None | Some(value: T)"],
+  // Opaque carrier for `unknown`-typed values. `(==)` for compare/map-key/match;
+  // `(0)` (auto-init ⇒ nonempty) so `havoc` (`:= *`) is well-formed.
+  ["UnknownType", "type Unknown(==, 0)"],
   ["SetToSeq", SET_TO_SEQ],
   ["Pow2", POW2],
   ["BitAnd", BIT_AND],
@@ -1182,6 +1187,22 @@ export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSl
   // skipped when the corresponding pure def was actually emitted.
   const emittedPureDefs = new Set<string>();
 
+  // Emit a decl, rolling back any preamble requirements it registered if it
+  // throws. A skipped decl must contribute neither text nor preambles — else a
+  // side-effecting `needPreamble` from a half-emitted decl leaves an unused
+  // preamble (e.g. `type Unknown` from a skipped const whose head is
+  // `unknown`-typed but whose value expr is unsupported).
+  const emitDeclTx = (d: Decl): string => {
+    const saved = new Set(_neededPreambles);
+    try {
+      return emitDecl(d);
+    } catch (e) {
+      _neededPreambles.clear();
+      for (const k of saved) _neededPreambles.add(k);
+      throw e;
+    }
+  };
+
   // Emit declarations
   const declLines: string[] = [];
   const skipped: string[] = [];
@@ -1193,7 +1214,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSl
       for (const inner of decl.decls) {
         try {
           declLines.push("");
-          declLines.push(emitDecl(inner));
+          declLines.push(emitDeclTx(inner));
           if (inner.kind === "def") emittedPureDefs.add(inner.name);
         } catch (e) {
           const name = "name" in inner ? inner.name : "unknown";
@@ -1207,7 +1228,7 @@ export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSl
     }
     try {
       declLines.push("");
-      declLines.push(emitDecl(decl));
+      declLines.push(emitDeclTx(decl));
       if (decl.kind === "def-by-method") emittedPureDefs.add(decl.name);
     } catch (e) {
       const name = "name" in decl ? decl.name : "unknown";
