@@ -218,8 +218,10 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
     if (method === "some")     return `${obj}.${monadic ? "anyM" : "any"} ${args[0]}`;
     if (method === "includes") return args.length > 1 ? `(${obj}.extract ${args[1]} ${obj}.size).contains ${args[0]}` : `${obj}.contains ${args[0]}`;
     if (method === "find")     return `${obj}.find? ${args[0]}`;
+    if (method === "join")     return `(String.intercalate ${args[0]} ${obj}.toList)`;
     if (method === "with")     return `${obj}.set! ${args[0]} ${args[1]}`;
     if (method === "push")     return args.length === 1 ? `Array.push ${obj} ${args[0]}` : `${obj} ++ #[${args.join(", ")}]`;
+    if (method === "unshift")  return `(#[${args.join(", ")}] ++ ${obj})`;
     if (method === "concat")   return args.length === 1 ? `Array.push ${obj} ${args[0]}` : `${obj} ++ #[${args.join(", ")}]`;
     // arr.slice → Array.extract. No-arg slice is a full copy (Array is a value
     // type in Lean, so the receiver itself); one arg drops the prefix, two args
@@ -268,7 +270,8 @@ function wrapOperand(sub: Expr, parentPrec?: number): string {
 
 function emitExpr(e: Expr, parentPrec?: number): string {
   switch (e.kind) {
-    case "var": return escapeName(e.name);
+    // `undefined` is the IR's spelling of the absent optional (mirrors dafny-emit's None)
+    case "var": return e.name === "undefined" ? "none" : escapeName(e.name);
     case "num": return `${e.value}`;
     case "bool": return e.value ? "true" : "false";
     case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
@@ -373,6 +376,10 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // `BaseType.variant`; a bare `variant` is an unknown identifier. (Dafny keeps
       // the bare form, so its output is unaffected.)
       if (e.ctorOf) return args.length ? `${e.ctorOf}.${e.fn} ${args.join(" ")}` : `${e.ctorOf}.${e.fn}`;
+      // Option constructors arrive Dafny-spelled from transform (`app "Some"`);
+      // Lean core exports the lowercase forms as top-level names.
+      if (e.fn === "Some" && args.length === 1) return `some ${args[0]}`;
+      if (e.fn === "None" && args.length === 0) return `none`;
       // SetToSeq → .toArray for Lean (HashSet has native toArray)
       if (e.fn === "SetToSeq" && args.length === 1) return `${args[0]}.toArray`;
       if (e.fn === "SetFromSeq" && args.length === 1) return `Std.HashSet.ofList ${args[0]}.toList`;
@@ -483,10 +490,19 @@ function emitStmts(stmts: Stmt[], indent: number): string {
 function emitStmt(s: Stmt, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (s.kind) {
-    case "let":
-      return s.mutable
-        ? `${pad}let mut ${escapeName(s.name)} : ${tyToLean(s.type)} := ${emitExpr(s.value)}`
-        : `${pad}let ${escapeName(s.name)} := ${emitExpr(s.value)}`;
+    case "let": {
+      // `mut` lets always carry their type (assignments must re-elaborate at it).
+      // Immutable lets are ascribed only when the initializer is a `match` (the
+      // `??` / Option-unwrap lowerings): Velvet's WP elaboration runs *backwards*,
+      // so without the ascription the binding's type is a metavariable that a
+      // later use pins first — e.g. `lines.size ≤ maxLines` pins `maxLines : ℕ`
+      // and the ℤ-valued unwrap arms then fail to elaborate. Other initializer
+      // shapes determine their own type, and leaving them bare keeps previously
+      // generated (and proven) artifacts byte-stable.
+      const ascribe = s.mutable || s.value.kind === "match";
+      const ty = ascribe && s.type.kind !== "unknown" ? ` : ${tyToLean(s.type)}` : "";
+      return `${pad}let ${s.mutable ? "mut " : ""}${escapeName(s.name)}${ty} := ${emitExpr(s.value)}`;
+    }
     case "assign": return `${pad}${escapeName(s.target)} := ${emitExpr(s.value)}`;
     case "ghostLet":
       return `${pad}let mut ${escapeName(s.name)} : ${tyToLean(s.type)} := ${emitExpr(s.value)}`;
