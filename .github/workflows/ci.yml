@@ -120,6 +120,8 @@ jobs:
             branch: lemmascript
           - repo: midspiral/guardians-lemmascript
             branch: main
+          - repo: midspiral/guardians-lemmascript
+            branch: generate-verify-execute
           - repo: midspiral/quorum-lemmascript
             branch: main
           - repo: midspiral/quorum-tutorial-lemmascript
@@ -128,6 +130,10 @@ jobs:
             branch: main
           - repo: midspiral/henri-lemmascript
             branch: main
+          - repo: midspiral/henri-lemmascript
+            branch: generate-verify-execute
+          - repo: midspiral/henri-lemmascript
+            branch: session
           - repo: midspiral/eventab-lemmascript
             branch: main
           - repo: midspiral/eslint-plugin-with-lemmascript
