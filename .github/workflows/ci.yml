@@ -179,6 +179,8 @@ jobs:
             branch: lemmascript
           - repo: midspiral/clear-split-lemmascript
             branch: main
+          - repo: midspiral/pi-lemmascript
+            branch: lemmascript
     steps:
       - uses: actions/checkout@v6
 
