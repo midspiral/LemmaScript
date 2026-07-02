@@ -23,7 +23,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
   const r = (x: Expr) => mapExpr(x, f);
   switch (e.kind) {
     case "var": case "num": case "bool": case "str": case "constructor":
-    case "emptyMap": case "emptySet": case "havoc": case "mapLiteral": return e;
+    case "emptyMap": case "emptySet": case "havoc": case "default": case "mapLiteral": return e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
     case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };
@@ -340,7 +340,7 @@ function rewriteChildrenExpr(e: Expr): Expr {
   const r = peepholeExpr;
   switch (e.kind) {
     case "var": case "num": case "bool": case "str": case "constructor":
-    case "emptyMap": case "emptySet": case "havoc": case "mapLiteral": return e;
+    case "emptyMap": case "emptySet": case "havoc": case "default": case "mapLiteral": return e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
     case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };

@@ -18,7 +18,7 @@ export type Expr =
   | { kind: "binop"; op: string; left: Expr; right: Expr }
   | { kind: "unop"; op: string; expr: Expr }
   | { kind: "app"; fn: string; args: Expr[]; ctorOf?: string }  // f a b; ctorOf set ⇒ fn is a datatype constructor of that (base) type. Dafny takes the bare name `fn(args)`; Lean must qualify it as `ctorOf.fn args`.
-  | { kind: "field"; obj: Expr; field: string }           // x.res, arr.size
+  | { kind: "field"; obj: Expr; field: string; fromUnion?: string; ctor?: string }   // x.res, arr.size; fromUnion set ⇒ `field` is a destructor of that (base) discriminated-union type. Dafny reads `x.field` directly; Lean must `match` since multi-ctor inductives have no field projections. ctor pins the owning constructor when several variants share the field name.
   | { kind: "toNat"; expr: Expr }                               // expr.toNat
   | { kind: "toReal"; expr: Expr }                             // int/nat → real coercion
   | { kind: "index"; arr: Expr; idx: Expr }                // arr[idx]!
@@ -36,6 +36,7 @@ export type Expr =
   | { kind: "implies"; premises: Expr[]; conclusion: Expr }
   | { kind: "let"; name: string; value: Expr; body: Expr }
   | { kind: "havoc"; type: Ty }
+  | { kind: "default"; type: Ty }                              // default value of T (Lean: `(default : T)` via Inhabited). Only produced by the return-in-loop→break rewrite, which is Lean-gated since Dafny keeps native in-loop returns; hence no Dafny producer today.
 
 export interface MatchArm {
   pattern: string;    // ".syn seq", ".idle", "_"
@@ -178,4 +179,58 @@ export interface Module {
   imports: string[];
   options: { key: string; value: string }[];
   decls: Decl[];
+}
+
+// ── Traversal ────────────────────────────────────────────────
+//
+// A single generic query visitor. `mapExpr`/`mapStmt` (in transform.ts) rewrite
+// the IR; these instead *query* it. `anyExpr(e, pred)` is true iff `pred` holds
+// for `e` or any sub-expression, descending through statements (lambda / if /
+// match / loop bodies), short-circuiting on the first hit. Query walkers (`does X
+// use var v?`, `does this body need Bool connectives?`) are one-liners on top of
+// this rather than a fresh hand-rolled recursion over every node kind.
+
+type ExprPred = (e: Expr) => boolean;
+
+export function anyExpr(e: Expr, pred: ExprPred): boolean {
+  if (pred(e)) return true;
+  switch (e.kind) {
+    case "var": case "num": case "bool": case "str":
+    case "emptyMap": case "emptySet": case "havoc": case "default": return false;
+    case "constructor": return (e.args ?? []).some(a => anyExpr(a, pred));
+    case "binop": return anyExpr(e.left, pred) || anyExpr(e.right, pred);
+    case "unop": case "toNat": case "toReal": return anyExpr(e.expr, pred);
+    case "app": return e.args.some(a => anyExpr(a, pred));
+    case "field": return anyExpr(e.obj, pred);
+    case "index": return anyExpr(e.arr, pred) || anyExpr(e.idx, pred);
+    case "implies": return e.premises.some(p => anyExpr(p, pred)) || anyExpr(e.conclusion, pred);
+    case "record": return (e.spread ? anyExpr(e.spread, pred) : false) || e.fields.some(f => anyExpr(f.value, pred));
+    case "arrayLiteral": return e.elems.some(x => anyExpr(x, pred));
+    case "mapLiteral": return e.entries.some(en => anyExpr(en.key, pred) || anyExpr(en.value, pred));
+    case "methodCall": return anyExpr(e.obj, pred) || e.args.some(a => anyExpr(a, pred));
+    case "lambda": return e.body.some(s => anyExprInStmt(s, pred));
+    case "if": return anyExpr(e.cond, pred) || anyExpr(e.then, pred) || anyExpr(e.else, pred);
+    case "match": return (typeof e.scrutinee !== "string" && anyExpr(e.scrutinee, pred)) || e.arms.some(a => anyExpr(a.body, pred));
+    case "forall": case "exists": return anyExpr(e.body, pred);
+    case "let": return anyExpr(e.value, pred) || anyExpr(e.body, pred);
+  }
+}
+
+export function anyExprInStmt(s: Stmt, pred: ExprPred): boolean {
+  switch (s.kind) {
+    case "let": case "assign": case "bind": case "let-bind": case "return":
+    case "ghostLet": case "ghostAssign": return anyExpr(s.value, pred);
+    case "assert": return anyExpr(s.expr, pred);
+    case "break": case "continue": return false;
+    case "if": return anyExpr(s.cond, pred) || anyExprInStmts(s.then, pred) || anyExprInStmts(s.else, pred);
+    case "match": return (typeof s.scrutinee !== "string" && anyExpr(s.scrutinee, pred)) || s.arms.some(a => anyExprInStmts(a.body, pred));
+    case "while": return anyExpr(s.cond, pred) || s.invariants.some(i => anyExpr(i, pred))
+      || (s.decreasing ? anyExpr(s.decreasing, pred) : false) || (s.doneWith ? anyExpr(s.doneWith, pred) : false)
+      || anyExprInStmts(s.body, pred);
+    case "forin": return anyExpr(s.bound, pred) || s.invariants.some(i => anyExpr(i, pred)) || anyExprInStmts(s.body, pred);
+  }
+}
+
+export function anyExprInStmts(stmts: Stmt[], pred: ExprPred): boolean {
+  return stmts.some(s => anyExprInStmt(s, pred));
 }

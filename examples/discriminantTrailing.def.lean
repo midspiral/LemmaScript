@@ -15,11 +15,8 @@ method tally (s : Shape) return (res : Int)
   ensures res ≥ 10
   do
     let mut n : Int := 0
-    match s with
-    | .circle =>
+    if (match s with | .circle => true | _ => false) then
       n := 1
-    | .square =>
+    else if (match s with | .square => true | _ => false) then
       n := 2
-    | .triangle =>
-      pure ()
     return n + 10
