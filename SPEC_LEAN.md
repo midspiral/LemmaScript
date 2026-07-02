@@ -63,6 +63,18 @@ All files live in `src/`, which Lake is configured to scan. No nested `lean/` di
 
 To set up a new project, copy `lakefile.lean`, `lean-toolchain`, and `dependencies.toml` from an existing case study.
 
+### 1.4 Overriding the Module Base — `//@ lean-module`
+
+By default the Lean module base is the file's basename, so `foo.ts` emits `foo.types.lean` / `foo.def.lean` and a `lakefile.lean` root of `«foo.types»`. Lean module names are **flat and global**: two `.ts` files with the same basename in different directories (e.g. an in-place fork that annotates two copies of `compaction.ts`) would emit colliding modules and cannot both be Lean libraries. Dafny is unaffected — each `.dfy` is verified as a standalone unit.
+
+A file-level directive overrides the base for the **Lean backend only**:
+
+```ts
+//@ lean-module compaction-cli
+```
+
+`lsc gen --backend=lean` then emits `compaction-cli.types.lean` / `compaction-cli.def.lean` (with `import «compaction-cli.types»`), and looks for `compaction-cli.spec.lean` / `compaction-cli.proof.lean`. Wire it into `lakefile.lean` with matching roots (`` `«compaction-cli.types» ``, `` `«compaction-cli.def» ``, `` `«compaction-cli.proof» ``). The Dafny artifacts (`foo.dfy`, `foo.dfy.gen`) keep the file basename.
+
 ---
 
 ## 2. Monadic Lifting

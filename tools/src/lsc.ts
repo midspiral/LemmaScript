@@ -91,6 +91,14 @@ function main() {
   // File-level directives consumed by the Dafny emitter.
   const safeSlice = /\/\/@ safe-slice\b/.test(fullText);
 
+  // `//@ lean-module <name>` overrides the Lean module base (default: file
+  // basename). Lean module names are flat/global, so two identically-named
+  // `.ts` files (e.g. an in-place fork's duplicated `compaction.ts`) would emit
+  // colliding `foo.types`/`foo.def` modules; this gives one a distinct base so
+  // both can be separate Lean libraries. Lean-only — Dafny is unaffected.
+  const leanModuleDirective = fullText.match(/\/\/@ lean-module ([A-Za-z0-9_.\-]+)/);
+  const leanModuleOverride = leanModuleDirective ? leanModuleDirective[1] : undefined;
+
   // Extract: ts-morph → Raw IR
   const raw = extractModule(sourceFile);
 
@@ -146,21 +154,22 @@ function main() {
   }
 
   // ── Lean backend ──────────────────────────────────────────
-  const specPath = path.join(dir, `${base}.spec.lean`);
-  const specImport = existsSync(specPath) ? `«${base}.spec»` : undefined;
-  let { typesFile, defFile } = transformModuleLean(typed, specImport);
+  const leanBase = leanModuleOverride ?? base;
+  const specPath = path.join(dir, `${leanBase}.spec.lean`);
+  const specImport = existsSync(specPath) ? `«${leanBase}.spec»` : undefined;
+  let { typesFile, defFile } = transformModuleLean(typed, specImport, leanModuleOverride);
   if (typesFile) typesFile = peepholeModule(typesFile, "lean");
   defFile = peepholeModule(defFile, "lean");
 
-  const typesPath = typesFile ? path.join(dir, `${base}.types.lean`) : null;
+  const typesPath = typesFile ? path.join(dir, `${leanBase}.types.lean`) : null;
   const typesText = typesFile ? emitLeanFile(typesFile) : null;
-  const defPath = path.join(dir, `${base}.def.lean`);
+  const defPath = path.join(dir, `${leanBase}.def.lean`);
   const defText = emitLeanFile(defFile);
 
   if (cmd === "gen") { leanGen(typesPath, defPath, typesText, defText); return; }
   if (cmd === "check") {
     leanGen(typesPath, defPath, typesText, defText);
-    if (!leanCheck(dir, base)) process.exit(1);
+    if (!leanCheck(dir, leanBase)) process.exit(1);
     return;
   }
   console.error(`Unknown command: ${cmd}`);
