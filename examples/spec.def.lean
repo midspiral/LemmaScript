@@ -276,7 +276,7 @@ method assertInMap (m : Std.HashMap String Int) (k : String) (fallback : Int) re
 _value == res else false
   ensures ¬(m.contains k) → res = fallback
   do
-    if ¬(m.contains k) then
+    if !(m.contains k) then
       return fallback
     assertGadget ((m.contains k) = true)
     return m.get! k

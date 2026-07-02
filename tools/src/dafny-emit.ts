@@ -464,6 +464,9 @@ function emitExpr(e: Expr): string {
 
     case "let": return `(var ${escapeName(e.name)} := ${emitExpr(e.value)}; ${emitExpr(e.body)})`;
     case "havoc": return "*";
+    // No Dafny producer: the only `default` source is the Lean return-in-loop
+    // rewrite, which never runs on the Dafny path (native in-loop returns).
+    case "default": throw new Error("default-value expression not produced on the Dafny path");
   }
 }
 

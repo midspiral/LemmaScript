@@ -4,6 +4,7 @@
  */
 
 import type { Expr, Stmt, Decl, Module } from "./ir.js";
+import { anyExpr } from "./ir.js";
 import type { Ty } from "./typedir.js";
 
 // ── Ty → Lean type string ──────────────────────────────────
@@ -60,7 +61,12 @@ function tyToLean(ty: Ty): string {
       const retStr = ret.includes(" ") ? `(${ret})` : ret;
       return [...params, retStr].join(" → ");
     }
-    case "unknown": return "_";
+    // Out-of-subset (`any`/`unknown`) — an opaque carrier, so unmodeled payloads
+    // (e.g. a `details` field never inspected by the verified code) pass through
+    // but real ops on them fail loudly. Mirrors the Dafny backend's
+    // `type Unknown(==, 0)`. The decl is emitted once, in the first file that
+    // needs it (the def file imports the types file, so no duplicate).
+    case "unknown": _needsUnknown = true; return "Unknown";
   }
 }
 
@@ -94,9 +100,114 @@ const PREC: Record<string, number> = {
 
 function prec(op: string): number { return PREC[op] ?? 10; }
 
-// ── Method call → Lean syntax ───────────────────────────────
+// ── Constructor registry (for union discriminator/destructor lowering) ──
+//
+// Lean, unlike Dafny, has no `x.Ctor?` discriminator test or `x.field`
+// projection on a multi-constructor inductive — both must be lowered to a
+// `match`. Doing so needs each union's constructor shapes. The inductives live
+// in the `.types.lean` file, but discriminator/destructor expressions also
+// appear in the `.def.lean` method bodies; since `lsc` emits both files in one
+// process (types first), we accumulate the registry across calls rather than
+// clearing it per file.
+type CtorInfo = { name: string; fields: { name: string; type: Ty }[] };
+const _unionCtors = new Map<string, CtorInfo[]>();
+
+// Types that transitively reference an `opaque` type can't derive `Repr` or
+// `DecidableEq` (the opaque type provides neither). `Inhabited` still derives
+// (via the empty array / first constructor), so only those two are dropped.
+// "Unknown" (the `any`/`unknown` carrier) is opaque by construction.
+const _opaqueNames = new Set<string>(["Unknown"]);
+const _typeRefs = new Map<string, Set<string>>();
+const _taintedTypes = new Set<string>();
+
+function collectUserRefs(ty: Ty, into: Set<string>): void {
+  switch (ty.kind) {
+    case "array": case "set": collectUserRefs(ty.elem, into); break;
+    case "optional": collectUserRefs(ty.inner, into); break;
+    case "map": collectUserRefs(ty.key, into); collectUserRefs(ty.value, into); break;
+    case "fn": ty.params.forEach(p => collectUserRefs(p, into)); collectUserRefs(ty.result, into); break;
+    case "user": into.add(ty.name.includes("<") ? ty.name.slice(0, ty.name.indexOf("<")) : ty.name); break;
+    case "unknown": into.add("Unknown"); break;
+  }
+}
+
+function registerInductives(decls: Decl[]): void {
+  for (const d of decls) {
+    if (d.kind === "inductive") {
+      _unionCtors.set(d.name, d.constructors);
+      const refs = new Set<string>();
+      for (const c of d.constructors) for (const f of c.fields) collectUserRefs(f.type, refs);
+      _typeRefs.set(d.name, refs);
+    } else if (d.kind === "structure") {
+      const refs = new Set<string>();
+      for (const f of d.fields) collectUserRefs(f.type, refs);
+      _typeRefs.set(d.name, refs);
+    } else if (d.kind === "opaque-type") {
+      _opaqueNames.add(d.name);
+    }
+  }
+  // Fixpoint: a type is tainted if it references an opaque or already-tainted type.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [name, refs] of _typeRefs) {
+      if (_taintedTypes.has(name)) continue;
+      if ([...refs].some(r => _opaqueNames.has(r) || _taintedTypes.has(r))) {
+        _taintedTypes.add(name);
+        changed = true;
+      }
+    }
+  }
+}
+
+/** Deriving clause, dropping `Repr`/`DecidableEq` for opaque-tainted types. */
+function emitDeriving(name: string, deriving: string[]): string {
+  const der = _taintedTypes.has(name) ? deriving.filter(x => x !== "Repr" && x !== "DecidableEq") : deriving;
+  return der.length > 0 ? `\nderiving ${der.join(", ")}` : "";
+}
 
 let _needsJSString = false;
+let _needsUnknown = false;
+let _unknownEmitted = false;  // across files in one run — the def file imports the types file
+
+// Bool-vs-Prop context. Lean keeps `Bool` and `Prop` distinct; the IR uses the
+// Prop connectives (∧/∨/¬) uniformly. In a computational position the connectives
+// may need to be the Bool ones (&&/||/!). They are only *required* when a connective
+// has an operand that does not coerce Bool→Prop — see `needsBoolConnectives`. A body
+// built only from decidable atoms (comparisons, Bool-returning calls) coerces fine
+// and stays in the more proof-friendly Prop form.
+let _boolCtx = false;
+
+// A Bool-valued atom that does NOT coerce to Prop: an inlined union discriminator
+// (lowered to a match-bool `match x with | .C .. => true | _ => false`) or a raw
+// `match` used as a Bool — neither has a `Decidable` instance Lean can synthesize
+// through the `match`. Under a Prop connective (∧/∨/¬) such an operand is a type
+// error, so its presence forces the whole body to Bool connectives.
+function isNonCoercibleBoolAtom(e: Expr): boolean {
+  if (e.kind === "match") return true;
+  if (e.kind === "binop" && (e.op === "=" || e.op === "≠") && e.right.kind === "constructor") {
+    const rhs = e.right; // capture the narrowed node so it survives the closure below
+    const ctor = rhs.type ? _unionCtors.get(rhs.type)?.find(c => c.name === rhs.name) : undefined;
+    return !!ctor && ctor.fields.length > 0;
+  }
+  return false;
+}
+
+// A ∧/∨/¬ connective with a non-coercible operand — the specific node that would
+// fail to elaborate if emitted in Prop form.
+function connectiveHasNonCoercibleOperand(e: Expr): boolean {
+  if (e.kind === "binop" && (e.op === "∧" || e.op === "∨")) return isNonCoercibleBoolAtom(e.left) || isNonCoercibleBoolAtom(e.right);
+  if (e.kind === "unop" && e.op === "¬") return isNonCoercibleBoolAtom(e.expr);
+  return false;
+}
+
+// True iff some ∧/∨/¬ connective in `e` has a non-coercible operand, i.e. emitting
+// the body with Prop connectives would fail to elaborate. (A decidable atom coerces,
+// so a body with no such operand stays Prop — this keeps arithmetic predicates like
+// `x ≥ 0 ∧ x < n` in `∧` form rather than forcing `&&`.)
+function needsBoolConnectives(e: Expr): boolean {
+  return anyExpr(e, connectiveHasNonCoercibleOperand);
+}
 
 function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: string, args: string[]): string {
   // Array methods
@@ -179,6 +290,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       return `#[${e.elems.map(el => emitExpr(el)).join(", ")}]`;
     case "emptyMap": return `Std.HashMap.empty`;
     case "emptySet": return `Std.HashSet.empty`;
+    case "default": return `(default : ${tyToLean(e.type)})`;
 
     case "methodCall": {
       const obj = emitExpr(e.obj);
@@ -201,11 +313,25 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "unop":
-      if (e.op === "¬") return `¬(${emitExpr(e.expr)})`;
+      if (e.op === "¬") return _boolCtx ? `!(${emitExpr(e.expr)})` : `¬(${emitExpr(e.expr)})`;
       if (e.op === "-" && e.expr.kind === "num") return `-${e.expr.value}`;
       return `(-${emitExpr(e.expr)})`;
 
     case "binop": {
+      // Discriminator test against a constructor that carries fields:
+      // `x = .Ctor` → `(match x with | .Ctor .. => true | _ => false)`. A
+      // multi-field constructor is a function, not a value, so a bare
+      // `x = Type.Ctor` is ill-typed. The Bool result coerces to Prop in spec
+      // positions, mirroring how the backend already treats decidable atoms.
+      // Nullary constructors (enums) keep the cheap `DecidableEq` comparison.
+      if ((e.op === "=" || e.op === "≠") && e.right.kind === "constructor") {
+        const rhs = e.right; // capture the narrowed node so it survives into the closure below
+        const ctor = rhs.type ? _unionCtors.get(rhs.type)?.find(c => c.name === rhs.name) : undefined;
+        if (ctor && ctor.fields.length > 0) {
+          const [yes, no] = e.op === "=" ? ["true", "false"] : ["false", "true"];
+          return `(match ${emitExpr(e.left)} with | .${escapeName(rhs.name)} .. => ${yes} | _ => ${no})`;
+        }
+      }
       // `k in m` (map/set membership) → `m.contains k` in Lean. Dafny has
       // native `in`; Lean uses the method form for HashMap/HashSet.
       if (e.op === "in") {
@@ -213,7 +339,10 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         const wrap = e.right.kind === "binop" || e.right.kind === "app" || e.right.kind === "methodCall";
         return `${wrap ? `(${recv})` : recv}.contains ${emitExpr(e.left)}`;
       }
-      const op = e.op === "arrayConcat" ? "++" : e.op;
+      const op = e.op === "arrayConcat" ? "++"
+        : _boolCtx && e.op === "∧" ? "&&"
+        : _boolCtx && e.op === "∨" ? "||"
+        : e.op;
       // ↔ does not chain in Lean — a nested iff operand needs parens.
       const childPrec = e.op === "↔" ? prec(e.op) + 1 : prec(e.op);
       // `-`, `/`, `%` are left-associative and non-associative, so an equal-
@@ -261,6 +390,24 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "field": {
+      // Union destructor (tagged by transform): `x.field` where x is a
+      // multi-constructor inductive. Lean has no projection there, so match the
+      // owning constructor, bind the field positionally, and ignore the rest.
+      // Other constructors fall to `default` — the source guards every such
+      // access with a discriminator test, so that branch is never reached.
+      if (e.fromUnion) {
+        const ctors = _unionCtors.get(e.fromUnion);
+        // Pin the owning ctor when given (field names repeat across variants);
+        // otherwise fall back to the sole variant carrying this field name.
+        const owner = (e.ctor ? ctors?.find(c => c.name === e.ctor) : undefined)
+          ?? ctors?.find(c => c.fields.some(f => f.name === e.field));
+        if (owner) {
+          const idx = owner.fields.findIndex(f => f.name === e.field);
+          const pats = owner.fields.map((_, i) => (i === idx ? "_v" : "_")).join(" ");
+          const fty = tyToLean(owner.fields[idx].type);
+          return `(match ${emitExpr(e.obj)} with | .${escapeName(owner.name)} ${pats} => _v | _ => (default : ${fty}))`;
+        }
+      }
       const obj = emitExpr(e.obj);
       if (e.field === "collectionSize") return `${obj}.size`;
       const wrap = e.obj.kind !== "var" && e.obj.kind !== "num" && e.obj.kind !== "bool";
@@ -351,7 +498,10 @@ function emitStmt(s: Stmt, indent: number): string {
       // to WPGen.default, which drops the assertion. Coerce to Prop via `= true`.
       // Top-level Prop constructs (`=`, `<`, `∧`, `¬`, `∀`, `∃`, `→`) already
       // land in Prop — Lean auto-coerces inner Bools there.
+      const prevBoolCtx = _boolCtx;
+      _boolCtx = false; // assertions are Prop
       const inner = emitExpr(s.expr);
+      _boolCtx = prevBoolCtx;
       const wrapped = isPropValued(s.expr) ? inner : `(${inner}) = true`;
       return `${pad}assertGadget (${wrapped})`;
     }
@@ -416,10 +566,16 @@ function emitStmt(s: Stmt, indent: number): string {
     }
 
     case "while": {
+      // Guard is computational (Bool); invariants / done_with are Prop.
       const lines = [`${pad}while ${emitExpr(s.cond)}`];
+      const prevBoolCtx = _boolCtx;
+      _boolCtx = false;
       for (const inv of s.invariants) lines.push(`${pad}  invariant ${emitExpr(inv)}`);
-      if (s.doneWith) lines.push(`${pad}  done_with ${emitExpr(s.doneWith)}`);
+      // `done_with True` (the auto-supplied fact for breaking loops) is a Prop;
+      // the bool literal would need a coercion, so emit the Prop `True` directly.
+      if (s.doneWith) lines.push(`${pad}  done_with ${s.doneWith.kind === "bool" && s.doneWith.value ? "True" : emitExpr(s.doneWith)}`);
       if (s.decreasing) lines.push(`${pad}  decreasing ${emitExpr(s.decreasing)}`);
+      _boolCtx = prevBoolCtx;
       lines.push(`${pad}do`);
       lines.push(emitStmts(s.body, indent + 1));
       return lines.join("\n");
@@ -427,7 +583,10 @@ function emitStmt(s: Stmt, indent: number): string {
 
     case "forin": {
       const lines = [`${pad}for ${s.idx} in [:${emitExpr(s.bound)}]`];
+      const prevBoolCtx = _boolCtx;
+      _boolCtx = false; // invariants are Prop
       for (const inv of s.invariants) lines.push(`${pad}  invariant ${emitExpr(inv)}`);
+      _boolCtx = prevBoolCtx;
       lines.push(`${pad}do`);
       lines.push(emitStmts(s.body, indent + 1));
       return lines.join("\n");
@@ -449,15 +608,13 @@ function emitDecl(d: Decl): string {
           lines.push(`  | ${c.name} ${params} : ${d.name}`);
         }
       }
-      if (d.deriving.length > 0) lines.push(`deriving ${d.deriving.join(", ")}`);
-      return lines.join("\n");
+      return lines.join("\n") + emitDeriving(d.name, d.deriving);
     }
 
     case "structure": {
       const lines = [`structure ${d.name} where`];
       for (const f of d.fields) lines.push(`  ${escapeName(f.name)} : ${tyToLean(f.type)}`);
-      if (d.deriving.length > 0) lines.push(`deriving ${d.deriving.join(", ")}`);
-      return lines.join("\n");
+      return lines.join("\n") + emitDeriving(d.name, d.deriving);
     }
 
     case "type-alias": {
@@ -471,7 +628,17 @@ function emitDecl(d: Decl): string {
 
     case "def": {
       const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`).join(" ");
-      let out = `def ${d.name} ${params} : ${tyToLean(d.returnType)} :=\n${emitPureExpr(d.body, 1)}`;
+      // A Bool-returning pure function is a computation, not a proposition, so its
+      // connectives *may* need the Bool operators (&&/||/!) — but only when a
+      // connective has a non-coercible operand (e.g. an inlined union discriminator).
+      // A predicate built from decidable atoms (`x ≥ 0 ∧ x < n`) coerces to Bool as
+      // a whole and stays in the more proof-friendly Prop form. Other return types
+      // only have connectives inside (Decidable) conditions, where Prop is fine.
+      const prevBoolCtx = _boolCtx;
+      _boolCtx = tyToLean(d.returnType) === "Bool" && needsBoolConnectives(d.body);
+      const body = emitPureExpr(d.body, 1);
+      _boolCtx = prevBoolCtx;
+      let out = `def ${d.name} ${params} : ${tyToLean(d.returnType)} :=\n${body}`;
       // A `//@ decreases` on a pure function marks it recursive and names its
       // termination measure — emit it as Lean's `termination_by`. This is
       // required when the recursion is on `arr.slice(...)` (→ `Array.extract`,
@@ -489,11 +656,16 @@ function emitDecl(d: Decl): string {
 
     case "method": {
       const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`).join(" ");
+      // Spec clauses are Prop; the `do` body is computational (Bool).
+      const prevBoolCtx = _boolCtx;
+      _boolCtx = false;
       const lines = [`method ${d.name} ${params} return (res : ${tyToLean(d.returnType)})`];
       for (const r of d.requires) lines.push(`  require ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
       lines.push("  do");
+      _boolCtx = true;
       lines.push(emitStmts(d.body, 2));
+      _boolCtx = prevBoolCtx;
       return lines.join("\n");
     }
 
@@ -510,10 +682,24 @@ function emitDecl(d: Decl): string {
     case "const":
       return `def ${escapeName(d.name)} : ${tyToLean(d.type)} := ${emitExpr(d.value)}`;
 
-    case "extern":
-      // Lean: emit an opaque function declaration. The user is expected to
-      // provide an axiomatic body or a stub in the companion spec file.
-      throw new Error(`Lean extern support not yet implemented: ${d.name}`);
+    case "extern": {
+      // Mirror Dafny's `function {:axiom}`: an uninterpreted total function.
+      // In Lean that is an `opaque` declaration (sound — it commits to no body,
+      // only to the type being inhabited). Any `requires`/`ensures` the source
+      // carried become a characterizing `axiom`; `\result` was already replaced
+      // by the call expression in the transform, so ensures reference `name args`.
+      const tp = d.typeParams.length > 0 ? ` {${d.typeParams.join(" ")} : Type}` : "";
+      const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`).join(" ");
+      const sig = `opaque ${escapeName(d.name)}${tp}${params ? ` ${params}` : ""} : ${tyToLean(d.returnType)}`;
+      if (d.requires.length === 0 && d.ensures.length === 0) return sig;
+      // Spec axiom: ∀ params, req1 → … → (ens1 ∧ … ∧ ensN). Tagged `@[grind]` so
+      // the proof automation can use it, matching the ghost-function convention.
+      const hyps = d.requires.map(emitExpr);
+      const concl = d.ensures.map(emitExpr).join(" ∧ ");
+      const axBody = [...hyps, concl].join(" → ");
+      const axiom = `@[grind] axiom ${escapeName(d.name)}_spec${params ? ` ${params}` : ""} : ${axBody}`;
+      return `${sig}\n${axiom}`;
+    }
   }
 }
 
@@ -542,11 +728,18 @@ function emitPureExpr(e: Expr, indent: number): string {
 
 export function emitLeanFile(file: Module): string {
   _needsJSString = false;
-  // Emit declarations first so _needsJSString is set
+  _needsUnknown = false;
+  registerInductives(file.decls);
+  // Emit declarations first so _needsJSString / _needsUnknown are set
   const declLines: string[] = [];
   for (const decl of file.decls) {
     declLines.push("");
     declLines.push(emitDecl(decl));
+  }
+  // The `unknown` carrier must precede every use (Lean is definition-before-use).
+  if (_needsUnknown && !_unknownEmitted) {
+    declLines.unshift("", "/-- Opaque carrier for `unknown`-typed values (mirrors Dafny's `type Unknown(==, 0)`). -/", "opaque Unknown : Type");
+    _unknownEmitted = true;
   }
   const lines: string[] = [];
   if (file.comment) {

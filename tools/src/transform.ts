@@ -7,6 +7,7 @@
 
 import type { TExpr, TStmt, TFunction, TModule, Ty } from "./typedir.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, StmtMatchArm, ConstDecl } from "./ir.js";
+import { anyExprInStmts } from "./ir.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 
@@ -22,7 +23,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
   if (hit) return hit;
   const r = (x: Expr) => mapExpr(x, f);
   switch (e.kind) {
-    case "var": case "num": case "bool": case "str": case "emptyMap": case "emptySet": case "havoc": return e;
+    case "var": case "num": case "bool": case "str": case "emptyMap": case "emptySet": case "havoc": case "default": return e;
     case "mapLiteral": return { ...e, entries: e.entries.map(en => ({ key: r(en.key), value: r(en.value) })) };
     case "constructor": return e.args ? { ...e, args: e.args.map(r) } : e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
@@ -627,6 +628,17 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           return { kind: "field", obj: transformExpr(e.obj), field: "true_?" };
         }
       }
+      // Union destructor: `x.field` where x is a discriminated union and `field`
+      // is a data field of one of its variants. Dafny reads the destructor
+      // directly; Lean has no field projection on a multi-ctor inductive, so tag
+      // the node with the union's base name and let the Lean emitter `match`.
+      if (e.obj.ty.kind === "user") {
+        const baseName = e.obj.ty.name.includes("<") ? e.obj.ty.name.slice(0, e.obj.ty.name.indexOf("<")) : e.obj.ty.name;
+        const decl = _typeDecls.find(d => d.name === baseName && d.kind === "discriminated-union");
+        if (decl?.variants?.some(v => v.fields.some(f => f.name === e.field))) {
+          return { kind: "field", obj: transformExpr(e.obj), field: e.field, fromUnion: baseName };
+        }
+      }
       return { kind: "field", obj: transformExpr(e.obj), field: e.field };
 
     case "index": {
@@ -1103,6 +1115,173 @@ function buildPopLowering(arrName: string, arrTy: Ty): { optValue: Expr; guarded
   const guardedTrunc: Expr = { kind: "if", cond: isNonEmpty, then: truncated, else: arrVar };
   return { optValue, guardedTrunc };
 }
+/**
+ * Velvet (Lean backend) rejects `return` inside a loop. For a function shaped as
+ * `…; while (…) { … early returns … }; return fallthrough`, hoist a mutable
+ * result variable: each in-loop `return e` becomes `_loopRet := e; break`, then
+ * `return _loopRet` after the loop. The trailing fallthrough return seeds
+ * `_loopRet`, so a normal loop exit returns it unchanged. Dafny is untouched —
+ * it keeps the native early returns.
+ */
+function stmtsContainReturn(stmts: Stmt[]): boolean {
+  for (const s of stmts) {
+    if (s.kind === "return") return true;
+    if (s.kind === "if" && (stmtsContainReturn(s.then) || stmtsContainReturn(s.else))) return true;
+    if (s.kind === "match" && s.arms.some(a => stmtsContainReturn(a.body))) return true;
+    // Don't descend into a nested while — its returns would target that loop.
+  }
+  return false;
+}
+
+function replaceReturnsWithBreak(stmts: Stmt[], retVar: string): Stmt[] {
+  return stmts.flatMap((s): Stmt[] => {
+    if (s.kind === "return") return [{ kind: "assign", target: retVar, value: s.value }, { kind: "break" }];
+    if (s.kind === "if") return [{ ...s, then: replaceReturnsWithBreak(s.then, retVar), else: replaceReturnsWithBreak(s.else, retVar) }];
+    if (s.kind === "match") return [{ ...s, arms: s.arms.map(a => ({ ...a, body: replaceReturnsWithBreak(a.body, retVar) })) }];
+    return [s];
+  });
+}
+
+// Seed value for `_loopRet` when a return-in-loop function has no trailing
+// fallthrough return. Readable literals for the primitives; everything else
+// (user types, arrays, maps, optionals) gets a typed `default : T` rather than a
+// type-incorrect `0` — these types derive `Inhabited`, so the default exists.
+function defaultExprForTy(ty: Ty): Expr {
+  switch (ty.kind) {
+    case "bool": return { kind: "bool", value: false };
+    case "string": return { kind: "str", value: "" };
+    case "nat": case "int": case "real": return { kind: "num", value: 0 };
+    default: return { kind: "default", type: ty };
+  }
+}
+
+function eliminateReturnInLoops(stmts: Stmt[], retTy: Ty, resultInvariants: Expr[]): Stmt[] {
+  const out: Stmt[] = [];
+  for (let i = 0; i < stmts.length; i++) {
+    const s = stmts[i];
+    if (s.kind === "while" && stmtsContainReturn(s.body)) {
+      const retVar = "_loopRet";
+      const next = stmts[i + 1];
+      const init: Expr = next && next.kind === "return" ? next.value : defaultExprForTy(retTy);
+      out.push({ kind: "let", name: retVar, type: retTy, mutable: true, value: init });
+      // The result variable carries the postcondition (the function's `ensures`
+      // with `\result` → `_loopRet`) as a loop invariant: it holds initially (the
+      // fallthrough seed) and after each `_loopRet := e; break`, so the
+      // postcondition is re-established from the invariant when the loop exits.
+      // Where Dafny discharged the postcondition at each `return` site, the
+      // break-rewrite discharges it once, after the loop.
+      out.push({ ...s, invariants: [...s.invariants, ...resultInvariants], body: replaceReturnsWithBreak(s.body, retVar) });
+      out.push({ kind: "return", value: { kind: "var", name: retVar } });
+      if (next && next.kind === "return") i++; // consume the seeded fallthrough return
+    } else {
+      out.push(s);
+    }
+  }
+  return out;
+}
+
+/** True if `name` is referenced as a variable anywhere in `stmts`. Conservative:
+ *  counts every occurrence and ignores shadowing — a spurious hit only costs an
+ *  unused `let`, whereas a miss would leave a binder unbound. */
+function stmtsUseVar(stmts: Stmt[], name: string): boolean {
+  return anyExprInStmts(stmts, e => e.kind === "var" && e.name === name);
+}
+
+/**
+ * Velvet (Lean backend) cannot synthesize a `WPGen` for a monadic statement
+ * `match` on a user inductive in a method body (loom's matcher-WPGen drops a
+ * `sorry`). loom *can* handle method-body `if`s (cf. examples/arrayEquals), so
+ * lower such matches to discriminator `if`-chains: `match x with | .C f.. => B`
+ * becomes `if x.C? then (let f := x.f-destructor; B) else …`. Constructor field
+ * binders become `let`s bound to the (already-supported) union destructor. Option
+ * matches and other non-user matches are left alone (loom handles those). Dafny
+ * is untouched — it keeps the native match.
+ */
+function matchToIfChains(stmts: Stmt[]): Stmt[] {
+  return stmts.flatMap((s): Stmt[] => {
+    if (s.kind === "if") return [{ ...s, then: matchToIfChains(s.then), else: matchToIfChains(s.else) }];
+    if (s.kind === "while") return [{ ...s, body: matchToIfChains(s.body) }];
+    if (s.kind === "forin") return [{ ...s, body: matchToIfChains(s.body) }];
+    if (s.kind !== "match") return [s];
+
+    const arms = s.arms.map(a => ({ ...a, body: matchToIfChains(a.body) }));
+    const ctorArms = arms.filter(a => a.pattern.trim() !== "_");
+    const firstCtor = ctorArms[0]?.pattern.trim().split(/\s+/)[0].replace(/^\./, "");
+    const decl = firstCtor
+      ? _typeDecls.find(d => (d.kind === "discriminated-union" || d.kind === "string-union") &&
+          ((d.variants?.some(v => v.name === firstCtor)) || (d.values?.includes(firstCtor))))
+      : undefined;
+    if (!decl) return [{ ...s, arms }]; // not a user union (e.g. Option) — leave as match
+
+    const scrutExpr: Expr = typeof s.scrutinee === "string" ? { kind: "var", name: s.scrutinee } : s.scrutinee;
+    const defaultArm = arms.find(a => a.pattern.trim() === "_");
+    let elseBranch: Stmt[] = defaultArm ? defaultArm.body : [];
+    for (let k = ctorArms.length - 1; k >= 0; k--) {
+      const armBody = ctorArms[k].body;
+      if (armBody.length === 0) continue; // empty arm (no-op) — let it fall through to `else`
+      const toks = ctorArms[k].pattern.trim().split(/\s+/);
+      const ctor = toks[0].replace(/^\./, "");
+      const binders = toks.slice(1);
+      const variant = decl.variants?.find(v => v.name === ctor);
+      // Discriminator condition. A nullary discriminated-union constructor would
+      // need `DecidableEq` for `x = .Ctor` (which such unions don't derive), so
+      // use a match-bool instead. Multi-field ctors already lower to a match-bool;
+      // string-unions derive DecidableEq, so `=` is fine there.
+      const cond: Expr = decl.kind === "discriminated-union" && binders.length === 0
+        ? { kind: "match", scrutinee: scrutExpr, arms: [
+            { pattern: `.${ctor}`, body: { kind: "bool", value: true } },
+            { pattern: "_", body: { kind: "bool", value: false } }] }
+        : { kind: "binop", op: "=", left: scrutExpr, right: { kind: "constructor", name: ctor, type: decl.name } };
+      // Bind only the constructor-field binders the body actually uses, pinning the
+      // owning ctor so the destructor doesn't guess (variants share field names).
+      const lets: Stmt[] = [];
+      binders.forEach((b, i) => {
+        const f = variant?.fields[i];
+        if (b !== "_" && f && stmtsUseVar(armBody, b)) lets.push({
+          kind: "let", name: b, type: f.type ?? { kind: "unknown" }, mutable: false,
+          value: { kind: "field", obj: scrutExpr, field: f.name, fromUnion: decl.name, ctor },
+        });
+      });
+      elseBranch = [{ kind: "if", cond, then: [...lets, ...armBody], else: elseBranch }];
+    }
+    return elseBranch;
+  });
+}
+
+/** True if `stmts` contain a `break` not nested inside another while. */
+function stmtsContainBreak(stmts: Stmt[]): boolean {
+  for (const s of stmts) {
+    if (s.kind === "break") return true;
+    if (s.kind === "if" && (stmtsContainBreak(s.then) || stmtsContainBreak(s.else))) return true;
+    if (s.kind === "match" && s.arms.some(a => stmtsContainBreak(a.body))) return true;
+  }
+  return false;
+}
+
+/**
+ * loom's default loop-exit fact is `¬guard`, which does not hold for a loop that
+ * `break`s (a break exits with the guard still true). Such loops need an explicit
+ * `//@ done_with` in the TS source (`//@ done_with true` when the loop invariant
+ * alone carries the exit facts). Rather than silently supplying one, reject —
+ * the exit fact is part of the spec and belongs beside the invariants.
+ * Lean-only; Dafny derives loop-exit facts from the break sites themselves.
+ */
+function requireDoneWithForBreaks(stmts: Stmt[], fnName: string): void {
+  for (const s of stmts) {
+    if (s.kind === "if") { requireDoneWithForBreaks(s.then, fnName); requireDoneWithForBreaks(s.else, fnName); }
+    if (s.kind === "match") for (const a of s.arms) requireDoneWithForBreaks(a.body, fnName);
+    if (s.kind === "while") {
+      if (!s.doneWith && stmtsContainBreak(s.body)) {
+        throw new Error(
+          `${fnName}: loop with break needs //@ done_with on the Lean backend ` +
+          `(an early return in a loop also lowers to a break). ` +
+          `Use //@ done_with true when the loop invariants carry the exit facts.`);
+      }
+      requireDoneWithForBreaks(s.body, fnName);
+    }
+  }
+}
+
 function eliminateTopLevelContinue(stmts: Stmt[]): Stmt[] {
   const out: Stmt[] = [];
   for (let i = 0; i < stmts.length; i++) {
@@ -2040,12 +2219,18 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     ? [{ kind: "namespace", name: "Pure", decls: pureDefs }]
     : [];
   if (typeDecls.length > 0 || pureDefs.length > 0 || externDecls.length > 0) {
+    // Declaration order differs by backend. Dafny allows forward references, so
+    // externs go first to be in scope everywhere. Lean requires definition-before-use:
+    // an extern's signature may reference a declared type (e.g. `estimateTokens(m: AgentMessage)`),
+    // so types must precede externs, which in turn precede the pure mirrors that may call them.
+    const decls = _opts.backend === "lean"
+      ? [...typeDecls, ...externDecls, ...pureNamespace]
+      : [...externDecls, ...typeDecls, ...pureNamespace];
     typesFile = {
       comment: "  Generated by lsc — Lean types and pure function mirrors.",
       imports: typesImports,
       options: [],
-      // Externs come first so they're in scope for every later declaration.
-      decls: [...externDecls, ...typeDecls, ...pureNamespace],
+      decls,
     };
   }
 
@@ -2065,6 +2250,20 @@ export function transformModule(mod: TModule, specImport?: string): { typesFile:
     let body = pureDefNames.has(fn.name)
       ? [{ kind: "return" as const, value: { kind: "app" as const, fn: `Pure.${fn.name}`, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) } }]
       : promoteAssignedLets(transformStmts(fn.body, mod.typeDecls));
+
+    // Lean-only method-body rewrites (Velvet can't WP-synthesize monadic matches
+    // and forbids `return` in loops):
+    //   1. monadic statement-`match` on a user union → discriminator `if`-chains
+    //   2. `return` inside a loop → result var + break (postcondition as invariant)
+    // Dafny keeps the native forms. Breaking loops (including those synthesized
+    // by rewrite 2) must carry a `//@ done_with` in the TS source — enforced here,
+    // since loom's default loop-exit fact `¬guard` does not hold across a break.
+    if (_opts.backend === "lean" && !pureDefNames.has(fn.name)) {
+      body = matchToIfChains(body);
+      const resultInvariants = fn.ensures.map(e => replaceVar(transformExpr(e), "\\result", { kind: "var", name: "_loopRet" }));
+      body = eliminateReturnInLoops(body, fn.returnTy, resultInvariants);
+      requireDoneWithForBreaks(body, fn.name);
+    }
 
     // Shadow reassigned parameters with mutable locals
     const paramNames = new Set(fn.params.map(p => p.name));
