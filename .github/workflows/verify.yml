@@ -36,6 +36,11 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
+      - name: Typecheck
+        run: |
+          npm ci
+          npm run typecheck
+
       - name: Clone LemmaScript
         run: git clone --branch ${{ inputs.ls-ref }} https://github.com/midspiral/LemmaScript.git ../LemmaScript
 
