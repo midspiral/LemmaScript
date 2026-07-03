@@ -19,7 +19,7 @@ on:
       node-version:
         description: 'Node.js version'
         type: string
-        default: '20'
+        default: '24'
       ls-ref:
         description: 'LemmaScript ref to verify against'
         type: string
