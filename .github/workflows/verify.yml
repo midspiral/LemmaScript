@@ -24,6 +24,10 @@ on:
         description: 'LemmaScript ref to verify against'
         type: string
         default: main
+      typecheck:
+        description: 'Run npm ci && npm run typecheck in the calling repo'
+        type: boolean
+        default: true
 
 jobs:
   verify:
@@ -37,6 +41,7 @@ jobs:
           node-version: ${{ inputs.node-version }}
 
       - name: Typecheck
+        if: inputs.typecheck
         run: |
           npm ci
           npm run typecheck
