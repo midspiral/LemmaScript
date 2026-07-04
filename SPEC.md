@@ -681,7 +681,7 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 - Equality: `v !== undefined`, `v === undefined` (early return)
 - Truthiness: `if (v)`, `if (!v)`, `opt ? a : b`
-- Composition: `v && rest` or `rest && v` (optional check on either side), `a === undefined || b === undefined`
+- Composition: `v && rest` or `rest && v` (optional check on either side) — in an `if`/`?:` condition or as a bare statement (`v !== undefined && v.f()`, the `if`-less guard idiom); `a === undefined || b === undefined`
 - Spec implication: `path !== undefined && rest ==> B` (premise narrows conclusion)
 - Optional chaining: `obj?.field`, `obj?.foo()`, `obj?.[i]`, chained `obj?.a?.b?.c` and `obj?.a.b.c`
 - Nullish coalescing: `x ?? default`; array index `arr[i] ?? default` (undefined ⟺ out of bounds under `noUncheckedIndexedAccess`) → `(0 <= i && i < arr.length) ? arr[i] : default`

@@ -144,7 +144,7 @@ function walkStmt(s: TStmt): TStmt {
   // array rule fires; independent narrows commute, so the order is harmless.)
   // && rules fire before the simple rule because they produce nested ifs whose
   // inner shape doesn't match the simple rule directly.
-  return ruleIfAndOptional(r) ?? ruleIfAndArrayIsArray(r) ?? ruleIfOptionalSimple(r) ?? r;
+  return ruleIfAndOptional(r) ?? ruleIfAndArrayIsArray(r) ?? ruleIfOptionalSimple(r) ?? ruleExprStmtAndOptional(r) ?? r;
 }
 
 function walkStmts(stmts: TStmt[]): TStmt[] {
@@ -614,6 +614,36 @@ function ruleIfAndOptional(s: TStmt): TStmt | null {
   const someBody: TStmt[] = canBeFalsy(check)
     ? [{ kind: "if", cond: bound(check), then: [walkStmt(innerIf)], else: [] }]
     : [walkStmt(innerIf)];
+  return {
+    kind: "someMatch",
+    scrutinee: check.scrutinee, binderTy: check.innerTy,
+    binder: check.binderHint,
+    someBody,
+    noneBody: [],
+  };
+}
+
+/** Rule: a bare expression statement `x !== undefined && rest` (the `if`-less
+ *  guard idiom, TS-equivalent to `if (x !== undefined) rest;`) where `x` is a
+ *  pure access path.
+ *  → `someMatch x { Some(_x_val) => rest;, None => {} }`.
+ *  Runs `rest` for effect inside the narrowed scope. Wrapping `rest` as an
+ *  expr-statement and walking it lets chained checks
+ *  (`a !== undefined && a.b !== undefined && a.b.f()`) nest into someMatches.
+ *  Unlike the ternary rule (`ruleConditionalAndOptional`), a method call in
+ *  `rest` is fine here: a statement-level someMatch arm keeps it in statement
+ *  position, so transform never ANF-lifts it out of the arm (which would drop
+ *  the guard and reference the un-narrowed optional). */
+function ruleExprStmtAndOptional(s: TStmt): TStmt | null {
+  if (s.kind !== "expr") return null;
+  if (s.expr.kind !== "binop" || s.expr.op !== "&&") return null;
+  const extracted = extractLeftmostOptionalCheck(s.expr);
+  if (!extracted) return null;
+  const { check, restCond } = extracted;
+  const innerStmt: TStmt = { kind: "expr", expr: restCond };
+  const someBody: TStmt[] = canBeFalsy(check)
+    ? [{ kind: "if", cond: bound(check), then: [walkStmt(innerStmt)], else: [] }]
+    : [walkStmt(innerStmt)];
   return {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,

@@ -158,6 +158,7 @@ Throughout, `e !== undefined` includes equivalent forms: `undefined !== e`, bare
 | `if (e !== undefined) S` (some-branch non-empty) | `someMatch e { Some(_e_val) => S, None => {} }` |
 | `if (e === undefined) terminate; rest` (some-branch empty + rest) | `someMatch e { Some(_e_val) => rest, None => terminate }` |
 | `if (e !== undefined && rest) S` (no else) | `someMatch e { Some(_e_val) => if rest S, None => {} }` |
+| `e !== undefined && rest` (bare expression statement — the `if`-less guard idiom) | `someMatch e { Some(_e_val) => rest;, None => {} }` |
 | `if (a === undefined \|\| b === undefined \|\| ...) terminate; rest` | nested `someMatch` for each var, deepest body is rest |
 | `let x = (e_opt && rest) ? a : b` (statement, impure-OK guard) | `var x := b; someMatch e_opt { Some(_v) => { if rest { x := a } } }` |
 
@@ -183,7 +184,7 @@ For the chain and neg-early-return rules, the `Array.isArray(x)` / `!Array.isArr
 | `optChain(obj, chain)` (from extract's `obj?.<chain>` — chain may be field/call/index steps) | `someMatch obj { Some(_oc{N}_val) => apply(chain, _oc{N}_val), None => undefined }` |
 | `k in m ? m[k] : default` (`m` map-typed; then-branch is exactly `m[k]`, `default` non-optional) | `someMatch m[k] { Some(_m_k_val) => _m_k_val, None => default }` |
 
-The `&&`-ternary rule skips when `rest` contains impure method calls (those would be lifted out of the match arm by transform, breaking binder scope) — the let-cond statement-level rule handles those. Both `&&`-ternary and `==>` rules walk their inner expression recursively so chained checks (`a !== undefined && a.b !== undefined ? ... : ...`, `... ==> ...`) become nested someMatches.
+The `&&`-ternary rule skips when `rest` contains impure method calls (those would be lifted out of the match arm by transform, breaking binder scope) — the let-cond statement-level rule handles those. Both `&&`-ternary and `==>` rules walk their inner expression recursively so chained checks (`a !== undefined && a.b !== undefined ? ... : ...`, `... ==> ...`) become nested someMatches. The bare-statement `&&` rule (above) has no such restriction: its arm is a statement-level someMatch, which keeps a guarded call in statement position, so transform never ANF-lifts it out. It likewise walks `rest` as a statement, so chained checks nest.
 
 The `k in m` map rule mirrors the discriminant-`in` path but is gated on `map`; the existing Dafny `Map.get` peephole then collapses the result back to `if k in m then m[k] else default`.
 
