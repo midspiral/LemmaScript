@@ -8,11 +8,11 @@ datatype Box = Box(items: seq<int>, inner: Option<Inner>)
 
 function total(xs: seq<int>): int
 {
-  0
+  |xs|
 }
 
 lemma total_ensures(xs: seq<int>)
-  ensures (total(xs) == 0)
+  ensures (total(xs) == |xs|)
 {
 }
 

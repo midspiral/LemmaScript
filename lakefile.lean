@@ -131,6 +131,7 @@ lean_lib Examples where
     `«spreadMerge.types», `«spreadMerge.def»,
     `«recordIndexByEnum.types», `«recordIndexByEnum.def»,
     `«leftPad.def», `«leftPad.proof»,
-    `«swap.def»
+    `«swap.def»,
+    `«andChainStmt.types», `«andChainStmt.def»
   ]
   extraDepTargets := #[``downloadDependencies]

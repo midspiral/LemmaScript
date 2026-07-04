@@ -13,15 +13,13 @@
  * verifies only because narrowing kept the call guarded and unwrapped.
  */
 
-//@ backend dafny
-
 type Inner = { val: number };
 type Box = { items: number[]; inner: Inner | undefined };
 
 function total(xs: number[]): number {
   //@ verify
-  //@ ensures \result === 0
-  return 0;
+  //@ ensures \result === xs.length
+  return xs.length;
 }
 
 function use(v: number): number {
