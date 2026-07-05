@@ -99,7 +99,7 @@ jobs:
 
 Design points, including the ones to settle:
 
-- **Trigger.** Tag-push is the natural hook (`npm version` already creates the tag; the local habit becomes `git push --follow-tags`). The failure mode "published locally but never pushed the tag" disappears entirely if publishing itself moves into the Action — which is the recommended endpoint: trusted publishing (OIDC) means no npm token on any laptop, and `--provenance` links the tarball verifiably to the exact commit, which complements the trust story below.
+- **Trigger (decided).** Tag-push. `npm version` already creates the annotated `vX.Y.Z` tag; a plain `git push` does not send tags, so the tag reaches GitHub via `git push --follow-tags` — set `git config push.followTags true` once to make it automatic rather than a habit. A `workflow_dispatch` input (tag name) rides along as a three-line fallback for backfills and re-runs where no tag-push run exists. The interim failure mode "published to npm but tag never pushed" disappears entirely once publishing itself moves into the Action — the recommended endpoint: trusted publishing (OIDC) means no npm token on any laptop, and `--provenance` links the tarball verifiably to the exact commit, which complements the trust story below.
 - **Cross-repo auth.** The sync job needs `contents: write` on the skills repo: a fine-grained PAT or a GitHub App installation token as a repo secret. It pushes to the **public** skills repo only — the private mirror remote is untouched by automation.
 - **Direct push, not PR.** The sync only writes `reference/` (machine-owned), so there is nothing for a human to review; a PR would just be a button to forget. Human skill edits flow through normal PRs and never touch `reference/`, so the two streams cannot conflict.
 - **Built-in checks.** The sync fails loudly if the source map cites a path that no longer exists — catching a renamed emitter file at release time instead of leaving a dangling pointer in the skill.
@@ -147,4 +147,3 @@ The tampering concern ("readable source invites edits; a patched verifier produc
 
 - **Curated examples in `reference/`?** Two or three Dafny triples (`binarySearch`, one lemma-heavy case like `toposort`, `todo-domain`) ride the same sync train at ~150K, giving agents worked proof patterns. Decide after the base sync works.
 - **Companion docs in `reference/`?** `SPEC_DAFNY.md` and `SUBSET.md` are small and load-bearing for agents — lean toward syncing them. Human-facing docs (`GETTING_STARTED.md`, `TOOLS.md`) stay in this repo only; for agents, SKILL.md is the getting-started.
-- **Interim trigger.** Until publishing moves into CI, is tag-push (with the `--follow-tags` habit) reliable enough, or is a `workflow_dispatch` fallback worth adding for re-runs?
