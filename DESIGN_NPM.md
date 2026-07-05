@@ -9,6 +9,7 @@
 2. **The skills have access to the source code and the spec of the latest release**, as ordinary files in the consuming project's working tree — greppable, and git-visible if edited.
 3. **Skills serve all agents**, not just Claude Code: agent-neutral content, consumer-chosen install location.
 4. **Every mechanism is stock git or stock npm.** No custom sync/merge/versioning machinery, no version stamps (git commits and tags are the provenance), no installer that could clobber user-defined skills.
+5. **Installing the tools is one npm command:** `npm i -g lemmascript` brings the officially included satellites with it (umbrella with shim bins, §4). No bespoke installer or setup script.
 
 ## Architecture: three homes
 
@@ -111,6 +112,38 @@ Design points, including the ones to settle:
 - Same interface rule: peerDep on `lemmascript`, communication via the CLI contract (`lsc extract` JSON). No programmatic API until something needs one.
 - Not-yet-published satellites get the claimcheck treatment before release: `tsc` build to `dist/`, `prepublishOnly`, peerDep, drop `private: true`.
 - **Satellite skills live in the skills repo** (`lemmascript-claimcheck/`, …), not in the satellite tarballs — one agent layer for the whole ecosystem, one consumption story. If a satellite needs reference material synced, its release workflow reuses the same sync pattern.
+
+### `lemmascript` is the umbrella: one npm command for all tools
+
+**Decision:** `npm i -g lemmascript` installs the whole toolchain. The `lemmascript` package lists the officially included satellites as `dependencies` and exposes their CLIs through its own `bin` entries:
+
+```jsonc
+"bin": {
+  "lsc": "tools/dist/lsc.js",
+  "lemmascript-claimcheck": "tools/dist/shims/claimcheck.js"
+  // one shim per officially included satellite
+},
+"dependencies": {
+  "ts-morph": "…",
+  "lemmascript-claimcheck": "^0.1.0"
+}
+```
+
+The shims are necessary because npm links only the *named* package's bin entries — dependencies' bins stay in the nested tree, never on PATH (verified empirically on npm 11; a bin-less meta-package installed `-g` exposes zero commands). Each shim is one line, delegating in-process so args, stdio, exit codes, and signals behave as if the satellite were invoked directly (Node strips the shebang on import):
+
+```js
+#!/usr/bin/env node
+import "lemmascript-claimcheck/cli";   // satellite adds "./cli" to its exports map
+```
+
+Verified end to end in a scratch global prefix: the umbrella's own CLI and the shim both land in the global bin dir, and the shim runs the nested satellite's CLI with arguments passing through.
+
+Mechanics and accepted consequences:
+
+- **No circularity.** Satellites keep their peerDep on `lemmascript`; nested under the umbrella, the peer resolves to the umbrella itself (an ancestor in the tree). npm handles this shape natively.
+- **Caret ranges keep cadences decoupled.** Satellites release on their own schedule; fresh installs and `npm update -g lemmascript` pick up the latest compatible satellite versions without a `lemmascript` release. A `lemmascript` release is only needed to add a satellite to the official set (a new shim + dependency) or to raise a floor.
+- **Project installs carry the satellites too.** `npm i -D lemmascript` brings the official set into the project's lockfile. Accepted: the officially included satellites are part of what "the LemmaScript toolchain" means, and CI pins the whole set via the lockfile.
+- **"Officially included" = public + blessed.** A satellite joins the umbrella when it is published and considered part of the standard toolchain; until then it is installed individually.
 
 ## 5. The kit
 
