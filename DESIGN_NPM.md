@@ -16,13 +16,13 @@
 - Consumers already route around this to get at the source: the kit README tells users to run `npx tsx LemmaScript/tools/src/lsc.ts`, and `lemmascript-claimcheck/src/extract.ts` has a fallback that shells into a source checkout via tsx.
 - Skills live in `midspiral/lemmascript-skills`, consumed as a git submodule at the kit's `.claude/skills/`. Projects outside the kit have no install or update story.
 - **Drift exists today:** `.claude/skills/lemmascript/SPEC.md` differs from `LemmaScript/SPEC.md`. Some difference may be the deliberate Dafny-only trim, but nothing enforces consistency.
-- The Lean backend emits `import LemmaScript.JSString`, yet the Lean support library (`LemmaScript/`) is not in the package — Lean users need the repo regardless.
+- The Lean backend is a **workspace workflow, not an npm-packageable artifact**: `lakefile.lean` has `require Velvet from "../velvet"` (a relative path to a sibling checkout), velvet pulls in loom the same way, mathlib comes via lake, and z3/cvc5 binaries are downloaded at build time. None of this resolves inside `node_modules`.
 - `lemmascript-claimcheck` is published and already follows a good pattern: peerDep on `lemmascript`, communicates via the `lsc` CLI contract (`lsc extract` JSON).
 - `lemmascript-guard` is `private: true` with `bin` pointing at raw `.ts` — not publishable as-is.
 
 ## Plan
 
-### 1. Ship source, docs, and the Lean library
+### 1. Ship source and docs
 
 Expand `files` in `package.json`:
 
@@ -35,17 +35,15 @@ Expand `files` in `package.json`:
   "SPEC_LEAN.md",
   "SUBSET.md",
   "GETTING_STARTED.md",
-  "TOOLS.md",
-  "LemmaScript",      // Lean support library (imported by generated Lean)
-  "LemmaScript.lean",
-  "lakefile.lean",
-  "lean-toolchain"
+  "TOOLS.md"
 ]
 ```
 
-Cost: ~750K uncompressed on top of the current 608K — negligible for npm. The full `examples/` tree (1.1M) stays out; at most one or two curated examples.
+Cost: ~720K uncompressed on top of the current 608K — negligible for npm. The full `examples/` tree (1.1M) stays out; at most one or two curated examples.
 
 After `npm i -D lemmascript`, an agent can grep and read the real pipeline (`extract.ts`, `dafny-emit.ts`, `lean-emit.ts`, …) and the annotation grammar without leaving `node_modules`.
+
+**The npm package is Dafny-first.** The Lean support library, `lakefile.lean`, and toolchain files stay out: the Lean workspace depends on sibling checkouts of velvet and loom via relative `require` paths, plus mathlib and solver downloads at build time — none of which resolves inside `node_modules`. `lsc gen --backend=lean` still *emits* Lean code from an npm install (the emitter is part of the CLI); *verifying* it requires the source kit. `SPEC_LEAN.md` ships as documentation and should say so. This matches the shipped skill, which is already Dafny-only.
 
 ### 2. Vendor skills into the package; add `lsc skills`
 
@@ -95,6 +93,7 @@ The kit keeps its submodule setup for source-first hacking. Its README caveat ("
 
 - **No runtime fetching** of skills from GitHub — that reinvents both git and npm.
 - **No merge machinery** in the skill installer — overwrite; the consumer's git handles conflicts.
+- **No Lean toolchain in the package.** The Lean backend's verification workflow (velvet, loom, mathlib, lake, solvers) stays a source-checkout affair — the kit is its distribution channel.
 - **No npm scope migration.** `lemmascript` / `lemmascript-*` unscoped names are published and the prefix works.
 - **No programmatic API** for the compiler yet; the CLI JSON contract is the interface.
 
