@@ -136,7 +136,7 @@ The shims are necessary because npm links only the *named* package's bin entries
 import "lemmascript-claimcheck/cli";   // satellite adds "./cli" to its exports map
 ```
 
-Verified end to end in a scratch global prefix: the umbrella's own CLI and the shim both land in the global bin dir, and the shim runs the nested satellite's CLI with arguments passing through.
+Verified end to end in both install modes: with `-g` (scratch prefix), the umbrella's own CLI and the shim both land in the global bin dir and the shim runs the nested satellite's CLI with arguments passing through. In a local project install, the shim's name collides with the satellite's own bin in `node_modules/.bin`; npm resolves this silently in favor of the direct dependency (the umbrella), and the collision is benign by construction — both candidates run the same satellite CLI, so either winner behaves identically.
 
 Mechanics and accepted consequences:
 
