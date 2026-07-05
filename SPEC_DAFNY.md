@@ -1,7 +1,7 @@
 # LemmaScript — Dafny Backend Specification
 
-**Version:** 0.5.7
-**Date:** June 2026
+**Version:** 0.5.9
+**Date:** July 2026
 
 This document covers what is unique to the Dafny backend. See [SPEC.md](SPEC.md) for the shared annotation language, translation rules, type mapping, and pipeline.
 
