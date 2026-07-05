@@ -1,116 +1,150 @@
 # DESIGN_NPM — Packaging LemmaScript for npm
 
-**Status:** draft, for review
+**Status:** draft v2, for review (v1 vendored source + skills into the tarball; revised after discussion)
 **Date:** July 2026
 
-## Goals
+## Requirements
 
-1. **Source in the box.** Agents work best when the LemmaScript source and spec are readable in `node_modules` — shipping only compiled JS defeats that. This is the bare minimum.
-2. **Skills that stay fresh.** A new project should get the Claude Code skills with one command, and updating them should be as cheap as `npm update`.
-3. **A cooperation convention** for the satellite tools (`lemmascript-claimcheck`, `lemmascript-guard`, future `lemmascript-*` packages).
-4. **Don't reinvent git.** No custom sync/merge/versioning machinery. npm is the distribution channel; git (submodules upstream, the consumer's own repo downstream) handles history and merging.
+1. **node_modules contains only the binary.** No source code in the tarball. Agents have no reason to enter `node_modules` at all.
+2. **The skills have access to the source code and the spec of the latest release**, as ordinary files in the consuming project's working tree — greppable, and git-visible if edited.
+3. **Skills serve all agents**, not just Claude Code: agent-neutral content, consumer-chosen install location.
+4. **Every mechanism is stock git or stock npm.** No custom sync/merge/versioning machinery, no version stamps (git commits and tags are the provenance), no installer that could clobber user-defined skills.
 
-## Current state (observed)
+## Architecture: three homes
 
-- The published `lemmascript` package (0.5.9) ships only `tools/dist` — no source, no `SPEC.md`, no skills.
-- Consumers already route around this to get at the source: the kit README tells users to run `npx tsx LemmaScript/tools/src/lsc.ts`, and `lemmascript-claimcheck/src/extract.ts` has a fallback that shells into a source checkout via tsx.
-- Skills live in `midspiral/lemmascript-skills`, consumed as a git submodule at the kit's `.claude/skills/`. Projects outside the kit have no install or update story.
-- **Drift exists today:** `.claude/skills/lemmascript/SPEC.md` differs from `LemmaScript/SPEC.md`. Some difference may be the deliberate Dafny-only trim, but nothing enforces consistency.
-- The Lean backend is a **workspace workflow, not an npm-packageable artifact**: `lakefile.lean` has `require Velvet from "../velvet"` (a relative path to a sibling checkout), velvet pulls in loom the same way, mathlib comes via lake, and z3/cvc5 binaries are downloaded at build time. None of this resolves inside `node_modules`.
-- `lemmascript-claimcheck` is published and already follows a good pattern: peerDep on `lemmascript`, communicates via the `lsc` CLI contract (`lsc extract` JSON).
-- `lemmascript-guard` is `private: true` with `bin` pointing at raw `.ts` — not publishable as-is.
+| Home | Contains | Role |
+|------|----------|------|
+| npm package `lemmascript` | `tools/dist` (+ auto-included README, LICENSE) | **Run.** Opaque execution artifact; integrity via immutable tarball + lockfile hash. |
+| skills repo `midspiral/lemmascript-skills` | skills + `reference/` (spec, source snapshot) | **Read.** The agent-facing layer, synced from each release by CI. |
+| repo `midspiral/LemmaScript` | everything | **Develop.** Single source of truth; its release workflow feeds the other two. |
 
-## Plan
+Each artifact lives in exactly one place; every copy is machine-maintained and one-directional.
 
-### 1. Ship source and docs
+## 1. The npm package: binary only
 
-Expand `files` in `package.json`:
+`files: ["tools/dist"]` — which is the published package today, so the npm side requires no change beyond the README. npm force-includes README and LICENSE; the README points at the skills repo as the documentation and source channel.
 
-```jsonc
-"files": [
-  "tools/dist",       // compiled CLI — bin stays here (fast startup, no tsx)
-  "tools/src",        // readable source for agents
-  "SPEC.md",
-  "SPEC_DAFNY.md",
-  "SPEC_LEAN.md",
-  "SUBSET.md",
-  "GETTING_STARTED.md",
-  "TOOLS.md"
-]
+Deliberate properties of the tarball:
+
+- **No source, no build script.** The readable source lives in the skills layer (§2). What ships is the execution artifact only; converting a source edit into changed behavior would require deliberately routing around the packaging, which no packaging choice prevents and which CI's fresh install erases anyway.
+- **Dafny-first, unchanged from v1:** the Lean workspace (velvet/loom sibling checkouts, mathlib, solver downloads) cannot resolve outside a source checkout. `lsc gen --backend=lean` keeps working exactly as far as it naturally does — no gating code. Lean verification's distribution channel is the source kit.
+
+## 2. The skills repo: the agent layer
+
+### Layout
+
+```
+lemmascript/
+  SKILL.md            # workflow, failure→fix guidance, source map (relative paths)
+  reference/          # machine-owned: written only by the release sync (§3)
+    SPEC.md           # verbatim copy of the release's SPEC.md
+    src/              # snapshot of tools/src from the release
+lemmascript-design-doc/
+lemmascript-proof-review/
+lemmascript-verified-codebase/
 ```
 
-Cost: ~720K uncompressed on top of the current 608K — negligible for npm. The full `examples/` tree (1.1M) stays out; at most one or two curated examples.
+- **`reference/` is machine-owned.** Humans never edit it; the release workflow overwrites it wholesale. Humans own everything else. This split means sync commits and human PRs cannot conflict by construction.
+- **Skill names carry the `lemmascript` prefix** (one-time rename of `design-doc`, `proof-review`, `verified-codebase`). Ownership is legible in a directory listing, and collisions with a consumer's own generically-named skills become practically impossible.
+- **Content is agent-neutral:** workflow steps, shell commands, file paths, failure→fix tables. No harness-specific tool names. SKILL.md (frontmatter + markdown) is an open format read by multiple harnesses; what differs per agent is only the install location.
 
-After `npm i -D lemmascript`, an agent can grep and read the real pipeline (`extract.ts`, `dafny-emit.ts`, `lean-emit.ts`, …) and the annotation grammar without leaving `node_modules`.
+### The source map
 
-**The npm package is Dafny-first.** The Lean support library, `lakefile.lean`, and toolchain files stay out: the Lean workspace depends on sibling checkouts of velvet and loom via relative `require` paths, plus mathlib and solver downloads at build time — none of which resolves inside `node_modules`. `lsc gen --backend=lean` still *emits* Lean code from an npm install (the emitter is part of the CLI); *verifying* it requires the source kit. `SPEC_LEAN.md` ships as documentation and should say so. This matches the shipped skill, which is already Dafny-only.
+SKILL.md points into `reference/` with **relative paths** (`reference/src/dafny-emit.ts` — "when the spec doesn't answer why `lsc` emitted something, read the emitter here"). Relative paths are stable in every layout; there is no node_modules discoverability caveat, no hoisting workaround. One norm-setting line: *"`reference/` is a read-only snapshot of the release — edits here have no effect on the installed binary; if `lsc` seems wrong, that's a bug report or a version pin, not a local patch."*
 
-### 2. Vendor skills into the package; add `lsc skills`
+### Consumption
 
-- Add `midspiral/lemmascript-skills` as a **git submodule** of this repo (e.g. at `skills/`) — the same mechanism the kit already uses, no new machinery. Include it in `files`.
-- Add a subcommand alongside `gen|regen|check|info`:
+Consumers mount the skills repo at `.claude/skills/` (or wherever their harness looks):
 
-  ```sh
-  npx lsc skills    # copy skills into .claude/skills/, overwriting
-  ```
+- **git submodule** — a pointer, no weight in the consumer's history; the kit's proven pattern. Downside: the mount point owns the whole directory, so user-defined skills live beside it, and clones need `--init`.
+- **git subtree** — skills merge in as regular files; user-defined skills coexist in the same directory, and a consumer who customized a shipped skill gets a real three-way merge *by git* on update. Downside: ~600K of reference source lands in the consumer's history per sync.
+- Agents with no skills support: the files are ordinary markdown in the repo; a one-line pointer in the project's `AGENTS.md` ("before writing verified code, read `.claude/skills/lemmascript/SKILL.md`") makes them reachable. Documented snippet — nothing auto-edits the consumer's files.
 
-- The command is a **dumb copy**: no merge logic, no manifests, no hash tracking. The consuming project's git is the merge tool — if a skill was customized locally, `git diff` after a sync shows exactly what upstream changed, and the user resolves it with tools they already know. This is the concrete meaning of "don't reinvent git."
-- Stamp each copied `SKILL.md` with the `lemmascript` version it came from (one marker line), so staleness is visible to humans and agents.
+Updating is the consumer's existing git discipline: bump the submodule / `git subtree pull`, review the diff. Pinning: the skills repo is tagged in lockstep with npm releases (§3), so a project pinned to `lemmascript@0.5.9` can pin skills to `v0.5.9`.
 
-Update story in a consuming project:
+## 3. The release + sync workflow (the "sure process")
 
-```sh
-npm update lemmascript && npx lsc skills
+The reliability requirement: **skills must not silently drift from releases.** The way to make the process *sure* is atomicity — publishing and syncing are one workflow, so one cannot happen without the other being attempted, and a failure is a red run, not silent drift.
+
+Recommended: releases run in a GitHub Action in `midspiral/LemmaScript`.
+
+```yaml
+# .github/workflows/release.yml (sketch)
+on:
+  push:
+    tags: ["v*"]          # created by `npm version`; pushed via `git push --follow-tags`
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write      # npm trusted publishing (OIDC) — no npm token secret
+    steps:
+      - checkout @ tag
+      - npm ci && npm run build && npm test/typecheck
+      - npm publish --provenance
+
+  sync-skills:
+    needs: publish         # atomicity: only after a successful publish
+    runs-on: ubuntu-latest
+    steps:
+      - checkout LemmaScript @ tag
+      - checkout midspiral/lemmascript-skills   # token: SKILLS_SYNC secret
+      - run: cp SPEC.md skills/lemmascript/reference/SPEC.md   # verbatim, no trim script
+      - run: rsync --delete tools/src/ skills/lemmascript/reference/src/
+      - run: scripts/check-source-map.ts        # every path cited in SKILL.md exists
+      - commit "sync from lemmascript vX.Y.Z" && push
+      - tag skills repo vX.Y.Z && push tag
 ```
 
-Projects that want it automatic add `"prepare": "lsc skills"` (the husky pattern): skills refresh on every install.
+Design points, including the ones to settle:
 
-### 3. Kill SPEC drift structurally
+- **Trigger.** Tag-push is the natural hook (`npm version` already creates the tag; the local habit becomes `git push --follow-tags`). The failure mode "published locally but never pushed the tag" disappears entirely if publishing itself moves into the Action — which is the recommended endpoint: trusted publishing (OIDC) means no npm token on any laptop, and `--provenance` links the tarball verifiably to the exact commit, which complements the trust story below.
+- **Cross-repo auth.** The sync job needs `contents: write` on the skills repo: a fine-grained PAT or a GitHub App installation token as a repo secret. It pushes to the **public** skills repo only — the private mirror remote is untouched by automation.
+- **Direct push, not PR.** The sync only writes `reference/` (machine-owned), so there is nothing for a human to review; a PR would just be a button to forget. Human skill edits flow through normal PRs and never touch `reference/`, so the two streams cannot conflict.
+- **Built-in checks.** The sync fails loudly if the source map cites a path that no longer exists — catching a renamed emitter file at release time instead of leaving a dangling pointer in the skill.
+- **No drift alarm needed.** With publish and sync in one workflow, "npm has vX.Y.Z but skills don't" can only mean a red workflow run, which GitHub already surfaces. A scheduled comparison job would be redundant mechanism; skip it unless local publishing is kept long-term.
 
-The skill's spec copy is **generated at publish time**: `prepublishOnly` copies (or applies the Dafny-only trim to) the repo's `SPEC.md` into the skill directory. The skill shipped with compiler X.Y.Z always describes compiler X.Y.Z.
+## 4. Satellites: `lemmascript-claimcheck` and others
 
-This is also the argument for vendoring skills *into* the `lemmascript` package rather than publishing a separate `lemmascript-skills` npm package: the skill documents the annotation grammar, which is versioned with the compiler, so their versions should move together. A skill typo fix becomes a patch release — cheap.
+- Same tarball rule: **dist only**. `lemmascript-claimcheck` drops `DESIGN.md` from `files` or keeps it — immaterial; new packages ship binaries.
+- Same interface rule: peerDep on `lemmascript`, communication via the CLI contract (`lsc extract` JSON). No programmatic API until something needs one.
+- Not-yet-published satellites get the claimcheck treatment before release: `tsc` build to `dist/`, `prepublishOnly`, peerDep, drop `private: true`.
+- **Satellite skills live in the skills repo** (`lemmascript-claimcheck/`, …), not in the satellite tarballs — one agent layer for the whole ecosystem, one consumption story. If a satellite needs reference material synced, its release workflow reuses the same sync pattern.
 
-> **Caution:** the submodule must pin the **public** remote. The skills repo also has a
-> `lemmascript-skills-private` remote; the npm tarball ships whatever commit the submodule
-> points at, so a wrong pin would publish private content.
+## 5. The kit
 
-### 4. Cooperation convention for `lemmascript-*` satellites
+The kit keeps its submodule setup and remains the **Lean channel** (source checkout + velvet/loom siblings). Its skills submodule now also delivers `reference/`, so the kit's caveat about substituting tsx incantations can shrink: reading source no longer requires knowing the checkout layout — the skill's relative paths work identically in the kit and in npm-consuming projects.
 
-One-line convention: **any `lemmascript-*` package may ship a `skills/` directory; `lsc skills` also scans `node_modules` for installed `lemmascript-*` packages and copies theirs in.**
+## Trust story
 
-Concretely:
+The tampering concern ("readable source invites edits; a patched verifier produces meaningless green"):
 
-- `lemmascript-claimcheck` — keeps its peerDep + CLI-contract pattern (already correct). Optionally gains `skills/claimcheck/` with agent guidance.
-- `lemmascript-guard` — gets the claimcheck treatment before publishing: `tsc` build to `dist/`, `prepublishOnly`, `peerDependencies: { "lemmascript": ">=…" }`, drop `private: true`.
-- Inter-package communication stays on the **CLI contract** (`lsc extract` JSON). No programmatic API until something actually needs one.
-
-### 5. The kit's role afterward
-
-The kit keeps its submodule setup for source-first hacking. Its README caveat ("the skills write `npx lsc`; substitute the tsx incantation") disappears for normal projects: the npm path now delivers source, spec, skills, and CLI in one install. `setup.sh` can later prefer the npm path.
+- **Run/read split.** The thing that runs (`tools/dist` in node_modules) and the thing you read (`reference/src` in the working tree) are different trees. The read copy is on no execution path — patching it accomplishes nothing.
+- **Edits are visible.** `reference/` lives in the consumer's working tree: any edit shows in `git status` and diff review — the inverse of invisible node_modules edits.
+- **The claim anchors in CI.** Local green is advisory; the verification that counts runs `npm ci` — pristine tooling from an immutable, hash-pinned tarball (with `--provenance`, verifiably built from the tagged commit).
+- **Norms over gates.** One read-only line in the skill; no permission bits, no checksum machinery in consumers.
 
 ## Non-goals
 
-- **No runtime fetching** of skills from GitHub — that reinvents both git and npm.
-- **No merge machinery** in the skill installer — overwrite; the consumer's git handles conflicts.
-- **No Lean toolchain in the package.** The Lean backend's verification workflow (velvet, loom, mathlib, lake, solvers) stays a source-checkout affair — the kit is its distribution channel.
-- **No npm scope migration.** `lemmascript` / `lemmascript-*` unscoped names are published and the prefix works.
-- **No programmatic API** for the compiler yet; the CLI JSON contract is the interface.
-
-## Optional extra
-
-Expose the skills repo as a Claude Code plugin marketplace (`/plugin marketplace add midspiral/lemmascript-skills`) — git-native distribution that Claude Code updates itself. Complement, not primary channel: plain `.claude/skills/` files remain agent-agnostic.
+- No source, docs, or skills in npm tarballs — the tarball is the execution artifact.
+- No `lsc skills` command, no installer, no overwrite semantics — consumption is git.
+- No version stamps in skill files — sync commit messages and lockstep tags are the provenance.
+- No merge machinery — subtree consumers get git's own three-way merge; that is the ceiling.
+- No runtime fetching of anything from GitHub.
+- No Lean toolchain in the package; no gating code around the Lean backend.
+- No npm scope migration.
 
 ## Rollout
 
-1. Expand `files`; verify with `npm pack --dry-run` and a scratch-project install (grep the source from `node_modules`, run `npx lsc`).
-2. Add the skills submodule; implement `lsc skills` (copy + version stamp); wire the `prepublishOnly` SPEC copy/trim.
-3. Publish `lemmascript` patch/minor; test `npm update && npx lsc skills` in a real case-study repo.
-4. Add `node_modules` scanning to `lsc skills`; publish `lemmascript-guard`; optionally add `skills/` to claimcheck and guard.
-5. Update kit README / `setup.sh`; document the convention in `TOOLS.md`.
+1. Skills repo: restructure to prefixed skill names + `reference/`; hand-run one sync from v0.5.9 to validate the trim script and source-map check.
+2. LemmaScript repo: add `release.yml` (publish + sync); set up npm trusted publishing and the skills-repo write token; move `npm publish` into CI.
+3. Slim `files` if needed, update README to point at the skills repo; release a patch through the new workflow end to end.
+4. Consumers: document the two mount recipes (submodule, subtree) + the `AGENTS.md` pointer snippet; migrate the kit's submodule to the restructured skills repo.
+5. Satellites: publish the remaining satellites; add satellite skill dirs to the skills repo as needed.
 
 ## Open questions
 
-- Does the Dafny-only trim of the skill's `SPEC.md` stay (generated via a script at publish time), or does the skill reference the full spec with a "Dafny only" preamble?
-- Should `lsc skills` take a `--dir` flag for agents other than Claude Code (e.g. `.cursor/rules`-style layouts), or is `.claude/skills/` enough for now?
-- Version stamp format: frontmatter field vs. HTML comment at top of `SKILL.md`?
+- **Curated examples in `reference/`?** Two or three Dafny triples (`binarySearch`, one lemma-heavy case like `toposort`, `todo-domain`) ride the same sync train at ~150K, giving agents worked proof patterns. Decide after the base sync works.
+- **Companion docs in `reference/`?** `SPEC_DAFNY.md` and `SUBSET.md` are small and load-bearing for agents — lean toward syncing them. Human-facing docs (`GETTING_STARTED.md`, `TOOLS.md`) stay in this repo only; for agents, SKILL.md is the getting-started.
+- **Interim trigger.** Until publishing moves into CI, is tag-push (with the `--follow-tags` habit) reliable enough, or is a `workflow_dispatch` fallback worth adding for re-runs?
