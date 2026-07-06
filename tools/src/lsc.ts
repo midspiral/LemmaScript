@@ -6,7 +6,7 @@
  */
 
 import { Project, ScriptTarget } from "ts-morph";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import path from "path";
 import { extractModule } from "./extract.js";
 import { resolveModule } from "./resolve.js";
@@ -65,13 +65,58 @@ function main() {
     args.splice(extraFlagsIdx, 1);
   }
 
-  const [cmd, filePath] = args;
-  if (!cmd || !filePath) {
-    console.error("Usage: lsc <gen|check|regen|extract|info> [--backend=lean|dafny] <file.ts>");
-    console.error("       lsc claimcheck <file.ts> [flags…]   (forwards to lemmascript-claimcheck)");
-    process.exit(1);
+  // --slow (batch mode only): verify every entry with its own timeout instead
+  // of degrading slow ones to gen-check.
+  let slow = false;
+  const slowIdx = args.indexOf("--slow");
+  if (slowIdx >= 0) {
+    slow = true;
+    args.splice(slowIdx, 1);
   }
 
+  const [cmd, filePath] = args;
+  if (!cmd) {
+    console.error("Usage: lsc <gen|check|regen|extract|info> [--backend=lean|dafny] <file.ts>");
+    console.error("       lsc <gen|gen-check|check> [--backend=…] [--slow]   (no file: batch over LemmaScript-files.txt)");
+    console.error("       lsc claimcheck [<file.ts>] [flags…]   (forwards to lemmascript-claimcheck)");
+    process.exit(1);
+  }
+  if (!filePath) {
+    runBatch(cmd, backend, slow);
+    return;
+  }
+  runFile(cmd, filePath, backend, timeLimit, extraFlags);
+}
+
+// Batch over LemmaScript-files.txt (`filepath [timeout_in_seconds] [extra dafny
+// flags…]` per line; no timeout = Dafny default). `check` entries with a
+// timeout above 60s (the CI limit) are gen-check only, unless --slow.
+// Fail-fast: the first failing entry exits. tools/check.sh drives this from
+// source; installed-package consumers run `lsc check`.
+function runBatch(cmd: string, backend: "lean" | "dafny", slow: boolean) {
+  if (cmd !== "gen" && cmd !== "gen-check" && cmd !== "check") {
+    console.error(`No file given, and batch mode supports gen|gen-check|check (not ${cmd}).`);
+    process.exit(1);
+  }
+  if (!existsSync("LemmaScript-files.txt")) {
+    console.error("No file given and no LemmaScript-files.txt found.");
+    process.exit(1);
+  }
+  const entries = readFileSync("LemmaScript-files.txt", "utf8").split("\n").map(s => s.trim()).filter(Boolean);
+  for (const entry of entries) {
+    const [file, second, ...rest] = entry.split(/\s+/);
+    const timeout = second && /^[1-9]\d*$/.test(second) ? parseInt(second) : undefined;
+    const flags = (timeout === undefined ? [second, ...rest] : rest).filter(Boolean).join(" ") || undefined;
+    if (cmd === "check" && backend === "dafny" && !slow && timeout !== undefined && timeout > 60) {
+      console.log(`=== ${path.basename(file)} (timeout ${timeout}s > 60s, gen-check only) ===`);
+      runFile("gen-check", file, backend, undefined, undefined);
+    } else {
+      runFile(cmd, file, backend, timeout, flags);
+    }
+  }
+}
+
+function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeLimit: number | undefined, extraFlags: string | undefined) {
   const absPath = path.resolve(filePath);
   if (!existsSync(absPath)) {
     console.error(`File not found: ${absPath}`);
