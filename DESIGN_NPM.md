@@ -1,6 +1,6 @@
 # DESIGN_NPM — Packaging LemmaScript for npm
 
-**Status:** v2, implemented and live — umbrella + `lsc claimcheck` shipped (claimcheck 0.6.0, lemmascript-claimcheck 0.2.0, lemmascript 0.5.10/0.5.11); skills repo restructured with machine-owned `reference/`; release-sync workflow validated end to end at v0.5.11 (§3). Remaining: publish-from-CI endpoint; open questions below. (v1 vendored source + skills into the tarball; revised after discussion.)
+**Status:** v2, implemented and live — umbrella + `lsc claimcheck` shipped (claimcheck 0.6.0, lemmascript-claimcheck 0.2.0, lemmascript 0.5.10/0.5.11); skills repo restructured with machine-owned `reference/`; release-sync workflow validated end to end at v0.5.11, publish-from-CI added alongside it (§3 — first release through it pending, after the npmjs.com trusted-publisher config). Open questions below. (v1 vendored source + skills into the tarball; revised after discussion.)
 **Date:** July 2026
 
 ## Requirements
@@ -65,19 +65,26 @@ Updating is the consumer's existing git discipline: bump the submodule / `git su
 
 ## 3. The release + sync workflow (the "sure process")
 
-The reliability requirement: **skills must not silently drift from releases.** The way to make the process *sure* is atomicity — publishing and syncing are one workflow, so one cannot happen without the other being attempted, and a failure is a red run, not silent drift.
+The reliability requirement: **skills must not silently drift from releases.** One human action — pushing the `vX.Y.Z` tag — drives everything; each downstream step is idempotent, and any failure is a red run, never silent drift.
 
-**Implemented:** [`.github/workflows/release-sync.yml`](.github/workflows/release-sync.yml). On each `v*` tag (or a manual `workflow_dispatch` with a tag input) it:
+Implemented as two sibling workflows on the same tag trigger:
 
-1. copies the release's `SPEC.md` and `tools/src` into the skills repo's `lemmascript/reference/`, commits as `sync from lemmascript vX.Y.Z`, and tags the skills repo in lockstep;
-2. **bumps the kit's submodules to tip** in `midspiral/lemmascript-kit` — `LemmaScript` to the tagged commit, `.claude/skills` to the fresh sync commit.
+- [`release.yml`](.github/workflows/release.yml) — **publish.** npm trusted publishing (OIDC): no npm token anywhere, and provenance links the tarball to the exact commit and run. Two guards keep it re-runnable: the package.json version must equal the tag, and an already-published version is skipped rather than failed. Configured once on npmjs.com (package `lemmascript` → trusted publisher: GitHub Actions, `midspiral/LemmaScript`, workflow `release.yml`).
+- [`release-sync.yml`](.github/workflows/release-sync.yml) — **sync.** Copies the release's `SPEC.md` + `tools/src` into the skills repo's machine-owned `lemmascript/reference/`, commits as `sync from lemmascript vX.Y.Z`, tags the skills repo in lockstep, and bumps the kit's submodules to tip in `midspiral/lemmascript-kit` (`LemmaScript` to the tagged commit, `.claude/skills` to the fresh sync commit). Validated live at v0.5.11.
 
-Publishing itself is still local for now; moving `npm publish` into the same workflow (trusted publishing + `--provenance`) remains the endpoint.
+The release loop, in full:
+
+```sh
+npm version patch      # the only versioning decision
+git push --follow-tags # the only publishing action — the tag is the release
+```
+
+The two workflows run in parallel; if publish fails while sync succeeds, skills/kit briefly lead npm — visible as a red `release.yml` run, fixed by re-running via `workflow_dispatch` (the guards make retries free). Only `lemmascript` publishes from CI; satellites release locally at their own, slower cadence.
 
 Design points:
 
-- **Trigger (decided).** Tag-push. `npm version` already creates the annotated `vX.Y.Z` tag; a plain `git push` does not send tags, so the tag reaches GitHub via `git push --follow-tags` — set `git config push.followTags true` once to make it automatic rather than a habit. A `workflow_dispatch` input (tag name) rides along as a three-line fallback for backfills and re-runs where no tag-push run exists. The interim failure mode "published to npm but tag never pushed" disappears entirely once publishing itself moves into the Action — the recommended endpoint: trusted publishing (OIDC) means no npm token on any laptop, and `--provenance` links the tarball verifiably to the exact commit, which complements the trust story below.
-- **Cross-repo auth.** The workflow needs `contents: write` on the skills repo and the kit repo: a fine-grained PAT (`SYNC_TOKEN` secret in the LemmaScript repo) scoped to exactly those two. It pushes to the **public** skills repo only — the private mirror remote is untouched by automation.
+- **Trigger (decided).** Tag-push. `npm version` already creates the annotated `vX.Y.Z` tag; a plain `git push` does not send tags, so the tag reaches GitHub via `git push --follow-tags` — set `git config push.followTags true` once to make it automatic rather than a habit. Both workflows carry a `workflow_dispatch` input (tag name) for backfills and re-runs.
+- **Cross-repo auth.** The sync workflow needs `contents: write` on the skills repo and the kit repo: a fine-grained PAT (`SYNC_TOKEN` secret in the LemmaScript repo) scoped to exactly those two. It pushes to the **public** skills repo only — the private mirror remote is untouched by automation. Publishing needs no secret at all — trusted publishing is OIDC.
 
   Creating/rotating `SYNC_TOKEN` (the one manual step; repo maintainer only):
   1. GitHub → Settings → Developer settings → Fine-grained tokens: resource owner **midspiral**, repository access limited to **lemmascript-skills** and **lemmascript-kit**, permission **Contents: read & write**. (If midspiral is an org, its settings must allow fine-grained PATs — worth a glance.)
@@ -86,7 +93,7 @@ Design points:
   Fine-grained PATs expire — when the workflow starts failing on the push steps with auth errors, rotate by repeating these two steps.
 - **Direct push, not PR.** The sync only writes `reference/` (machine-owned), so there is nothing for a human to review; a PR would just be a button to forget. Human skill edits flow through normal PRs and never touch `reference/`, so the two streams cannot conflict.
 - **Built-in checks, idempotent by construction.** The sync sanity-checks its output (non-empty spec, `src/lsc.ts` present), commits only when `reference/` actually changed, and tags only if the tag doesn't already exist — so a re-run, or a release that was already hand-synced, is a clean no-op.
-- **No drift alarm needed.** With publish and sync in one workflow, "npm has vX.Y.Z but skills don't" can only mean a red workflow run, which GitHub already surfaces. A scheduled comparison job would be redundant mechanism; skip it unless local publishing is kept long-term.
+- **No drift alarm needed.** With both workflows driven by the same tag, "npm has vX.Y.Z but skills don't" (or vice versa) can only mean a red workflow run, which GitHub already surfaces. A scheduled comparison job would be redundant mechanism.
 
 ## 4. Satellites: `lemmascript-claimcheck` and others
 
