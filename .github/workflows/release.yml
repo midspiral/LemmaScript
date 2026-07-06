@@ -1,0 +1,70 @@
+# Publish lemmascript to npm on each vX.Y.Z tag, via npm trusted publishing
+# (OIDC): no npm token anywhere, and provenance links the tarball to this exact
+# commit and run. The sibling workflow release-sync.yml (same trigger) syncs the
+# skills repo and bumps the kit. See DESIGN_NPM.md §3.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v0.5.12)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write      # OIDC for trusted publishing + provenance
+      contents: read
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout at tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install tools dependencies
+        working-directory: tools
+        run: npm ci
+
+      - name: Build and typecheck
+        run: npm run build && npm run typecheck
+
+      - name: Version must match tag
+        run: |
+          TAG='${{ steps.tag.outputs.tag }}'
+          V="v$(node -p "require('./package.json').version")"
+          if [ "$V" != "$TAG" ]; then
+            echo "package.json version ($V) does not match tag ($TAG)"
+            exit 1
+          fi
+
+      - name: Publish (skip if already on the registry)
+        run: |
+          V="$(node -p "require('./package.json').version")"
+          if npm view "lemmascript@$V" version >/dev/null 2>&1; then
+            echo "lemmascript@$V already published — skipping"
+          else
+            npm publish
+          fi
