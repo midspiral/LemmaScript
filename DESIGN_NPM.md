@@ -69,7 +69,13 @@ The reliability requirement: **skills must not silently drift from releases.** O
 
 Implemented as two sibling workflows on the same tag trigger:
 
-- [`release.yml`](.github/workflows/release.yml) — **publish.** npm trusted publishing (OIDC): no npm token anywhere, and provenance links the tarball to the exact commit and run. Two guards keep it re-runnable: the package.json version must equal the tag, and an already-published version is skipped rather than failed. Configured once on npmjs.com (package `lemmascript` → trusted publisher: GitHub Actions, `midspiral/LemmaScript`, workflow `release.yml`).
+- [`release.yml`](.github/workflows/release.yml) — **publish.** npm trusted publishing (OIDC): no npm token anywhere, and provenance links the tarball to the exact commit and run. Two guards keep it re-runnable: the package.json version must equal the tag, and an already-published version is skipped rather than failed.
+
+  Configuring the trusted publisher (one-time, on npmjs.com; no secret to store):
+  1. Log in to npmjs.com → package **lemmascript** → **Settings**.
+  2. Under **Trusted Publisher**, choose **GitHub Actions** and enter: organization/user `midspiral`, repository `LemmaScript`, workflow filename `release.yml` (exact filename; renaming the workflow later means updating this), environment left blank. Save.
+
+  That's all — the workflow authenticates via short-lived OIDC tokens minted per run.
 - [`release-sync.yml`](.github/workflows/release-sync.yml) — **sync.** Copies the release's `SPEC.md` + `tools/src` into the skills repo's machine-owned `lemmascript/reference/`, commits as `sync from lemmascript vX.Y.Z`, tags the skills repo in lockstep, and bumps the kit's submodules to tip in `midspiral/lemmascript-kit` (`LemmaScript` to the tagged commit, `.claude/skills` to the fresh sync commit). Validated live at v0.5.11.
 
 The release loop, in full:
