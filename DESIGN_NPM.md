@@ -1,6 +1,6 @@
 # DESIGN_NPM — Packaging LemmaScript for npm
 
-**Status:** v2, in implementation — umbrella + `lsc claimcheck` landed (§4); claimcheck/lemmascript-claimcheck minor releases in flight. (v1 vendored source + skills into the tarball; revised after discussion.)
+**Status:** v2, implemented and live — umbrella + `lsc claimcheck` shipped (claimcheck 0.6.0, lemmascript-claimcheck 0.2.0, lemmascript 0.5.10/0.5.11); skills repo restructured with machine-owned `reference/`; release-sync workflow validated end to end at v0.5.11 (§3). Remaining: publish-from-CI endpoint; open questions below. (v1 vendored source + skills into the tarball; revised after discussion.)
 **Date:** July 2026
 
 ## Requirements
