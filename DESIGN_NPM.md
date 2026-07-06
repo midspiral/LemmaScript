@@ -78,6 +78,12 @@ Design points:
 
 - **Trigger (decided).** Tag-push. `npm version` already creates the annotated `vX.Y.Z` tag; a plain `git push` does not send tags, so the tag reaches GitHub via `git push --follow-tags` — set `git config push.followTags true` once to make it automatic rather than a habit. A `workflow_dispatch` input (tag name) rides along as a three-line fallback for backfills and re-runs where no tag-push run exists. The interim failure mode "published to npm but tag never pushed" disappears entirely once publishing itself moves into the Action — the recommended endpoint: trusted publishing (OIDC) means no npm token on any laptop, and `--provenance` links the tarball verifiably to the exact commit, which complements the trust story below.
 - **Cross-repo auth.** The workflow needs `contents: write` on the skills repo and the kit repo: a fine-grained PAT (`SYNC_TOKEN` secret in the LemmaScript repo) scoped to exactly those two. It pushes to the **public** skills repo only — the private mirror remote is untouched by automation.
+
+  Creating/rotating `SYNC_TOKEN` (the one manual step; repo maintainer only):
+  1. GitHub → Settings → Developer settings → Fine-grained tokens: resource owner **midspiral**, repository access limited to **lemmascript-skills** and **lemmascript-kit**, permission **Contents: read & write**. (If midspiral is an org, its settings must allow fine-grained PATs — worth a glance.)
+  2. `gh secret set SYNC_TOKEN -R midspiral/LemmaScript` and paste the token.
+
+  Fine-grained PATs expire — when the workflow starts failing on the push steps with auth errors, rotate by repeating these two steps.
 - **Direct push, not PR.** The sync only writes `reference/` (machine-owned), so there is nothing for a human to review; a PR would just be a button to forget. Human skill edits flow through normal PRs and never touch `reference/`, so the two streams cannot conflict.
 - **Built-in checks, idempotent by construction.** The sync sanity-checks its output (non-empty spec, `src/lsc.ts` present), commits only when `reference/` actually changed, and tags only if the tag doesn't already exist — so a re-run, or a release that was already hand-synced, is a clean no-op.
 - **No drift alarm needed.** With publish and sync in one workflow, "npm has vX.Y.Z but skills don't" can only mean a red workflow run, which GitHub already surfaces. A scheduled comparison job would be redundant mechanism; skip it unless local publishing is kept long-term.
