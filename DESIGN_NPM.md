@@ -1,6 +1,6 @@
 # DESIGN_NPM — Packaging LemmaScript for npm
 
-**Status:** draft v2, for review (v1 vendored source + skills into the tarball; revised after discussion)
+**Status:** v2, in implementation — umbrella + `lsc claimcheck` landed (§4); claimcheck/lemmascript-claimcheck minor releases in flight. (v1 vendored source + skills into the tarball; revised after discussion.)
 **Date:** July 2026
 
 ## Requirements
@@ -115,35 +115,27 @@ Design points, including the ones to settle:
 
 ### `lemmascript` is the umbrella: one npm command for all tools
 
-**Decision:** `npm i -g lemmascript` installs the whole toolchain. The `lemmascript` package lists the officially included satellites as `dependencies` and exposes their CLIs through its own `bin` entries:
+**Decision (implemented):** `npm i -g lemmascript` installs the whole toolchain. The officially included satellites are `dependencies` of `lemmascript`, and their functionality is exposed through **`lsc` subcommands** — not separate bin names:
 
-```jsonc
-"bin": {
-  "lsc": "tools/dist/lsc.js",
-  "lemmascript-claimcheck": "tools/dist/shims/claimcheck.js"
-  // one shim per officially included satellite
-},
-"dependencies": {
-  "ts-morph": "…",
-  "lemmascript-claimcheck": "^0.1.0"
-}
+```sh
+lsc claimcheck <file.ts> [flags…]   # forwards verbatim to lemmascript-claimcheck
 ```
 
-The shims are necessary because npm links only the *named* package's bin entries — dependencies' bins stay in the nested tree, never on PATH (verified empirically on npm 11; a bin-less meta-package installed `-g` exposes zero commands). Each shim is one line, delegating in-process so args, stdio, exit codes, and signals behave as if the satellite were invoked directly (Node strips the shebang on import):
+How the forwarding works: `lsc` intercepts the subcommand before its own flag parsing, rewrites `process.argv`, and runs the satellite CLI in-process via `import("lemmascript-claimcheck/cli")` — args, stdio, exit codes, and signals behave exactly as a direct invocation (Node strips the shebang on import). A too-old satellite produces a friendly reinstall hint. In-tree forwarding is necessary because npm links only the *named* package's bin entries — dependencies' bins stay in the nested tree, never on PATH (verified empirically on npm 11; a bin-less meta-package installed `-g` exposes zero commands).
 
-```js
-#!/usr/bin/env node
-import "lemmascript-claimcheck/cli";   // satellite adds "./cli" to its exports map
-```
+The contract a satellite honors to join the umbrella:
 
-Verified end to end in both install modes: with `-g` (scratch prefix), the umbrella's own CLI and the shim both land in the global bin dir and the shim runs the nested satellite's CLI with arguments passing through. In a local project install, the shim's name collides with the satellite's own bin in `node_modules/.bin`; npm resolves this silently in favor of the direct dependency (the umbrella), and the collision is benign by construction — both candidates run the same satellite CLI, so either winner behaves identically.
+- **Export the CLI entry** — `"exports": { "./cli": "./dist/cli.js" }` — and ship type declarations, so the consumer side stays a one-line typed import.
+- **Own your runtime needs.** lemmascript-claimcheck moved `claimcheck` from peerDependencies to a real dependency and resolves it from its own tree (`require.resolve("claimcheck/cli")`, spawned) with `$CLAIMCHECK` override above and PATH fallback below — the umbrella needs no knowledge of transitive tooling.
 
 Mechanics and accepted consequences:
 
+- **Standalone commands still exist** — installing a satellite directly (`npm i -g lemmascript-claimcheck`) links its own bin, unchanged.
 - **No circularity.** Satellites keep their peerDep on `lemmascript`; nested under the umbrella, the peer resolves to the umbrella itself (an ancestor in the tree). npm handles this shape natively.
-- **Caret ranges keep cadences decoupled.** Satellites release on their own schedule; fresh installs and `npm update -g lemmascript` pick up the latest compatible satellite versions without a `lemmascript` release. A `lemmascript` release is only needed to add a satellite to the official set (a new shim + dependency) or to raise a floor.
+- **Caret ranges keep cadences decoupled — within a 0.x minor.** Fresh installs and `npm update -g lemmascript` pick up satellite patches without a `lemmascript` release. Note the 0.x caret rule: `^0.5.1` does *not* match 0.6.0, so a satellite **minor** release requires a hand-edited range bump in its consumer (npm version does not do this).
 - **Project installs carry the satellites too.** `npm i -D lemmascript` brings the official set into the project's lockfile. Accepted: the officially included satellites are part of what "the LemmaScript toolchain" means, and CI pins the whole set via the lockfile.
 - **"Officially included" = public + blessed.** A satellite joins the umbrella when it is published and considered part of the standard toolchain; until then it is installed individually.
+- **Release order flows up the dependency chain:** claimcheck → lemmascript-claimcheck → lemmascript, each consumer bumping its range after its dependency publishes.
 
 ## 5. The kit
 

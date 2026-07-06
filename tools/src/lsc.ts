@@ -22,6 +22,23 @@ import { runInfo } from "./info-command.js";
 
 function main() {
   const args = process.argv.slice(2);
+
+  // `lsc claimcheck …` forwards verbatim to the lemmascript-claimcheck CLI
+  // (a dependency; its cli reads the rewritten process.argv).
+  if (args[0] === "claimcheck") {
+    process.argv = [process.argv[0], "lemmascript-claimcheck", ...args.slice(1)];
+    import("lemmascript-claimcheck/cli").catch((err: unknown) => {
+      const code = (err as { code?: string })?.code;
+      if (code === "ERR_MODULE_NOT_FOUND" || code === "ERR_PACKAGE_PATH_NOT_EXPORTED") {
+        console.error("`lsc claimcheck` needs lemmascript-claimcheck >= 0.2.0; reinstall with: npm i -g lemmascript");
+      } else {
+        console.error(err instanceof Error ? err.message : String(err));
+      }
+      process.exit(1);
+    });
+    return;
+  }
+
   const backendIdx = args.findIndex(a => a.startsWith("--backend="));
   let backend: "lean" | "dafny" = "dafny";
   if (backendIdx >= 0) {
@@ -51,6 +68,7 @@ function main() {
   const [cmd, filePath] = args;
   if (!cmd || !filePath) {
     console.error("Usage: lsc <gen|check|regen|extract|info> [--backend=lean|dafny] <file.ts>");
+    console.error("       lsc claimcheck <file.ts> [flags…]   (forwards to lemmascript-claimcheck)");
     process.exit(1);
   }
 

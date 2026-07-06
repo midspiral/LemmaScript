@@ -1,6 +1,6 @@
 {
   "name": "lemmascript",
-  "version": "0.5.9",
+  "version": "0.5.10",
   "description": "A verification toolchain for TypeScript — generates Lean 4 or Dafny from annotated TS",
   "type": "module",
   "engines": {
@@ -19,6 +19,7 @@
     "typecheck:examples": "tsc -p examples/tsconfig.json"
   },
   "dependencies": {
+    "lemmascript-claimcheck": "^0.2.0",
     "ts-morph": "^25.0.0"
   },
   "devDependencies": {
