@@ -9,29 +9,19 @@ For the annotation language, see [SPEC.md](SPEC.md). For backend-specific behavi
 - **Node.js >= 18**
 - **Dafny >= 4.x** ([install](https://github.com/dafny-lang/dafny))
 - **git**
+- **lemmascript** — `npm install -g lemmascript`
 
-## Directory layout
+## Get a worked example
 
-Clone LemmaScript and your target project as **siblings** under a shared parent directory. To get a working verified example, clone [midspiral/hono-lemmascript](https://github.com/midspiral/hono-lemmascript/) — it already has annotations, generated Dafny, proofs, and CI in place.
-
-```
-~/code/
-  LemmaScript/                  ← this repo
-  hono-lemmascript/             ← worked example
-```
-
-The sibling layout matters because the toolchain is invoked from inside the project as `npx tsx ../LemmaScript/tools/src/lsc.ts ...` (running from source — fixes apply immediately, no publish step), and because an AI coding agent should be started in the **parent directory** so it can read and edit both trees. You will hit cases where the cleanest fix is in the toolchain rather than your annotations.
+To start from a working verified codebase, clone [midspiral/hono-lemmascript](https://github.com/midspiral/hono-lemmascript/) — it already has annotations, generated Dafny, proofs, and CI in place:
 
 ```sh
 mkdir -p ~/code && cd ~/code
-git clone https://github.com/midspiral/LemmaScript.git
-cd LemmaScript && npm install && cd tools && npm ci && cd ../..
-
 git clone -b lemmascript https://github.com/midspiral/hono-lemmascript.git
 cd hono-lemmascript
 ```
 
-Run `../LemmaScript/tools/check.sh dafny` to reproduce the full verification, or jump straight to the edit loop on any file listed in `LemmaScript-files.txt`.
+Run `lsc check --backend=dafny` to reproduce the full verification (it batches over the files listed in `LemmaScript-files.txt`), or jump straight to the edit loop on any of those files.
 
 ## Pick something to verify
 
@@ -55,7 +45,7 @@ For richer specs, see [SPEC.md §2](SPEC.md#2-the---annotation-language).
 
 ```sh
 # from inside hono-lemmascript/
-npx tsx ../LemmaScript/tools/src/lsc.ts regen --backend=dafny src/utils/cookie.ts
+lsc regen --backend=dafny src/utils/cookie.ts
 ```
 
 This produces two files next to your TS source:
@@ -74,7 +64,7 @@ When Dafny complains, the fix usually belongs either in `cookie.ts` (tighten `//
 After editing the TS, re-run `regen` (not `gen`):
 
 ```sh
-npx tsx ../LemmaScript/tools/src/lsc.ts regen --backend=dafny src/utils/cookie.ts
+lsc regen --backend=dafny src/utils/cookie.ts
 ```
 
 `regen` three-way-merges the new generated code into your `.dfy`, preserving every proof addition. **Never `rm cookie.dfy cookie.dfy.gen` and `gen` fresh** — you will lose all your proofs.
@@ -88,13 +78,24 @@ dafny verify --isolate-assertions src/utils/cookie.dfy
 
 ## When LemmaScript itself needs work
 
-LemmaScript is a tech preview. You will hit unsupported TS methods, missed narrowing patterns, or generated Dafny that doesn't typecheck for your particular types. The fix is usually a small change in `../LemmaScript/tools/src/` — most often `transform.ts`, `peephole.ts`, `dafny-emit.ts`, or `types.ts`. See [TOOLS.md](TOOLS.md) for the pipeline.
+LemmaScript is a tech preview. You will hit unsupported TS methods, missed narrowing patterns, or generated Dafny that doesn't typecheck for your particular types. The fix is usually a small change in LemmaScript's `tools/src/` — most often `transform.ts`, `peephole.ts`, `dafny-emit.ts`, or `types.ts`. See [TOOLS.md](TOOLS.md) for the pipeline.
 
-`tsx` picks up edits to LemmaScript source automatically — no `npm run build` step when invoking via `npx tsx`. Land toolchain changes in their own PR, separately from the project change.
+For that, clone LemmaScript as a **sibling** of your project and run it from source instead of the installed package:
+
+```sh
+# sibling checkout
+git clone https://github.com/midspiral/LemmaScript.git
+(cd LemmaScript && npm install && cd tools && npm ci)
+
+# from inside your project, the source equivalent of `lsc`:
+npx tsx ../LemmaScript/tools/src/lsc.ts regen --backend=dafny src/utils/cookie.ts
+```
+
+`tsx` picks up edits to LemmaScript source automatically — no build step, no publish. The sibling layout is also what `../LemmaScript/tools/check.sh dafny` and the case-study CI use. Land toolchain changes in their own PR, separately from the project change.
 
 ## Working with agents
 
-- **Start the agent in the parent directory** (`~/code/`), not the project directory.
+- **Start the agent in the project directory** — or, if you keep a sibling LemmaScript checkout for toolchain fixes, in the parent directory (`~/code/`) so it can read and edit both trees.
 - **Point it at [AGENTS.md](AGENTS.md).**
 - **Don't use `//@ assume`.** It tells Dafny to trust an obligation unconditionally; if the agent reaches for it to silence a failure, the proof has stopped meaning anything. Restructure or prove a helper lemma instead.
 - **Stay in-place when in-place is asked** — otherwise the agent may refactor the production code "for clarity," defeating the point.
