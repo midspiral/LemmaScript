@@ -45,7 +45,7 @@ See the external case studies:
 **Install from npm:**
 
 ```sh
-npm install lemmascript
+npm install -g lemmascript
 ```
 
 **Or from source:**
@@ -67,17 +67,21 @@ git clone https://github.com/namin/velvet.git -b lemma ../velvet
 ### Dafny backend
 
 ```sh
-npx lsc gen --backend=dafny src/myModule.ts
-npx lsc check --backend=dafny src/myModule.ts
-npx lsc regen --backend=dafny src/myModule.ts
+lsc gen --backend=dafny src/myModule.ts
+lsc check --backend=dafny src/myModule.ts
+lsc regen --backend=dafny src/myModule.ts
 ```
+
+With no file argument, `lsc check` batches over `LemmaScript-files.txt` (one `filepath [timeout] [extra dafny flags…]` per line — the list `tools/check.sh` runs in CI).
+
+From a sibling source checkout, the equivalent of `lsc` is `npx tsx ../LemmaScript/tools/src/lsc.ts` — no build step, toolchain edits apply immediately.
 
 The Dafny backend generates two files per TS source: `foo.dfy.gen` (always regeneratable) and `foo.dfy` (source of truth, with LLM/user proof additions). The diff between them must be additions-only.
 
 ### Lean backend
 
 ```sh
-npx lsc gen --backend=lean src/myModule.ts
+lsc gen --backend=lean src/myModule.ts
 lake build
 ```
 
