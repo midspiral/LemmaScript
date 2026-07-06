@@ -1,0 +1,83 @@
+# Release sync: on each vX.Y.Z tag, copy the release's spec + compiler source into
+# the skills repo's machine-owned reference/, tag it in lockstep, and bump the
+# kit's submodules to tip. See DESIGN_NPM.md §3.
+#
+# Cross-repo pushes use the SYNC_TOKEN secret: a fine-grained PAT with
+# Contents read/write on midspiral/lemmascript-skills and midspiral/lemmascript-kit.
+name: Release sync
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to sync (e.g. v0.5.10)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout LemmaScript at tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Checkout lemmascript-skills
+        uses: actions/checkout@v6
+        with:
+          repository: midspiral/lemmascript-skills
+          token: ${{ secrets.SYNC_TOKEN }}
+          path: skills
+
+      - name: Sync reference/ (machine-owned)
+        run: |
+          cp SPEC.md skills/lemmascript/reference/SPEC.md
+          rsync -a --delete tools/src/ skills/lemmascript/reference/src/
+          # sanity: the sync produced what the skill's source map points at
+          test -s skills/lemmascript/reference/SPEC.md
+          test -f skills/lemmascript/reference/src/lsc.ts
+
+      - name: Commit, push, and tag skills
+        id: skills
+        working-directory: skills
+        run: |
+          TAG='${{ steps.tag.outputs.tag }}'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lemmascript/reference
+          if ! git diff --cached --quiet; then
+            git commit -m "sync from lemmascript ${TAG}"
+            git push
+          fi
+          if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            git tag "${TAG}"
+            git push origin "refs/tags/${TAG}"
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Bump kit submodules to tip
+        run: |
+          TAG='${{ steps.tag.outputs.tag }}'
+          git clone "https://x-access-token:${{ secrets.SYNC_TOKEN }}@github.com/midspiral/lemmascript-kit.git" kit
+          cd kit
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git submodule update --init -- LemmaScript .claude/skills
+          git -C LemmaScript fetch origin "refs/tags/${TAG}"
+          git -C LemmaScript checkout FETCH_HEAD
+          git -C .claude/skills fetch origin '${{ steps.skills.outputs.sha }}'
+          git -C .claude/skills checkout '${{ steps.skills.outputs.sha }}'
+          git add LemmaScript .claude/skills
+          if ! git diff --cached --quiet; then
+            git commit -m "bump submodules: lemmascript ${TAG}"
+            git push
+          fi
