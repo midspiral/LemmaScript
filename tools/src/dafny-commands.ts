@@ -56,12 +56,15 @@ export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number, ex
     args.push(dfyPath);
     execFileSync("dafny", args, { cwd: dir, stdio: "inherit" });
     return true;
-  } catch {
+  } catch (e: any) {
+    if (e?.code === "ENOENT") {
+      console.error("ERROR: `dafny` not found on PATH — verification never ran. Install Dafny 4.x: https://dafny.org/");
+    }
     return false;
   }
 }
 
-export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, text: string, dir: string) {
+export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, text: string, dir: string, timeLimit?: number, extraFlags?: string) {
   // 1. Read old gen before overwriting (needed for base seeding)
   const oldGen = existsSync(genPath) ? readFileSync(genPath, "utf-8") : "";
 
@@ -72,7 +75,7 @@ export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, t
   if (!existsSync(dfyPath)) {
     writeFileSync(dfyPath, text);
     console.log(`Created: ${path.basename(dfyPath)}`);
-    if (!dafnyVerify(dfyPath, dir)) {
+    if (!dafnyVerify(dfyPath, dir, timeLimit, extraFlags)) {
       console.error(`FAILED: ${path.basename(dfyPath)} verification failed on first run.`);
       process.exit(1);
     }
@@ -109,7 +112,7 @@ export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, t
   }
 
   // 7. Verify
-  if (!dafnyVerify(dfyPath, dir)) {
+  if (!dafnyVerify(dfyPath, dir, timeLimit, extraFlags)) {
     console.error(`FAILED: ${path.basename(dfyPath)} verification failed.`);
     process.exit(1);
   }

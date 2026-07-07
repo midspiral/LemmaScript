@@ -243,7 +243,7 @@ function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeL
       if (!dafnyVerify(dfyPath, dir, timeLimit, extraFlags)) process.exit(1);
       return;
     }
-    if (cmd === "regen") { dafnyRegen(genPath, dfyPath, basePath, text, dir); return; }
+    if (cmd === "regen") { dafnyRegen(genPath, dfyPath, basePath, text, dir, timeLimit, extraFlags); return; }
     console.error(`Unknown command: ${cmd}`);
     process.exit(1);
   }
