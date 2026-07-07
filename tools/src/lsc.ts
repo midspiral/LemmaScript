@@ -78,7 +78,12 @@ function main() {
   const timeLimitIdx = args.findIndex(a => a.startsWith("--time-limit="));
   let timeLimit: number | undefined;
   if (timeLimitIdx >= 0) {
-    timeLimit = parseInt(args[timeLimitIdx].split("=")[1]);
+    const val = args[timeLimitIdx].split("=")[1];
+    if (!/^[1-9]\d*$/.test(val)) {
+      console.error(`Invalid --time-limit: ${val} (expected seconds as a positive integer)`);
+      process.exit(1);
+    }
+    timeLimit = parseInt(val);
     args.splice(timeLimitIdx, 1);
   }
 
