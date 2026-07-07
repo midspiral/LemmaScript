@@ -103,6 +103,15 @@ function main() {
     args.splice(slowIdx, 1);
   }
 
+  // Anything flag-shaped left over is a typo or a space-separated form
+  // (`--backend lean`): reject it rather than let it become a positional arg
+  // or be silently ignored (which would e.g. verify with the wrong backend).
+  const stray = args.find(a => a.startsWith("-"));
+  if (stray) {
+    console.error(`Unknown flag: ${stray} (flags take the form --flag=value, e.g. --backend=dafny)`);
+    process.exit(1);
+  }
+
   const [cmd, filePath] = args;
   if (!cmd) {
     console.error("Usage: lsc <gen|check|regen|extract|info> [--backend=lean|dafny] <file.ts>");
