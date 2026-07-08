@@ -3,8 +3,16 @@
  */
 
 import type { Expr, Stmt, Decl, Module } from "./ir.js";
+import { usesName, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshName } from "./names.js";
+
+/** A `freshName` predicate: true iff `name` is referenced in any of `exprs`.
+ *  Keeps a synthesized binder from capturing a name the wrapped expressions
+ *  use — a *local* check, so a name elsewhere in the module is irrelevant. */
+function usedIn(...exprs: Expr[]): (name: string) => boolean {
+  return name => exprs.some(e => usesName(e, name));
+}
 
 // ── Ty → Dafny type string ─────────────────────────────────
 
@@ -77,14 +85,22 @@ function paramList(params: { name: string; type: Ty }[]): string {
 /** Format a method signature header, omitting `returns` for void methods.
  *  Dafny's definite-assignment rule rejects unassigned out-parameters, so a
  *  `returns (res: ())` on a void method fails verification. */
-function methodHeader(prefix: string, params: { name: string; type: Ty }[], returnType: Ty): string {
+function methodHeader(prefix: string, params: { name: string; type: Ty }[], returnType: Ty,
+                      scope?: { requires: Expr[]; ensures: Expr[]; body: Stmt[] }): string {
   const sig = `${prefix}(${paramList(params)})`;
   if (returnType.kind === "void") return sig;
-  // The out-parameter is `res` by default, but any module identifier named `res`
-  // — a parameter (an Express handler's `(req, res)`), a body local, or a callee
-  // — would collide; `freshName` primes it (`res'`) on collision and records it
-  // so `\result` references in the ensures/body resolve to the same name.
-  const resName = freshName("res");
+  // The out-parameter is `res` by default, but a name collision — a parameter
+  // (an Express handler's `(req, res)`), a body local, or a callee named `res`
+  // — would shadow it. Check only *this method's own* signature and body: `res`
+  // is a common identifier module-wide (fields, unrelated params), so a
+  // module-wide check would prime spuriously. `freshName` primes to `res'` on a
+  // real local collision, recorded so `\result` references resolve to it.
+  const taken = (n: string): boolean =>
+    params.some(p => escapeName(p.name) === n) ||
+    (scope !== undefined && (scope.requires.some(e => usesName(e, n)) ||
+                             scope.ensures.some(e => usesName(e, n)) ||
+                             usesNameInStmts(scope.body, n)));
+  const resName = freshName("res", taken);
   _resultName = resName;
   return `${sig} returns (${resName}: ${tyToDafny(returnType)})`;
 }
@@ -212,8 +228,9 @@ function emitExpr(e: Expr): string {
           const lam = e.args[0];
           const ret = lam.body[0];
           if (ret.kind !== "return") throw new Error("unreachable");
-          // User lambda param stays exact; the no-param fallback is minted, so freshen it.
-          const p = lam.params[0] ? escapeName(lam.params[0].name) : freshName("x");
+          // User lambda param stays exact; the no-param fallback is minted, so
+          // freshen it against this quantifier's own operands (a local check).
+          const p = lam.params[0] ? escapeName(lam.params[0].name) : freshName("x", usedIn(e.obj, ret.value));
           const body = emitExpr(ret.value);
           return `(exists ${p} :: ${p} in ${obj} && ${body})`;
         }
@@ -265,7 +282,8 @@ function emitExpr(e: Expr): string {
         if (e.method === "delete") {
           // Minted comprehension binder: freshen so a user variable `k` in the
           // receiver or key isn't captured (`k != k` would delete nothing).
-          const k = freshName("k");
+          // Local check — only this comprehension's own operands can collide.
+          const k = freshName("k", usedIn(e.obj, e.args[0]));
           return `(map ${k} | ${k} in ${obj} && ${k} != ${args[0]} :: ${obj}[${k}])`;
         }
       }
@@ -283,8 +301,9 @@ function emitExpr(e: Expr): string {
           const lam = e.args[0];
           const ret = lam.body[0];
           if (ret.kind !== "return") throw new Error("unreachable");
-          // User lambda param stays exact; the no-param fallback is minted, so freshen it.
-          const p = lam.params[0] ? escapeName(lam.params[0].name) : freshName("x");
+          // User lambda param stays exact; the no-param fallback is minted, so
+          // freshen it against this set-builder's own operands (a local check).
+          const p = lam.params[0] ? escapeName(lam.params[0].name) : freshName("x", usedIn(e.obj, ret.value));
           const body = emitExpr(ret.value);
           return `(set ${p} | ${p} in ${obj} && ${body})`;
         }
@@ -675,7 +694,7 @@ function emitDecl(d: Decl): string {
 
     case "method": {
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
-      const lines = [methodHeader(`method ${d.name}${tp}`, d.params, d.returnType)];
+      const lines = [methodHeader(`method ${d.name}${tp}`, d.params, d.returnType, d)];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
       if (d.decreases) lines.push(`  decreases ${emitExpr(d.decreases)}`);
@@ -692,7 +711,7 @@ function emitDecl(d: Decl): string {
       }
       if (d.fields.length > 0 && d.methods.length > 0) lines.push("");
       for (const m of d.methods) {
-        lines.push(`  ${methodHeader(`method ${m.name}`, m.params, m.returnType)}`);
+        lines.push(`  ${methodHeader(`method ${m.name}`, m.params, m.returnType, m)}`);
         for (const r of m.requires) lines.push(`    requires ${emitExpr(r)}`);
         for (const e of m.ensures) lines.push(`    ensures ${emitExpr(e)}`);
         lines.push(`  {`);

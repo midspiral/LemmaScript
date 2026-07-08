@@ -234,3 +234,19 @@ export function anyExprInStmt(s: Stmt, pred: ExprPred): boolean {
 export function anyExprInStmts(stmts: Stmt[], pred: ExprPred): boolean {
   return stmts.some(s => anyExprInStmt(s, pred));
 }
+
+// A name is "used" — such that a synthesized binder of the same name would
+// capture or shadow it — iff it appears as a variable reference or a called
+// function. These drive the *local* freshness checks for user-facing binders
+// (the result out-parameter, comprehension binders): a binder is checked only
+// against the expressions/scope it actually wraps, not the whole module.
+const _refsName = (name: string): ExprPred =>
+  e => (e.kind === "var" && e.name === name) || (e.kind === "app" && e.fn === name);
+
+export function usesName(e: Expr, name: string): boolean {
+  return anyExpr(e, _refsName(name));
+}
+
+export function usesNameInStmts(stmts: Stmt[], name: string): boolean {
+  return anyExprInStmts(stmts, _refsName(name));
+}
