@@ -155,9 +155,12 @@ let _typeDecls: TypeDeclInfo[] = [];
 
 /** Prefix match-bound field names to avoid capturing user variables.
  *  When prefix is given (the scrutinee name), include it to avoid
- *  collisions in nested matches on different variables. */
+ *  collisions in nested matches on different variables. `freshName` closes
+ *  the residual gap: a user variable literally named `_value`/`_x_field` in an
+ *  arm body would still be captured, so prime on any module-wide collision.
+ *  Deterministic, so the pattern binder and its body substitutions agree. */
 function matchBinder(fieldName: string, prefix?: string): string {
-  return prefix ? `_${prefix}_${fieldName}` : `_${fieldName}`;
+  return freshName(prefix ? `_${prefix}_${fieldName}` : `_${fieldName}`);
 }
 
 /** Build a match arm pattern like `.VariantName _v_field1 _v_field2` from variant info. */
