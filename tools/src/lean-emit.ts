@@ -4,7 +4,7 @@
  */
 
 import type { Expr, Stmt, Decl, Module } from "./ir.js";
-import { anyExpr, usesName, usesNameInStmts } from "./ir.js";
+import { anyExpr, usesNameInDecl } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshName } from "./names.js";
 
@@ -687,9 +687,7 @@ function emitDecl(d: Decl): string {
       // fields, unrelated params), so a module-wide check would prime spuriously.
       _resultName = freshName("res", n =>
         d.params.some(p => escapeName(p.name) === n) ||
-        d.requires.some(e => usesName(e, n)) ||
-        d.ensures.some(e => usesName(e, n)) ||
-        usesNameInStmts(d.body, n));
+        usesNameInDecl(d.requires, d.ensures, d.body, n));
       const lines = [`method ${d.name} ${params} return (${_resultName} : ${tyToLean(d.returnType)})`];
       for (const r of d.requires) lines.push(`  require ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);

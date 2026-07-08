@@ -3,9 +3,9 @@
  */
 
 import type { Expr, Stmt, Decl, Module } from "./ir.js";
-import { usesName, usesNameInStmts } from "./ir.js";
+import { usesName, usesNameInDecl } from "./ir.js";
 import type { Ty } from "./typedir.js";
-import { freshName, isUserName } from "./names.js";
+import { freshName } from "./names.js";
 import { renameFreeVar } from "./transform.js";
 
 /** Fresh binder for a comprehension wrapping the given subexpressions: `base`
@@ -95,10 +95,9 @@ function escapeName(name: string): string {
   else return name;
   // Mangling must stay injective: the mangled form may itself be a name the
   // user wrote (`match` → `match_` beside a real `match_`, `_x` → `i_x` beside
-  // a real `i_x`), silently merging two distinct variables. A prime cannot
-  // occur in a TS identifier, so one always leaves user-name space.
-  while (isUserName(out)) out += "'";
-  return out;
+  // a real `i_x`), silently merging two distinct variables. `freshName` primes
+  // it clear of user-name space (a prime can't occur in a TS identifier).
+  return freshName(out);
 }
 
 /** Format a typed parameter list for Dafny: "x: int, y: seq<int>" */
@@ -121,9 +120,7 @@ function methodHeader(prefix: string, params: { name: string; type: Ty }[], retu
   // real local collision, recorded so `\result` references resolve to it.
   const taken = (n: string): boolean =>
     params.some(p => escapeName(p.name) === n) ||
-    (scope !== undefined && (scope.requires.some(e => usesName(e, n)) ||
-                             scope.ensures.some(e => usesName(e, n)) ||
-                             usesNameInStmts(scope.body, n)));
+    (scope !== undefined && usesNameInDecl(scope.requires, scope.ensures, scope.body, n));
   const resName = freshName("res", taken);
   _resultName = resName;
   return `${sig} returns (${resName}: ${tyToDafny(returnType)})`;

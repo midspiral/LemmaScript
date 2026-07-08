@@ -253,3 +253,9 @@ export function usesName(e: Expr, name: string): boolean {
 export function usesNameInStmts(stmts: Stmt[], name: string): boolean {
   return anyExprInStmts(stmts, _refsName(name));
 }
+
+/** Does a declaration's spec (requires/ensures) or body reference `name`? The
+ *  scope a method's out-parameter binder must dodge, shared by both emitters. */
+export function usesNameInDecl(requires: Expr[], ensures: Expr[], body: Stmt[], name: string): boolean {
+  return requires.some(e => usesName(e, name)) || ensures.some(e => usesName(e, name)) || usesNameInStmts(body, name);
+}
