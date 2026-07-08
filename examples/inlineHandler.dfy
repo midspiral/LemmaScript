@@ -37,7 +37,7 @@ function safePath(path: string): bool
   !((StringIndexOf(path, "..") >= 0))
 }
 
-method get_entries(req: Unknown, res: Unknown) returns (res_: Unknown)
+method get_entries(req: Unknown, res: Unknown) returns (res': Unknown)
 {
   var id: string := *;
   var filePath := (("./entries/" + id) + ".json");

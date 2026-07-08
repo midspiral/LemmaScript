@@ -234,3 +234,28 @@ export function anyExprInStmt(s: Stmt, pred: ExprPred): boolean {
 export function anyExprInStmts(stmts: Stmt[], pred: ExprPred): boolean {
   return stmts.some(s => anyExprInStmt(s, pred));
 }
+
+// A name is "used" — such that a synthesized binder of the same name would
+// capture or shadow it — iff it appears as a variable reference or a called
+// function. These drive the *local* freshness checks for user-facing binders
+// (the result out-parameter, comprehension binders): a binder is checked only
+// against the expressions/scope it actually wraps, not the whole module.
+const _refsName = (name: string): ExprPred =>
+  e => (e.kind === "var" && e.name === name) ||
+       (e.kind === "app" && e.fn === name) ||
+       (e.kind === "constructor" && e.name === name) ||
+       (e.kind === "match" && typeof e.scrutinee === "string" && e.scrutinee === name);
+
+export function usesName(e: Expr, name: string): boolean {
+  return anyExpr(e, _refsName(name));
+}
+
+export function usesNameInStmts(stmts: Stmt[], name: string): boolean {
+  return anyExprInStmts(stmts, _refsName(name));
+}
+
+/** Does a declaration's spec (requires/ensures) or body reference `name`? The
+ *  scope a method's out-parameter binder must dodge, shared by both emitters. */
+export function usesNameInDecl(requires: Expr[], ensures: Expr[], body: Stmt[], name: string): boolean {
+  return requires.some(e => usesName(e, name)) || ensures.some(e => usesName(e, name)) || usesNameInStmts(body, name);
+}

@@ -132,6 +132,7 @@ lean_lib Examples where
     `«recordIndexByEnum.types», `«recordIndexByEnum.def»,
     `«leftPad.def», `«leftPad.proof»,
     `«swap.def»,
-    `«andChainStmt.types», `«andChainStmt.def»
+    `«andChainStmt.types», `«andChainStmt.def»,
+    `«nameClash.types», `«nameClash.def»
   ]
   extraDepTargets := #[``downloadDependencies]

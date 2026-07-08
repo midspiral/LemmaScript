@@ -9,6 +9,7 @@ import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, T
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
+import { setUserNames, freshName } from "./names.js";
 
 // ── Expression extraction ────────────────────────────────────
 
@@ -1222,7 +1223,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
             let initExpr: RawExpr = extractExpr(initializer);
             let initVar: RawExpr = initExpr;
             if (initExpr.kind !== "var") {
-              const tempName = `_destr${_destrCounter++}`;
+              const tempName = freshName(`_destr${_destrCounter++}`);
               const initTs = _eraseGenerics(typeToString(initializer.getType()));
               result.push({ kind: "let", name: tempName, mutable: false, tsType: initTs, init: initExpr, line });
               initVar = { kind: "var", name: tempName };
@@ -1264,7 +1265,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
               let initExpr: RawExpr = extractExpr(initializer);
               let initVar: RawExpr = initExpr;
               if (initExpr.kind !== "var") {
-                const tempName = `_destr${_destrCounter++}`;
+                const tempName = freshName(`_destr${_destrCounter++}`);
                 const initTs = _eraseGenerics(typeToString(initializer.getType()));
                 result.push({ kind: "let", name: tempName, mutable: false, tsType: initTs, init: initExpr, line });
                 initVar = { kind: "var", name: tempName };
@@ -1849,6 +1850,9 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
 // ── Module extraction ────────────────────────────────────────
 
 export function extractModule(sourceFile: SourceFile): RawModule {
+  // Seed the fresh-name check (names.ts) before anything mints: every
+  // Identifier token in the module, a deliberate over-approximation.
+  setUserNames(new Set(sourceFile.getDescendantsOfKind(SyntaxKind.Identifier).map(i => i.getText())));
   const typeDecls: TypeDeclInfo[] = [];
   // Cross-file calls are auto-externed: ts-morph resolves the call's symbol;
   // if it's defined in a different source file we treat the symbol as opaque

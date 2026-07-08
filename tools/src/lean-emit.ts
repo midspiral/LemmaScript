@@ -4,8 +4,9 @@
  */
 
 import type { Expr, Stmt, Decl, Module } from "./ir.js";
-import { anyExpr } from "./ir.js";
+import { anyExpr, usesNameInDecl } from "./ir.js";
 import type { Ty } from "./typedir.js";
+import { freshName } from "./names.js";
 
 // ── Ty → Lean type string ──────────────────────────────────
 
@@ -82,10 +83,15 @@ const LEAN_KEYWORDS = new Set([
   "at", "from", "to", "deriving", "extends", "true", "false",
 ]);
 
+// The return-value identifier for the method currently being emitted. Default
+// `res`, but primed (e.g. `res'`) when a module identifier is named `res` — set
+// by the method case. `\result` in an ensures/body must use the same name.
+let _resultName = "res";
+
 function escapeName(name: string): string {
   // \result is carried through the IR as the var name "\\result"; render it
-  // as Lean's canonical return-value identifier (matches `return (res : T)`).
-  if (name === "\\result") return "res";
+  // as the method's return-value identifier (matches `return (res : T)`).
+  if (name === "\\result") return _resultName;
   return LEAN_KEYWORDS.has(name) ? `«${name}»` : name;
 }
 
@@ -243,6 +249,7 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
     if (method === "getDirect") return `${obj}.get! ${args[0]}`;
     if (method === "has")       return `${obj}.contains ${args[0]}`;
     if (method === "set")       return `${obj}.insert ${args[0]} ${args[1]}`;
+    if (method === "delete")    return `${obj}.erase ${args[0]}`;
   }
   // Set methods
   if (tyKind === "set") {
@@ -675,7 +682,13 @@ function emitDecl(d: Decl): string {
       // Spec clauses are Prop; the `do` body is computational (Bool).
       const prevBoolCtx = _boolCtx;
       _boolCtx = false;
-      const lines = [`method ${d.name} ${params} return (res : ${tyToLean(d.returnType)})`];
+      // Prime the return binder only on a collision within *this method's own*
+      // signature/body — `res` is a common identifier module-wide (record
+      // fields, unrelated params), so a module-wide check would prime spuriously.
+      _resultName = freshName("res", n =>
+        d.params.some(p => escapeName(p.name) === n) ||
+        usesNameInDecl(d.requires, d.ensures, d.body, n));
+      const lines = [`method ${d.name} ${params} return (${_resultName} : ${tyToLean(d.returnType)})`];
       for (const r of d.requires) lines.push(`  require ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
       lines.push("  do");
