@@ -10,8 +10,7 @@ import { renameFreeVar } from "./transform.js";
 
 /** Fresh binder for a comprehension wrapping the given subexpressions: `base`
  *  verbatim unless one of them references it, then primed until free. A *local*
- *  check — a same-named name elsewhere in the module keeps the plain binder.
- *  `freshName` owns the priming rule; this just supplies a wrapped-scope check. */
+ *  check — a same-named name elsewhere in the module keeps the plain binder. */
 function freshBinder(base: string, ...wrapped: Expr[]): string {
   return freshName(base, name => wrapped.some(w => usesName(w, name)));
 }
@@ -112,12 +111,11 @@ function methodHeader(prefix: string, params: { name: string; type: Ty }[], retu
                       scope?: { requires: Expr[]; ensures: Expr[]; body: Stmt[] }): string {
   const sig = `${prefix}(${paramList(params)})`;
   if (returnType.kind === "void") return sig;
-  // The out-parameter is `res` by default, but a name collision — a parameter
-  // (an Express handler's `(req, res)`), a body local, or a callee named `res`
-  // — would shadow it. Check only *this method's own* signature and body: `res`
-  // is a common identifier module-wide (fields, unrelated params), so a
-  // module-wide check would prime spuriously. `freshName` primes to `res'` on a
-  // real local collision, recorded so `\result` references resolve to it.
+  // The out-parameter is `res` by default, but a param (an Express handler's
+  // `(req, res)`), body local, or callee named `res` would shadow it. Check only
+  // *this method's own* signature and body — `res` is common module-wide (fields,
+  // unrelated params), so a module-wide check would prime spuriously. The primed
+  // name is recorded so `\result` references resolve to it.
   const taken = (n: string): boolean =>
     params.some(p => escapeName(p.name) === n) ||
     (scope !== undefined && usesNameInDecl(scope.requires, scope.ensures, scope.body, n));
