@@ -11,6 +11,7 @@ import { isBigInt } from "./typedir.js";
 import { parseTsType, tyToCanonical } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
+import { enterFunction, mintName } from "./names.js";
 
 // ── Environment ──────────────────────────────────────────────
 
@@ -679,7 +680,7 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
       if (ft.kind !== "optional") return { name: f.name, value: ovf };  // required: override always provides
       // optional: override field wins iff present, else base's field
       const bvf: TExpr = { kind: "field", obj: bv, field: f.name, ty: ft };
-      const binder = `_m${mergeBinder++}`;
+      const binder = mintName(`_m${mergeBinder++}`);
       // someBody is the unwrapped present value; transform re-wraps each arm in
       // the backend's Some constructor (Dafny `Some`, Lean `Option.some`).
       return { name: f.name, value: {
@@ -690,7 +691,7 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
   });
   if (tover.ty.kind === "optional") {
     // override may be absent (undefined spreads nothing) → base unchanged
-    const binder = `_mo${mergeBinder++}`;
+    const binder = mintName(`_mo${mergeBinder++}`);
     return {
       kind: "someMatch", scrutinee: tover, binder, binderTy: userTy,
       someBody: merged(tbase, { kind: "var", name: binder, ty: userTy }), noneBody: tbase, ty: userTy,
@@ -1573,6 +1574,8 @@ function resolveFunction(
   moduleConstants: Map<string, Ty> = new Map(),
   opts?: { thisBinding?: { name: string; ty: Ty }; forcePure?: boolean }
 ): TFunction {
+  // Scope the fresh-name authority to this function (see names.ts).
+  enterFunction(fn.name);
 
   const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
   const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: expandAlias(resolveTsType(p.tsType, overrides, p.name), typeDecls) }));

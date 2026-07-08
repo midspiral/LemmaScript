@@ -6,6 +6,7 @@
 import type { Expr, Stmt, Decl, Module } from "./ir.js";
 import { anyExpr } from "./ir.js";
 import type { Ty } from "./typedir.js";
+import { enterFunction } from "./names.js";
 
 // ── Ty → Lean type string ──────────────────────────────────
 
@@ -82,10 +83,16 @@ const LEAN_KEYWORDS = new Set([
   "at", "from", "to", "deriving", "extends", "true", "false",
 ]);
 
+// The Loom return-value binder for the method currently being emitted.
+// Default `res`, but primed (`res'`) when a parameter is named `res`: the
+// parameter is in scope in the ensures clauses, where the return binder would
+// shadow it and silently make every mention of the parameter self-referential.
+let _resultName = "res";
+
 function escapeName(name: string): string {
   // \result is carried through the IR as the var name "\\result"; render it
-  // as Lean's canonical return-value identifier (matches `return (res : T)`).
-  if (name === "\\result") return "res";
+  // as the current method's return-value binder (matches `return (res : T)`).
+  if (name === "\\result") return _resultName;
   return LEAN_KEYWORDS.has(name) ? `«${name}»` : name;
 }
 
@@ -243,6 +250,7 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
     if (method === "getDirect") return `${obj}.get! ${args[0]}`;
     if (method === "has")       return `${obj}.contains ${args[0]}`;
     if (method === "set")       return `${obj}.insert ${args[0]} ${args[1]}`;
+    if (method === "delete")    return `${obj}.erase ${args[0]}`;
   }
   // Set methods
   if (tyKind === "set") {
@@ -613,6 +621,10 @@ function emitStmt(s: Stmt, indent: number): string {
 // ── Declaration emission ─────────────────────────────────────
 
 function emitDecl(d: Decl): string {
+  _resultName = "res";  // default; the method case primes it if a param is named `res`
+  // Names with cross-function meaning (datatype members, consts) must not see
+  // a stale function scope; function cases below set their own.
+  enterFunction(null);
   switch (d.kind) {
     case "inductive": {
       const lines = [`inductive ${d.name} where`];
@@ -643,6 +655,7 @@ function emitDecl(d: Decl): string {
     }
 
     case "def": {
+      enterFunction(d.name);
       const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`).join(" ");
       // A Bool-returning pure function is a computation, not a proposition, so its
       // connectives *may* need the Bool operators (&&/||/!) — but only when a
@@ -671,11 +684,15 @@ function emitDecl(d: Decl): string {
       throw new Error("function by method is not supported for Lean backend");
 
     case "method": {
+      enterFunction(d.name);
       const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`).join(" ");
+      const taken = new Set(d.params.map(p => escapeName(p.name)));
+      _resultName = "res";
+      while (taken.has(_resultName)) _resultName += "'";
       // Spec clauses are Prop; the `do` body is computational (Bool).
       const prevBoolCtx = _boolCtx;
       _boolCtx = false;
-      const lines = [`method ${d.name} ${params} return (res : ${tyToLean(d.returnType)})`];
+      const lines = [`method ${d.name} ${params} return (${_resultName} : ${tyToLean(d.returnType)})`];
       for (const r of d.requires) lines.push(`  require ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
       lines.push("  do");

@@ -9,6 +9,7 @@ import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, T
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
+import { setUserNames, enterFunction, identTokens, isSpecName, mintName } from "./names.js";
 
 // ── Expression extraction ────────────────────────────────────
 
@@ -1026,7 +1027,10 @@ function forCounterRename(decl: VariableDeclaration, forStmt: Node): string | nu
 
   const used = new Set(scopeRoot.getDescendantsOfKind(SyntaxKind.Identifier).map(i => i.getText()));
   let n = 2;
-  while (used.has(`${name}_${n}`) || _reservedForCounterNames.has(`${name}_${n}`)) n++;
+  // isSpecName closes a blind spot: identifiers that live only inside `//@`
+  // comment strings are not Identifier AST nodes, but renameSpec rewrites
+  // spec text wholesale, so a "fresh" name aliasing one would merge them.
+  while (used.has(`${name}_${n}`) || _reservedForCounterNames.has(`${name}_${n}`) || isSpecName(`${name}_${n}`)) n++;
   const fresh = `${name}_${n}`;
   _reservedForCounterNames.add(fresh);
   return fresh;
@@ -1222,7 +1226,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
             let initExpr: RawExpr = extractExpr(initializer);
             let initVar: RawExpr = initExpr;
             if (initExpr.kind !== "var") {
-              const tempName = `_destr${_destrCounter++}`;
+              const tempName = mintName(`_destr${_destrCounter++}`);
               const initTs = _eraseGenerics(typeToString(initializer.getType()));
               result.push({ kind: "let", name: tempName, mutable: false, tsType: initTs, init: initExpr, line });
               initVar = { kind: "var", name: tempName };
@@ -1264,7 +1268,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
               let initExpr: RawExpr = extractExpr(initializer);
               let initVar: RawExpr = initExpr;
               if (initExpr.kind !== "var") {
-                const tempName = `_destr${_destrCounter++}`;
+                const tempName = mintName(`_destr${_destrCounter++}`);
                 const initTs = _eraseGenerics(typeToString(initializer.getType()));
                 result.push({ kind: "let", name: tempName, mutable: false, tsType: initTs, init: initExpr, line });
                 initVar = { kind: "var", name: tempName };
@@ -1714,7 +1718,18 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
     _inFunctionExtraction = prevInFn;
   }
 }
+/** The name a function node is known by across the pipeline: its own name
+ *  for declarations/methods, the enclosing const's name for var-assigned
+ *  arrows and function expressions (matching `raw.name = f.name` below),
+ *  null when anonymous. Keys the fresh-name authority's per-function sets. */
+function fnScopeName(fn: Node): string | null {
+  if ((Node.isFunctionDeclaration(fn) || Node.isMethodDeclaration(fn)) && fn.getName()) return fn.getName()!;
+  return fn.getFirstAncestorByKind(SyntaxKind.VariableDeclaration)?.getName() ?? null;
+}
+
 function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
+  // Scope the fresh-name authority to this function (see names.ts).
+  enterFunction(fnScopeName(fn));
   // A `<T extends B>` bound is handled one of two ways. When B is a modelable
   // type (a record/nominal), substitute T with B — a body that reads T's fields
   // (e.g. `x.id`) then typechecks against B. When B is a union/intersection we
@@ -1850,6 +1865,39 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
 
 export function extractModule(sourceFile: SourceFile): RawModule {
   const typeDecls: TypeDeclInfo[] = [];
+  // Seed the fresh-name authority before anything mints (see names.ts):
+  // per function, every Identifier token plus identifier-shaped tokens inside
+  // its `//@` spec text (those aren't AST nodes and would otherwise be
+  // invisible to freshness checks); at module level, everything outside the
+  // functions (decl names, top-level consts). Scoping per function keeps
+  // primes away from names that only collide in some unrelated function.
+  {
+    const fnNodes = [
+      ...sourceFile.getDescendantsOfKind(SyntaxKind.FunctionDeclaration),
+      ...sourceFile.getDescendantsOfKind(SyntaxKind.MethodDeclaration),
+      ...sourceFile.getDescendantsOfKind(SyntaxKind.ArrowFunction),
+      ...sourceFile.getDescendantsOfKind(SyntaxKind.FunctionExpression),
+    ];
+    const fnRanges: [number, number][] = [];
+    const perFn = new Map<string, { src: Set<string>; spec: Set<string> }>();
+    for (const fn of fnNodes) {
+      fnRanges.push([fn.getFullStart(), fn.getEnd()]);
+      const name = fnScopeName(fn);
+      if (!name) continue;
+      perFn.set(name, {
+        src: new Set(fn.getDescendantsOfKind(SyntaxKind.Identifier).map(i => i.getText())),
+        spec: identTokens((fn.getFullText().match(/\/\/@[^\n]*/g) ?? []).join("\n")),
+      });
+    }
+    const outsideFns = (pos: number) => !fnRanges.some(([a, b]) => a <= pos && pos < b);
+    const moduleSrc = new Set<string>();
+    for (const id of sourceFile.getDescendantsOfKind(SyntaxKind.Identifier))
+      if (outsideFns(id.getStart())) moduleSrc.add(id.getText());
+    const moduleSpec = new Set<string>();
+    for (const m of sourceFile.getFullText().matchAll(/\/\/@[^\n]*/g))
+      if (outsideFns(m.index ?? 0)) for (const t of identTokens(m[0])) moduleSpec.add(t);
+    setUserNames({ src: moduleSrc, spec: moduleSpec }, perFn);
+  }
   // Cross-file calls are auto-externed: ts-morph resolves the call's symbol;
   // if it's defined in a different source file we treat the symbol as opaque
   // and emit a body-less `function {:axiom}` in Dafny. Populated by

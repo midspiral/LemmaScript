@@ -10,6 +10,7 @@ import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm
 import { anyExprInStmts } from "./ir.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseTsType } from "./types.js";
+import { enterFunction, mintName } from "./names.js";
 
 // ── Generic IR walkers ──────────────────────────────────────
 
@@ -70,6 +71,52 @@ function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
     case "ghostAssign": return { ...s, value: r(s.value) };
     case "assert": return { ...s, expr: r(s.expr) };
   }
+}
+
+/** Binder names of a match-arm pattern (".ctor a b" binds a and b; the leading
+ *  token is the constructor, not a binding; "_" binds nothing). */
+function patternBinders(pattern: string): string[] {
+  const toks = pattern.match(/[A-Za-z_][A-Za-z0-9_']*/g) ?? [];
+  return pattern.trimStart().startsWith(".") ? toks.slice(1) : toks;
+}
+
+/** Rename free occurrences of `from` to `to`, stopping at constructs that
+ *  rebind `from` (lambda params, let, match patterns, quantifiers, for-in
+ *  indices): occurrences under a rebinding refer to that binding and must
+ *  stay. Emitters use this to hygienically freshen a binder they are about
+ *  to wrap around foreign code. Built on mapExpr's pruning contract: the
+ *  callback intercepts each binding construct, rewrites its non-shadowed
+ *  children explicitly, and returns non-null to stop descent. */
+export function renameFreeVar(e: Expr, from: string, to: string): Expr {
+  const f = (x: Expr): Expr | null => {
+    if (x.kind === "var") return x.name === from ? { ...x, name: to } : x;
+    if (x.kind === "let" && x.name === from) return { ...x, value: mapExpr(x.value, f) };
+    if ((x.kind === "forall" || x.kind === "exists") && x.var === from) return x;
+    if (x.kind === "match") {
+      const scr = typeof x.scrutinee === "string"
+        ? (x.scrutinee === from ? to : x.scrutinee) : mapExpr(x.scrutinee, f);
+      return { ...x, scrutinee: scr, arms: x.arms.map(a =>
+        patternBinders(a.pattern).includes(from) ? a : { ...a, body: mapExpr(a.body, f) }) };
+    }
+    if (x.kind === "lambda") {
+      // mapExpr doesn't descend into lambda bodies; do it here unless the
+      // lambda rebinds `from`. Within the body a `let` of `from` shadows it
+      // for the remainder of the block.
+      if (x.params.some(p => p.name === from)) return x;
+      const body: Stmt[] = [];
+      let shadowed = false;
+      for (const s of x.body) {
+        if (shadowed) { body.push(s); continue; }
+        body.push(s.kind === "forin" && s.idx === from
+          ? { ...s, bound: mapExpr(s.bound, f) }
+          : mapStmt(s, f));
+        if ((s.kind === "let" || s.kind === "let-bind" || s.kind === "ghostLet") && s.name === from) shadowed = true;
+      }
+      return { ...x, body };
+    }
+    return null;
+  };
+  return mapExpr(e, f);
 }
 
 
@@ -349,7 +396,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
   // callKind "unknown" and fall through to the regular case below where
   // they become `methodCall`.
   if (binds && e.kind === "call" && e.callKind === "method" && e.fn.kind === "var") {
-    const name = `_t${_liftCounter++}`;
+    const name = mintName(`_t${_liftCounter++}`);
     const args = e.args.map(a => lowerExpr(a, binds));
     binds.push({ kind: "let-bind", name, value: { kind: "app", fn: e.fn.name, args } });
     return { kind: "var", name };
@@ -748,7 +795,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const result: Expr = { kind: "methodCall", obj: recv, objTy: e.fn.obj.ty, method, args, monadic: needsMonadic };
         // Monadic HOF call is itself monadic — lift via binds like a method call
         if (_opts.monadic && needsMonadic && binds) {
-          const name = `_t${_liftCounter++}`;
+          const name = mintName(`_t${_liftCounter++}`);
           binds.push({ kind: "let-bind", name, value: result });
           return { kind: "var", name };
         }
@@ -910,7 +957,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     case "havoc":
       // Dafny's * only works in var/assign positions — lift to own declaration
       if (binds) {
-        const name = `_t${_liftCounter++}`;
+        const name = mintName(`_t${_liftCounter++}`);
         binds.push({ kind: "let", name, type: e.ty, mutable: false, value: { kind: "havoc", type: e.ty } });
         return { kind: "var", name };
       }
@@ -1339,11 +1386,11 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
         const count = _forofCounters.get(keyName) ?? 0;
         _forofCounters.set(keyName, count + 1);
         const suffix = count === 0 ? "" : `${count + 1}`;
-        const keysSeqName = `_${keyName}_keys${suffix}`;
+        const keysSeqName = mintName(`_${keyName}_keys${suffix}`, { specVisible: true });
         const convExpr: Expr = { kind: "app", fn: "SetToSeq", args: [{ kind: "field", obj: iterExpr, field: "keys" }] };
         result.push({ kind: "let", name: keysSeqName, type: { kind: "array", elem: keyTy }, mutable: false, value: convExpr });
         const keysVar: Expr = { kind: "var", name: keysSeqName };
-        const idxName = `_${keyName}_idx${suffix}`;
+        const idxName = mintName(`_${keyName}_idx${suffix}`, { specVisible: true });
         const idx: Expr = { kind: "var", name: idxName };
         const arrSize: Expr = { kind: "field", obj: keysVar, field: "size" };
         const bodyStmts = eliminateTopLevelContinue(transformStmts(s.body, typeDecls));
@@ -1366,11 +1413,11 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
         const count = _forofCounters.get(keyName) ?? 0;
         _forofCounters.set(keyName, count + 1);
         const suffix = count === 0 ? "" : `${count + 1}`;
-        const keysSeqName = `_${keyName}_keys${suffix}`;
+        const keysSeqName = mintName(`_${keyName}_keys${suffix}`, { specVisible: true });
         const convExpr: Expr = { kind: "app", fn: "SetToSeq", args: [{ kind: "field", obj: iterExpr, field: "keys" }] };
         result.push({ kind: "let", name: keysSeqName, type: { kind: "array", elem: keyTy }, mutable: false, value: convExpr });
         const keysVar: Expr = { kind: "var", name: keysSeqName };
-        const idxName = `_${keyName}_idx${suffix}`;
+        const idxName = mintName(`_${keyName}_idx${suffix}`, { specVisible: true });
         const idx: Expr = { kind: "var", name: idxName };
         const arrSize: Expr = { kind: "field", obj: keysVar, field: "size" };
         const bodyStmts = eliminateTopLevelContinue(transformStmts(s.body, typeDecls));
@@ -1389,7 +1436,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
 
       // Sets aren't indexable — bind SetToSeq to a variable for iteration
       if (s.iterable.ty.kind === "set") {
-        const seqName = `_${varName}_seq`;
+        const seqName = mintName(`_${varName}_seq`, { specVisible: true });
         const convExpr: Expr = { kind: "app", fn: "SetToSeq", args: [iterExpr] };
         const elemTy: Ty = varTy.kind !== "unknown" ? varTy : { kind: "string" };
         result.push({ kind: "let", name: seqName, type: { kind: "array", elem: elemTy }, mutable: false, value: convExpr });
@@ -1398,7 +1445,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
       const count = _forofCounters.get(varName) ?? 0;
       _forofCounters.set(varName, count + 1);
       const suffix = count === 0 ? "" : `${count + 1}`;
-      const idxName = `_${varName}_idx${suffix}`;
+      const idxName = mintName(`_${varName}_idx${suffix}`, { specVisible: true });
       const idx: Expr = { kind: "var", name: idxName };
       const arrSize: Expr = { kind: "field", obj: iterExpr, field: "size" };
       const bodyStmts = eliminateTopLevelContinue(transformStmts(s.body, typeDecls));
@@ -1477,15 +1524,18 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           const arrIR = transformExpr(arrExpr);
           const arrTy = arrExpr.ty;
           const elemTy = arrTy.kind === "array" ? arrTy.elem : { kind: "unknown" as const };
-          const idxName = `_${param}_idx`;
+          const idxName = mintName(`_${param}_idx`, { specVisible: true });
           const idx: Expr = { kind: "var", name: idxName };
           const arrSize: Expr = { kind: "field", obj: arrIR, field: "size" };
           const elemVar: Expr = { kind: "var", name: param };
           const keyIR = transformExpr(keyExpr);
           const valIR = transformExpr(valExpr);
           const mapSet: Expr = { kind: "methodCall", obj: { kind: "var", name: s.name }, objTy: s.ty, method: "set", args: [keyIR, valIR], monadic: false };
-          // Auto-invariant: all processed elements' keys are in the map
-          const kVar: Expr = { kind: "var", name: "ki" };
+          // Auto-invariant: all processed elements' keys are in the map.
+          // The quantifier wraps user-derived expressions (arrIR/keyIR), so
+          // the binder must avoid user names or it captures them.
+          const kiName = mintName("ki");
+          const kVar: Expr = { kind: "var", name: kiName };
           const mapHasKey: Expr = {
             kind: "implies",
             premises: [
@@ -1494,7 +1544,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
             ],
             conclusion: { kind: "methodCall", obj: { kind: "var", name: s.name }, objTy: s.ty, method: "has", args: [keyIR.kind === "field" ? { kind: "field", obj: { kind: "index", arr: arrIR, idx: kVar }, field: (keyIR as any).field } : keyIR], monadic: false },
           };
-          const autoInv: Expr = { kind: "forall", var: "ki", type: { kind: "int" }, body: mapHasKey };
+          const autoInv: Expr = { kind: "forall", var: kiName, type: { kind: "int" }, body: mapHasKey };
           const stmts: Stmt[] = [
             { kind: "let", name: s.name, type: s.ty, mutable: true, value: { kind: "emptyMap" } },
             { kind: "forin", idx: idxName, bound: arrSize,
@@ -2159,6 +2209,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   const defByMethods: FnDefByMethod[] = [];
   for (const fn of mod.functions) {
     if (!fn.isPure) continue;
+    enterFunction(fn.name);
     const body = transformPureBody(fn.body, mod.typeDecls);
     if (body) {
       // For pure-function lemmas, replace \result with the function call.
@@ -2242,6 +2293,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   // def-by-method functions also skip their method wrappers
   const pureDefNames = new Set([...pureDefs.map(d => d.name), ...defByMethods.map(d => d.name)]);
   const methods: FnMethod[] = mod.functions.map(fn => {
+    enterFunction(fn.name);
     const ensures: Expr[] = [];
     for (const e of fn.ensures) {
       const m = ensuresToMatch(e, mod.typeDecls);
@@ -2294,6 +2346,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   // Class declarations
   const classDecls: Decl[] = (mod.classes ?? []).map(cls => {
     const classMethods: FnMethod[] = cls.methods.map(fn => {
+      enterFunction(fn.name);
       const ensures: Expr[] = fn.ensures.map(transformExpr);
       _forofCounters.clear();
       const body = promoteAssignedLets(transformStmts(fn.body, mod.typeDecls));

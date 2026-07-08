@@ -3,7 +3,10 @@
  */
 
 import type { Expr, Stmt, Decl, Module } from "./ir.js";
+import { anyExpr } from "./ir.js";
 import type { Ty } from "./typedir.js";
+import { renameFreeVar } from "./transform.js";
+import { enterFunction, isUserName } from "./names.js";
 
 // ── Ty → Dafny type string ─────────────────────────────────
 
@@ -62,10 +65,55 @@ function escapeName(name: string): string {
   // \result is carried through the IR as the var name "\\result"; render it
   // as the current method's out-parameter name.
   if (name === "\\result") return _resultName;
-  if (DAFNY_KEYWORDS.has(name)) return `${name}_`;
+  let out = name;
+  if (DAFNY_KEYWORDS.has(name)) out = `${name}_`;
   // Dafny doesn't allow identifiers starting with _
-  if (name.startsWith("_")) return `i${name}`;
+  else if (name.startsWith("_")) out = `i${name}`;
+  else return name;
+  // Mangling must stay injective: the mangled form may itself be a name the
+  // user wrote in this function (`match` → `match_` beside a real `match_`,
+  // `_x` → `i_x` beside a real `i_x`), silently merging two distinct
+  // variables. A prime cannot occur in a TS identifier, so one always leaves
+  // user-name space.
+  while (isUserName(out)) out += "'";
+  return out;
+}
+
+/** Does the expression reference `name` — as a variable, callee, constructor,
+ *  or string match scrutinee? Used to keep emitted binders capture-free: a
+ *  wrapped subexpression mentioning the binder's name forces a prime (SPEC
+ *  §3.2's `k'`), and only then — an unrelated same-named local elsewhere in
+ *  the function keeps the plain binder. Not binding-aware, so a rebound inner
+ *  `name` also counts; over-approximating freshness only costs a prime. */
+function usesName(e: Expr, name: string): boolean {
+  return anyExpr(e, x =>
+    (x.kind === "var" && x.name === name) ||
+    (x.kind === "app" && x.fn === name) ||
+    (x.kind === "constructor" && x.name === name) ||
+    (x.kind === "match" && typeof x.scrutinee === "string" && x.scrutinee === name));
+}
+
+/** Fresh binder for a comprehension wrapping the given subexpressions: `base`
+ *  verbatim unless one of them references it, then primed until free. */
+function freshBinder(base: string, ...wrapped: Expr[]): string {
+  let name = base;
+  while (wrapped.some(w => usesName(w, name))) name += "'";
   return name;
+}
+
+/** Binder + body for lowering a single-return lambda to a comprehension whose
+ *  receiver is emitted inside the binder's scope. TS scoping keeps the
+ *  receiver outside the lambda, so a lambda param sharing a name with
+ *  anything free in the receiver would capture it — e.g. `mk(n).some(n => …)`
+ *  emitting `exists n :: n in mk(n) && …`. Alpha-rename the lambda's own
+ *  param out of the way; the zero-param default must additionally dodge free
+ *  names in the body. */
+function comprehensionBinder(lam: Extract<Expr, { kind: "lambda" }>, value: Expr, receiver: Expr): { binder: string; body: Expr } {
+  const rawName = lam.params[0]?.name;
+  if (rawName === undefined) return { binder: escapeName(freshBinder("x", receiver, value)), body: value };
+  if (!usesName(receiver, rawName)) return { binder: escapeName(rawName), body: value };
+  const fresh = freshBinder(rawName, receiver, value);
+  return { binder: escapeName(fresh), body: renameFreeVar(value, rawName, fresh) };
 }
 
 /** Format a typed parameter list for Dafny: "x: int, y: seq<int>" */
@@ -76,13 +124,28 @@ function paramList(params: { name: string; type: Ty }[]): string {
 /** Format a method signature header, omitting `returns` for void methods.
  *  Dafny's definite-assignment rule rejects unassigned out-parameters, so a
  *  `returns (res: ())` on a void method fails verification. */
-function methodHeader(prefix: string, params: { name: string; type: Ty }[], returnType: Ty): string {
+/** Local names declared anywhere in a statement tree (escaped, as they will
+ *  be emitted). The out-parameter must dodge these too — a method-body local
+ *  cannot shadow an out-parameter in Dafny ("Duplicate local-variable name"). */
+function collectLocalNames(stmts: Stmt[], into: Set<string>): void {
+  for (const s of stmts) {
+    if (s.kind === "let" || s.kind === "ghostLet" || s.kind === "let-bind") into.add(escapeName(s.name));
+    if (s.kind === "forin") { into.add(escapeName(s.idx)); collectLocalNames(s.body, into); }
+    if (s.kind === "if") { collectLocalNames(s.then, into); collectLocalNames(s.else, into); }
+    if (s.kind === "match") for (const a of s.arms) collectLocalNames(a.body, into);
+    if (s.kind === "while") collectLocalNames(s.body, into);
+  }
+}
+
+function methodHeader(prefix: string, params: { name: string; type: Ty }[], returnType: Ty, body?: Stmt[]): string {
   const sig = `${prefix}(${paramList(params)})`;
   if (returnType.kind === "void") return sig;
-  // The out-parameter is `res` by default, but a parameter named `res` (e.g. an
-  // Express handler's `(req, res)`) would collide; pick a fresh name and record
-  // it so `\result` references in the ensures/body resolve to the same name.
+  // The out-parameter is `res` by default, but a parameter (e.g. an Express
+  // handler's `(req, res)`) or a body local named `res` would collide; pick a
+  // fresh name and record it so `\result` references in the ensures/body
+  // resolve to the same name.
   const taken = new Set(params.map(p => escapeName(p.name)));
+  if (body) collectLocalNames(body, taken);
   let resName = "res";
   while (taken.has(resName)) resName += "_";
   _resultName = resName;
@@ -212,8 +275,8 @@ function emitExpr(e: Expr): string {
           const lam = e.args[0];
           const ret = lam.body[0];
           if (ret.kind !== "return") throw new Error("unreachable");
-          const p = escapeName(lam.params[0]?.name ?? "x");
-          const body = emitExpr(ret.value);
+          const { binder: p, body: v } = comprehensionBinder(lam, ret.value, e.obj);
+          const body = emitExpr(v);
           return `(exists ${p} :: ${p} in ${obj} && ${body})`;
         }
       }
@@ -261,7 +324,13 @@ function emitExpr(e: Expr): string {
         }
         if (e.method === "set") return `${obj}[${args[0]} := ${args[1]}]`;
         if (e.method === "has") return `(${args[0]} in ${obj})`;
-        if (e.method === "delete") return `(map k | k in ${obj} && k != ${args[0]} :: ${obj}[k])`;
+        if (e.method === "delete") {
+          // Binder must be fresh: a hardcoded `k` is captured by any same-named
+          // free variable in the receiver/key (e.g. a parameter `k`), turning
+          // the filter into `k != k` — the empty map, silently.
+          const b = freshBinder("k", e.obj, e.args[0]);
+          return `(map ${b} | ${b} in ${obj} && ${b} != ${args[0]} :: ${obj}[${b}])`;
+        }
       }
       // Set methods
       if (ty === "set") {
@@ -277,8 +346,8 @@ function emitExpr(e: Expr): string {
           const lam = e.args[0];
           const ret = lam.body[0];
           if (ret.kind !== "return") throw new Error("unreachable");
-          const p = escapeName(lam.params[0]?.name ?? "x");
-          const body = emitExpr(ret.value);
+          const { binder: p, body: v } = comprehensionBinder(lam, ret.value, e.obj);
+          const body = emitExpr(v);
           return `(set ${p} | ${p} in ${obj} && ${body})`;
         }
       }
@@ -590,6 +659,9 @@ function emitStmt(s: Stmt, indent: number): string {
 
 function emitDecl(d: Decl): string {
   _resultName = "res";  // default; methodHeader bumps it if a param is named `res`
+  // Names with cross-function meaning (datatype members, consts) must not see
+  // a stale function scope; function cases below set their own.
+  enterFunction(null);
   switch (d.kind) {
     case "inductive": {
       const tp = d.typeParams?.length ? `<${d.typeParams.join(", ")}>` : "";
@@ -632,6 +704,7 @@ function emitDecl(d: Decl): string {
     }
 
     case "def": {
+      enterFunction(d.name);
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
       const lines = [`function ${d.name}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
@@ -654,6 +727,7 @@ function emitDecl(d: Decl): string {
     }
 
     case "def-by-method": {
+      enterFunction(d.name);
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
       const lines = [`function ${d.name}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
@@ -667,8 +741,9 @@ function emitDecl(d: Decl): string {
     }
 
     case "method": {
+      enterFunction(d.name);
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
-      const lines = [methodHeader(`method ${d.name}${tp}`, d.params, d.returnType)];
+      const lines = [methodHeader(`method ${d.name}${tp}`, d.params, d.returnType, d.body)];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
       if (d.decreases) lines.push(`  decreases ${emitExpr(d.decreases)}`);
@@ -685,7 +760,8 @@ function emitDecl(d: Decl): string {
       }
       if (d.fields.length > 0 && d.methods.length > 0) lines.push("");
       for (const m of d.methods) {
-        lines.push(`  ${methodHeader(`method ${m.name}`, m.params, m.returnType)}`);
+        enterFunction(m.name);
+        lines.push(`  ${methodHeader(`method ${m.name}`, m.params, m.returnType, m.body)}`);
         for (const r of m.requires) lines.push(`    requires ${emitExpr(r)}`);
         for (const e of m.ensures) lines.push(`    ensures ${emitExpr(e)}`);
         lines.push(`  {`);

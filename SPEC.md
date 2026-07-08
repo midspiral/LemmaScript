@@ -533,6 +533,18 @@ The same coercion applies to non-bool conditions in `if`/`while`/`?:` positions:
 | `forall(k, P)` | `∀ k : T, P'` | `forall k :: P'` |
 | `exists(k, P)` | `∃ k : T, P'` | `exists k :: P'` |
 
+**Generated names.** Lowerings synthesize identifiers — comprehension binders
+(`k` above), loop counters (`_x_idx`), lift temporaries (`_t0`), narrowing
+binders (`_x_val`), the result binder `res`. Every synthesized name is used
+verbatim unless it would collide with a name in the scope it lives in — a
+user-written identifier it could capture or shadow, or anything free in the
+expressions the binder wraps — in which case it gets a prime (`k'`, `res'`).
+TypeScript identifiers cannot contain a prime, so one prime always suffices,
+and no prime ever appears without a real collision. The same rule keeps
+keyword/underscore mangling (`match` → `match_`, `_x` → `i_x`) injective per
+scope. See `tools/src/names.ts`; `examples/nameClash.ts` pins the behavior on both
+backends.
+
 ### 3.3 Nat-Typing Rules
 
 An expression is Nat-typed if:
