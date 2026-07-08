@@ -10,11 +10,10 @@ import { renameFreeVar } from "./transform.js";
 
 /** Fresh binder for a comprehension wrapping the given subexpressions: `base`
  *  verbatim unless one of them references it, then primed until free. A *local*
- *  check — a same-named name elsewhere in the module keeps the plain binder. */
+ *  check — a same-named name elsewhere in the module keeps the plain binder.
+ *  `freshName` owns the priming rule; this just supplies a wrapped-scope check. */
 function freshBinder(base: string, ...wrapped: Expr[]): string {
-  let name = base;
-  while (wrapped.some(w => usesName(w, name))) name += "'";
-  return name;
+  return freshName(base, name => wrapped.some(w => usesName(w, name)));
 }
 
 /** Binder + body for lowering a single-return lambda to a comprehension whose
