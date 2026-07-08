@@ -73,6 +73,49 @@ function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
   }
 }
 
+/** Binders a match-arm pattern string (`.Ctor a b`, `_x_val`, `_`) introduces. */
+function patternBinders(pattern: string): string[] {
+  const toks = pattern.match(/[A-Za-z_][A-Za-z0-9_']*/g) ?? [];
+  return pattern.trimStart().startsWith(".") ? toks.slice(1) : toks;
+}
+
+/** Rename free occurrences of `from` to `to`, stopping at every construct that
+ *  rebinds `from` — lambda params, `let`/`let-bind`/`ghostLet` (shadows the
+ *  rest of the block), `match` arm patterns, `forall`/`exists`, and `for-in`
+ *  indices. Capture-avoiding: a nested scope that reintroduces `from` keeps its
+ *  own binding untouched. `mapExpr` doesn't descend into lambda bodies, so this
+ *  walks them by hand. */
+export function renameFreeVar(e: Expr, from: string, to: string): Expr {
+  const f = (x: Expr): Expr | null => {
+    if (x.kind === "var") return x.name === from ? { ...x, name: to } : x;
+    // let-expression: `value` is in the outer scope (rename), `body` sees the
+    // rebound `from` (leave it), so handle the recursion here to stop descent.
+    if (x.kind === "let" && x.name === from) return { ...x, value: mapExpr(x.value, f) };
+    if ((x.kind === "forall" || x.kind === "exists") && x.var === from) return x;
+    if (x.kind === "match") {
+      const scr = typeof x.scrutinee === "string"
+        ? (x.scrutinee === from ? to : x.scrutinee) : mapExpr(x.scrutinee, f);
+      return { ...x, scrutinee: scr, arms: x.arms.map(a =>
+        patternBinders(a.pattern).includes(from) ? a : { ...a, body: mapExpr(a.body, f) }) };
+    }
+    if (x.kind === "lambda") {
+      if (x.params.some(p => p.name === from)) return x;   // param shadows `from`
+      const body: Stmt[] = [];
+      let shadowed = false;
+      for (const s of x.body) {
+        if (shadowed) { body.push(s); continue; }
+        body.push(s.kind === "forin" && s.idx === from
+          ? { ...s, bound: mapExpr(s.bound, f) }            // idx shadows in the loop body
+          : mapStmt(s, f));
+        if ((s.kind === "let" || s.kind === "let-bind" || s.kind === "ghostLet") && s.name === from) shadowed = true;
+      }
+      return { ...x, body };
+    }
+    return null;
+  };
+  return mapExpr(e, f);
+}
+
 
 
 /** Map over all sub-expressions in a TExpr (typed IR). */

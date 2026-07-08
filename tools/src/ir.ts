@@ -241,7 +241,10 @@ export function anyExprInStmts(stmts: Stmt[], pred: ExprPred): boolean {
 // (the result out-parameter, comprehension binders): a binder is checked only
 // against the expressions/scope it actually wraps, not the whole module.
 const _refsName = (name: string): ExprPred =>
-  e => (e.kind === "var" && e.name === name) || (e.kind === "app" && e.fn === name);
+  e => (e.kind === "var" && e.name === name) ||
+       (e.kind === "app" && e.fn === name) ||
+       (e.kind === "constructor" && e.name === name) ||
+       (e.kind === "match" && typeof e.scrutinee === "string" && e.scrutinee === name);
 
 export function usesName(e: Expr, name: string): boolean {
   return anyExpr(e, _refsName(name));

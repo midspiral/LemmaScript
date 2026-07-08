@@ -249,6 +249,7 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
     if (method === "getDirect") return `${obj}.get! ${args[0]}`;
     if (method === "has")       return `${obj}.contains ${args[0]}`;
     if (method === "set")       return `${obj}.insert ${args[0]} ${args[1]}`;
+    if (method === "delete")    return `${obj}.erase ${args[0]}`;
   }
   // Set methods
   if (tyKind === "set") {

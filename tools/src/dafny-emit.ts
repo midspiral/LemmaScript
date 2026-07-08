@@ -5,13 +5,31 @@
 import type { Expr, Stmt, Decl, Module } from "./ir.js";
 import { usesName, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
-import { freshName } from "./names.js";
+import { freshName, isUserName } from "./names.js";
+import { renameFreeVar } from "./transform.js";
 
-/** A `freshName` predicate: true iff `name` is referenced in any of `exprs`.
- *  Keeps a synthesized binder from capturing a name the wrapped expressions
- *  use — a *local* check, so a name elsewhere in the module is irrelevant. */
-function usedIn(...exprs: Expr[]): (name: string) => boolean {
-  return name => exprs.some(e => usesName(e, name));
+/** Fresh binder for a comprehension wrapping the given subexpressions: `base`
+ *  verbatim unless one of them references it, then primed until free. A *local*
+ *  check — a same-named name elsewhere in the module keeps the plain binder. */
+function freshBinder(base: string, ...wrapped: Expr[]): string {
+  let name = base;
+  while (wrapped.some(w => usesName(w, name))) name += "'";
+  return name;
+}
+
+/** Binder + body for lowering a single-return lambda to a comprehension whose
+ *  receiver is emitted inside the binder's scope. TS scoping keeps the receiver
+ *  outside the lambda, so a lambda param sharing a name with anything free in
+ *  the receiver would capture it — e.g. `mk(n).some(n => …)` naively emitting
+ *  `exists n :: n in mk(n) && …`. Alpha-rename the param out of the way (and
+ *  its free uses in the body); the zero-param default must also dodge free
+ *  names in the body. */
+function comprehensionBinder(lam: Extract<Expr, { kind: "lambda" }>, value: Expr, receiver: Expr): { binder: string; body: Expr } {
+  const rawName = lam.params[0]?.name;
+  if (rawName === undefined) return { binder: escapeName(freshBinder("x", receiver, value)), body: value };
+  if (!usesName(receiver, rawName)) return { binder: escapeName(rawName), body: value };
+  const fresh = freshBinder(rawName, receiver, value);
+  return { binder: escapeName(fresh), body: renameFreeVar(value, rawName, fresh) };
 }
 
 // ── Ty → Dafny type string ─────────────────────────────────
@@ -71,10 +89,17 @@ function escapeName(name: string): string {
   // \result is carried through the IR as the var name "\\result"; render it
   // as the current method's out-parameter name.
   if (name === "\\result") return _resultName;
-  if (DAFNY_KEYWORDS.has(name)) return `${name}_`;
+  let out = name;
+  if (DAFNY_KEYWORDS.has(name)) out = `${name}_`;
   // Dafny doesn't allow identifiers starting with _
-  if (name.startsWith("_")) return `i${name}`;
-  return name;
+  else if (name.startsWith("_")) out = `i${name}`;
+  else return name;
+  // Mangling must stay injective: the mangled form may itself be a name the
+  // user wrote (`match` → `match_` beside a real `match_`, `_x` → `i_x` beside
+  // a real `i_x`), silently merging two distinct variables. A prime cannot
+  // occur in a TS identifier, so one always leaves user-name space.
+  while (isUserName(out)) out += "'";
+  return out;
 }
 
 /** Format a typed parameter list for Dafny: "x: int, y: seq<int>" */
@@ -228,10 +253,8 @@ function emitExpr(e: Expr): string {
           const lam = e.args[0];
           const ret = lam.body[0];
           if (ret.kind !== "return") throw new Error("unreachable");
-          // User lambda param stays exact; the no-param fallback is minted, so
-          // freshen it against this quantifier's own operands (a local check).
-          const p = lam.params[0] ? escapeName(lam.params[0].name) : freshName("x", usedIn(e.obj, ret.value));
-          const body = emitExpr(ret.value);
+          const { binder: p, body: v } = comprehensionBinder(lam, ret.value, e.obj);
+          const body = emitExpr(v);
           return `(exists ${p} :: ${p} in ${obj} && ${body})`;
         }
       }
@@ -283,7 +306,7 @@ function emitExpr(e: Expr): string {
           // Minted comprehension binder: freshen so a user variable `k` in the
           // receiver or key isn't captured (`k != k` would delete nothing).
           // Local check — only this comprehension's own operands can collide.
-          const k = freshName("k", usedIn(e.obj, e.args[0]));
+          const k = freshBinder("k", e.obj, e.args[0]);
           return `(map ${k} | ${k} in ${obj} && ${k} != ${args[0]} :: ${obj}[${k}])`;
         }
       }
@@ -301,10 +324,8 @@ function emitExpr(e: Expr): string {
           const lam = e.args[0];
           const ret = lam.body[0];
           if (ret.kind !== "return") throw new Error("unreachable");
-          // User lambda param stays exact; the no-param fallback is minted, so
-          // freshen it against this set-builder's own operands (a local check).
-          const p = lam.params[0] ? escapeName(lam.params[0].name) : freshName("x", usedIn(e.obj, ret.value));
-          const body = emitExpr(ret.value);
+          const { binder: p, body: v } = comprehensionBinder(lam, ret.value, e.obj);
+          const body = emitExpr(v);
           return `(set ${p} | ${p} in ${obj} && ${body})`;
         }
       }
