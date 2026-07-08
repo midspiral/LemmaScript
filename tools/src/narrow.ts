@@ -37,6 +37,7 @@
 
 import type { TModule, TFunction, TStmt, TExpr, Ty } from "./typedir.js";
 import type { TypeDeclInfo } from "./types.js";
+import { freshName } from "./names.js";
 
 // ── Optional-check detection ────────────────────────────────
 
@@ -58,7 +59,7 @@ function parseOptionalCheck(cond: TExpr): { scrutinee: TExpr; innerTy: Ty; negat
     const innerTy = cond.expr.ty.inner;
     const hint = binderHintFor(e);
     if (hint === null) return null;
-    return { scrutinee: e, innerTy, negated: true, binderHint: hint, truthiness: true };
+    return { scrutinee: e, innerTy, negated: true, binderHint: freshName(hint), truthiness: true };
   }
   if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) {
     // Bare optional truthiness: `if (e)` where e: T | undefined — true iff e is
@@ -66,7 +67,7 @@ function parseOptionalCheck(cond: TExpr): { scrutinee: TExpr; innerTy: Ty; negat
     if (cond.ty.kind === "optional") {
       const hint = binderHintFor(cond);
       if (hint === null) return null;
-      return { scrutinee: cond, innerTy: cond.ty.inner, negated: false, binderHint: hint, truthiness: true };
+      return { scrutinee: cond, innerTy: cond.ty.inner, negated: false, binderHint: freshName(hint), truthiness: true };
     }
     return null;
   }
@@ -78,7 +79,7 @@ function parseOptionalCheck(cond: TExpr): { scrutinee: TExpr; innerTy: Ty; negat
   if (!e || e.ty.kind !== "optional") return null;
   const hint = binderHintFor(e);
   if (hint === null) return null;
-  return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binderHint: hint, truthiness: false };
+  return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binderHint: freshName(hint), truthiness: false };
 }
 
 function binderHintFor(e: TExpr): string | null {
@@ -414,7 +415,7 @@ function ruleNullish(e: TExpr): TExpr | null {
   if (e.kind !== "nullish") return null;
   if (e.left.ty.kind !== "optional") return null;
   const innerTy = e.left.ty.inner;
-  const binder = `_oc${_ocCounter++}_val`;
+  const binder = freshName(`_oc${_ocCounter++}_val`);
   return {
     kind: "someMatch",
     scrutinee: e.left, binder, binderTy: innerTy,
@@ -481,7 +482,7 @@ function ruleOptChain(e: TExpr): TExpr | null {
   if (e.kind !== "optChain") return null;
   if (e.obj.ty.kind !== "optional") return null;
   const innerTy = e.obj.ty.inner;
-  const binder = `_oc${_ocCounter++}_val`;
+  const binder = freshName(`_oc${_ocCounter++}_val`);
   let body: TExpr = { kind: "var", name: binder, ty: innerTy };
   for (const step of e.chain) {
     if (step.kind === "field") {
@@ -523,9 +524,9 @@ function binderHintForMapAccess(m: TExpr, k: TExpr): string {
     // mHint is `_m_val`, kHint is `_k_val` — stitch into `_m_k_val`.
     const mStem = mHint.replace(/_val$/, "");
     const kStem = kHint.replace(/^_/, "").replace(/_val$/, "");
-    return `${mStem}_${kStem}_val`;
+    return freshName(`${mStem}_${kStem}_val`);
   }
-  return `_oc${_ocCounter++}_val`;
+  return freshName(`_oc${_ocCounter++}_val`);
 }
 
 /** Rule (expression): `k in m ? m[k] : default` where m is map-typed.
@@ -565,8 +566,9 @@ function ruleConditionalInMap(e: TExpr): TExpr | null {
 function ruleConditionalOptionalTruthy(e: TExpr): TExpr | null {
   if (e.kind !== "conditional") return null;
   if (e.cond.ty.kind !== "optional") return null;
-  const binder = binderHintFor(e.cond);
-  if (binder === null) return null;
+  const hint = binderHintFor(e.cond);
+  if (hint === null) return null;
+  const binder = freshName(hint);
   return {
     kind: "someMatch",
     scrutinee: e.cond, binderTy: e.cond.ty.inner,

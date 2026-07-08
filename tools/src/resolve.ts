@@ -11,6 +11,7 @@ import { isBigInt } from "./typedir.js";
 import { parseTsType, tyToCanonical } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
+import { freshName } from "./names.js";
 
 // ── Environment ──────────────────────────────────────────────
 
@@ -679,7 +680,7 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
       if (ft.kind !== "optional") return { name: f.name, value: ovf };  // required: override always provides
       // optional: override field wins iff present, else base's field
       const bvf: TExpr = { kind: "field", obj: bv, field: f.name, ty: ft };
-      const binder = `_m${mergeBinder++}`;
+      const binder = freshName(`_m${mergeBinder++}`);
       // someBody is the unwrapped present value; transform re-wraps each arm in
       // the backend's Some constructor (Dafny `Some`, Lean `Option.some`).
       return { name: f.name, value: {
@@ -690,7 +691,7 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
   });
   if (tover.ty.kind === "optional") {
     // override may be absent (undefined spreads nothing) → base unchanged
-    const binder = `_mo${mergeBinder++}`;
+    const binder = freshName(`_mo${mergeBinder++}`);
     return {
       kind: "someMatch", scrutinee: tover, binder, binderTy: userTy,
       someBody: merged(tbase, { kind: "var", name: binder, ty: userTy }), noneBody: tbase, ty: userTy,
@@ -1376,7 +1377,9 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         // General tuple destructuring: all unknown
         for (const _ of s.names) nameTypes.push({ kind: "unknown" });
       }
-      const idxName = `_${s.names[0]}_idx`;
+      // Must match the freshened counter transform mints for this loop, so a
+      // spec referencing the loop index resolves to the same name.
+      const idxName = freshName(`_${s.names[0]}_idx`);
       env = extend(env, idxName, { kind: "nat" });
       for (let j = 0; j < s.names.length; j++) {
         env = extend(env, s.names[j], nameTypes[j] ?? { kind: "unknown" });

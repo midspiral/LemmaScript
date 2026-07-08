@@ -4,6 +4,7 @@
 
 import type { Expr, Stmt, Decl, Module } from "./ir.js";
 import type { Ty } from "./typedir.js";
+import { freshName } from "./names.js";
 
 // ── Ty → Dafny type string ─────────────────────────────────
 
@@ -79,12 +80,11 @@ function paramList(params: { name: string; type: Ty }[]): string {
 function methodHeader(prefix: string, params: { name: string; type: Ty }[], returnType: Ty): string {
   const sig = `${prefix}(${paramList(params)})`;
   if (returnType.kind === "void") return sig;
-  // The out-parameter is `res` by default, but a parameter named `res` (e.g. an
-  // Express handler's `(req, res)`) would collide; pick a fresh name and record
-  // it so `\result` references in the ensures/body resolve to the same name.
-  const taken = new Set(params.map(p => escapeName(p.name)));
-  let resName = "res";
-  while (taken.has(resName)) resName += "_";
+  // The out-parameter is `res` by default, but any module identifier named `res`
+  // — a parameter (an Express handler's `(req, res)`), a body local, or a callee
+  // — would collide; `freshName` primes it (`res'`) on collision and records it
+  // so `\result` references in the ensures/body resolve to the same name.
+  const resName = freshName("res");
   _resultName = resName;
   return `${sig} returns (${resName}: ${tyToDafny(returnType)})`;
 }
@@ -212,7 +212,8 @@ function emitExpr(e: Expr): string {
           const lam = e.args[0];
           const ret = lam.body[0];
           if (ret.kind !== "return") throw new Error("unreachable");
-          const p = escapeName(lam.params[0]?.name ?? "x");
+          // User lambda param stays exact; the no-param fallback is minted, so freshen it.
+          const p = lam.params[0] ? escapeName(lam.params[0].name) : freshName("x");
           const body = emitExpr(ret.value);
           return `(exists ${p} :: ${p} in ${obj} && ${body})`;
         }
@@ -261,7 +262,12 @@ function emitExpr(e: Expr): string {
         }
         if (e.method === "set") return `${obj}[${args[0]} := ${args[1]}]`;
         if (e.method === "has") return `(${args[0]} in ${obj})`;
-        if (e.method === "delete") return `(map k | k in ${obj} && k != ${args[0]} :: ${obj}[k])`;
+        if (e.method === "delete") {
+          // Minted comprehension binder: freshen so a user variable `k` in the
+          // receiver or key isn't captured (`k != k` would delete nothing).
+          const k = freshName("k");
+          return `(map ${k} | ${k} in ${obj} && ${k} != ${args[0]} :: ${obj}[${k}])`;
+        }
       }
       // Set methods
       if (ty === "set") {
@@ -277,7 +283,8 @@ function emitExpr(e: Expr): string {
           const lam = e.args[0];
           const ret = lam.body[0];
           if (ret.kind !== "return") throw new Error("unreachable");
-          const p = escapeName(lam.params[0]?.name ?? "x");
+          // User lambda param stays exact; the no-param fallback is minted, so freshen it.
+          const p = lam.params[0] ? escapeName(lam.params[0].name) : freshName("x");
           const body = emitExpr(ret.value);
           return `(set ${p} | ${p} in ${obj} && ${body})`;
         }
