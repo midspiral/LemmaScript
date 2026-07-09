@@ -44,7 +44,7 @@ function tyToDafny(ty: Ty): string {
     case "map": return `map<${tyToDafny(ty.key)}, ${tyToDafny(ty.value)}>`;
     case "set": return `set<${tyToDafny(ty.elem)}>`;
     case "optional": { needPreamble("OptionType"); return `Option<${tyToDafny(ty.inner)}>`; }
-    case "user": return ty.name;
+    case "user": return escapeName(ty.name);
     case "fn": return `(${ty.params.map(tyToDafny).join(", ")}) -> ${tyToDafny(ty.result)}`;
     // Out-of-subset (`any`/`unknown`); opaque so real ops on it fail loudly
     // rather than silently verify as `int`. Mirrors the Lean backend's `_`.
@@ -134,9 +134,16 @@ function escapeName(name: string): string {
   if (name === "\\result") return _resultName;
   const user = _userDafnyNames.get(name);
   if (user !== undefined) return user;
-  // A generated (toolchain-minted) name: escape, then freshen in the Dafny
-  // namespace so it can't collapse onto an escaped user name. Cache it so the
-  // declaration and every reference render identically.
+  return escapeGeneratedName(name);
+}
+
+/** Allocate a toolchain-generated name (an ANF temp, a comprehension binder, a
+ *  companion `_ensures` lemma). Escapes to a base, then freshens in the Dafny
+ *  namespace so it can't collapse onto an escaped user name. Bypasses the user
+ *  map on purpose: the raw name is synthesized, so it must be freshened *away
+ *  from* a same-spelled user name, not aliased onto it. Cached so a declaration
+ *  and its references render identically. */
+function escapeGeneratedName(name: string): string {
   const cached = _generatedDafnyNames.get(name);
   if (cached !== undefined) return cached;
   const emitted = freshDafnyName(dafnyBaseName(name));
@@ -700,22 +707,22 @@ function emitDecl(d: Decl): string {
         const fields = c.fields.map(f => collides.has(f.name) ? { ...f, name: `${f.name}_${c.name}` } : f);
         return `${escapeName(c.name)}(${paramList(fields)})`;
       });
-      return `datatype ${d.name}${tp} = ${ctors.join(" | ")}`;
+      return `datatype ${escapeName(d.name)}${tp} = ${ctors.join(" | ")}`;
     }
 
     case "structure": {
       const tp = d.typeParams?.length ? `<${d.typeParams.join(", ")}>` : "";
-      return `datatype ${d.name}${tp} = ${d.name}(${paramList(d.fields)})`;
+      return `datatype ${escapeName(d.name)}${tp} = ${escapeName(d.name)}(${paramList(d.fields)})`;
     }
 
     case "type-alias": {
-      return `type ${d.name} = ${tyToDafny(d.target)}`;
+      return `type ${escapeName(d.name)} = ${tyToDafny(d.target)}`;
     }
 
     case "opaque-type": {
       // Abstract type — no definition. `(==)` so it can sit inside datatypes
       // that derive structural equality. Never constructed or destructured.
-      return `type ${d.name}(==)`;
+      return `type ${escapeName(d.name)}(==)`;
     }
 
     case "def": {
@@ -731,7 +738,7 @@ function emitDecl(d: Decl): string {
         // Strip constraints like (==) from type params — ghost lemmas don't need them
         const lemmaTP = d.typeParams.length > 0 ? `<${d.typeParams.map(t => t.replace(/\(.*\)/, '')).join(", ")}>` : "";
         lines.push("");
-        lines.push(`lemma ${d.name}_ensures${lemmaTP}(${paramList(d.params)})`);
+        lines.push(`lemma ${escapeGeneratedName(`${d.name}_ensures`)}${lemmaTP}(${paramList(d.params)})`);
         for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
         for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
         lines.push(`{`);
@@ -766,7 +773,7 @@ function emitDecl(d: Decl): string {
     }
 
     case "class": {
-      const lines = [`class ${d.name} {`];
+      const lines = [`class ${escapeName(d.name)} {`];
       for (const f of d.fields) {
         lines.push(`  var ${escapeName(f.name)}: ${tyToDafny(f.type)}`);
       }

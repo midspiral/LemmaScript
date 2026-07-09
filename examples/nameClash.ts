@@ -116,3 +116,30 @@ export function resAssignOnly(x: number): number {
   res = 1;
   return x;
 }
+
+// Declaration-derived names escape too: the `_`-prefixed head mangles to `i_foo'`
+// (dodging the user `i_foo`), and its companion `_ensures` lemma — a generated
+// name — must mangle as well (`_foo_ensures` starts with `_`, which Dafny
+// forbids), freshened away from any user name rather than aliased to one.
+export function _foo(x: number): number {
+  //@ verify
+  //@ ensures \result === x
+  return x;
+}
+
+export function i_foo(x: number): number {
+  //@ verify
+  //@ ensures \result === x
+  return x;
+}
+
+// Type/interface names are the same family: `_Box` mangles to `i_Box'` at the
+// datatype head and at every `Ty.user` reference, staying distinct from `i_Box`.
+export interface _Box { x: number }
+export interface i_Box { y: number }
+
+export function useBox(b: _Box): number {
+  //@ verify
+  //@ ensures \result === b.x
+  return b.x;
+}

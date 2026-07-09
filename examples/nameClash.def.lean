@@ -81,3 +81,18 @@ method resAssignOnly (x : Int) return (res' : Int)
     let mut res : Int := 0
     res := 1
     return x
+
+method _foo (x : Int) return (res : Int)
+  ensures res = x
+  do
+    return Pure._foo x
+
+method i_foo (x : Int) return (res : Int)
+  ensures res = x
+  do
+    return Pure.i_foo x
+
+method useBox (b : _Box) return (res : Int)
+  ensures res = b.x
+  do
+    return Pure.useBox b

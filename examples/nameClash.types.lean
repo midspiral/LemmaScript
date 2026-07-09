@@ -3,6 +3,10 @@
 -/
 import LemmaScript
 
+structure _Box where
+  x : Int
+deriving Repr, Inhabited, DecidableEq
+
 namespace Pure
 
 def delKey (d : Std.HashMap String Int) (k : String) : Std.HashMap String Int :=
@@ -31,5 +35,14 @@ def callee (x : Int) : Int :=
 
 def someEscCollision (_x : Int) (i_x : Int) : Bool :=
   (single _x).any (fun _x => _x > 0)
+
+def _foo (x : Int) : Int :=
+  x
+
+def i_foo (x : Int) : Int :=
+  x
+
+def useBox (b : _Box) : Int :=
+  b.x
 
 end Pure
