@@ -265,6 +265,7 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 | `transform.ts` | Transform | Typed IR → IR |
 | `peephole.ts` | Peephole | IR → IR (Some/None ceremony elimination) |
 | `types.ts` | (shared) | TypeDeclInfo, parseTsType |
+| `names.ts` | (shared) | Fresh-name minting — collision-safe internal identifiers |
 | `lean-emit.ts` | Emit | IR → Lean text |
 | `dafny-emit.ts` | Emit | IR → Dafny text |
 | `lean-commands.ts` | CLI | Lean gen/check commands |
