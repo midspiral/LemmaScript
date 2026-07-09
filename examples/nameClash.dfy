@@ -7,6 +7,8 @@ function JSRem(a: int, b: int): int
   if a < 0 then -r else r
 }
 
+datatype i_Box' = i_Box'(x: int)
+
 function delKey(d: map<string, int>, k: string): map<string, int>
 {
   var rest := (map k' | k' in d && k' != k :: d[k']);
@@ -73,6 +75,56 @@ lemma passThrough_ensures(res: int)
 {
 }
 
+function callee(x: int): int
+{
+  (x + 1)
+}
+
+lemma callee_ensures(x: int)
+  ensures (callee(x) == (x + 1))
+{
+}
+
+function someEscCollision(i_x': int, i_x: int): bool
+{
+  (exists i_x'' :: i_x'' in single(i_x') && (i_x'' > 0))
+}
+
+lemma someEscCollision_ensures(i_x': int, i_x: int)
+  ensures (someEscCollision(i_x', i_x) ==> (i_x' > 0))
+{
+}
+
+function i_foo'(x: int): int
+{
+  x
+}
+
+lemma i_foo_ensures(x: int)
+  ensures (i_foo'(x) == x)
+{
+}
+
+function i_foo(x: int): int
+{
+  x
+}
+
+lemma i_foo_ensures'(x: int)
+  ensures (i_foo(x) == x)
+{
+}
+
+function useBox(b: i_Box'): int
+{
+  b.x
+}
+
+lemma useBox_ensures(b: i_Box')
+  ensures (useBox(b) == b.x)
+{
+}
+
 method sumTo(x: int) returns (res': int)
   requires (x >= 0)
   ensures (res' >= 0)
@@ -89,4 +141,22 @@ method sumTo(x: int) returns (res': int)
     i := (i + 1);
   }
   return res;
+}
+
+method tempClash(i_t0': int, i_t0: int) returns (res: int)
+  ensures (res == ((i_t0' + 1) + (i_t0 + 1)))
+{
+  var z := 0;
+  var i_t0'' := callee(i_t0');
+  var i_t1 := callee(i_t0);
+  z := (i_t0'' + i_t1);
+  return z;
+}
+
+method resAssignOnly(x: int) returns (res': int)
+  ensures (res' == x)
+{
+  var res := 0;
+  res := 1;
+  return x;
 }

@@ -78,3 +78,68 @@ export function sumTo(x: number): number {
   }
   return res;
 }
+
+// Freshness holds in the raw namespace but Dafny escaping runs *after*: the
+// user param `_t0` escapes to `i_t0'` (dodging the user `i_t0`), so a generated
+// ANF temp for `callee(_t0)` — raw-freshened to `_t0'` — must escape to `i_t0''`.
+// Escaped in the raw namespace alone, temp and param both collapse to `i_t0'`.
+export function callee(x: number): number {
+  //@ verify
+  //@ ensures \result === x + 1
+  return x + 1;
+}
+
+export function tempClash(_t0: number, i_t0: number): number {
+  //@ verify
+  //@ ensures \result === (_t0 + 1) + (i_t0 + 1)
+  let z = 0;
+  z = callee(_t0) + callee(i_t0);
+  return z;
+}
+
+// `.some` binder capture surviving Dafny escaping: the receiver `single(_x)`
+// and the lambda binder `_x` both head for `i_x'`, so the binder must land on
+// `i_x''` — else the receiver reads the bound var and the body is constant-true.
+export function someEscCollision(_x: number, i_x: number): boolean {
+  //@ verify
+  //@ ensures \result ==> _x > 0
+  return single(_x).some(_x => _x > 0);
+}
+
+// The out-parameter must dodge a body local even when it is only assigned or
+// never read: a bare `let res` still declares `res`, so the emitter's method-body
+// scan has to count bindings and assignment targets, not just references.
+export function resAssignOnly(x: number): number {
+  //@ verify
+  //@ ensures \result === x
+  let res = 0;
+  res = 1;
+  return x;
+}
+
+// Declaration-derived names escape too: the `_`-prefixed head mangles to `i_foo'`
+// (dodging the user `i_foo`), and its companion `_ensures` lemma — a generated
+// name — must mangle as well (`_foo_ensures` starts with `_`, which Dafny
+// forbids), freshened away from any user name rather than aliased to one.
+export function _foo(x: number): number {
+  //@ verify
+  //@ ensures \result === x
+  return x;
+}
+
+export function i_foo(x: number): number {
+  //@ verify
+  //@ ensures \result === x
+  return x;
+}
+
+// Type/interface names are the same family: `_Box` mangles to `i_Box'` at the
+// datatype head and at every `Ty.user` reference, staying distinct from `i_Box`.
+export interface _Box { x: number }
+export interface i_Box { y: number }
+
+export function useBox(b: _Box): number {
+  //@ verify
+  //@ ensures \result === b.x
+  return b.x;
+}

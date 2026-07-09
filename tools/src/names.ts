@@ -38,6 +38,12 @@ export function isUserName(name: string): boolean {
   return _userNames.has(name);
 }
 
+/** The raw user identifiers, for a backend that needs to allocate its own
+ *  emitted names against them (e.g. Dafny escaping — see dafny-emit). */
+export function userNames(): readonly string[] {
+  return [..._userNames];
+}
+
 /** A toolchain-internal name: `base` verbatim, primed on collision. The one
  *  place the priming rule lives. `taken` says what counts as a collision —
  *  by default a user-written name anywhere in the module; callers that know
