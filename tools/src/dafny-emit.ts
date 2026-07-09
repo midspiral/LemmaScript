@@ -5,7 +5,7 @@
 import type { Expr, Stmt, Decl, Module } from "./ir.js";
 import { usesName, usesNameInDecl } from "./ir.js";
 import type { Ty } from "./typedir.js";
-import { freshName } from "./names.js";
+import { freshName, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
 
 /** Fresh binder for a comprehension wrapping the given subexpressions: `base`
@@ -78,25 +78,71 @@ const DAFNY_KEYWORDS = new Set([
 ]);
 
 // The Dafny out-parameter name for the method currently being emitted. Default
-// `res`, but bumped (e.g. `res_`) when a parameter is named `res` — set by
-// methodHeader and reset per decl. `\result` in an ensures must use the *same*
-// name, so escapeName routes it here.
+// `res`, but bumped (e.g. `res'`) when the method's own scope uses `res` — set
+// by methodHeader and reset per decl. `\result` in an ensures must use the
+// *same* name, so escapeName routes it here.
 let _resultName = "res";
 
+// ── Dafny name allocation ──────────────────────────────────
+//
+// freshName (names.ts) freshens in the *raw TS* namespace — but that is not the
+// namespace Dafny sees. Escaping maps `_x`→`i_x` and keyword `match`→`match_`,
+// so two raw-distinct names can collapse *after* escaping: a raw-freshened temp
+// `_t0'`→`i_t0'` colliding with a user `_t0` that escaped-and-primed to `i_t0'`.
+// So Dafny hygiene is a second allocator, layered at emission: escape to a base,
+// then freshen against the names already claimed in the Dafny namespace. User
+// names are allocated up front (Dafny-safe ones kept exact); generated names are
+// allocated on first sight and cached so a decl and its references agree. Reset
+// per file. (The raw freshName layer stays — Lean has a different escaping story.)
+
+function dafnyBaseName(name: string): string {
+  if (DAFNY_KEYWORDS.has(name)) return `${name}_`;
+  if (name.startsWith("_")) return `i${name}`;  // Dafny forbids leading `_`
+  return name;
+}
+
+let _userDafnyNames = new Map<string, string>();
+let _generatedDafnyNames = new Map<string, string>();
+let _takenDafnyNames = new Set<string>();
+
+/** `base`, primed until free in the Dafny namespace. A prime can't occur in a
+ *  TS identifier, so priming always leaves user-name space. */
+function freshDafnyName(base: string): string {
+  let out = base;
+  while (_takenDafnyNames.has(out)) out += "'";
+  return out;
+}
+
+function resetDafnyNameCache(): void {
+  _userDafnyNames = new Map();
+  _generatedDafnyNames = new Map();
+  _takenDafnyNames = new Set();
+  const raws = [...userNames()].sort();
+  // Dafny-safe source names keep their spelling; names that must mangle are then
+  // freshened in the emitted namespace (safe-first, sorted → deterministic).
+  for (const raw of raws) if (dafnyBaseName(raw) === raw) { _userDafnyNames.set(raw, raw); _takenDafnyNames.add(raw); }
+  for (const raw of raws) if (dafnyBaseName(raw) !== raw) {
+    const emitted = freshDafnyName(dafnyBaseName(raw));
+    _userDafnyNames.set(raw, emitted);
+    _takenDafnyNames.add(emitted);
+  }
+}
+
 function escapeName(name: string): string {
-  // \result is carried through the IR as the var name "\\result"; render it
-  // as the current method's out-parameter name.
+  // \result is carried through the IR as var "\\result"; render it as the
+  // current method's out-parameter name (chosen locally by methodHeader).
   if (name === "\\result") return _resultName;
-  let out = name;
-  if (DAFNY_KEYWORDS.has(name)) out = `${name}_`;
-  // Dafny doesn't allow identifiers starting with _
-  else if (name.startsWith("_")) out = `i${name}`;
-  else return name;
-  // Mangling must stay injective: the mangled form may itself be a name the
-  // user wrote (`match` → `match_` beside a real `match_`, `_x` → `i_x` beside
-  // a real `i_x`), silently merging two distinct variables. `freshName` primes
-  // it clear of user-name space (a prime can't occur in a TS identifier).
-  return freshName(out);
+  const user = _userDafnyNames.get(name);
+  if (user !== undefined) return user;
+  // A generated (toolchain-minted) name: escape, then freshen in the Dafny
+  // namespace so it can't collapse onto an escaped user name. Cache it so the
+  // declaration and every reference render identically.
+  const cached = _generatedDafnyNames.get(name);
+  if (cached !== undefined) return cached;
+  const emitted = freshDafnyName(dafnyBaseName(name));
+  _generatedDafnyNames.set(name, emitted);
+  _takenDafnyNames.add(emitted);
+  return emitted;
 }
 
 /** Format a typed parameter list for Dafny: "x: int, y: seq<int>" */
@@ -148,7 +194,7 @@ function emitQuantifier(e: Expr & { kind: "forall" | "exists" }, keyword: string
   while (body.kind === e.kind) {
     const dty = tyToDafny((body as typeof e).type);
     const ann = dty === "string" ? "" : `: ${dty}`;
-    vars.push(`${(body as typeof e).var}${ann}`);
+    vars.push(`${escapeName((body as typeof e).var)}${ann}`);
     body = (body as typeof e).body;
   }
   return `${keyword} ${vars.join(", ")} :: ${emitExpr(body)}`;
@@ -300,7 +346,7 @@ function emitExpr(e: Expr): string {
           // Minted comprehension binder: freshen so a user variable `k` in the
           // receiver or key isn't captured (`k != k` would delete nothing).
           // Local check — only this comprehension's own operands can collide.
-          const k = freshBinder("k", e.obj, e.args[0]);
+          const k = escapeName(freshBinder("k", e.obj, e.args[0]));
           return `(map ${k} | ${k} in ${obj} && ${k} != ${args[0]} :: ${obj}[${k}])`;
         }
       }
@@ -674,7 +720,7 @@ function emitDecl(d: Decl): string {
 
     case "def": {
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
-      const lines = [`function ${d.name}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
+      const lines = [`function ${escapeName(d.name)}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       if (d.decreases) lines.push(`  decreases ${emitExpr(d.decreases)}`);
       lines.push(`{`);
@@ -696,7 +742,7 @@ function emitDecl(d: Decl): string {
 
     case "def-by-method": {
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
-      const lines = [`function ${d.name}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
+      const lines = [`function ${escapeName(d.name)}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       if (d.decreases) lines.push(`  decreases ${emitExpr(d.decreases)}`);
       lines.push(`{`);
@@ -709,7 +755,7 @@ function emitDecl(d: Decl): string {
 
     case "method": {
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
-      const lines = [methodHeader(`method ${d.name}${tp}`, d.params, d.returnType, d)];
+      const lines = [methodHeader(`method ${escapeName(d.name)}${tp}`, d.params, d.returnType, d)];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
       if (d.decreases) lines.push(`  decreases ${emitExpr(d.decreases)}`);
@@ -726,7 +772,7 @@ function emitDecl(d: Decl): string {
       }
       if (d.fields.length > 0 && d.methods.length > 0) lines.push("");
       for (const m of d.methods) {
-        lines.push(`  ${methodHeader(`method ${m.name}`, m.params, m.returnType, m)}`);
+        lines.push(`  ${methodHeader(`method ${escapeName(m.name)}`, m.params, m.returnType, m)}`);
         for (const r of m.requires) lines.push(`    requires ${emitExpr(r)}`);
         for (const e of m.ensures) lines.push(`    ensures ${emitExpr(e)}`);
         lines.push(`  {`);
@@ -1224,6 +1270,7 @@ function translatePattern(pattern: string): string {
 
 export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSlice?: boolean }): string {
   _useSafeSlice = !!opts?.safeSlice;
+  resetDafnyNameCache();
   buildRecordCtorMap(file.decls);
   _neededPreambles.clear();
 

@@ -254,8 +254,33 @@ export function usesNameInStmts(stmts: Stmt[], name: string): boolean {
   return anyExprInStmts(stmts, _refsName(name));
 }
 
-/** Does a declaration's spec (requires/ensures) or body reference `name`? The
- *  scope a method's out-parameter binder must dodge, shared by both emitters. */
+/** Names a statement tree *binds, targets, or introduces* — `let`/`let-bind`/
+ *  `ghostLet` names, `assign`/`bind`/`ghostAssign` targets, `for-in` indices,
+ *  and `match`-arm pattern binders — recursing through nested blocks. Distinct
+ *  from `usesNameInStmts` (expression references only): an unread or assign-only
+ *  local still duplicate-declares against a method's out-parameter in Dafny. */
+export function bindsNameInStmts(stmts: Stmt[], name: string): boolean {
+  const patternBindsName = (p: string): boolean => {
+    const toks = p.match(/[A-Za-z_][A-Za-z0-9_']*/g) ?? [];
+    return (p.trimStart().startsWith(".") ? toks.slice(1) : toks).includes(name);
+  };
+  return stmts.some(s => {
+    switch (s.kind) {
+      case "let": case "let-bind": case "ghostLet": return s.name === name;
+      case "assign": case "bind": case "ghostAssign": return s.target === name;
+      case "forin": return s.idx === name || bindsNameInStmts(s.body, name);
+      case "if": return bindsNameInStmts(s.then, name) || bindsNameInStmts(s.else, name);
+      case "while": return bindsNameInStmts(s.body, name);
+      case "match": return s.arms.some(a => patternBindsName(a.pattern) || bindsNameInStmts(a.body, name));
+      default: return false;
+    }
+  });
+}
+
+/** Every occurrence of `name` a method's out-parameter binder must dodge —
+ *  referenced in a spec (requires/ensures) or body, *or* bound/targeted anywhere
+ *  in the body (an unread local still duplicate-declares). Both emitters share it. */
 export function usesNameInDecl(requires: Expr[], ensures: Expr[], body: Stmt[], name: string): boolean {
-  return requires.some(e => usesName(e, name)) || ensures.some(e => usesName(e, name)) || usesNameInStmts(body, name);
+  return requires.some(e => usesName(e, name)) || ensures.some(e => usesName(e, name))
+    || usesNameInStmts(body, name) || bindsNameInStmts(body, name);
 }

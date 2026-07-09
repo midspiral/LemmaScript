@@ -73,6 +73,26 @@ lemma passThrough_ensures(res: int)
 {
 }
 
+function callee(x: int): int
+{
+  (x + 1)
+}
+
+lemma callee_ensures(x: int)
+  ensures (callee(x) == (x + 1))
+{
+}
+
+function someEscCollision(i_x': int, i_x: int): bool
+{
+  (exists i_x'' :: i_x'' in single(i_x') && (i_x'' > 0))
+}
+
+lemma someEscCollision_ensures(i_x': int, i_x: int)
+  ensures (someEscCollision(i_x', i_x) ==> (i_x' > 0))
+{
+}
+
 method sumTo(x: int) returns (res': int)
   requires (x >= 0)
   ensures (res' >= 0)
@@ -89,4 +109,22 @@ method sumTo(x: int) returns (res': int)
     i := (i + 1);
   }
   return res;
+}
+
+method tempClash(i_t0': int, i_t0: int) returns (res: int)
+  ensures (res == ((i_t0' + 1) + (i_t0 + 1)))
+{
+  var z := 0;
+  var i_t0'' := callee(i_t0');
+  var i_t1 := callee(i_t0);
+  z := (i_t0'' + i_t1);
+  return z;
+}
+
+method resAssignOnly(x: int) returns (res': int)
+  ensures (res' == x)
+{
+  var res := 0;
+  res := 1;
+  return x;
 }

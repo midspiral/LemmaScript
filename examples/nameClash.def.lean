@@ -55,3 +55,29 @@ method sumTo (x : Int) return (res' : Int)
       res := res + i
       i := i + 1
     return res
+
+method callee (x : Int) return (res : Int)
+  ensures res = x + 1
+  do
+    return Pure.callee x
+
+method tempClash (_t0 : Int) (i_t0 : Int) return (res : Int)
+  ensures res = _t0 + 1 + i_t0 + 1
+  do
+    let mut z : Int := 0
+    let _t0' ← callee _t0
+    let _t1 ← callee i_t0
+    z := _t0' + _t1
+    return z
+
+method someEscCollision (_x : Int) (i_x : Int) return (res : Bool)
+  ensures res → _x > 0
+  do
+    return Pure.someEscCollision _x i_x
+
+method resAssignOnly (x : Int) return (res' : Int)
+  ensures res' = x
+  do
+    let mut res : Int := 0
+    res := 1
+    return x
