@@ -38,8 +38,30 @@ export type Expr =
   | { kind: "havoc"; type: Ty }
   | { kind: "default"; type: Ty }                              // default value of T (Lean: `(default : T)` via Inhabited). Only produced by the return-in-loop→break rewrite, which is Lean-gated since Dafny keeps native in-loop returns; hence no Dafny producer today.
 
+/** A match-arm pattern. Backend-neutral: `.some x`, `.syn seq`, `.none` are held
+ *  structurally and rendered to each backend's constructor syntax by its emitter
+ *  (`Some(x)` / `syn(seq)` in Dafny, `.some x` / `.syn seq` in Lean). */
+export type MatchPattern =
+  | { kind: "wild" }                                    // "_"
+  | { kind: "ctor"; ctor: string; binders: string[] };  // ".some x" ⇒ {ctor:"some", binders:["x"]}; ".none" ⇒ binders:[]
+
+export const pWild = (): MatchPattern => ({ kind: "wild" });
+export const pCtor = (ctor: string, ...binders: string[]): MatchPattern => ({ kind: "ctor", ctor, binders });
+
+/** Binder identifiers a pattern introduces (`[]` for wildcard / nullary ctor). */
+export function patternBinders(p: MatchPattern): string[] {
+  return p.kind === "ctor" ? p.binders : [];
+}
+export function patternCtor(p: MatchPattern): string | null {
+  return p.kind === "ctor" ? p.ctor : null;
+}
+/** Does the pattern bind `name`? */
+export function patternBinds(p: MatchPattern, name: string): boolean {
+  return patternBinders(p).includes(name);
+}
+
 export interface MatchArm {
-  pattern: string;    // ".syn seq", ".idle", "_"
+  pattern: MatchPattern;
   body: Expr;
 }
 
@@ -63,7 +85,7 @@ export type Stmt =
   | { kind: "assert"; expr: Expr; assumed?: boolean }
 
 export interface StmtMatchArm {
-  pattern: string;
+  pattern: MatchPattern;
   body: Stmt[];
 }
 
@@ -260,10 +282,6 @@ export function usesNameInStmts(stmts: Stmt[], name: string): boolean {
  *  from `usesNameInStmts` (expression references only): an unread or assign-only
  *  local still duplicate-declares against a method's out-parameter in Dafny. */
 export function bindsNameInStmts(stmts: Stmt[], name: string): boolean {
-  const patternBindsName = (p: string): boolean => {
-    const toks = p.match(/[A-Za-z_][A-Za-z0-9_']*/g) ?? [];
-    return (p.trimStart().startsWith(".") ? toks.slice(1) : toks).includes(name);
-  };
   return stmts.some(s => {
     switch (s.kind) {
       case "let": case "let-bind": case "ghostLet": return s.name === name;
@@ -271,7 +289,7 @@ export function bindsNameInStmts(stmts: Stmt[], name: string): boolean {
       case "forin": return s.idx === name || bindsNameInStmts(s.body, name);
       case "if": return bindsNameInStmts(s.then, name) || bindsNameInStmts(s.else, name);
       case "while": return bindsNameInStmts(s.body, name);
-      case "match": return s.arms.some(a => patternBindsName(a.pattern) || bindsNameInStmts(a.body, name));
+      case "match": return s.arms.some(a => patternBinds(a.pattern, name) || bindsNameInStmts(a.body, name));
       default: return false;
     }
   });

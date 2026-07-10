@@ -3,8 +3,8 @@
  * No logic, no type decisions — just serialization.
  */
 
-import type { Expr, Stmt, Decl, Module } from "./ir.js";
-import { anyExpr, usesNameInDecl } from "./ir.js";
+import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
+import { anyExpr, usesNameInDecl, patternBinders } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshName } from "./names.js";
 
@@ -183,6 +183,11 @@ let _unknownEmitted = false;  // across files in one run — the def file import
 // built only from decidable atoms (comparisons, Bool-returning calls) coerces fine
 // and stays in the more proof-friendly Prop form.
 let _boolCtx = false;
+
+/** Render a match pattern to Lean syntax: `_`, `.none`, `.some x`, `.syn seq`. */
+function renderLeanPattern(p: MatchPattern): string {
+  return p.kind === "wild" ? "_" : "." + [p.ctor, ...p.binders].join(" ");
+}
 
 // A Bool-valued atom that does NOT coerce to Prop: an inlined union discriminator
 // (lowered to a match-bool `match x with | .C .. => true | _ => false`) or a raw
@@ -455,7 +460,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // Always parenthesize inline matches — Lean parses alternatives greedily,
       // so any token after an arm body (`→`, another match's `|`, etc.) would
       // bleed into the last `.none` case without explicit bracketing.
-      const arms = e.arms.map(a => `| ${a.pattern} => ${emitExpr(a.body)}`);
+      const arms = e.arms.map(a => `| ${renderLeanPattern(a.pattern)} => ${emitExpr(a.body)}`);
       const scrut = typeof e.scrutinee === "string" ? e.scrutinee : emitExpr(e.scrutinee);
       return `(match ${scrut} with ${arms.join(" ")})`;
     }
@@ -552,10 +557,10 @@ function emitStmt(s: Stmt, indent: number): string {
       const scrut = typeof s.scrutinee === "string" ? s.scrutinee : emitExpr(s.scrutinee);
       // Option match (.some/.none) → emit as if/let for WPGen.if compatibility
       if (s.arms.length === 2) {
-        const someArm = s.arms.find(a => a.pattern.startsWith(".some "));
-        const noneArm = s.arms.find(a => a.pattern === ".none");
+        const someArm = s.arms.find(a => a.pattern.kind === "ctor" && a.pattern.ctor === "some");
+        const noneArm = s.arms.find(a => a.pattern.kind === "ctor" && a.pattern.ctor === "none");
         if (someArm && noneArm) {
-          const boundVar = someArm.pattern.slice(6); // strip ".some "
+          const boundVar = patternBinders(someArm.pattern)[0]; // ".some x" ⇒ "x"
           const hName = `h_${scrut.replace(/[^a-zA-Z0-9_]/g, "_")}`;
           const lines = [
             `${pad}if ${hName} : (${scrut}).isSome = true then`,
@@ -578,7 +583,7 @@ function emitStmt(s: Stmt, indent: number): string {
       // General match
       const lines = [`${pad}match ${scrut} with`];
       for (const arm of s.arms) {
-        lines.push(`${pad}| ${arm.pattern} =>`);
+        lines.push(`${pad}| ${renderLeanPattern(arm.pattern)} =>`);
         if (arm.body.length === 0) {
           lines.push(`${pad}  pure ()`);
         } else {
@@ -741,7 +746,7 @@ function emitPureExpr(e: Expr, indent: number): string {
     case "match": {
       const lines = [`${pad}match ${typeof e.scrutinee === "string" ? e.scrutinee : emitExpr(e.scrutinee)} with`];
       for (const arm of e.arms) {
-        lines.push(`${pad}| ${arm.pattern} =>`);
+        lines.push(`${pad}| ${renderLeanPattern(arm.pattern)} =>`);
         lines.push(emitPureExpr(arm.body, indent + 1));
       }
       return lines.join("\n");

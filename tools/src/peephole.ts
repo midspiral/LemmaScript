@@ -13,7 +13,8 @@
  *
  * Statement-level rule 1 also handles match-statement on m.get.
  */
-import type { Expr, Stmt, Decl, Module, MatchArm, StmtMatchArm } from "./ir.js";
+import type { Expr, Stmt, Decl, Module, MatchArm, StmtMatchArm, MatchPattern } from "./ir.js";
+import { patternCtor, patternBinders } from "./ir.js";
 
 // ── Generic walkers (same shape as transform.ts) ─────────────
 
@@ -61,19 +62,18 @@ function isMapGet(e: Expr): { obj: Expr; key: Expr; objTy: MethodCall["objTy"] }
   return { obj: e.obj, key: e.args[0], objTy: e.objTy };
 }
 
-/** Parse Some-arm pattern like ".some _val" — returns binder name, or null for ".some _" or unparseable. */
-function parseSomeBinder(pattern: string): string | null {
-  if (!pattern.startsWith(".some")) return null;
-  const rest = pattern.slice(5).trim();
-  if (rest === "" || rest === "_") return null;
-  return rest.split(/\s+/)[0];
+/** Binder of a Some arm — its name, or null for `.some _` / a non-`some` pattern. */
+function parseSomeBinder(p: MatchPattern): string | null {
+  if (patternCtor(p) !== "some") return null;
+  const b = patternBinders(p)[0];
+  return b === undefined || b === "_" ? null : b;
 }
 
 /** Identify a Some/None match's arms. */
-function getSomeNoneArms<A extends { pattern: string; body: any }>(arms: A[]): { someArm: A; noneArm: A; binder: string | null } | null {
+function getSomeNoneArms<A extends { pattern: MatchPattern; body: any }>(arms: A[]): { someArm: A; noneArm: A; binder: string | null } | null {
   if (arms.length !== 2) return null;
-  const someArm = arms.find(a => a.pattern.startsWith(".some"));
-  const noneArm = arms.find(a => a.pattern === ".none");
+  const someArm = arms.find(a => patternCtor(a.pattern) === "some");
+  const noneArm = arms.find(a => patternCtor(a.pattern) === "none");
   if (!someArm || !noneArm) return null;
   return { someArm, noneArm, binder: parseSomeBinder(someArm.pattern) };
 }

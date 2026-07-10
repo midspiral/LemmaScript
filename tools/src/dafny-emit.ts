@@ -2,7 +2,7 @@
  * Dafny emitter — IR → Dafny text.
  */
 
-import type { Expr, Stmt, Decl, Module } from "./ir.js";
+import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
 import { usesName, usesNameInDecl } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshName, userNames } from "./names.js";
@@ -1263,15 +1263,11 @@ function qualifyCtor(name: string, type?: string): string {
  */
 const CTOR_MAP: Record<string, string> = { "some": "Some", "none": "None" };
 
-function translatePattern(pattern: string): string {
-  if (pattern === "_") return "_";
-  const m = pattern.match(/^\.(\w+)\s*(.*)$/);
-  if (!m) return pattern;
-  const ctorName = CTOR_MAP[m[1]] ?? escapeName(m[1]);
-  const fields = m[2].trim();
-  if (!fields) return ctorName;
-  const fieldNames = fields.split(/\s+/).map(escapeName);
-  return `${ctorName}(${fieldNames.join(", ")})`;
+function translatePattern(p: MatchPattern): string {
+  if (p.kind === "wild") return "_";
+  const ctorName = CTOR_MAP[p.ctor] ?? escapeName(p.ctor);
+  if (p.binders.length === 0) return ctorName;
+  return `${ctorName}(${p.binders.map(escapeName).join(", ")})`;
 }
 
 
