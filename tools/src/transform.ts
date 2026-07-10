@@ -210,6 +210,11 @@ function isNat(ty: Ty): boolean { return ty.kind === "nat"; }
 function isIntegral(ty: Ty): boolean { return ty.kind === "int" || ty.kind === "nat"; }
 function isArray(ty: Ty): boolean { return ty.kind === "array"; }
 function isUser(ty: Ty): boolean { return ty.kind === "user"; }
+function isRecordType(ty: Ty): boolean {
+  if (ty.kind !== "user") return false;
+  const base = ty.name.includes("<") ? ty.name.slice(0, ty.name.indexOf("<")) : ty.name;
+  return _typeDecls.find(d => d.name === base)?.kind === "record";
+}
 
 /** Truthiness test for a *lowered* value of source type `ty`, used by `||`
  *  falsiness lowering. Mirrors narrow.ts's `canBeFalsy`: only int/nat/string/bool
@@ -677,10 +682,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const baseName = e.obj.ty.name.includes("<") ? e.obj.ty.name.slice(0, e.obj.ty.name.indexOf("<")) : e.obj.ty.name;
         const decl = _typeDecls.find(d => d.name === baseName && d.kind === "discriminated-union");
         if (decl?.variants?.some(v => v.fields.some(f => f.name === e.field))) {
-          return { kind: "field", obj: transformExpr(e.obj), field: e.field, fromUnion: baseName };
+          return { kind: "field", obj: transformExpr(e.obj), field: e.field, fromUnion: baseName, datatypeField: true };
         }
       }
-      return { kind: "field", obj: transformExpr(e.obj), field: e.field };
+      return { kind: "field", obj: transformExpr(e.obj), field: e.field, datatypeField: isRecordType(e.obj.ty) };
 
     case "index": {
       const idx = transformExpr(e.idx);

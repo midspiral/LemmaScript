@@ -18,7 +18,7 @@ export type Expr =
   | { kind: "binop"; op: string; left: Expr; right: Expr }
   | { kind: "unop"; op: string; expr: Expr }
   | { kind: "app"; fn: string; args: Expr[]; ctorOf?: string }  // f a b; ctorOf set ⇒ fn is a datatype constructor of that (base) type. Dafny takes the bare name `fn(args)`; Lean must qualify it as `ctorOf.fn args`.
-  | { kind: "field"; obj: Expr; field: string; fromUnion?: string; ctor?: string }   // x.res, arr.size; fromUnion set ⇒ `field` is a destructor of that (base) discriminated-union type. Dafny reads `x.field` directly; Lean must `match` since multi-ctor inductives have no field projections. ctor pins the owning constructor when several variants share the field name.
+  | { kind: "field"; obj: Expr; field: string; fromUnion?: string; ctor?: string; datatypeField?: boolean }   // x.res, arr.size; fromUnion set ⇒ `field` is a destructor of that (base) discriminated-union type. Dafny reads `x.field` directly; Lean must `match` since multi-ctor inductives have no field projections. ctor pins the owning constructor when several variants share the field name. datatypeField set ⇒ `field` is a declared datatype field (proven by the transform), so the Dafny emitter projects it rather than treating `size`/`length`/`keys` as the collection intrinsic (`|obj|`, `.Keys`).
   | { kind: "toNat"; expr: Expr }                               // expr.toNat
   | { kind: "toReal"; expr: Expr }                             // int/nat → real coercion
   | { kind: "index"; arr: Expr; idx: Expr }                // arr[idx]!

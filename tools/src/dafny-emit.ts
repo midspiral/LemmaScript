@@ -475,8 +475,10 @@ function emitExpr(e: Expr): string {
 
     case "field": {
       const obj = emitExpr(e.obj);
-      if (e.field === "size" || e.field === "length" || e.field === "collectionSize") return `|${obj}|`;
-      if (e.field === "keys") return `${obj}.Keys`;
+      // `size`/`length`/`keys` are collection intrinsics unless the transform
+      // proved this is a declared datatype field (then project it).
+      if (!e.datatypeField && (e.field === "size" || e.field === "length" || e.field === "collectionSize")) return `|${obj}|`;
+      if (!e.datatypeField && e.field === "keys") return `${obj}.Keys`;
       if (e.field === "toNat") return obj;
       return `${obj}.${escapeName(e.field)}`;
     }
