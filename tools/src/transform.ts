@@ -6,8 +6,8 @@
  */
 
 import type { TExpr, TStmt, TFunction, TModule, Ty } from "./typedir.js";
-import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, StmtMatchArm, ConstDecl } from "./ir.js";
-import { anyExprInStmts } from "./ir.js";
+import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, StmtMatchArm, ConstDecl, MatchPattern } from "./ir.js";
+import { anyExprInStmts, pWild, pCtor, patternBinders, patternBinds, patternCtor } from "./ir.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
@@ -73,12 +73,6 @@ function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
   }
 }
 
-/** Binders a match-arm pattern string (`.Ctor a b`, `_x_val`, `_`) introduces. */
-function patternBinders(pattern: string): string[] {
-  const toks = pattern.match(/[A-Za-z_][A-Za-z0-9_']*/g) ?? [];
-  return pattern.trimStart().startsWith(".") ? toks.slice(1) : toks;
-}
-
 /** Rename free occurrences of `from` to `to`, stopping at every construct that
  *  rebinds `from` — lambda params, `let`/`let-bind`/`ghostLet` (shadows the
  *  rest of the block), `match` arm patterns, `forall`/`exists`, and `for-in`
@@ -96,7 +90,7 @@ export function renameFreeVar(e: Expr, from: string, to: string): Expr {
       const scr = typeof x.scrutinee === "string"
         ? (x.scrutinee === from ? to : x.scrutinee) : mapExpr(x.scrutinee, f);
       return { ...x, scrutinee: scr, arms: x.arms.map(a =>
-        patternBinders(a.pattern).includes(from) ? a : { ...a, body: mapExpr(a.body, f) }) };
+        patternBinds(a.pattern, from) ? a : { ...a, body: mapExpr(a.body, f) }) };
     }
     if (x.kind === "lambda") {
       if (x.params.some(p => p.name === from)) return x;   // param shadows `from`
@@ -207,9 +201,8 @@ function matchBinder(fieldName: string, prefix?: string): string {
 }
 
 /** Build a match arm pattern like `.VariantName _v_field1 _v_field2` from variant info. */
-function buildMatchPattern(variantName: string, fields: { name: string }[], scopePrefix?: string): string {
-  if (fields.length === 0) return `.${variantName}`;
-  return `.${variantName} ${fields.map(f => matchBinder(f.name, scopePrefix)).join(" ")}`;
+function buildMatchPattern(variantName: string, fields: { name: string }[], scopePrefix?: string): MatchPattern {
+  return pCtor(variantName, ...fields.map(f => matchBinder(f.name, scopePrefix)));
 }
 
 const _forofCounters = new Map<string, number>();
@@ -428,8 +421,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         return {
           kind: "match", scrutinee: lowerExpr(e.expr, binds),
           arms: [
-            { pattern: `.some ${bound}`, body: truthy ? { kind: "unop", op: "¬", expr: truthy } : { kind: "bool", value: false } },
-            { pattern: ".none", body: { kind: "bool", value: true } },
+            { pattern: pCtor("some", bound), body: truthy ? { kind: "unop", op: "¬", expr: truthy } : { kind: "bool", value: false } },
+            { pattern: pCtor("none"), body: { kind: "bool", value: true } },
           ],
         };
       }
@@ -482,8 +475,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           return {
             kind: "match", scrutinee: optExpr,
             arms: [
-              { pattern: ".some _", body: { kind: "bool", value: !isNone } },
-              { pattern: ".none", body: { kind: "bool", value: isNone } },
+              { pattern: pCtor("some", "_"), body: { kind: "bool", value: !isNone } },
+              { pattern: pCtor("none"), body: { kind: "bool", value: isNone } },
             ],
           };
         }
@@ -500,8 +493,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         return {
           kind: "match", scrutinee: optExpr,
           arms: [
-            { pattern: `.some ${bound}`, body: { kind: "binop", op: cmpOp, left: { kind: "var", name: bound }, right: valExpr } },
-            { pattern: ".none", body: { kind: "bool", value: noneVal } },
+            { pattern: pCtor("some", bound), body: { kind: "binop", op: cmpOp, left: { kind: "var", name: bound }, right: valExpr } },
+            { pattern: pCtor("none"), body: { kind: "bool", value: noneVal } },
           ],
         };
       }
@@ -518,11 +511,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         return {
           kind: "match", scrutinee: optExpr,
           arms: [
-            { pattern: `.some ${bound}`, body: {
+            { pattern: pCtor("some", bound), body: {
               kind: "if", cond: truthy,
               then: { kind: "app", fn: "Some", args: [{ kind: "var", name: bound }] },
               else: { kind: "var", name: "undefined" } } },
-            { pattern: ".none", body: { kind: "var", name: "undefined" } },
+            { pattern: pCtor("none"), body: { kind: "var", name: "undefined" } },
           ],
         };
       }
@@ -541,8 +534,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         return {
           kind: "match", scrutinee: optExpr,
           arms: [
-            { pattern: `.some ${bound}`, body: someBody },
-            { pattern: ".none", body: defaultExpr },
+            { pattern: pCtor("some", bound), body: someBody },
+            { pattern: pCtor("none"), body: defaultExpr },
           ],
         };
       }
@@ -992,8 +985,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return {
         kind: "match", scrutinee,
         arms: [
-          { pattern: `.some ${e.binder}`, body: someBody },
-          { pattern: ".none", body: noneBody },
+          { pattern: pCtor("some", e.binder), body: someBody },
+          { pattern: pCtor("none"), body: noneBody },
         ],
       };
     }
@@ -1033,7 +1026,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.fallthrough) {
         let body = lowerExpr(e.fallthrough, binds);
         if (wrapOpt) body = wrapOptionalBranch(body, e.fallthrough);
-        arms.push({ pattern: "_", body });
+        arms.push({ pattern: pWild(), body });
       }
       return { kind: "match", scrutinee: varName ?? scrutinee, arms };
     }
@@ -1077,7 +1070,7 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): Expr | null {
   let rhs = transformExpr(e.right);
   rhs = replaceFieldAccess(rhs, obj.name, fields);
 
-  return { kind: "match", scrutinee: obj.name, arms: [{ pattern, body: rhs }, { pattern: "_", body: { kind: "bool", value: true } }] };
+  return { kind: "match", scrutinee: obj.name, arms: [{ pattern, body: rhs }, { pattern: pWild(), body: { kind: "bool", value: true } }] };
 }
 
 function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; tsType: string }[]): Expr {
@@ -1253,8 +1246,8 @@ function matchToIfChains(stmts: Stmt[]): Stmt[] {
     if (s.kind !== "match") return [s];
 
     const arms = s.arms.map(a => ({ ...a, body: matchToIfChains(a.body) }));
-    const ctorArms = arms.filter(a => a.pattern.trim() !== "_");
-    const firstCtor = ctorArms[0]?.pattern.trim().split(/\s+/)[0].replace(/^\./, "");
+    const ctorArms = arms.filter(a => a.pattern.kind !== "wild");
+    const firstCtor = ctorArms[0] ? patternCtor(ctorArms[0].pattern) : undefined;
     const decl = firstCtor
       ? _typeDecls.find(d => (d.kind === "discriminated-union" || d.kind === "string-union") &&
           ((d.variants?.some(v => v.name === firstCtor)) || (d.values?.includes(firstCtor))))
@@ -1262,14 +1255,13 @@ function matchToIfChains(stmts: Stmt[]): Stmt[] {
     if (!decl) return [{ ...s, arms }]; // not a user union (e.g. Option) — leave as match
 
     const scrutExpr: Expr = typeof s.scrutinee === "string" ? { kind: "var", name: s.scrutinee } : s.scrutinee;
-    const defaultArm = arms.find(a => a.pattern.trim() === "_");
+    const defaultArm = arms.find(a => a.pattern.kind === "wild");
     let elseBranch: Stmt[] = defaultArm ? defaultArm.body : [];
     for (let k = ctorArms.length - 1; k >= 0; k--) {
       const armBody = ctorArms[k].body;
       if (armBody.length === 0) continue; // empty arm (no-op) — let it fall through to `else`
-      const toks = ctorArms[k].pattern.trim().split(/\s+/);
-      const ctor = toks[0].replace(/^\./, "");
-      const binders = toks.slice(1);
+      const ctor = patternCtor(ctorArms[k].pattern) ?? "";
+      const binders = patternBinders(ctorArms[k].pattern);
       const variant = decl.variants?.find(v => v.name === ctor);
       // Discriminator condition. A nullary discriminated-union constructor would
       // need `DecidableEq` for `x = .Ctor` (which such unions don't derive), so
@@ -1277,8 +1269,8 @@ function matchToIfChains(stmts: Stmt[]): Stmt[] {
       // string-unions derive DecidableEq, so `=` is fine there.
       const cond: Expr = decl.kind === "discriminated-union" && binders.length === 0
         ? { kind: "match", scrutinee: scrutExpr, arms: [
-            { pattern: `.${ctor}`, body: { kind: "bool", value: true } },
-            { pattern: "_", body: { kind: "bool", value: false } }] }
+            { pattern: pCtor(ctor), body: { kind: "bool", value: true } },
+            { pattern: pWild(), body: { kind: "bool", value: false } }] }
         : { kind: "binop", op: "=", left: scrutExpr, right: { kind: "constructor", name: ctor, type: decl.name } };
       // Bind only the constructor-field binders the body actually uses, pinning the
       // owning ctor so the destructor doesn't guess (variants share field names).
@@ -1676,8 +1668,8 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
         return [{
           kind: "match", scrutinee,
           arms: [
-            { pattern: `.some ${s.binder}`, body: someBody },
-            { pattern: ".none", body: noneBody },
+            { pattern: pCtor("some", s.binder), body: someBody },
+            { pattern: pCtor("none"), body: noneBody },
           ],
         }];
       }
@@ -1711,9 +1703,9 @@ function buildMatchArms<T>(
   cases: { name: string; body: TStmt[] }[],
   varName: string | undefined, typeName: string | undefined, typeDecls: TypeDeclInfo[],
   transformBody: (body: TStmt[], varName: string | undefined, fields: { name: string; tsType: string }[]) => T | null
-): { pattern: string; body: T }[] | null {
+): { pattern: MatchPattern; body: T }[] | null {
   const decl = typeName ? typeDecls.find(d => d.name === typeName) : undefined;
-  const arms: { pattern: string; body: T }[] = [];
+  const arms: { pattern: MatchPattern; body: T }[] = [];
   for (const c of cases) {
     const variant = decl?.variants?.find(v => v.name === c.name);
     const fields = variant?.fields ?? [];
@@ -1782,7 +1774,7 @@ function emitMatchStmt(
       const body = transformArmBody(fallthrough, remaining.fields);
       arms.push({ pattern, body });
     } else {
-      arms.push({ pattern: "_", body: transformStmts(fallthrough, typeDecls) });
+      arms.push({ pattern: pWild(), body: transformStmts(fallthrough, typeDecls) });
     }
   }
   return { kind: "match", scrutinee: isPath ? transformExpr(scrutinee) : prefix, arms };
@@ -1838,7 +1830,7 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
     ? buildMatchArms(cases, undefined, ef.enumTyName, typeDecls, (body) => transformStmts(body, typeDecls))!
     : buildMatchArms(cases, s.expr.kind === "var" ? s.expr.name : "?", s.expr.ty.kind === "user" ? s.expr.ty.name : undefined, typeDecls,
         (body, vn, fields) => transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls))!;
-  if (s.defaultBody.length > 0) arms.push({ pattern: "_", body: transformStmts(s.defaultBody, typeDecls) });
+  if (s.defaultBody.length > 0) arms.push({ pattern: pWild(), body: transformStmts(s.defaultBody, typeDecls) });
   return { kind: "match", scrutinee: ef ? ef.scrutinee : (s.expr.kind === "var" ? s.expr.name : "?"), arms };
 }
 
@@ -1983,8 +1975,8 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
           return {
             kind: "match", scrutinee,
             arms: [
-              { pattern: `.some ${s.binder}`, body: someExpr },
-              { pattern: ".none", body: noneExpr },
+              { pattern: pCtor("some", s.binder), body: someExpr },
+              { pattern: pCtor("none"), body: noneExpr },
             ],
           };
         }
@@ -2005,7 +1997,7 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
     if (s.defaultBody.length > 0) {
       const body = transformPureBody(s.defaultBody, typeDecls);
       if (!body) return null;
-      arms.push({ pattern: "_", body });
+      arms.push({ pattern: pWild(), body });
     }
     return { kind: "match", scrutinee: ef.scrutinee, arms };
   }
@@ -2024,7 +2016,7 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
   if (s.defaultBody.length > 0) {
     const body = transformPureBody(s.defaultBody, typeDecls);
     if (!body) return null;
-    arms.push({ pattern: "_", body });
+    arms.push({ pattern: pWild(), body });
   }
   if (s.expr.kind !== "var") return null;
   return { kind: "match", scrutinee: s.expr.name, arms };
@@ -2066,7 +2058,7 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
     } else {
       const body = transformPureBody(chain.fallthrough, typeDecls);
       if (!body) return null;
-      arms.push({ pattern: "_", body });
+      arms.push({ pattern: pWild(), body });
     }
   }
   return { kind: "match", scrutinee: chain.varName, arms };
