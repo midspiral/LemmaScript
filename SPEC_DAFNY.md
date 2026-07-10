@@ -105,7 +105,7 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 |--------|------|---------|
 | `StringIndexOf` | `s.indexOf(sub)`, `s.indexOf(sub, from)`, `s.includes(sub)` | Recursive string search (also provides `StringIndexOfFrom`) |
 | `StringSplit` | `s.split(d)` | Axiomatic split (`1 <= \|res\| <= \|s\| + 1`) |
-| `StringTrim` | `s.trim()` / `s.trimEnd()` / `s.trimStart()` | Trim (also provides `StringTrimRight` / `StringTrimLeft`) |
+| `StringTrim` | `s.trim()` / `s.trimEnd()` / `s.trimStart()` | Trim (also provides `StringTrimRight` / `StringTrimLeft`); strips the full ECMAScript whitespace set via `IsJSWhitespace`, not just `' '` |
 | `StringToLower` / `StringToUpper` | `s.toLowerCase()` / `s.toUpperCase()` | Case folding |
 
 ---
