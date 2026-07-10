@@ -408,6 +408,27 @@ function ruleImplOptional(e: TExpr): TExpr | null {
   };
 }
 
+type OptChain = Extract<TExpr, { kind: "optChain" }>;
+
+/** Apply an optional chain's steps (field / index / call) to a base expr —
+ *  shared by `ruleOptChain` (base = binder) and `ruleOptChainIndex` (base = arr[i]). */
+function applyChain(body: TExpr, chain: OptChain["chain"]): TExpr {
+  for (const step of chain) {
+    if (step.kind === "field") body = { kind: "field", obj: body, field: step.name, ty: step.ty };
+    else if (step.kind === "index") body = { kind: "index", obj: body, idx: step.idx, ty: step.ty };
+    else body = { kind: "call", fn: body, args: step.args, ty: step.ty, callKind: step.callKind };
+  }
+  return body;
+}
+
+/** `0 <= idx && idx < arr.length` — the in-bounds guard for an array index. */
+function arrayBoundsCond(arr: TExpr, idx: TExpr): TExpr {
+  const len: TExpr = { kind: "field", obj: arr, field: "length", ty: { kind: "int" } };
+  const lo: TExpr = { kind: "binop", op: "<=", left: { kind: "num", value: 0, ty: { kind: "int" } }, right: idx, ty: { kind: "bool" } };
+  const hi: TExpr = { kind: "binop", op: "<", left: idx, right: len, ty: { kind: "bool" } };
+  return { kind: "binop", op: "&&", left: lo, right: hi, ty: { kind: "bool" } };
+}
+
 /** Rule (expression): `left ?? right` — nullish coalescing.
  *  → `someMatch left { Some(_v) => _v, None => right }`.
  *  Single-evaluation: scrutinee may be any expression. */
@@ -435,11 +456,7 @@ function ruleNullishIndex(e: TExpr): TExpr | null {
   if (e.kind !== "nullish") return null;
   if (e.left.kind !== "index") return null;
   if (e.left.obj.ty.kind !== "array") return null;
-  const idx = e.left.idx;
-  const len: TExpr = { kind: "field", obj: e.left.obj, field: "length", ty: { kind: "int" } };
-  const lo: TExpr = { kind: "binop", op: "<=", left: { kind: "num", value: 0, ty: { kind: "int" } }, right: idx, ty: { kind: "bool" } };
-  const hi: TExpr = { kind: "binop", op: "<", left: idx, right: len, ty: { kind: "bool" } };
-  const cond: TExpr = { kind: "binop", op: "&&", left: lo, right: hi, ty: { kind: "bool" } };
+  const cond = arrayBoundsCond(e.left.obj, e.left.idx);
   return { kind: "conditional", cond, then: e.left, else: e.right, ty: e.ty };
 }
 
@@ -455,21 +472,8 @@ function ruleOptChainIndex(e: TExpr): TExpr | null {
   if (e.kind !== "optChain") return null;
   if (e.obj.kind !== "index") return null;
   if (e.obj.obj.ty.kind !== "array") return null;
-  const idx = e.obj.idx;
-  const len: TExpr = { kind: "field", obj: e.obj.obj, field: "length", ty: { kind: "int" } };
-  const lo: TExpr = { kind: "binop", op: "<=", left: { kind: "num", value: 0, ty: { kind: "int" } }, right: idx, ty: { kind: "bool" } };
-  const hi: TExpr = { kind: "binop", op: "<", left: idx, right: len, ty: { kind: "bool" } };
-  const cond: TExpr = { kind: "binop", op: "&&", left: lo, right: hi, ty: { kind: "bool" } };
-  let body: TExpr = e.obj; // arr[i] — in bounds under `cond`
-  for (const step of e.chain) {
-    if (step.kind === "field") {
-      body = { kind: "field", obj: body, field: step.name, ty: step.ty };
-    } else if (step.kind === "index") {
-      body = { kind: "index", obj: body, idx: step.idx, ty: step.ty };
-    } else {
-      body = { kind: "call", fn: body, args: step.args, ty: step.ty, callKind: step.callKind };
-    }
-  }
+  const cond = arrayBoundsCond(e.obj.obj, e.obj.idx);
+  const body = applyChain(e.obj, e.chain); // arr[i] — in bounds under `cond`
   const undef: TExpr = { kind: "var", name: "undefined", ty: { kind: "void" } };
   return { kind: "conditional", cond, then: body, else: undef, ty: e.ty };
 }
@@ -483,16 +487,7 @@ function ruleOptChain(e: TExpr): TExpr | null {
   if (e.obj.ty.kind !== "optional") return null;
   const innerTy = e.obj.ty.inner;
   const binder = freshName(`_oc${_ocCounter++}_val`);
-  let body: TExpr = { kind: "var", name: binder, ty: innerTy };
-  for (const step of e.chain) {
-    if (step.kind === "field") {
-      body = { kind: "field", obj: body, field: step.name, ty: step.ty };
-    } else if (step.kind === "index") {
-      body = { kind: "index", obj: body, idx: step.idx, ty: step.ty };
-    } else {
-      body = { kind: "call", fn: body, args: step.args, ty: step.ty, callKind: step.callKind };
-    }
-  }
+  const body = applyChain({ kind: "var", name: binder, ty: innerTy }, e.chain);
   const noneBody: TExpr = { kind: "var", name: "undefined", ty: { kind: "void" } };
   return {
     kind: "someMatch",
@@ -577,28 +572,34 @@ function ruleConditionalOptionalTruthy(e: TExpr): TExpr | null {
   };
 }
 
-/** Extract an optional check from any position in an `&&` chain.
- *  `(x !== undefined && b) && c` → { check, restCond: b && c }.
- *  `a && (x !== undefined)`     → { check, restCond: a }.
- *  Conjunct order doesn't carry semantic weight, so either side is fine. */
-function extractLeftmostOptionalCheck(cond: TExpr): {
-  check: NonNullable<ReturnType<typeof parseSimpleOptionalCheck>>;
-  restCond: TExpr;
-} | null {
+/** Find the leftmost `parse`-matching conjunct anywhere in an `&&` chain,
+ *  returning it plus the remaining conjunction. Conjunct order doesn't carry
+ *  semantic weight, so either side is fine. Shared by the optional and
+ *  Array.isArray chain extractors — they differ only in `parse`.
+ *  `(x !== undefined && b) && c` → { check, restCond: b && c }. */
+function extractLeftmostCheck<C>(cond: TExpr, parse: (e: TExpr) => C | null): { check: C; restCond: TExpr } | null {
   if (cond.kind !== "binop" || cond.op !== "&&") return null;
-  const leftCheck = parseSimpleOptionalCheck(cond.left);
-  if (leftCheck && !leftCheck.negated) return { check: leftCheck, restCond: cond.right };
-  const rightCheck = parseSimpleOptionalCheck(cond.right);
-  if (rightCheck && !rightCheck.negated) return { check: rightCheck, restCond: cond.left };
+  const left = parse(cond.left);
+  if (left) return { check: left, restCond: cond.right };
+  const right = parse(cond.right);
+  if (right) return { check: right, restCond: cond.left };
   if (cond.left.kind === "binop" && cond.left.op === "&&") {
-    const inner = extractLeftmostOptionalCheck(cond.left);
+    const inner = extractLeftmostCheck(cond.left, parse);
     if (inner) return { check: inner.check, restCond: { ...cond, left: inner.restCond } as TExpr };
   }
   if (cond.right.kind === "binop" && cond.right.op === "&&") {
-    const inner = extractLeftmostOptionalCheck(cond.right);
+    const inner = extractLeftmostCheck(cond.right, parse);
     if (inner) return { check: inner.check, restCond: { ...cond, right: inner.restCond } as TExpr };
   }
   return null;
+}
+
+/** `&&`-chain extractor for a positive optional check. */
+function extractLeftmostOptionalCheck(cond: TExpr) {
+  return extractLeftmostCheck(cond, e => {
+    const c = parseSimpleOptionalCheck(e);
+    return c && !c.negated ? c : null;
+  });
 }
 
 /** Rule: `if (x !== undefined && rest) then` (no else) where x is a pure
@@ -704,29 +705,11 @@ function isNarrowablePath(e: TExpr): boolean {
   return false;
 }
 
-/** Mirror of `extractLeftmostOptionalCheck` for synth-array-union checks:
- *  finds `Array.isArray(path)` somewhere in a `&&` chain, returns it plus
- *  the remaining conjunction. The check must be the positive form (negated
- *  `!Array.isArray(...)` would narrow to the wrong variant for then-body
- *  consumers, so we leave those to the existing untouched-conditional path). */
-function extractLeftmostArrayIsArrayCheck(cond: TExpr): {
-  check: NonNullable<ReturnType<typeof parseArrayIsArrayCall>>;
-  restCond: TExpr;
-} | null {
-  if (cond.kind !== "binop" || cond.op !== "&&") return null;
-  const leftCheck = parseArrayIsArrayCall(cond.left);
-  if (leftCheck) return { check: leftCheck, restCond: cond.right };
-  const rightCheck = parseArrayIsArrayCall(cond.right);
-  if (rightCheck) return { check: rightCheck, restCond: cond.left };
-  if (cond.left.kind === "binop" && cond.left.op === "&&") {
-    const inner = extractLeftmostArrayIsArrayCheck(cond.left);
-    if (inner) return { check: inner.check, restCond: { ...cond, left: inner.restCond } as TExpr };
-  }
-  if (cond.right.kind === "binop" && cond.right.op === "&&") {
-    const inner = extractLeftmostArrayIsArrayCheck(cond.right);
-    if (inner) return { check: inner.check, restCond: { ...cond, right: inner.restCond } as TExpr };
-  }
-  return null;
+/** `&&`-chain extractor for `Array.isArray(path)` (positive form only — a negated
+ *  `!Array.isArray(...)` would narrow to the wrong variant for then-body consumers,
+ *  so those are left to the untouched-conditional path). */
+function extractLeftmostArrayIsArrayCheck(cond: TExpr) {
+  return extractLeftmostCheck(cond, parseArrayIsArrayCall);
 }
 
 /** Detect `x.kind === "variant"`, `'key' in x`, or `Array.isArray(x)` (synth
