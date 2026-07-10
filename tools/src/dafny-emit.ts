@@ -1037,22 +1037,39 @@ const SEQ_SORT_BY = `function {:axiom} SeqSortBy<T(==,!new)>(s: seq<T>, cmp: (T,
   ensures |SeqSortBy(s, cmp)| == |s|
   ensures forall i: int, j: int :: 0 <= i <= j < |SeqSortBy(s, cmp)| ==> cmp(SeqSortBy(s, cmp)[i], SeqSortBy(s, cmp)[j]) <= 0`;
 
-const STRING_TRIM = `function StringTrimLeft(s: string): string
+// TS/JS String.prototype.trim() strips ECMAScript WhiteSpace ∪ LineTerminator:
+// Unicode general-category Zs plus TAB/VT/FF/CR/LF, LS/PS, and the BOM — NOT just
+// U+0020, and NOT U+0085 (NEL, which is Cc). See
+// https://tc39.es/ecma262/#sec-white-space and
+// https://tc39.es/ecma262/#sec-line-terminators.
+// `\\U{..}` are Dafny char escapes (not JS: the string
+// is emitted verbatim), so the enumeration below is Dafny source, not decoded.
+const STRING_TRIM = `predicate IsJSWhitespace(c: char)
+{
+  c == '\\U{0009}' || c == '\\U{000A}' || c == '\\U{000B}' || c == '\\U{000C}' || c == '\\U{000D}' ||
+  c == '\\U{0020}' || c == '\\U{00A0}' || c == '\\U{1680}' ||
+  ('\\U{2000}' <= c <= '\\U{200A}') ||
+  c == '\\U{2028}' || c == '\\U{2029}' || c == '\\U{202F}' || c == '\\U{205F}' ||
+  c == '\\U{3000}' || c == '\\U{FEFF}'
+}
+
+function StringTrimLeft(s: string): string
   ensures |StringTrimLeft(s)| <= |s|
-  ensures StringTrimLeft(s) == "" || (|StringTrimLeft(s)| > 0 && StringTrimLeft(s)[0] != ' ')
+  ensures StringTrimLeft(s) == "" || (|StringTrimLeft(s)| > 0 && !IsJSWhitespace(StringTrimLeft(s)[0]))
   decreases |s|
 {
   if |s| == 0 then ""
-  else if s[0] == ' ' then StringTrimLeft(s[1..])
+  else if IsJSWhitespace(s[0]) then StringTrimLeft(s[1..])
   else s
 }
 
 function StringTrimRight(s: string): string
   ensures |StringTrimRight(s)| <= |s|
+  ensures StringTrimRight(s) == "" || (|StringTrimRight(s)| > 0 && !IsJSWhitespace(StringTrimRight(s)[|StringTrimRight(s)|-1]))
   decreases |s|
 {
   if |s| == 0 then ""
-  else if s[|s|-1] == ' ' then StringTrimRight(s[..|s|-1])
+  else if IsJSWhitespace(s[|s|-1]) then StringTrimRight(s[..|s|-1])
   else s
 }
 
