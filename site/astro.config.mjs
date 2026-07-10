@@ -85,6 +85,7 @@ export default defineConfig({
     starlight({
       customCss: ["./src/styles/custom.css"],
       plugins: [starlightLinksValidator()],
+      favicon: "/favicon.svg",
       title: "LemmaScript",
       description: "A verification toolchain for TypeScript — generate Lean 4 or Dafny from annotated code.",
       social: [{ icon: "github", label: "GitHub", href: "https://github.com/midspiral/LemmaScript" }],
