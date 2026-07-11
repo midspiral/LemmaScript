@@ -158,6 +158,8 @@ jobs:
             branch: main
           - repo: midspiral/pi-lemmascript
             branch: lemmascript
+          - repo: midspiral/flue-lemmascript
+            branch: lemmascript
           - repo: midspiral/balanced-match-lemmascript
             branch: lemmascript
           - repo: midspiral/guardians-lemmascript
