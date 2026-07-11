@@ -961,13 +961,16 @@ The spec body is purely additive — `regen` three-way-merges and preserves user
 | `Record<K, V>` | `Std.HashMap K' V'` | `map<K', V'>` |
 | `(a: T1, b: T2) => R` (function type) | — | `(T1, T2) -> R` (typically used in a `type Foo = (...) => R` alias; lambda params passed to a callee with a `Foo`-typed parameter get inferred types) |
 | `unknown` | `Int` | `int` |
-| `[T, T, ...]` (tuple) | `Array T'` | `seq<T'>` |
+| `[A, B, ...]` (heterogeneous tuple) | `A' × B' × ...` | `(A', B', ...)` |
+| `[T, T, ...]` (homogeneous tuple) | `Array T'` | `seq<T'>` |
 | `<T extends Base>` (record/nominal bound) | `T` erased to `Base` | `T` erased to `Base` |
 | `<T>` / `<T extends U>` (unbounded, or union/intersection bound) | `T` kept as type param (bound dropped) | `T` kept as type param (bound dropped) |
 | `A \| B` (union param) | field intersection type | field intersection type |
 | Anything else | Pass through | Pass through |
 
 `lsc` reads parameter and variable types from ts-morph. Primitive types are mapped per the table. User-defined types (like `State`, `Event`) are passed through by name — the corresponding backend type is generated from the TS type declaration.
+
+**Tuples.** A tuple type lowers to a native backend tuple (`(A, B)` in Dafny, `A × B` in Lean) only when its element types differ; a *homogeneous* tuple (`[number, number]`) lowers to `seq`/`Array` instead, since a sequence is a superset of what a same-typed tuple offers (dynamic index, `.length`, `.map`). The same homogeneity rule applies to an unannotated array literal: `[1, "a"]` is a tuple, `[1, 2, 3]` a sequence; an explicit expected type wins. Tuple element access **requires a compile-time integer-literal index** — `t[0]`, `t[1]` — because a tuple has a distinct type per slot, so a runtime index has neither a single result type nor a backend projection (`t.0`/`t.1`). A non-literal index into a tuple is a `lsc` error. `const [a, b] = t` destructuring works (it desugars to per-slot access). See [`examples/tuples.ts`](examples/tuples.ts).
 
 ### 6.1.1 BigInt
 

@@ -18,6 +18,7 @@ export type Ty =
   | { kind: "string"; values?: string[] }   // values: members of an inline string-union (`"a" | "b"`), kept for record-index-by-enum
   | { kind: "void" }
   | { kind: "array"; elem: Ty }
+  | { kind: "tuple"; elems: Ty[] }           // heterogeneous fixed-arity tuple (`[A, B]`); homogeneous tuples lower to `array`
   | { kind: "map"; key: Ty; value: Ty }
   | { kind: "set"; elem: Ty }
   | { kind: "optional"; inner: Ty }
@@ -28,6 +29,38 @@ export type Ty =
 /** True for an int/nat that came from a TS `bigint` (integer division semantics). */
 export function isBigInt(ty: Ty): boolean {
   return (ty.kind === "int" || ty.kind === "nat") && !!ty.big;
+}
+
+/** Structural equality on Ty. Used to decide whether a tuple type is homogeneous
+ *  (all elements equal ⇒ lower to `seq`) vs heterogeneous (⇒ keep as `tuple`). */
+export function tyEqual(a: Ty, b: Ty): boolean {
+  if (a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "array": return tyEqual(a.elem, (b as typeof a).elem);
+    case "set":   return tyEqual(a.elem, (b as typeof a).elem);
+    case "tuple": {
+      const bt = b as typeof a;
+      return a.elems.length === bt.elems.length && a.elems.every((e, i) => tyEqual(e, bt.elems[i]));
+    }
+    case "map": {
+      const bm = b as typeof a;
+      return tyEqual(a.key, bm.key) && tyEqual(a.value, bm.value);
+    }
+    case "optional": return tyEqual(a.inner, (b as typeof a).inner);
+    case "user":     return a.name === (b as typeof a).name;
+    case "fn": {
+      const bf = b as typeof a;
+      return a.params.length === bf.params.length
+        && a.params.every((p, i) => tyEqual(p, bf.params[i]))
+        && tyEqual(a.result, bf.result);
+    }
+    case "string": {
+      const bs = b as typeof a;
+      return JSON.stringify(a.values ?? null) === JSON.stringify(bs.values ?? null);
+    }
+    case "int": case "nat": return !!a.big === !!(b as typeof a).big;
+    case "bool": case "real": case "void": case "unknown": return true;   // no payload
+  }
 }
 
 export type CallKind = "pure" | "method" | "spec-pure" | "unknown"

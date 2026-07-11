@@ -39,6 +39,13 @@ function tyToLean(ty: Ty): string {
       const elem = tyToLean(ty.elem);
       return elem.includes(" ") ? `Array (${elem})` : `Array ${elem}`;
     }
+    case "tuple":
+      // Right-nested Prod: `A × B × C` = `A × (B × C)`. Parenthesize any element
+      // whose rendering has a space so it binds tighter than `×` (e.g. `A → B`).
+      return ty.elems.map(el => {
+        const s = tyToLean(el);
+        return s.includes(" ") ? `(${s})` : s;
+      }).join(" × ");
     case "map": {
       const k = tyToLean(ty.key);
       const v = tyToLean(ty.value);
@@ -131,6 +138,7 @@ const _taintedTypes = new Set<string>();
 function collectUserRefs(ty: Ty, into: Set<string>): void {
   switch (ty.kind) {
     case "array": case "set": collectUserRefs(ty.elem, into); break;
+    case "tuple": ty.elems.forEach(el => collectUserRefs(el, into)); break;
     case "optional": collectUserRefs(ty.inner, into); break;
     case "map": collectUserRefs(ty.key, into); collectUserRefs(ty.value, into); break;
     case "fn": ty.params.forEach(p => collectUserRefs(p, into)); collectUserRefs(ty.result, into); break;
@@ -305,6 +313,15 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "arrayLiteral":
       if (e.elems.length === 0) return `#[]`;
       return `#[${e.elems.map(el => emitExpr(el)).join(", ")}]`;
+    case "tupleLiteral":
+      return `(${e.elems.map(el => emitExpr(el)).join(", ")})`;
+    case "tupleProj": {
+      // Right-nested Prod projection: element i is `.2`×i then `.1`, except the
+      // last (i = arity-1) which is `.2`×i with no trailing `.1`.
+      const obj = emitExpr(e.obj);
+      const twos = ".2".repeat(e.index);
+      return e.index === e.arity - 1 ? `${obj}${twos}` : `${obj}${twos}.1`;
+    }
     case "emptyMap": return `Std.HashMap.empty`;
     case "emptySet": return `Std.HashSet.empty`;
     case "default": return `(default : ${tyToLean(e.type)})`;

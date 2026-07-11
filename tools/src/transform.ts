@@ -35,6 +35,8 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "toNat": return { ...e, expr: r(e.expr) };
     case "toReal": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
+    case "tupleLiteral": return { ...e, elems: e.elems.map(r) };
+    case "tupleProj": return { ...e, obj: r(e.obj) };
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
     case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
@@ -689,6 +691,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
 
     case "index": {
       const idx = transformExpr(e.idx);
+      if (e.obj.ty.kind === "tuple") {
+        // resolve guarantees a numeric-literal index here; project at that slot.
+        return { kind: "tupleProj", obj: transformExpr(e.obj), index: (e.idx as { value: number }).value, arity: e.obj.ty.elems.length };
+      }
       if (e.obj.ty.kind === "map") {
         // Mirrors the .get() → .getDirect switch at line ~453: when resolve has
         // narrowed the index type to non-optional (via `k in m` atoms in scope),
@@ -905,6 +911,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.ty.kind === "set" && e.elems.length === 0) return { kind: "emptySet" };
       // Set with initial elements: new Set([a, b]) → {a, b}
       if (e.ty.kind === "set") return { kind: "app", fn: "SetLiteral", args: e.elems.map(el => lowerExpr(el, binds)) };
+      if (e.ty.kind === "tuple") return { kind: "tupleLiteral", elems: e.elems.map(el => lowerExpr(el, binds)) };
       return { kind: "arrayLiteral", elems: e.elems.map(el => lowerExpr(el, binds)) };
 
     case "lambda": {
@@ -1373,89 +1380,73 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
     const s = stmts[i];
     // Transform for-of → for-in over range
     if (s.kind === "forof") {
-      const varName = s.names[0];
-      const varTy = s.nameTypes[0] ?? { kind: "unknown" as const };
-      let iterExpr = transformExpr(s.iterable);
+      const headName = s.names[0];
+      const headTy = s.nameTypes[0] ?? { kind: "unknown" as const };
+      const iterExpr = transformExpr(s.iterable);
 
-      // Map key-only iteration: for (const k in record) → iterate keys only
-      if (s.names.length === 1 && s.iterable.ty.kind === "map") {
-        const keyName = s.names[0];
-        const keyTy = s.nameTypes[0] ?? s.iterable.ty.key ?? { kind: "unknown" as const };
-        const count = _forofCounters.get(keyName) ?? 0;
-        _forofCounters.set(keyName, count + 1);
-        const suffix = count === 0 ? "" : `${count + 1}`;
-        const keysSeqName = freshName(`_${keyName}_keys${suffix}`);
-        const convExpr: Expr = { kind: "app", fn: "SetToSeq", args: [{ kind: "field", obj: iterExpr, field: "keys" }] };
-        result.push({ kind: "let", name: keysSeqName, type: { kind: "array", elem: keyTy }, mutable: false, value: convExpr });
-        const keysVar: Expr = { kind: "var", name: keysSeqName };
-        const idxName = freshName(`_${keyName}_idx${suffix}`);
-        const idx: Expr = { kind: "var", name: idxName };
-        const arrSize: Expr = { kind: "field", obj: keysVar, field: "size" };
-        const bodyStmts = eliminateTopLevelContinue(transformStmts(s.body, typeDecls));
-        const letKey: Stmt = { kind: "let", name: keyName, type: keyTy, mutable: false, value: { kind: "index", arr: keysVar, idx } };
-        const boundInv: Expr = { kind: "binop", op: "≤", left: idx, right: arrSize };
-        result.push({
-          kind: "forin", idx: idxName, bound: arrSize,
-          invariants: [boundInv, ...s.invariants.map(transformExpr)],
-          body: [letKey, ...bodyStmts],
-        });
-        i++;
-        continue;
-      }
-
-      // Map iteration: for (const [k, v] of map) → iterate keys, look up values
-      if (s.names.length >= 2 && s.iterable.ty.kind === "map") {
-        const keyName = s.names[0], valueName = s.names[1];
-        const keyTy = s.nameTypes[0] ?? { kind: "unknown" as const };
-        const valueTy = s.nameTypes[1] ?? { kind: "unknown" as const };
-        const count = _forofCounters.get(keyName) ?? 0;
-        _forofCounters.set(keyName, count + 1);
-        const suffix = count === 0 ? "" : `${count + 1}`;
-        const keysSeqName = freshName(`_${keyName}_keys${suffix}`);
-        const convExpr: Expr = { kind: "app", fn: "SetToSeq", args: [{ kind: "field", obj: iterExpr, field: "keys" }] };
-        result.push({ kind: "let", name: keysSeqName, type: { kind: "array", elem: keyTy }, mutable: false, value: convExpr });
-        const keysVar: Expr = { kind: "var", name: keysSeqName };
-        const idxName = freshName(`_${keyName}_idx${suffix}`);
-        const idx: Expr = { kind: "var", name: idxName };
-        const arrSize: Expr = { kind: "field", obj: keysVar, field: "size" };
-        const bodyStmts = eliminateTopLevelContinue(transformStmts(s.body, typeDecls));
-        const letKey: Stmt = { kind: "let", name: keyName, type: keyTy, mutable: false, value: { kind: "index", arr: keysVar, idx } };
-        const letVal: Stmt = { kind: "let", name: valueName, type: valueTy, mutable: false,
-          value: { kind: "methodCall", obj: iterExpr, objTy: s.iterable.ty, method: "getDirect", args: [{ kind: "var", name: keyName }], monadic: false } };
-        const boundInv: Expr = { kind: "binop", op: "≤", left: idx, right: arrSize };
-        result.push({
-          kind: "forin", idx: idxName, bound: arrSize,
-          invariants: [boundInv, ...s.invariants.map(transformExpr)],
-          body: [letKey, letVal, ...bodyStmts],
-        });
-        i++;
-        continue;
-      }
-
-      // Sets aren't indexable — bind SetToSeq to a variable for iteration
-      if (s.iterable.ty.kind === "set") {
-        const seqName = freshName(`_${varName}_seq`);
-        const convExpr: Expr = { kind: "app", fn: "SetToSeq", args: [iterExpr] };
-        const elemTy: Ty = varTy.kind !== "unknown" ? varTy : { kind: "string" };
-        result.push({ kind: "let", name: seqName, type: { kind: "array", elem: elemTy }, mutable: false, value: convExpr });
-        iterExpr = { kind: "var", name: seqName };
-      }
-      const count = _forofCounters.get(varName) ?? 0;
-      _forofCounters.set(varName, count + 1);
+      // All for-of shapes lower to the same range loop `for idx in 0..seq.size`;
+      // they differ only in (a) which indexable `seq` is iterated and (b) the
+      // per-iteration `let`s that bind the loop names. Compute the shared loop-
+      // variable naming once, then let each shape fill in `seq` + `perIter`.
+      const count = _forofCounters.get(headName) ?? 0;
+      _forofCounters.set(headName, count + 1);
       const suffix = count === 0 ? "" : `${count + 1}`;
-      const idxName = freshName(`_${varName}_idx${suffix}`);
-      const idx: Expr = { kind: "var", name: idxName };
-      const arrSize: Expr = { kind: "field", obj: iterExpr, field: "size" };
-      const bodyStmts = eliminateTopLevelContinue(transformStmts(s.body, typeDecls));
-      const letElem: Stmt = { kind: "let", name: varName, type: varTy, mutable: false, value: { kind: "index", arr: iterExpr, idx } };
+      const idxName = freshName(`_${headName}_idx${suffix}`);
+      const idxVar: Expr = { kind: "var", name: idxName };
+
+      let seq: Expr;
+      let perIter: Stmt[];
+
+      if (s.iterable.ty.kind === "map") {
+        // for (const k of map) / for (const [k, v] of map): materialize the keys
+        // as a seq and index into it; a value name looks up via getDirect.
+        const keyTy = s.nameTypes[0] ?? s.iterable.ty.key ?? { kind: "unknown" as const };
+        const keysSeqName = freshName(`_${headName}_keys${suffix}`);
+        result.push({ kind: "let", name: keysSeqName, type: { kind: "array", elem: keyTy }, mutable: false,
+          value: { kind: "app", fn: "SetToSeq", args: [{ kind: "field", obj: iterExpr, field: "keys" }] } });
+        seq = { kind: "var", name: keysSeqName };
+        const letKey: Stmt = { kind: "let", name: headName, type: keyTy, mutable: false, value: { kind: "index", arr: seq, idx: idxVar } };
+        if (s.names.length >= 2) {
+          const valueTy = s.nameTypes[1] ?? { kind: "unknown" as const };
+          const letVal: Stmt = { kind: "let", name: s.names[1], type: valueTy, mutable: false,
+            value: { kind: "methodCall", obj: iterExpr, objTy: s.iterable.ty, method: "getDirect", args: [{ kind: "var", name: headName }], monadic: false } };
+          perIter = [letKey, letVal];
+        } else {
+          perIter = [letKey];
+        }
+      } else if (s.names.length >= 2 && s.iterable.ty.kind === "array" && s.iterable.ty.elem.kind === "tuple") {
+        // for (const [a, b] of tupleArr): bind the element once, then destructure
+        // it into each name via a tuple projection.
+        const tupleTy = s.iterable.ty.elem;
+        seq = iterExpr;
+        const elemName = freshName(`_${headName}_elem${suffix}`);
+        const letElem: Stmt = { kind: "let", name: elemName, type: tupleTy, mutable: false, value: { kind: "index", arr: seq, idx: idxVar } };
+        perIter = [letElem, ...s.names.map((n, k): Stmt => ({
+          kind: "let", name: n, type: tupleTy.elems[k] ?? { kind: "unknown" }, mutable: false,
+          value: { kind: "tupleProj", obj: { kind: "var", name: elemName }, index: k, arity: tupleTy.elems.length },
+        }))];
+      } else {
+        // Single element by index. Sets aren't indexable, so materialize first.
+        if (s.iterable.ty.kind === "set") {
+          const seqName = freshName(`_${headName}_seq${suffix}`);
+          const elemTy: Ty = headTy.kind !== "unknown" ? headTy : { kind: "string" };
+          result.push({ kind: "let", name: seqName, type: { kind: "array", elem: elemTy }, mutable: false,
+            value: { kind: "app", fn: "SetToSeq", args: [iterExpr] } });
+          seq = { kind: "var", name: seqName };
+        } else {
+          seq = iterExpr;
+        }
+        perIter = [{ kind: "let", name: headName, type: headTy, mutable: false, value: { kind: "index", arr: seq, idx: idxVar } }];
+      }
+
+      const arrSize: Expr = { kind: "field", obj: seq, field: "size" };
       // Auto-add bound invariant: idx ≤ bound (always true for range loops)
-      const boundInv: Expr = { kind: "binop", op: "≤", left: idx, right: arrSize };
+      const boundInv: Expr = { kind: "binop", op: "≤", left: idxVar, right: arrSize };
+      const bodyStmts = eliminateTopLevelContinue(transformStmts(s.body, typeDecls));
       result.push({
-        kind: "forin",
-        idx: idxName,
-        bound: arrSize,
+        kind: "forin", idx: idxName, bound: arrSize,
         invariants: [boundInv, ...s.invariants.map(transformExpr)],
-        body: [letElem, ...bodyStmts],
+        body: [...perIter, ...bodyStmts],
       });
       i++;
       continue;

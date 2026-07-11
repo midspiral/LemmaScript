@@ -36,7 +36,8 @@ Two things shape what you can verify:
 | `boolean` | bool | |
 | `string` | string | |
 | `T[]` / `Array<T>` / `readonly T[]` | sequence | |
-| `[T, U, ...]` (tuple) | sequence | |
+| `[A, B, ...]` (heterogeneous tuple) | tuple | Native tuple (`(A, B)` / `A × B`). Access needs a literal index (`t[0]`, `t[1]`); `const [a, b] = t` works. |
+| `[T, T, ...]` (homogeneous tuple) | sequence | Same-typed elements model as a `seq` (more capable than a fixed tuple). |
 | `Map<K, V>` / `Record<K, V>` | map | |
 | `Set<T>` | set | |
 | `T \| undefined`, `T \| null` | optional | `undefined` and `null` model identically. |

@@ -41,6 +41,7 @@ function tyToDafny(ty: Ty): string {
     case "string": return "string";
     case "void": return "()";
     case "array": return `seq<${tyToDafny(ty.elem)}>`;
+    case "tuple": return `(${ty.elems.map(tyToDafny).join(", ")})`;
     case "map": return `map<${tyToDafny(ty.key)}, ${tyToDafny(ty.value)}>`;
     case "set": return `set<${tyToDafny(ty.elem)}>`;
     case "optional": { needPreamble("OptionType"); return `Option<${tyToDafny(ty.inner)}>`; }
@@ -237,6 +238,9 @@ function emitExpr(e: Expr): string {
     case "arrayLiteral":
       if (e.elems.length === 0) return `[]`;
       return `[${e.elems.map(emitExpr).join(", ")}]`;
+
+    case "tupleLiteral": return `(${e.elems.map(emitExpr).join(", ")})`;
+    case "tupleProj": return `${emitExpr(e.obj)}.${e.index}`;
 
     case "emptyMap": return `map[]`;
     case "emptySet": return `{}`;
@@ -1263,6 +1267,7 @@ function resolveTy(ty: Ty): Ty {
   if (ty.kind === "user" && !_declaredTypes.has(ty.name)) return { kind: "string" };
   if (ty.kind === "optional") return { kind: "optional", inner: resolveTy(ty.inner) };
   if (ty.kind === "array") return { kind: "array", elem: resolveTy(ty.elem) };
+  if (ty.kind === "tuple") return { kind: "tuple", elems: ty.elems.map(resolveTy) };
   if (ty.kind === "map") return { kind: "map", key: resolveTy(ty.key), value: resolveTy(ty.value) };
   if (ty.kind === "set") return { kind: "set", elem: resolveTy(ty.elem) };
   return ty;
