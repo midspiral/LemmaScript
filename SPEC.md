@@ -428,10 +428,11 @@ No normalization of operators. Both backends handle all comparison directions.
 - `string`: `!s` → `s == ""` (empty string is falsy)
 - `optional`: `!opt` → match on None (undefined is falsy)
 - `bool`: `!b` → `¬b` (standard negation)
+- `array` / object (user type) / `map` / `set`: always truthy in JS, so `!x` → `false`
 
 `!!expr` works naturally: the inner `!` coerces to bool, the outer `!` negates.
 
-The same coercion applies to non-bool conditions in `if`/`while`/`?:` positions: `n` (number) → `n != 0` (every nonzero number is truthy, including negatives), `xs` (array) → `true` (every array is truthy in JS, even `[]`), `s` (string) → `|s| > 0`. Optional conditions are handled separately (see Optional narrowing).
+The same coercion applies to non-bool conditions in `if`/`while`/`?:` positions: `n` (number) → `n != 0` (every nonzero number is truthy, including negatives), `xs` (array), an object (user type), a `map`, or a `set` → `true` (all truthy in JS, even `[]`/`{}`), `s` (string) → `|s| > 0`. Optional conditions are handled separately (see Optional narrowing).
 
 ### 3.2 Special Forms
 
