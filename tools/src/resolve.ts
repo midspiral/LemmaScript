@@ -496,7 +496,7 @@ function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExp
     }
   }
   if (fn.kind === "field" && fn.obj.ty.kind === "array" &&
-      ["map", "filter", "every", "some", "find", "findLast", "findIndex"].includes(fn.field) &&
+      ["map", "filter", "every", "some", "find", "findLast", "findIndex", "findLastIndex"].includes(fn.field) &&
       rawArgs.length >= 1 && rawArgs[0].kind === "lambda" &&
       rawArgs[0].params.length >= 1 && !rawArgs[0].params[0].tsType) {
     const elemTy = fn.obj.ty.elem;
@@ -598,7 +598,7 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
     if (fn.field === "filter") return objTy;
     if (fn.field === "every" || fn.field === "some") return { kind: "bool" };
     if (fn.field === "find" || fn.field === "findLast") return { kind: "optional", inner: objTy.elem };
-    if (fn.field === "findIndex") return { kind: "int" };
+    if (fn.field === "findIndex" || fn.field === "findLastIndex") return { kind: "int" };
     if (fn.field === "flat" && objTy.elem.kind === "array") return { kind: "array", elem: objTy.elem.elem };
     if (fn.field === "slice") return objTy;
     if (fn.field === "join" && objTy.elem.kind === "string") return { kind: "string" };

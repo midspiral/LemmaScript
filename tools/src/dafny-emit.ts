@@ -262,7 +262,10 @@ function emitExpr(e: Expr): string {
         if (e.method === "push")     return `(${obj} + [${args.join(", ")}])`;
         if (e.method === "unshift")  return `([${args.join(", ")}] + ${obj})`;
         if (e.method === "concat")   return `(${obj} + [${args.join(", ")}])`;
-        if (e.method === "sort")     { needPreamble("SeqSortBy"); return `SeqSortBy(${obj}, ${args[0]})`; }
+        if (e.method === "sort")     {
+          if (args.length === 0) { needPreamble("SeqSort"); return `SeqSort(${obj})`; }
+          needPreamble("SeqSortBy"); return `SeqSortBy(${obj}, ${args[0]})`;
+        }
         // No-arg slice is a full copy; Dafny seq is an immutable value type, so
         // the copy is just the seq itself (the idiom for "copy then mutate").
         if (e.method === "slice" && args.length === 0) return obj;
@@ -290,6 +293,10 @@ function emitExpr(e: Expr): string {
         if (e.method === "findIndex") {
           needPreamble("SeqFindIndex");
           return `SeqFindIndex(${obj}, ${args[0]})`;
+        }
+        if (e.method === "findLastIndex") {
+          needPreamble("SeqFindLastIndex");
+          return `SeqFindLastIndex(${obj}, ${args[0]})`;
         }
         if (e.method === "flat" && args.length === 0) {
           needPreamble("SeqFlatten");
@@ -954,6 +961,19 @@ function SeqIndexOfFrom<T(==)>(s: seq<T>, x: T, from: nat): int
   else SeqIndexOfFrom(s, x, from + 1)
 }`;
 
+const SEQ_FIND_LAST_INDEX = `function SeqFindLastIndex<T>(s: seq<T>, p: T -> bool): int
+  ensures -1 <= SeqFindLastIndex(s, p) < |s|
+  ensures SeqFindLastIndex(s, p) >= 0 ==> p(s[SeqFindLastIndex(s, p)])
+  ensures SeqFindLastIndex(s, p) >= 0 ==>
+    (forall j: int :: SeqFindLastIndex(s, p) < j < |s| ==> !p(s[j]))
+  ensures SeqFindLastIndex(s, p) == -1 ==> (forall i: nat :: i < |s| ==> !p(s[i]))
+  decreases |s|
+{
+  if |s| == 0 then -1
+  else if p(s[|s|-1]) then |s| - 1
+  else SeqFindLastIndex(s[..|s|-1], p)
+}`;
+
 const SEQ_FIND_LAST = `function SeqFindLast<T>(s: seq<T>, p: T -> bool): Option<T>
   ensures SeqFindLast(s, p).Some? ==> p(SeqFindLast(s, p).value)
   ensures SeqFindLast(s, p).Some? ==> SeqFindLast(s, p).value in s
@@ -1034,6 +1054,11 @@ const STRING_SPLIT = `function {:axiom} StringSplit(s: string, d: string): seq<s
 // is the soundness condition — cmp must be a total preorder, otherwise no sorted
 // permutation exists and the axiom would be vacuous. Callers discharge it (e.g.
 // `(a,b) => a.k - b.k` is total + transitive by linear arithmetic).
+// Bare `.sort()`: permutation only, no sortedness (JS default order is type-dependent).
+const SEQ_SORT = `function {:axiom} SeqSort<T(==,!new)>(s: seq<T>): seq<T>
+  ensures multiset(SeqSort(s)) == multiset(s)
+  ensures |SeqSort(s)| == |s|`;
+
 const SEQ_SORT_BY = `function {:axiom} SeqSortBy<T(==,!new)>(s: seq<T>, cmp: (T, T) -> int): seq<T>
   requires forall a: T, b: T :: cmp(a, b) <= 0 || cmp(b, a) <= 0
   requires forall a: T, b: T, c: T :: cmp(a, b) <= 0 && cmp(b, c) <= 0 ==> cmp(a, c) <= 0
@@ -1216,6 +1241,7 @@ const PREAMBLE_CODE: [string, string][] = [
   ["FloorReal", FLOOR_REAL],
   ["SeqIndexOf", SEQ_INDEX_OF],
   ["SeqFindIndex", SEQ_FIND_INDEX],
+  ["SeqFindLastIndex", SEQ_FIND_LAST_INDEX],
   ["SeqFilterSome", SEQ_FILTER_SOME],
   ["SeqFindLast", SEQ_FIND_LAST],
   ["SeqFlatten", SEQ_FLATTEN],
@@ -1223,6 +1249,7 @@ const PREAMBLE_CODE: [string, string][] = [
   ["SafeSlice", SAFE_SLICE],
   ["StringIndexOf", STRING_INDEX_OF],
   ["StringSplit", STRING_SPLIT],
+  ["SeqSort", SEQ_SORT],
   ["SeqSortBy", SEQ_SORT_BY],
   ["StringTrim", STRING_TRIM],
   ["StringToLower", STRING_TO_LOWER],
