@@ -46,15 +46,10 @@ jobs:
 
       - uses: ./.github/actions/setup-dafny
 
-      - name: Regenerate Dafny (verify happens in the check step below)
+      # Drift + additions-only only; `dafny verify` runs in the sharded
+      # `examples-dafny` job below (parallel), off this job's critical path.
+      - name: Regenerate Dafny (drift + additions-only; verify runs in examples-dafny)
         run: ./regen-dafny.sh --no-verify
-
-      - name: Check Dafny additions-only and verify
-        run: |
-          for f in examples/*.ts; do
-            echo "=== checking $f ==="
-            npx tsx tools/src/lsc.ts check --backend=dafny "$f"
-          done
 
       - name: Check Dafny generated files are up to date
         run: |
@@ -77,6 +72,53 @@ jobs:
 
       - name: Build
         run: lake build
+
+  # Dafny verification of the examples, sharded across runners. The `tools` job
+  # enforces drift + additions-only (regen --no-verify); this job runs the actual
+  # `dafny verify` in parallel. Files are split by index (i % N == shard), so no
+  # hand-maintained file list. Each shard also re-checks drift for its own slice.
+  examples-dafny:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install tools dependencies
+        working-directory: tools
+        run: npm ci
+
+      - uses: ./.github/actions/setup-dafny
+
+      - name: Check Dafny (shard ${{ matrix.shard }} of 4)
+        run: |
+          i=0
+          for f in examples/*.ts; do
+            if [ $((i % 4)) -eq ${{ matrix.shard }} ]; then
+              echo "=== checking $f ==="
+              npx tsx tools/src/lsc.ts check --backend=dafny "$f"
+            fi
+            i=$((i + 1))
+          done
+
+      - name: Check Dafny generated files are up to date (this shard)
+        run: |
+          git diff --exit-code -- '*.dfy.gen' '*.dfy'
+          untracked=$(git ls-files --others --exclude-standard -- '*.dfy.gen')
+          if [ -n "$untracked" ]; then
+            echo "ERROR: Untracked .dfy.gen files:"
+            echo "$untracked"
+            exit 1
+          fi
 
   case-studies-dafny:
     runs-on: ubuntu-latest
