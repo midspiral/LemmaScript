@@ -261,45 +261,82 @@ function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[]): TStmt | null {
   };
 }
 
-/** Collect a `||` chain of negative optional checks (`x === undefined`).
- *  Returns the list of checks if every leaf is a negative optional check; null otherwise. */
-function collectOrChainOfNegativeChecks(cond: TExpr): ReturnType<typeof parseSimpleOptionalCheck>[] | null {
-  if (cond.kind === "binop" && cond.op === "||") {
-    const left = collectOrChainOfNegativeChecks(cond.left);
-    const right = collectOrChainOfNegativeChecks(cond.right);
-    if (!left || !right) return null;
-    return [...left, ...right];
-  }
-  const check = parseSimpleOptionalCheck(cond);
-  if (!check || !check.negated) return null;
-  return [check];
+/** Flatten a nested `||` chain into its leaf conditions. */
+function flattenOr(e: TExpr): TExpr[] {
+  if (e.kind === "binop" && e.op === "||") return [...flattenOr(e.left), ...flattenOr(e.right)];
+  return [e];
 }
 
-/** Rule: `if (x === undefined || y === undefined || ...) terminate; rest`.
- *  → nested someMatches narrowing each var in turn, each None branch = terminate,
- *    deepest someBody = rest.
+/** A `||` disjunct that `x === None` makes true (so if every disjunct is false,
+ *  `x` is Some). `residual` is the guard it still contributes once `x` is Some
+ *  (`!v` for a falsy-capable `!x`; `v.chain !== lit` for an optchain compare;
+ *  null otherwise). */
+type NoneDetector = { scrutinee: TExpr; innerTy: Ty; binder: string; residual: TExpr | null };
+
+function classifyDisjunct(leaf: TExpr): NoneDetector | null {
+  // `x?.chain !== lit` — `undefined !== lit` is true when x is None.
+  if (leaf.kind === "binop" && leaf.op === "!==") {
+    const oc = leaf.left.kind === "optChain" ? leaf.left : leaf.right.kind === "optChain" ? leaf.right : null;
+    if (oc && oc.kind === "optChain" && oc.obj.ty.kind === "optional") {
+      const hint = binderHintFor(oc.obj);
+      if (hint === null) return null;
+      const binder = freshName(hint);
+      const unwrapped = applyChain({ kind: "var", name: binder, ty: oc.obj.ty.inner }, oc.chain);
+      if (unwrapped.kind === "field" && unwrapped.obj.ty.kind === "user") {
+        const base = unwrapped.obj.ty.name.replace(/<.*/, "");
+        const decl = _typeDecls.find(d => d.name === base);
+        if (decl?.kind === "discriminated-union" && decl.discriminant === unwrapped.field) unwrapped.isDiscriminant = true;
+      }
+      const lit = leaf.left === oc ? leaf.right : leaf.left;
+      return { scrutinee: oc.obj, innerTy: oc.obj.ty.inner, binder, residual: { kind: "binop", op: "!==", left: unwrapped, right: lit, ty: { kind: "bool" } } };
+    }
+  }
+  // `!x` / `x === undefined`.
+  const chk = parseOptionalCheck(leaf);
+  if (chk && chk.negated) {
+    const residual: TExpr | null = canBeFalsy(chk)
+      ? { kind: "unop", op: "!", expr: { kind: "var", name: chk.binderHint, ty: chk.innerTy }, ty: { kind: "bool" } }
+      : null;
+    return { scrutinee: chk.scrutinee, innerTy: chk.innerTy, binder: chk.binderHint, residual };
+  }
+  return null;
+}
+
+/** Rule: `if (D1 || … || Dn) terminate; rest`. Each `Di` that detects some optional
+ *  `x` is None (`!x`, `x === undefined`, `x?.chain !== lit`) narrows that `x` to Some
+ *  across `rest`; the rest — value guards reading a narrowed `x` directly, plus the
+ *  detectors' Some-case residuals — become a trailing early-return. Sound: reaching
+ *  `rest` means every disjunct was false, so every detected optional is present.
+ *  Covers `if (!x || x.f !== v) continue` / `if (x?.t !== 'm' || x.g) break`.
  *  Closes the resolve.ts:602 TODO ("|| narrowing"). */
 function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[]): TStmt | null {
   if (s.kind !== "if") return null;
   if (rest.length === 0) return null;
-  if (s.then.length === 0 || s.else.length !== 0) return null;
+  if (s.then.length === 0 || s.else.length !== 0 || !isTerminating(s.then)) return null;
   if (s.cond.kind !== "binop" || s.cond.op !== "||") return null;  // single check is the simpler rule
-  const checks = collectOrChainOfNegativeChecks(s.cond);
-  if (!checks || checks.length < 2) return null;
-  // Build nested someMatch from innermost outward
-  let inner: TStmt[] = rest;
-  for (let i = checks.length - 1; i >= 0; i--) {
-    const check = checks[i]!;
-    const someBody: TStmt[] = canBeFalsy(check)
-      ? [{ kind: "if", cond: bound(check), then: inner, else: s.then }]
-      : inner;
-    inner = [{
-      kind: "someMatch",
-      scrutinee: check.scrutinee, binderTy: check.innerTy,
-      binder: check.binderHint,
-      someBody,
-      noneBody: s.then,
-    }];
+  const leaves = flattenOr(s.cond);
+  if (leaves.length < 2) return null;
+
+  const detectors: NoneDetector[] = [];
+  const residualLeaves: TExpr[] = [];
+  const seen = new Set<string>();
+  for (const leaf of leaves) {
+    const d = classifyDisjunct(leaf);
+    if (!d) { residualLeaves.push(leaf); continue; }
+    const key = binderHintFor(d.scrutinee)!;
+    if (seen.has(key)) return null;  // two detectors on one optional: rare; leave to other rules
+    seen.add(key);
+    detectors.push(d);
+    if (d.residual) residualLeaves.push(d.residual);
+  }
+  if (detectors.length === 0) return null;
+
+  let inner: TStmt[] = residualLeaves.length === 0
+    ? rest
+    : [{ kind: "if", cond: residualLeaves.reduce((a, b): TExpr => ({ kind: "binop", op: "||", left: a, right: b, ty: { kind: "bool" } })), then: s.then, else: [] }, ...rest];
+  for (let i = detectors.length - 1; i >= 0; i--) {
+    const d = detectors[i]!;
+    inner = [{ kind: "someMatch", scrutinee: d.scrutinee, binderTy: d.innerTy, binder: d.binder, someBody: inner, noneBody: s.then }];
   }
   return inner[0];
 }
