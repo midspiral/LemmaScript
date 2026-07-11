@@ -51,7 +51,7 @@ LemmaScript supports two verification backends:
 
 **Lean** (via Velvet/Loom) is the secondary backend. It is more powerful for inductive proofs and offers a richer proof language, but automation is harder for LLMs. See [SPEC_LEAN.md](SPEC_LEAN.md).
 
-Both backends share the same TypeScript source, `//@ ` annotations, and pipeline (extract → resolve → transform). They differ only in the emitter and the proof workflow.
+Both backends share the same TypeScript source, `//@ ` annotations, and pipeline (extract → resolve → transform). They differ mainly in the emitter and the proof workflow, with some backend-specific steps in transform and peephole.
 
 ---
 
@@ -94,7 +94,7 @@ design choices in the resolve/narrow/transform split, and
 
 **No erasure, no gap.** The TypeScript source *is* the production code. The `//@ ` annotations are comments — invisible to tsc, bundlers, and the runtime. Proof files never touch the production build.
 
-**Shared pipeline, separate emitters.** Extract, resolve, narrow, and transform are backend-agnostic. Peephole takes a `backend` parameter (some rewrites are Dafny-only — see [TOOLS.md](TOOLS.md#peephole-rules)). The IR uses semantic names (e.g., `arraySet`, `mapGet`) and preserves `Ty` objects — each emitter maps to its own syntax and type system.
+**Shared pipeline, separate emitters.** Extract, resolve, and narrow are backend-agnostic. Transform and peephole take a `backend` parameter (some steps are backend-specific — see [TOOLS.md](TOOLS.md#peephole-rules)). The IR retains raw method-name strings (e.g., `push`, `slice`) with their `Ty` objects — each emitter maps those to its own syntax and type system.
 
 **The trust question.** Does the generated embedding faithfully model the TypeScript code? This is a one-directional question (TS → prover) validated by inspection of the code generator. The code generator is a straightforward syntactic translation — it does not optimize, reorder, or transform.
 

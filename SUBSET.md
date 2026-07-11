@@ -48,7 +48,7 @@ User-defined types referenced from a verified function are pulled in automatical
 
 ## Values, operators, literals
 
-All the usual operators carry over with their normal meaning: `=== !== < <= > >= + - * / % && || !` and the ternary `c ? a : b`. Integer `/` is integer division.
+All the usual operators carry over with their normal meaning: `=== !== < <= > >= + - * / % && || !` and the ternary `c ? a : b`. `number / number` is real division (matching JS: `3 / 2 === 1.5`); for an integer quotient use `Math.floor(a / b)`. `bigint / bigint` is integer division.
 
 Supported literal forms include number/bigint/hex literals, string and template literals (`` `${n} items` `` concatenates), array literals with spread (`[...xs, e]`), object literals with spread (`{ ...obj, f: v }`), and `Record`/`Map` object literals.
 

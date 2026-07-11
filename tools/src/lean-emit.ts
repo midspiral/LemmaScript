@@ -1,6 +1,8 @@
 /**
- * Lean emitter — IR → Lean text.
- * No logic, no type decisions — just serialization.
+ * Lean emitter — IR → Lean text. Beyond serialization it makes type-driven
+ * decisions: Bool-vs-Prop connectives, dropping Repr/DecidableEq for
+ * opaque-tainted types, discriminator/destructor lowering, method dispatch,
+ * and support-import selection.
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
