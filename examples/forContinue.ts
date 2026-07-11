@@ -6,8 +6,6 @@
  * their own continue scope and must not receive the outer update.
  */
 
-//@ backend dafny
-
 // Skip-evens count: walks `xs`, skipping even values via `continue`. The
 // `continue` is in the same scope as the outer `for`; the desugar must
 // insert `i = i + 1` immediately before the `continue`.
@@ -70,4 +68,35 @@ export function countPositivesNonNested(grid: number[][]): number {
     }
   }
   return total;
+}
+
+// A `continue` in a non-last `switch` (→ `match`) arm: the inverter can't fold
+// it (not a trailing-guard `if`, and the match isn't the loop body's last stmt),
+// so it survives to native Dafny `continue` emission — the shape flue's narrowed
+// countConsecutiveRetryableModelErrors (packages/runtime/src/submission-state.ts)
+// produces.
+type Kind = "keep" | "skip" | "stop";
+interface Item { kind: Kind }
+
+export function countKeep(items: Item[]): number {
+  //@ verify
+  //@ type i nat
+  //@ ensures 0 <= \result && \result <= items.length
+  let count = 0;
+  for (let i = 0; i < items.length; i = i + 1) {
+    //@ invariant 0 <= i && i <= items.length
+    //@ invariant 0 <= count && count <= i
+    //@ done_with true
+    //@ decreases items.length - i
+    switch (items[i]!.kind) {
+      case "skip":
+        continue;            // survives — match is not the loop body's last stmt
+      case "stop":
+        return count;
+      case "keep":
+        break;               // switch exit; falls to the increment below
+    }
+    count = count + 1;
+  }
+  return count;
 }

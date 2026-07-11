@@ -134,6 +134,7 @@ lean_lib Examples where
     `«swap.def»,
     `«andChainStmt.types», `«andChainStmt.def»,
     `«nameClash.types», `«nameClash.def»,
-    `«tuples.types», `«tuples.def», `«tuples.proof»
+    `«tuples.types», `«tuples.def», `«tuples.proof»,
+    `«forContinue.types», `«forContinue.def», `«forContinue.proof»
   ]
   extraDepTargets := #[``downloadDependencies]

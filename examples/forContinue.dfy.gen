@@ -7,6 +7,10 @@ function JSRem(a: int, b: int): int
   if a < 0 then -r else r
 }
 
+datatype Kind = keep | skip | stop
+
+datatype Item = Item(kind: Kind)
+
 method countOdds(xs: seq<int>) returns (res: int)
   ensures (res <= |xs|)
 {
@@ -75,4 +79,32 @@ method countPositivesNonNested(grid: seq<seq<int>>) returns (res: int)
     i := (i + 1);
   }
   return total;
+}
+
+method countKeep(items: seq<Item>) returns (res: int)
+  ensures (0 <= res)
+  ensures (res <= |items|)
+{
+  var count := 0;
+  var i := 0;
+  while (i < |items|)
+    invariant (0 <= i)
+    invariant (i <= |items|)
+    invariant (0 <= count)
+    invariant (count <= i)
+    decreases (|items| - i)
+  {
+    match items[i].kind {
+      case skip =>
+        i := (i + 1);
+        continue;
+      case stop =>
+        return count;
+      case keep =>
+
+    }
+    count := (count + 1);
+    i := (i + 1);
+  }
+  return count;
 }
