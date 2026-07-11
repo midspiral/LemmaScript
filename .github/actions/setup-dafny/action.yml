@@ -1,5 +1,10 @@
 name: Setup Dafny
-description: Set up .NET and Dafny
+description: Set up .NET and Dafny, caching the Dafny release by version
+
+inputs:
+  dafny-version:
+    description: Dafny version to install
+    default: '4.11.0'
 
 runs:
   using: composite
@@ -8,6 +13,25 @@ runs:
       with:
         dotnet-version: '8.0.x'
 
-    - uses: dafny-lang/setup-dafny-action@v1
+    # Cache the extracted Dafny release keyed on the exact version, so a version
+    # bump misses the cache and re-downloads. Installed under runner.temp (NOT the
+    # workspace) so it never shows up in the repo's `git diff` / `git ls-files`
+    # up-to-date checks.
+    - name: Cache Dafny
+      id: cache-dafny
+      uses: actions/cache@v4
       with:
-        dafny-version: '4.11.0'
+        path: ${{ runner.temp }}/dafny
+        key: dafny-${{ runner.os }}-${{ inputs.dafny-version }}
+
+    - name: Download Dafny
+      if: steps.cache-dafny.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        mkdir -p "${{ runner.temp }}/dafny"
+        curl -sSL "https://github.com/dafny-lang/dafny/releases/download/v${{ inputs.dafny-version }}/dafny-${{ inputs.dafny-version }}-x64-ubuntu-22.04.zip" -o "${{ runner.temp }}/dafny.zip"
+        unzip -q "${{ runner.temp }}/dafny.zip" -d "${{ runner.temp }}/dafny"
+
+    - name: Add Dafny to PATH
+      shell: bash
+      run: echo "${{ runner.temp }}/dafny/dafny" >> "$GITHUB_PATH"
