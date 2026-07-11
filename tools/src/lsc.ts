@@ -16,7 +16,7 @@ import { narrowModule } from "./narrow.js";
 import { autoHavocModule } from "./autohavoc.js";
 import { transformModuleLean, transformModuleDafny } from "./transform.js";
 import { peepholeModule } from "./peephole.js";
-import { emitLeanFile } from "./lean-emit.js";
+import { emitLeanFile, resetLeanModule } from "./lean-emit.js";
 import { emitDafnyFile } from "./dafny-emit.js";
 import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-commands.js";
 import { leanGen, leanCheck } from "./lean-commands.js";
@@ -270,6 +270,7 @@ function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeL
   if (typesFile) typesFile = peepholeModule(typesFile, "lean");
   defFile = peepholeModule(defFile, "lean");
 
+  resetLeanModule();  // clear per-module emitter state so batch mode doesn't leak into this module
   const typesPath = typesFile ? path.join(dir, `${leanBase}.types.lean`) : null;
   const typesText = typesFile ? emitLeanFile(typesFile) : null;
   const defPath = path.join(dir, `${leanBase}.def.lean`);

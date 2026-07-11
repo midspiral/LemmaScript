@@ -760,6 +760,21 @@ function emitPureExpr(e: Expr, indent: number): string {
 
 // ── File emission ────────────────────────────────────────────
 
+/** Reset per-module emitter state. Call once per module before the types file
+ *  (not between types and def — the def file reads the types file's registries). */
+export function resetLeanModule(): void {
+  _resultName = "res";
+  _unionCtors.clear();
+  _opaqueNames.clear();
+  _opaqueNames.add("Unknown");
+  _typeRefs.clear();
+  _taintedTypes.clear();
+  _needsJSString = false;
+  _needsUnknown = false;
+  _unknownEmitted = false;
+  _boolCtx = false;
+}
+
 export function emitLeanFile(file: Module): string {
   _needsJSString = false;
   _needsUnknown = false;
