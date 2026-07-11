@@ -436,8 +436,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // Number truthiness: !n → n == 0
       if (e.op === "!" && (e.expr.ty.kind === "int" || e.expr.ty.kind === "nat"))
         return { kind: "binop", op: "=", left: lowerExpr(e.expr, binds), right: { kind: "num", value: 0 } };
-      // Array truthiness: every array is truthy in JS, so !xs is always false.
-      if (e.op === "!" && e.expr.ty.kind === "array") {
+      // Object truthiness: arrays, objects, maps, and sets are always truthy in
+      // JS, so `!x` is always false.
+      if (e.op === "!" && ["array", "user", "map", "set", "tuple"].includes(e.expr.ty.kind)) {
         lowerExpr(e.expr, binds);  // preserve any lifted side effects; value is the constant false
         return { kind: "bool", value: false };
       }
