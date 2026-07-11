@@ -602,6 +602,13 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           else: { kind: "var", name: "undefined" },
         };
       }
+      // || on a number → `if x != 0 then x else default` (0 the only falsy int).
+      if (e.op === "||" && (e.left.ty.kind === "int" || e.left.ty.kind === "nat")) {
+        const left = lowerExpr(e.left, binds);
+        const right = lowerExpr(e.right, binds);
+        const truthy = valueTruthyCond(left, e.left.ty)!;
+        return { kind: "if", cond: truthy, then: left, else: right };
+      }
       // String concatenation: `+` with a string operand. Stringify int/nat
       // operands (Dafny NatToString, Lean toString) and join with arrayConcat
       // (rendered `+` in Dafny, `++` in Lean).
