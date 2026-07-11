@@ -64,7 +64,7 @@ export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number, ex
   }
 }
 
-export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, text: string, dir: string, timeLimit?: number, extraFlags?: string) {
+export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, text: string, dir: string, timeLimit?: number, extraFlags?: string, noVerify = false) {
   // 1. Read old gen before overwriting (needed for base seeding)
   const oldGen = existsSync(genPath) ? readFileSync(genPath, "utf-8") : "";
 
@@ -75,7 +75,7 @@ export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, t
   if (!existsSync(dfyPath)) {
     writeFileSync(dfyPath, text);
     console.log(`Created: ${path.basename(dfyPath)}`);
-    if (!dafnyVerify(dfyPath, dir, timeLimit, extraFlags)) {
+    if (!noVerify && !dafnyVerify(dfyPath, dir, timeLimit, extraFlags)) {
       console.error(`FAILED: ${path.basename(dfyPath)} verification failed on first run.`);
       process.exit(1);
     }
@@ -111,8 +111,8 @@ export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, t
     process.exit(1);
   }
 
-  // 7. Verify
-  if (!dafnyVerify(dfyPath, dir, timeLimit, extraFlags)) {
+  // 7. Verify (skipped under --no-verify: caller verifies separately)
+  if (!noVerify && !dafnyVerify(dfyPath, dir, timeLimit, extraFlags)) {
     console.error(`FAILED: ${path.basename(dfyPath)} verification failed.`);
     process.exit(1);
   }

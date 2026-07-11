@@ -103,6 +103,17 @@ function main() {
     args.splice(slowIdx, 1);
   }
 
+  // --no-verify (regen only): do regen + three-way merge + additions-only check
+  // but skip `dafny verify`. CI's `tools` job passes this to regen-dafny.sh so
+  // regen only enforces the drift + additions-only invariants; the separate
+  // `lsc check` pass over the same files does the one and only verification.
+  let noVerify = false;
+  const noVerifyIdx = args.indexOf("--no-verify");
+  if (noVerifyIdx >= 0) {
+    noVerify = true;
+    args.splice(noVerifyIdx, 1);
+  }
+
   // Anything flag-shaped left over is a typo or a space-separated form
   // (`--backend lean`): reject it rather than let it become a positional arg
   // or be silently ignored (which would e.g. verify with the wrong backend).
@@ -123,7 +134,7 @@ function main() {
     runBatch(cmd, backend, slow);
     return;
   }
-  runFile(cmd, filePath, backend, timeLimit, extraFlags);
+  runFile(cmd, filePath, backend, timeLimit, extraFlags, noVerify);
 }
 
 // LemmaScript-files.txt, parsed: `filepath [timeout_in_seconds] [extra dafny
@@ -162,7 +173,7 @@ function runBatch(cmd: string, backend: "lean" | "dafny", slow: boolean) {
   }
 }
 
-function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeLimit: number | undefined, extraFlags: string | undefined) {
+function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeLimit: number | undefined, extraFlags: string | undefined, noVerify = false) {
   const absPath = path.resolve(filePath);
   if (!existsSync(absPath)) {
     console.error(`File not found: ${absPath}`);
@@ -257,7 +268,7 @@ function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeL
       if (!dafnyVerify(dfyPath, dir, timeLimit, extraFlags)) process.exit(1);
       return;
     }
-    if (cmd === "regen") { dafnyRegen(genPath, dfyPath, basePath, text, dir, timeLimit, extraFlags); return; }
+    if (cmd === "regen") { dafnyRegen(genPath, dfyPath, basePath, text, dir, timeLimit, extraFlags, noVerify); return; }
     console.error(`Unknown command: ${cmd}`);
     process.exit(1);
   }

@@ -46,8 +46,8 @@ jobs:
 
       - uses: ./.github/actions/setup-dafny
 
-      - name: Regenerate Dafny and verify
-        run: ./regen-dafny.sh
+      - name: Regenerate Dafny (verify happens in the check step below)
+        run: ./regen-dafny.sh --no-verify
 
       - name: Check Dafny additions-only and verify
         run: |
