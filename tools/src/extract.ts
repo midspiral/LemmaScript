@@ -1880,7 +1880,8 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       const name = recordMatch[1];
       // `<T extends B>` → bare `T`: a Dafny type param, like the def path.
       const typeParams = recordMatch[2]?.split(",").map(s => s.trim().split(/\s+extends\s+/)[0].trim()).filter(Boolean);
-      const fields = recordMatch[3].split(",").map(f => f.trim()).filter(Boolean).map(f => {
+      // Split on `,` OR `;` — TS object types allow both.
+      const fields = recordMatch[3].split(/[,;]/).map(f => f.trim()).filter(Boolean).map(f => {
         const [fname, ftype] = f.split(":").map(s => s.trim());
         const synth = _synthFromTsTypeString(ftype);
         return { name: fname, tsType: synth ?? ftype };
