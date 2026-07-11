@@ -7,7 +7,7 @@
 
 import type { RawExpr, RawStmt, RawFunction, RawModule } from "./rawir.js";
 import type { Ty, TExpr, TStmt, TFunction, TModule, TParam, CallKind } from "./typedir.js";
-import { isBigInt } from "./typedir.js";
+import { isBigInt, tyEqual } from "./typedir.js";
 import { parseTsType, tyToCanonical } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
@@ -337,6 +337,7 @@ function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new 
   }
   if (ty.kind === "optional") return { kind: "optional", inner: expandAlias(ty.inner, typeDecls, seen) };
   if (ty.kind === "array") return { kind: "array", elem: expandAlias(ty.elem, typeDecls, seen) };
+  if (ty.kind === "tuple") return { kind: "tuple", elems: ty.elems.map(e => expandAlias(e, typeDecls, seen)) };
   if (ty.kind === "set") return { kind: "set", elem: expandAlias(ty.elem, typeDecls, seen) };
   if (ty.kind === "map") return { kind: "map", key: expandAlias(ty.key, typeDecls, seen), value: expandAlias(ty.value, typeDecls, seen) };
   return ty;
@@ -354,7 +355,7 @@ function getDiscriminant(ctx: Ctx, typeName: string): string | undefined {
 // unions, arrays, maps, sets, and unresolved generics are reference-compared at
 // runtime, so a structural proof over them is unsound. Returns true for those.
 function refEqHazard(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
-  if (ty.kind === "array" || ty.kind === "map" || ty.kind === "set") return true;
+  if (ty.kind === "array" || ty.kind === "map" || ty.kind === "set" || ty.kind === "tuple") return true;
   if (ty.kind === "user") {
     let decl = typeDecls.find(d => d.name === ty.name);
     if (!decl && ty.name.includes(".")) {
@@ -388,6 +389,7 @@ function isUnmodeledTy(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
   if (ty.kind === "unknown") return true;
   if (ty.kind === "optional") return isUnmodeledTy(ty.inner, typeDecls);
   if (ty.kind === "array") return isUnmodeledTy(ty.elem, typeDecls);
+  if (ty.kind === "tuple") return ty.elems.some(e => isUnmodeledTy(e, typeDecls));
   if (ty.kind === "set") return isUnmodeledTy(ty.elem, typeDecls);
   if (ty.kind === "map") return isUnmodeledTy(ty.key, typeDecls) || isUnmodeledTy(ty.value, typeDecls);
   if (ty.kind === "user") {
@@ -909,6 +911,15 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let idxTy: Ty;
       if (obj.ty.kind === "array") {
         idxTy = obj.ty.elem;
+      } else if (obj.ty.kind === "tuple") {
+        // Tuple projection: the position must be a literal — a tuple has a
+        // distinct type per slot, so a runtime index has no single result type
+        // and no backend projection (`t.0`/`t.1`) exists for it.
+        const elems = obj.ty.elems;
+        if (idx.kind !== "num" || !Number.isInteger(idx.value) || idx.value < 0 || idx.value >= elems.length) {
+          throw new Error(`tuple index must be an integer literal in [0, ${elems.length}); got ${tyToCanonical(idx.ty)} index into ${tyToCanonical(obj.ty)}`);
+        }
+        idxTy = elems[idx.value];
       } else if (obj.ty.kind === "map") {
         const objPath = asTExprAccessPath(obj);
         const idxPath = asTExprAccessPath(idx);
@@ -1081,6 +1092,17 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "arrayLiteral": {
+      // Expected-tuple context: type each element against its own slot type and
+      // produce a tuple literal (`[1, "a"]: [number, string]`).
+      if (ctx.returnTy.kind === "tuple") {
+        const slots = ctx.returnTy.elems;
+        const elems = e.elems.map((el, i) => {
+          const slot = slots[i];
+          const r = resolveExpr(el, slot ? { ...ctx, returnTy: slot } : ctx);
+          return slot ? coerceStr(r, slot) : r;
+        });
+        return { kind: "arrayLiteral", elems, ty: { kind: "tuple", elems: elems.map(x => x.ty) } };
+      }
       // Thread the expected element type into each element, so a record/union
       // literal in an array resolves to its named datatype rather than an
       // anonymous tuple (mirrors return-position and call-argument records, which
@@ -1095,6 +1117,12 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         return expectedElem ? coerceStr(r, expectedElem) : r;
       });
       const elemTy: Ty = elems.length > 0 ? elems[0].ty : { kind: "unknown" };
+      // No expected collection type: infer array vs tuple from the elements —
+      // heterogeneous element types can't be a homogeneous seq, so they form a
+      // tuple (`[1, "a"]` → `(int, string)`); otherwise a seq.
+      if (!expectedElem && elems.length >= 2 && !elems.every(x => tyEqual(x.ty, elemTy))) {
+        return { kind: "arrayLiteral", elems, ty: { kind: "tuple", elems: elems.map(x => x.ty) } };
+      }
       return { kind: "arrayLiteral", elems, ty: { kind: "array", elem: elemTy } };
     }
 
@@ -1373,6 +1401,10 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       } else if (s.names.length >= 2 && iterable.ty.kind === "map") {
         // Map destructuring: [key, value]
         nameTypes.push(iterable.ty.key, iterable.ty.value);
+      } else if (s.names.length >= 2 && iterable.ty.kind === "array" && iterable.ty.elem.kind === "tuple") {
+        // Array of tuples: bind each name to its slot type.
+        const elems = iterable.ty.elem.elems;
+        for (let i = 0; i < s.names.length; i++) nameTypes.push(elems[i] ?? { kind: "unknown" });
       } else {
         // General tuple destructuring: all unknown
         for (const _ of s.names) nameTypes.push({ kind: "unknown" });

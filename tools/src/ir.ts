@@ -22,6 +22,8 @@ export type Expr =
   | { kind: "toNat"; expr: Expr }                               // expr.toNat
   | { kind: "toReal"; expr: Expr }                             // int/nat → real coercion
   | { kind: "index"; arr: Expr; idx: Expr }                // arr[idx]!
+  | { kind: "tupleLiteral"; elems: Expr[] }                // (a, b) — heterogeneous tuple literal
+  | { kind: "tupleProj"; obj: Expr; index: number; arity: number }  // projection at a 0-based position; arity is needed only by Lean, whose right-nested Prod makes the last slot asymmetric (Dafny just uses `t.index`)
   | { kind: "record"; spread: Expr | null; fields: { name: string; value: Expr }[]; ctor?: string }
   | { kind: "arrayLiteral"; elems: Expr[] }
   | { kind: "emptyMap" }
@@ -225,6 +227,8 @@ export function anyExpr(e: Expr, pred: ExprPred): boolean {
     case "app": return e.args.some(a => anyExpr(a, pred));
     case "field": return anyExpr(e.obj, pred);
     case "index": return anyExpr(e.arr, pred) || anyExpr(e.idx, pred);
+    case "tupleLiteral": return e.elems.some(x => anyExpr(x, pred));
+    case "tupleProj": return anyExpr(e.obj, pred);
     case "implies": return e.premises.some(p => anyExpr(p, pred)) || anyExpr(e.conclusion, pred);
     case "record": return (e.spread ? anyExpr(e.spread, pred) : false) || e.fields.some(f => anyExpr(f.value, pred));
     case "arrayLiteral": return e.elems.some(x => anyExpr(x, pred));

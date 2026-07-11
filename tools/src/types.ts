@@ -43,6 +43,7 @@ export interface TypeDeclInfo {
 // ── TS type string → Ty (single source of truth) ───────────
 
 import type { Ty } from "./typedir.js";
+import { tyEqual } from "./typedir.js";
 import { Node, Project, SyntaxKind } from "ts-morph";
 import type { Project as TsProject, SourceFile, TypeNode } from "ts-morph";
 
@@ -135,9 +136,12 @@ function tyFromTypeNode(tn: TypeNode): Ty {
   }
   if (Node.isArrayTypeNode(tn)) return { kind: "array", elem: tyFromTypeNode(tn.getElementTypeNode()) };
   if (Node.isTupleTypeNode(tn)) {
-    const elems = tn.getElements();
+    const elems = tn.getElements().map(tyFromTypeNode);
     if (elems.length === 0) return { kind: "array", elem: { kind: "unknown" } };
-    return { kind: "array", elem: tyFromTypeNode(elems[0]) };
+    // Homogeneous tuple → seq; only heterogeneous tuples need the tuple
+    // representation.
+    if (elems.every(e => tyEqual(e, elems[0]))) return { kind: "array", elem: elems[0] };
+    return { kind: "tuple", elems };
   }
   if (Node.isFunctionTypeNode(tn)) {
     const params = tn.getParameters().map(p => {
@@ -197,6 +201,7 @@ export function tyToCanonical(ty: Ty): string {
     case "void":   return "void";
     case "unknown":return "unknown";
     case "array":  return `seq<${tyToCanonical(ty.elem)}>`;
+    case "tuple":  return `(${ty.elems.map(tyToCanonical).join(", ")})`;
     case "map":    return `map<${tyToCanonical(ty.key)}, ${tyToCanonical(ty.value)}>`;
     case "set":    return `set<${tyToCanonical(ty.elem)}>`;
     case "optional": return `Option<${tyToCanonical(ty.inner)}>`;
