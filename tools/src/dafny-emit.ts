@@ -634,7 +634,7 @@ function emitStmt(s: Stmt, indent: number): string {
     case "break":
       return `${pad}break;`;
     case "continue":
-      throw new Error("Unsupported Dafny construct: 'continue' statement");
+      return `${pad}continue;`;
 
     case "if": {
       let out = `${pad}if ${emitExpr(s.cond)} {\n${emitStmts(s.then, indent + 1)}\n${pad}}`;

@@ -66,6 +66,7 @@ A handful of `Math.*` helpers are understood: `abs`, `min`, `max`, `floor`, `cei
 | `switch` on a discriminant | ✅ — becomes a `match` |
 | `if`-chain on a `.tag` field | ✅ — also becomes a `match` |
 | `break` | ✅ — add `//@ done_with` to say what holds on exit |
+| `continue` | ✅ |
 | `return` inside a loop | ✅ on Dafny; on Lean, restructure to `break` + a result variable |
 | `throw new Error(...)` | ✅ — modeled as an unreachable point; characterize valid input with `//@ requires` instead of relying on it |
 
