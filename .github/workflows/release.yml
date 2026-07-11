@@ -19,6 +19,9 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment:
+      name: npm-publish
+      url: https://www.npmjs.com/package/lemmascript
     permissions:
       id-token: write      # OIDC for trusted publishing + provenance
       contents: read
