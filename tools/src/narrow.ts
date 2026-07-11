@@ -145,7 +145,7 @@ function walkStmt(s: TStmt): TStmt {
   // array rule fires; independent narrows commute, so the order is harmless.)
   // && rules fire before the simple rule because they produce nested ifs whose
   // inner shape doesn't match the simple rule directly.
-  return ruleIfAndOptional(r) ?? ruleIfAndArrayIsArray(r) ?? ruleIfOptionalSimple(r) ?? ruleExprStmtAndOptional(r) ?? r;
+  return ruleIfAndOptional(r) ?? ruleIfAndArrayIsArray(r) ?? ruleIfOptionalSimple(r) ?? ruleExprStmtAndOptional(r) ?? ruleOptionalIndexBinding(r) ?? r;
 }
 
 function walkStmts(stmts: TStmt[]): TStmt[] {
@@ -160,7 +160,7 @@ function walkStmts(stmts: TStmt[]): TStmt[] {
       i += tagged.consumed - 1;
       continue;
     }
-    const consumed = ruleEarlyReturnOrChain(s, rest) ?? ruleEarlyReturnConsume(s, rest);
+    const consumed = ruleEarlyReturnOrChain(s, rest) ?? ruleEarlyReturnConsume(s, rest) ?? ruleEarlyReturnOptChainCompare(s, rest);
     if (consumed) {
       result.push(walkStmt(consumed));
       return result;
@@ -302,6 +302,50 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[]): TStmt | null {
     }];
   }
   return inner[0];
+}
+
+/** Rule: `if (opt?.chain !== lit) terminate; rest` where `opt` is optional.
+ *  `opt?.chain` is `undefined` when `opt` is None, and `undefined !== lit` is
+ *  true, so the None case takes the terminating branch — falling through to
+ *  `rest` proves `opt` is Some. Rewrite to
+ *    someMatch opt { Some(v) => [if (v.chain !== lit) terminate; rest]; None => terminate }
+ *  narrowing `opt` to `v` across `rest` (transform substitutes the scrutinee) and
+ *  handing the now-non-optional inner guard to the ordinary rules (e.g.
+ *  discriminant narrowing). Bound-optional companion to ruleEarlyReturnConsume,
+ *  which handles only a bare presence check (`opt !== undefined`). Restricted to
+ *  `!==` so the None case is guaranteed to terminate. */
+function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[]): TStmt | null {
+  if (s.kind !== "if") return null;
+  if (rest.length === 0) return null;
+  if (s.else.length !== 0 || !isTerminating(s.then)) return null;
+  const c = s.cond;
+  if (c.kind !== "binop" || c.op !== "!==") return null;
+  const oc = c.left.kind === "optChain" ? c.left : c.right.kind === "optChain" ? c.right : null;
+  if (!oc || oc.kind !== "optChain" || oc.obj.ty.kind !== "optional") return null;
+  const lit = c.left === oc ? c.right : c.left;
+  const innerTy = oc.obj.ty.inner;
+  const hint = binderHintFor(oc.obj);
+  if (hint === null) return null;
+  const binder = freshName(hint);
+  const binderVar: TExpr = { kind: "var", name: binder, ty: innerTy };
+  const unwrapped = applyChain(binderVar, oc.chain);
+  // applyChain rebuilds the field without the `isDiscriminant` flag resolve sets
+  // on a direct `x.disc`; restore it when the unwrapped access is the binder
+  // union's discriminant, so the inner guard feeds discriminant narrowing.
+  if (unwrapped.kind === "field" && unwrapped.obj.ty.kind === "user") {
+    const base = unwrapped.obj.ty.name.replace(/<.*/, "");
+    const decl = _typeDecls.find(d => d.name === base);
+    if (decl?.kind === "discriminated-union" && decl.discriminant === unwrapped.field) {
+      unwrapped.isDiscriminant = true;
+    }
+  }
+  const innerGuard: TExpr = { kind: "binop", op: "!==", left: unwrapped, right: lit, ty: { kind: "bool" } };
+  // Keep `rest` as trailing statements (not an else branch) — `s.then` terminates,
+  // so `if (g) terminate; rest` ≡ `if (g) terminate else rest`, and the trailing
+  // form lets the ordinary early-exit rules (e.g. discriminant narrowing) fire on
+  // the now-non-optional inner guard when `chain` is a union discriminant.
+  const someBody: TStmt[] = [{ kind: "if", cond: innerGuard, then: s.then, else: [] }, ...rest];
+  return { kind: "someMatch", scrutinee: oc.obj, binder, binderTy: innerTy, someBody, noneBody: s.then };
 }
 
 /** Rule (expression): `e !== undefined ? a : b`. */
@@ -476,6 +520,28 @@ function ruleOptChainIndex(e: TExpr): TExpr | null {
   const body = applyChain(e.obj, e.chain); // arr[i] — in bounds under `cond`
   const undef: TExpr = { kind: "var", name: "undefined", ty: { kind: "void" } };
   return { kind: "conditional", cond, then: body, else: undef, ty: e.ty };
+}
+
+/** Rule (statement): reconcile a `const e = arr[i]` whose binding is optional
+ *  (`e: T | undefined`) but whose array-index initializer is total (`T`). Model
+ *  the index as its JS semantics — `e := (0 <= i && i < arr.length) ? arr[i] :
+ *  undefined` — so `e` is a real `Option<T>` and a later `e?.f` someMatch is
+ *  well-typed; an in-bounds proof makes the None branch dead, so safely-indexed
+ *  code verifies as if total. Bound-form sibling of ruleOptChainIndex /
+ *  ruleNullishIndex. Fires purely on the optional-binding/total-index shape (the
+ *  usual source is `noUncheckedIndexedAccess`, but the flag itself is never
+ *  checked). Skipped when the element type is already optional: no mismatch. */
+function ruleOptionalIndexBinding(s: TStmt): TStmt | null {
+  if (s.kind !== "let") return null;
+  if (s.ty.kind !== "optional") return null;
+  const init = s.init;
+  if (init.kind !== "index") return null;
+  if (init.obj.ty.kind !== "array") return null;
+  if (init.ty.kind === "optional") return null;  // array-of-optionals: not a flag artifact
+  const cond = arrayBoundsCond(init.obj, init.idx);
+  const undef: TExpr = { kind: "var", name: "undefined", ty: { kind: "void" } };
+  const guarded: TExpr = { kind: "conditional", cond, then: init, else: undef, ty: s.ty };
+  return { ...s, init: guarded };
 }
 
 /** Rule (expression): `obj?.<chain>` — single-eval optional chain.
