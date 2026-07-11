@@ -335,7 +335,8 @@ function coerceCondToBool(cond: Expr, ty: Ty): Expr {
     return { kind: "binop", op: "≠", left: cond, right: { kind: "num", value: 0 } };
   if (ty.kind === "string")
     return { kind: "binop", op: ">", left: { kind: "field", obj: cond, field: "length" }, right: { kind: "num", value: 0 } };
-  if (ty.kind === "array")
+  // Arrays, objects, maps, sets, tuples are always truthy in JS (even `[]`/`{}`).
+  if (["array", "user", "map", "set", "tuple"].includes(ty.kind))
     return { kind: "bool", value: true };
   return cond;
 }
