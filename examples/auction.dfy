@@ -30,6 +30,65 @@ method highestBid(bids: seq<Option<Bid>>, key: string, reserve: int) returns (re
   return best;
 }
 
+method winningBidder(bids: seq<Option<Bid>>, key: string, reserve: int) returns (res: int)
+  ensures ((res == -1) || ((0 <= res) && (res < |bids|)))
+{
+  var winner := -1;
+  var best := reserve;
+  var i := 0;
+  while (i < |bids|)
+    invariant ((winner == -1) || ((0 <= winner) && (winner < |bids|)))
+  {
+    var bid := bids[i];
+    match bid {
+      case Some(i_bid_val) =>
+        if (i_bid_val.key != key) {
+          i := (i + 1);
+          continue;
+        }
+        if (i_bid_val.amount > best) {
+          best := i_bid_val.amount;
+          winner := i;
+        }
+        i := (i + 1);
+      case None =>
+        i := (i + 1);
+    }
+  }
+  return winner;
+}
+
+method secondPrice(bids: seq<Option<Bid>>, key: string, reserve: int) returns (res: int)
+  ensures (res >= reserve)
+{
+  var best := reserve;
+  var second := reserve;
+  var i := 0;
+  while (i < |bids|)
+    invariant (second >= reserve)
+    invariant (best >= second)
+  {
+    var bid := bids[i];
+    match bid {
+      case Some(i_bid_val) =>
+        if (i_bid_val.key != key) {
+          i := (i + 1);
+          continue;
+        }
+        if (i_bid_val.amount > best) {
+          second := best;
+          best := i_bid_val.amount;
+        } else if (i_bid_val.amount > second) {
+          second := i_bid_val.amount;
+        }
+        i := (i + 1);
+      case None =>
+        i := (i + 1);
+    }
+  }
+  return second;
+}
+
 method firstFunded(bids: seq<Option<Bid>>, key: string) returns (res: int)
   ensures ((res == -1) || ((0 <= res) && (res < |bids|)))
 {
