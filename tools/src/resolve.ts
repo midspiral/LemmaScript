@@ -189,10 +189,9 @@ function detectOptionalCheck(cond: RawExpr, ctx: Ctx): {
   if (cond.right.kind === "var" && cond.right.name === "undefined") optExpr = cond.left;
   if (cond.left.kind === "var" && cond.left.name === "undefined") optExpr = cond.right;
   if (!optExpr) {
-    // `x?.disc === 'lit'` / `x?.disc !== 'lit'` (lit not undefined): an optional
-    // chain compared to a concrete literal implies its base `x` is present (a
-    // None base makes `x?.disc` undefined, which never equals a real literal).
-    // `===` narrows the then-branch; `!==` narrows the else-branch.
+    // `x?.disc === 'lit'` implies `x` is present (a None base makes `x?.disc`
+    // undefined, never equal to a real literal) — narrow the then-branch.
+    if (cond.op !== "===") return null;
     const oc = cond.left.kind === "optChain" ? cond.left
       : cond.right.kind === "optChain" ? cond.right : null;
     if (oc) {
@@ -200,7 +199,7 @@ function detectOptionalCheck(cond: RawExpr, ctx: Ctx): {
       const litIsUndef = lit.kind === "var" && lit.name === "undefined";
       if (!litIsUndef) {
         const inner = classifyOptExpr(oc.obj, ctx);
-        if (inner) return { ...inner, inThen: cond.op === "===" };
+        if (inner) return { ...inner, inThen: true };
       }
     }
     return null;
