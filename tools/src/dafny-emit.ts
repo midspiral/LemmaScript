@@ -1003,12 +1003,21 @@ const SEQ_JOIN = `function SeqJoin(s: seq<string>, sep: string): string
   else s[0] + sep + SeqJoin(s[1..], sep)
 }`;
 
-const SAFE_SLICE = `function SafeSlice<T>(s: seq<T>, lo: int, hi: int): seq<T>
+const SAFE_SLICE = `function NormalizeSliceIndex(n: nat, i: int): int
+  ensures 0 <= NormalizeSliceIndex(n, i) <= n as int
+{
+  if i < 0 then
+    if n as int + i < 0 then 0 else n as int + i
+  else if i > n as int then n as int
+  else i
+}
+
+function SafeSlice<T>(s: seq<T>, lo: int, hi: int): seq<T>
   ensures |SafeSlice(s, lo, hi)| <= |s|
 {
-  var lo' := if lo < 0 then 0 else if lo > |s| as int then |s| else lo;
-  var hi' := if hi > |s| as int then |s| else if hi < lo' then lo' else hi;
-  s[lo'..hi']
+  var lo' := NormalizeSliceIndex(|s|, lo);
+  var hi' := NormalizeSliceIndex(|s|, hi);
+  if hi' < lo' then [] else s[lo'..hi']
 }`;
 
 const STRING_INDEX_OF = `function StringIndexOf(s: string, sub: string): int
