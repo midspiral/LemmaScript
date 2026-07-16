@@ -76,7 +76,14 @@ Implemented as two sibling workflows on the same tag trigger:
   2. Under **Trusted Publisher**, choose **GitHub Actions** and enter: organization/user `midspiral`, repository `LemmaScript`, workflow filename `release.yml` (exact filename; renaming the workflow later means updating this), environment left blank. Save.
 
   That's all — the workflow authenticates via short-lived OIDC tokens minted per run.
-- [`release-sync.yml`](.github/workflows/release-sync.yml) — **sync.** Copies the release's `SPEC.md` + `tools/src` into the skills repo's machine-owned `lemmascript/reference/`, commits as `sync from lemmascript vX.Y.Z`, tags the skills repo in lockstep, and bumps the kit's submodules to tip in `midspiral/lemmascript-kit` (`LemmaScript` to the tagged commit, `.claude/skills` to the fresh sync commit). Validated live at v0.5.11.
+- [`release-sync.yml`](.github/workflows/release-sync.yml) — **sync.** Copies the release's `SPEC.md` + `tools/src` into the skills repo's machine-owned `lemmascript/reference/`, commits as `sync from lemmascript vX.Y.Z`, and tags the skills repo in lockstep. It does **not** bump the kit — that is now decoupled (see below). Validated live at v0.5.11.
+
+**Kit tracks tip, not just releases.** The `midspiral/lemmascript-kit` superproject's two submodules advance on every source push, not only on a release tag, via a small `kit-bump.yml` in each source repo:
+
+- [`kit-bump.yml`](.github/workflows/kit-bump.yml) in **LemmaScript** — on push to `main`, advances the kit's `LemmaScript` submodule to the pushed commit.
+- `kit-bump.yml` in **lemmascript-skills** — on push to `main`, advances the kit's `.claude/skills` submodule. This fires on ordinary skill edits *and* on the per-release `reference/` sync commit above, so `.claude/skills` still moves on every release — just as a side effect of the skills push rather than a step in `release-sync.yml`.
+
+  Each bumper is idempotent (no-op when the kit already points at the commit) and guarded two ways against the release-time race where both push to the kit at once: a same-repo `concurrency` group serializes a repo's own bumps, and a `git pull --rebase` retry loop absorbs a cross-repo push landing mid-run (the two touch different submodule paths, so rebases auto-merge). A single `release-sync` step doing both bumps atomically was the alternative; per-repo bumpers were chosen so the kit follows tip continuously rather than lurching once per release.
 
 The release loop, in full:
 
@@ -90,13 +97,18 @@ The two workflows run in parallel; if publish fails while sync succeeds, skills/
 Design points:
 
 - **Trigger (decided).** Tag-push. `npm version` already creates the annotated `vX.Y.Z` tag; a plain `git push` does not send tags, so the tag reaches GitHub via `git push --follow-tags` — set `git config push.followTags true` once to make it automatic rather than a habit. Both workflows carry a `workflow_dispatch` input (tag name) for backfills and re-runs.
-- **Cross-repo auth.** The sync workflow needs `contents: write` on the skills repo and the kit repo: a fine-grained PAT (`SYNC_TOKEN` secret in the LemmaScript repo) scoped to exactly those two. It pushes to the **public** skills repo only — the private mirror remote is untouched by automation. Publishing needs no secret at all — trusted publishing is OIDC.
+- **Cross-repo auth.** The workflows that push across repos need `contents: write` on the skills repo and the kit repo: a fine-grained PAT (`SYNC_TOKEN`) scoped to exactly those two. `release-sync.yml` and this repo's `kit-bump.yml` read it from the **LemmaScript** repo's secrets; the skills repo's `kit-bump.yml` reads it from the **lemmascript-skills** repo's secrets. The **same token value** serves all three — its scope already covers both target repos — but Actions secrets are per-repo, so it must be set in both source repos. It pushes to the **public** skills repo only — the private mirror remote is untouched by automation. Publishing needs no secret at all — trusted publishing is OIDC.
 
   Creating/rotating `SYNC_TOKEN` (the one manual step; repo maintainer only):
   1. GitHub → Settings → Developer settings → Fine-grained tokens: resource owner **midspiral**, repository access limited to **lemmascript-skills** and **lemmascript-kit**, permission **Contents: read & write**. (If midspiral is an org, its settings must allow fine-grained PATs — worth a glance.)
-  2. `gh secret set SYNC_TOKEN -R midspiral/LemmaScript` and paste the token.
+  2. Set it as a secret in **both** source repos (same value):
+     ```sh
+     gh secret set SYNC_TOKEN -R midspiral/LemmaScript
+     gh secret set SYNC_TOKEN -R midspiral/lemmascript-skills
+     ```
+     Or, if `midspiral` is an org, one org secret instead: `gh secret set SYNC_TOKEN --org midspiral --repos LemmaScript,lemmascript-skills`.
 
-  Fine-grained PATs expire — when the workflow starts failing on the push steps with auth errors, rotate by repeating these two steps.
+  Fine-grained PATs expire — when the workflows start failing on the push steps with auth errors, rotate by repeating these steps (both repos, or the single org secret).
 - **Direct push, not PR.** The sync only writes `reference/` (machine-owned), so there is nothing for a human to review; a PR would just be a button to forget. Human skill edits flow through normal PRs and never touch `reference/`, so the two streams cannot conflict.
 - **Built-in checks, idempotent by construction.** The sync sanity-checks its output (non-empty spec, `src/lsc.ts` present), commits only when `reference/` actually changed, and tags only if the tag doesn't already exist — so a re-run, or a release that was already hand-synced, is a clean no-op.
 - **No drift alarm needed.** With both workflows driven by the same tag, "npm has vX.Y.Z but skills don't" (or vice versa) can only mean a red workflow run, which GitHub already surfaces. A scheduled comparison job would be redundant mechanism.

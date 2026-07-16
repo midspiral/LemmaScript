@@ -1,6 +1,9 @@
 # Release sync: on each vX.Y.Z tag, copy the release's spec + compiler source into
-# the skills repo's machine-owned reference/, tag it in lockstep, and bump the
-# kit's submodules to tip. See DESIGN_NPM.md §3.
+# the skills repo's machine-owned reference/ and tag it in lockstep. The kit's
+# submodules are NOT bumped here — they track tip via kit-bump.yml in each source
+# repo (this repo's kit-bump.yml follows LemmaScript main; lemmascript-skills'
+# kit-bump.yml follows skills main, which the reference-sync commit below advances).
+# See DESIGN_NPM.md §3.
 #
 # Cross-repo pushes use the SYNC_TOKEN secret: a fine-grained PAT with
 # Contents read/write on midspiral/lemmascript-skills and midspiral/lemmascript-kit.
@@ -63,21 +66,3 @@ jobs:
             git push origin "refs/tags/${TAG}"
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Bump kit submodules to tip
-        run: |
-          TAG='${{ steps.tag.outputs.tag }}'
-          git clone "https://x-access-token:${{ secrets.SYNC_TOKEN }}@github.com/midspiral/lemmascript-kit.git" kit
-          cd kit
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git submodule update --init -- LemmaScript .claude/skills
-          git -C LemmaScript fetch origin "refs/tags/${TAG}"
-          git -C LemmaScript checkout FETCH_HEAD
-          git -C .claude/skills fetch origin '${{ steps.skills.outputs.sha }}'
-          git -C .claude/skills checkout '${{ steps.skills.outputs.sha }}'
-          git add LemmaScript .claude/skills
-          if ! git diff --cached --quiet; then
-            git commit -m "bump submodules: lemmascript ${TAG}"
-            git push
-          fi

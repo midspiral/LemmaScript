@@ -1,0 +1,61 @@
+# Kit bump: on every push to main, advance the lemmascript-kit superproject's
+# `LemmaScript` submodule to this commit, so the kit tracks tip (not just releases).
+# The sibling lemmascript-skills repo has its own kit-bump.yml that advances the
+# `.claude/skills` submodule the same way. See DESIGN_NPM.md §3.
+#
+# Cross-repo push uses the SYNC_TOKEN secret: a fine-grained PAT with Contents
+# read/write on midspiral/lemmascript-kit.
+name: Kit bump
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'LemmaScript commit to pin (default: latest main)'
+        required: false
+
+# Serialize this repo's bumps so two quick pushes can't race each other. The
+# cross-repo race (a skills bump landing between our fetch and push) is handled
+# by the rebase-retry loop below, which a concurrency group cannot cover.
+concurrency:
+  group: kit-bump-lemmascript
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve commit
+        id: rev
+        run: echo "sha=${{ github.event.inputs.sha || github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump kit LemmaScript submodule
+        env:
+          SHA: ${{ steps.rev.outputs.sha }}
+        run: |
+          git clone "https://x-access-token:${{ secrets.SYNC_TOKEN }}@github.com/midspiral/lemmascript-kit.git" kit
+          cd kit
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git submodule update --init -- LemmaScript
+          git -C LemmaScript fetch origin "$SHA"
+          git -C LemmaScript checkout "$SHA"
+          git add LemmaScript
+          if git diff --cached --quiet; then
+            echo "kit already at ${SHA} — nothing to bump"
+            exit 0
+          fi
+          git commit -m "bump submodule: LemmaScript ${SHA}"
+          # The skills bumper may push to the kit concurrently; rebase and retry.
+          for attempt in 1 2 3 4 5; do
+            if git push; then exit 0; fi
+            echo "push rejected (attempt ${attempt}); rebasing on latest kit main"
+            git pull --rebase origin main
+          done
+          echo "ERROR: could not push kit bump after retries" >&2
+          exit 1
