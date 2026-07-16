@@ -464,8 +464,13 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // Same unsupported-real story as the `real` type case in tyToLean.
       throw new Error("real arithmetic is not supported by the Lean backend (needs noncomputable ℝ / Mathlib).");
 
-    case "index":
-      return `${emitExpr(e.arr)}[${emitExpr(e.idx)}]!`;
+    case "index": {
+      const arr = emitExpr(e.arr);
+      // Parenthesize a low-precedence array expr (e.g. a function application)
+      // so the index binds to the whole thing, not its last token.
+      const wrap = e.arr.kind === "app" || e.arr.kind === "binop" || e.arr.kind === "methodCall" || e.arr.kind === "if" || e.arr.kind === "let" || e.arr.kind === "unop";
+      return `${wrap ? `(${arr})` : arr}[${emitExpr(e.idx)}]!`;
+    }
 
     case "record": {
       const fields = e.fields.map(f => `${escapeName(f.name)} := ${emitExpr(f.value)}`);
@@ -644,6 +649,48 @@ function emitStmt(s: Stmt, indent: number): string {
 
 // ── Declaration emission ─────────────────────────────────────
 
+/** Collect every function/variable name an IR tree references (stripping any
+ *  `Pure.` qualifier), via a generic walk over `app`/`var` nodes. */
+function collectRefNames(node: unknown, into: Set<string>): void {
+  if (node === null || typeof node !== "object") return;
+  if (Array.isArray(node)) { for (const x of node) collectRefNames(x, into); return; }
+  const n = node as { kind?: string; fn?: unknown; name?: unknown };
+  if (n.kind === "app" && typeof n.fn === "string") into.add(n.fn.replace(/^Pure\./, ""));
+  if (n.kind === "var" && typeof n.name === "string") into.add(n.name.replace(/^Pure\./, ""));
+  for (const k of Object.keys(node)) collectRefNames((node as Record<string, unknown>)[k], into);
+}
+
+/** Lean requires definition-before-use: order sibling decls so one that
+ *  references another is emitted after it. Cycles are left in place (they would
+ *  need a `mutual` block). Bails to the original order if any decl is unnamed. */
+function orderDeclsByDeps(decls: Decl[]): Decl[] {
+  const named = decls.filter((d): d is Decl & { name: string } => typeof (d as { name?: unknown }).name === "string");
+  if (named.length !== decls.length) return decls;
+  const names = new Set(named.map(d => d.name));
+  const byName = new Map(named.map(d => [d.name, d]));
+  const deps = new Map<string, string[]>();
+  for (const d of named) {
+    const refs = new Set<string>();
+    collectRefNames(d, refs);
+    refs.delete(d.name);
+    deps.set(d.name, [...refs].filter(r => names.has(r)));
+  }
+  const sorted: Decl[] = [];
+  const done = new Set<string>();
+  const onStack = new Set<string>();
+  const visit = (name: string) => {
+    if (done.has(name) || onStack.has(name)) return;
+    onStack.add(name);
+    for (const dep of deps.get(name) ?? []) visit(dep);
+    onStack.delete(name);
+    done.add(name);
+    const def = byName.get(name);
+    if (def) sorted.push(def);
+  };
+  for (const d of named) visit(d.name);
+  return sorted;
+}
+
 function emitDecl(d: Decl): string {
   switch (d.kind) {
     case "inductive": {
@@ -725,7 +772,7 @@ function emitDecl(d: Decl): string {
 
     case "namespace": {
       const lines = [`namespace ${d.name}`];
-      for (const inner of d.decls) lines.push("", emitDecl(inner));
+      for (const inner of orderDeclsByDeps(d.decls)) lines.push("", emitDecl(inner));
       lines.push("", `end ${d.name}`);
       return lines.join("\n");
     }
