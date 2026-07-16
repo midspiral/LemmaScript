@@ -306,14 +306,24 @@ function emitExpr(e: Expr): string {
           needPreamble("SeqJoin");
           return `SeqJoin(${obj}, ${args[0]})`;
         }
-        if (e.method === "some" && e.args[0].kind === "lambda" &&
-            e.args[0].body.length === 1 && e.args[0].body[0].kind === "return") {
+        // `.some(pred)`: inline a single-return lambda's body, else apply the
+        // predicate (e.g. a function reference).
+        if (e.method === "some") {
           const lam = e.args[0];
-          const ret = lam.body[0];
-          if (ret.kind !== "return") throw new Error("unreachable");
-          const { binder: p, body: v } = comprehensionBinder(lam, ret.value, e.obj);
-          const body = emitExpr(v);
+          let p: string, body: string;
+          if (lam.kind === "lambda" && lam.body.length === 1 && lam.body[0].kind === "return") {
+            const cb = comprehensionBinder(lam, lam.body[0].value, e.obj);
+            p = cb.binder;
+            body = emitExpr(cb.body);
+          } else {
+            p = escapeName(freshBinder("x", e.obj, e.args[0]));
+            body = `${args[0]}(${p})`;
+          }
           return `(exists ${p} :: ${p} in ${obj} && ${body})`;
+        }
+        // `.reduce(f, init)` → Std's FoldLeft(f, init, xs) (same arg order).
+        if (e.method === "reduce" && args.length === 2) {
+          return `Std.Collections.Seq.FoldLeft(${args[0]}, ${args[1]}, ${obj})`;
         }
       }
       // String methods
