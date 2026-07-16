@@ -795,8 +795,10 @@ function emitDecl(d: Decl): string {
       if (d.requires.length === 0 && d.ensures.length === 0) return sig;
       // Spec axiom: ∀ params, req1 → … → (ens1 ∧ … ∧ ensN). Tagged `@[grind]` so
       // the proof automation can use it, matching the ghost-function convention.
-      const hyps = d.requires.map(emitExpr);
-      const concl = d.ensures.map(emitExpr).join(" ∧ ");
+      // Parenthesize each clause: an unwrapped `∀ k, P` would otherwise swallow
+      // the following ` ∧ …` conjuncts into its body.
+      const hyps = d.requires.map(e => `(${emitExpr(e)})`);
+      const concl = d.ensures.map(e => `(${emitExpr(e)})`).join(" ∧ ");
       const axBody = [...hyps, concl].join(" → ");
       const axiom = `@[grind] axiom ${escapeName(d.name)}_spec${params ? ` ${params}` : ""} : ${axBody}`;
       return `${sig}\n${axiom}`;
