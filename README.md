@@ -86,6 +86,52 @@ lsc gen --backend=lean src/myModule.ts
 lake build
 ```
 
+## Continuous Integration
+
+LemmaScript ships a **reusable GitHub Actions workflow** that regenerates your artifacts, verifies them, and fails the build if any committed generated file is out of date. Call it from your own repo's workflow:
+
+```yaml
+# .github/workflows/lemmascript.yml
+name: LemmaScript
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    uses: midspiral/LemmaScript/.github/workflows/verify.yml@main
+    with:
+      backend: dafny      # dafny | lean | dafny-slow
+```
+
+The workflow installs the toolchain and (per `backend`) the Dafny or Lean stack, then runs `tools/check.sh`, which batches over a **`LemmaScript-files.txt`** at your repo root. This file is the list of sources CI verifies — you create and maintain it. One entry per line, `filepath [timeout] [extra dafny flags…]`:
+
+```
+src/domain.ts
+src/patch.ts 120
+src/heavy.ts 300 --isolate-assertions
+```
+
+The optional second column is a per-file timeout in seconds; anything after it is passed verbatim to Dafny. The same list drives `lsc check` locally when you run it with no file argument, so CI and your local runs verify exactly the same set. To verify additional Dafny files outside that list, add an executable `check-extra.sh` at the root and it runs automatically (Dafny backends only).
+
+Inputs (all optional):
+
+| Input | Default | Purpose |
+|-------|---------|---------|
+| `backend` | `dafny` | `dafny`, `lean`, or `dafny-slow` (isolate-assertions / long-running proofs) |
+| `node-version` | `24` | Node.js version |
+| `ls-ref` | `main` | LemmaScript ref to verify against |
+| `typecheck` | `true` | Run `npm ci && npm run typecheck` in the calling repo first |
+
+To verify against **both** backends, add a second job with `backend: lean`.
+
+Examples:
+- **[talktimer-lemmascript](https://github.com/midspiral/talktimer-lemmascript/blob/main/.github/workflows/lemmascript.yml)** — Dafny-only.
+- **[pi-lemmascript](https://github.com/midspiral/pi-lemmascript/blob/lemmascript/.github/workflows/lemmascript.yml)** — Dafny + Lean (two jobs).
+
 ## Annotations
 
 ```typescript
