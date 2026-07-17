@@ -21,7 +21,7 @@ Formal verification extends that idea to *behavior*. Instead of just "this funct
 ## What you'll use
 
 - **LemmaScript**: a toolchain that takes your TypeScript code, reads special comments you've added, and generates a formal model that a theorem prover can check. Your TypeScript runs unchanged; the verification is a parallel process.
-- **Dafny**: the theorem prover that checks your proofs. You won't write Dafny directly (LemmaScript generates it and an agent completes proof), but you'll see its output when verification succeeds or fails.
+- **Dafny**: the theorem prover that checks your proofs. You won't write Dafny directly (LemmaScript generates it and an agent completes the proofs), but you'll see its output when verification succeeds or fails.
 - **An AI agent** (like Claude Code or Codex): your partner for this build. You'll describe what you want; the agent will draft code and specifications. You review, modify, and direct.
 
 ## AI use

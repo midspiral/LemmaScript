@@ -48,17 +48,17 @@ function rehypeRepoLinks() {
 // only touch links whose visible text IS a bare *.md filename, so intentional
 // text like `[SPEC.md §2]` or `[TOOLS.md#narrow-rules]` is left untouched.
 const LINK_NAMES = {
-  "/": "Overview",
-  "/subset/": "Overview (Subset)",
-  "/getting-started/": "Getting Started",
-  "/howto_greenfield/": "Greenfield tutorial",
+  "/case-studies/": "Case studies & examples",
+  "/subset/": "Supported TypeScript subset",
+  "/getting-started/": "Getting started in an existing codebase",
+  "/howto_greenfield/": "Start a new project",
   "/spec/": "Specification",
   "/spec-dafny/": "Dafny backend spec",
   "/spec-lean/": "Lean backend spec",
-  "/tools/": "Tools",
+  "/tools/": "Toolchain architecture",
   "/design/": "Design",
   "/architecture-narrowing/": "Narrowing architecture",
-  "/agents/": "Agents",
+  "/agents/": "Guidance for agents",
 }
 const BARE_FILENAME = /^[A-Za-z0-9_]+\.md$/
 
@@ -91,11 +91,12 @@ export default defineConfig({
       social: [{ icon: "github", label: "GitHub", href: "https://github.com/midspiral/LemmaScript" }],
       sidebar: [
         {
-          label: "Getting started",
+          label: "Start here",
           items: [
-            { label: "Overview (Subset)", link: "/subset/" },
-            { label: "Overview (Brownfield)", link: "/getting-started/" },
-            { label: "Howto (Greenfield)", link: "/howto_greenfield/" },
+            { label: "What is LemmaScript?", link: "/" },
+            { label: "Installation", link: "/installation/" },
+            { label: "How the loop works", link: "/how-the-loop-works/" },
+            { label: "How to: Brownfield", link: "/getting-started/" },
           ],
         },
         {
@@ -117,22 +118,25 @@ export default defineConfig({
           ],
         },
         {
-          label: "Specification",
+          label: "Reference",
           items: [
-            { label: "Overview", link: "/spec/" },
+            { label: "CLI (lsc)", link: "/reference/cli/" },
+            { label: "Supported TypeScript subset", link: "/subset/" },
+            { label: "Specification", link: "/spec/" },
             { label: "Dafny backend", link: "/spec-dafny/" },
             { label: "Lean backend", link: "/spec-lean/" },
           ],
         },
-        { label: "Tools", link: "/tools/" },
         {
-          label: "Design",
+          label: "Under the hood",
           items: [
             { label: "Design rationale", link: "/design/" },
+            { label: "Toolchain architecture", link: "/tools/" },
             { label: "Architecture: narrowing", link: "/architecture-narrowing/" },
+            { label: "Guidance for agents", link: "/agents/" },
+            { label: "Case studies & examples", link: "/case-studies/" },
           ],
         },
-        { label: "Agents", link: "/agents/" },
       ],
     }),
   ],

@@ -6,7 +6,7 @@ description: "Translate the design document into a verified domain model."
 ## What this step produces
 
 A single file: `src/domain.ts`.
-[Sample.](https://github.com/midspiral/quorum-tutorial-lemmascript/blob/main/src/domain.dfy)
+[Sample.](https://github.com/midspiral/quorum-tutorial-lemmascript/blob/main/src/domain.ts)
 This is the verified core. Everything else in the app (UI, network, storage) will import from this file and should never duplicate its logic.
 
 ## Tell your agent what to do

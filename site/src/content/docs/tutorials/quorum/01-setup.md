@@ -24,35 +24,38 @@ Confirm:
 dafny --version
 ```
 
+## Install LemmaScript
+
+One global install puts the `lsc` toolchain (and companions like `lsc claimcheck`)
+on your PATH:
+
+```bash
+npm install -g lemmascript
+```
+
 ## Set up your workspace
 
-LemmaScript needs to be a sibling directory to your project. Create a parent folder that holds both:
+Create the project, then clone the agent skills into it — they teach your agent the
+annotation grammar and the verification loop, and they carry the Quorum design
+document you'll use in the next step:
 
-```bash
-git clone --recursive https://github.com/midspiral/lemmascript-kit quorum-tutorial
-cd quorum-tutorial
-```
-
-LemmaScript (https://github.com/midspiral/LemmaScript.git) should already be cloned inside it:
-```bash
-cd LemmaScript 
-npm install && npm run build
-cd ..
-```
-
-Create your app directory next to it, as a sibling:
 ```bash
 mkdir quorum && cd quorum
 npm init -y
 npm install typescript --save-dev
+git clone https://github.com/midspiral/lemmascript-skills <your/skills/dir>
 ```
+
+`<your/skills/dir>` is wherever your agent discovers skills — for Claude Code
+that's `.claude/skills`; other agents have their own location. The tutorial uses
+the placeholder throughout; substitute your path.
 
 Your file structure:
 ```
-quorum-tutorial/
-├── .claude/skills/ ← the skills for AI (cloned)
-├── LemmaScript/    ← the toolchain (cloned)
-└── quorum/         ← your app (you are here)
+quorum/
+├── <your/skills/dir>/ ← the skills for AI (cloned)
+├── package.json
+└── (src/ comes later)
 ```
 
 ## Verify the toolchain
@@ -68,7 +71,7 @@ EOF
 ```
 
 ```bash
-npx tsx ../LemmaScript/tools/src/lsc.ts gen --backend=dafny hello.ts
+lsc gen --backend=dafny hello.ts
 dafny verify hello.dfy
 ```
 
@@ -84,8 +87,8 @@ rm hello.ts hello.dfy hello.dfy.gen
 
 ## What you've done
 
-- Installed Dafny (the theorem prover) and LemmaScript (the toolchain)
-- Set up a sibling directory layout: `LemmaScript/` next to `quorum/`
+- Installed Dafny (the theorem prover) and the LemmaScript toolchain from npm
+- Created the project with the agent skills mounted at your agent's skills directory
 - Verified the full pipeline works: annotated TypeScript → generated Dafny → proof passes
 
 ## Next step

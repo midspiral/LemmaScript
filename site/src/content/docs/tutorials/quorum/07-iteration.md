@@ -51,9 +51,10 @@ export function participantCount(e: Event): number {
 ### Verify
 
 ```bash
-npx tsx ../LemmaScript/tools/src/lsc.ts regen --backend=dafny src/domain.ts
-dafny verify src/domain.dfy
+lsc regen --backend=dafny src/domain.ts
 ```
+
+(`regen` re-verifies after merging, so no separate `dafny verify` is needed.)
 
 This one should auto-discharge: the body directly returns the ensures expression. No proof work needed in the `.dfy` file.
 
@@ -106,8 +107,7 @@ export function participationRate(e: Event, s: number): number {
 ### Verify — expect a fight
 
 ```bash
-npx tsx ../LemmaScript/tools/src/lsc.ts regen --backend=dafny src/domain.ts
-dafny verify src/domain.dfy
+lsc regen --backend=dafny src/domain.ts
 ```
 
 This is where it gets real. The proof involves multiplication (`* 100`) and

@@ -13,7 +13,7 @@ Proofs passing doesn't mean you've proven everything the design promised. Dafny 
 
 ## Open a fresh agent
 
-This works best in a **new agent with no context** from the build process. A clean agent reads the files from scratch and isn't biased by the iteration it just went through. We recommend using this `proof-review` skill to guide the agent. 
+This works best in a **new agent with no context** from the build process. A clean agent reads the files from scratch and isn't biased by the iteration it just went through. We recommend using the `lemmascript-proof-review` skill (in your skills directory) to guide the agent. 
 
 If you use the skill, simply call it from the agent; no further instructions needed. 
 

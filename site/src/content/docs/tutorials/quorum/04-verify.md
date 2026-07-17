@@ -15,13 +15,17 @@ Verification is iterative. You write annotations, generate Dafny, run the prover
 
 The command:
 ```bash
-npx tsx ../LemmaScript/tools/src/lsc.ts check --backend=dafny src/domain.ts
+lsc check --backend=dafny src/domain.ts
 ```
 
 This does three things in sequence:
-1. Generates `domain.dfy.gen` (the Dafny translation, never edit this)
-2. Creates or merges `domain.dfy` (the working file where proof additions go)
+1. Generates `domain.dfy.gen` (the Dafny translation, never edit this) and, on the
+   first run, creates `domain.dfy` as a copy of it (the working file where proof
+   additions go)
+2. Checks that the diff between `domain.dfy` and `domain.dfy.gen` is additions-only
 3. Runs `dafny verify domain.dfy`
+
+(Merging after a TypeScript change is `regen`'s job, covered below.)
 
 ## What success looks like
 
@@ -143,7 +147,7 @@ The agent adds proofs to `domain.dfy`. When you later change the TypeScript and 
 
 **After any TypeScript change, always use regen (not gen):**
 ```bash
-npx tsx ../LemmaScript/tools/src/lsc.ts regen --backend=dafny src/domain.ts
+lsc regen --backend=dafny src/domain.ts
 ```
 
 ## Common gotchas
