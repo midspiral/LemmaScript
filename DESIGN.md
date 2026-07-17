@@ -169,9 +169,9 @@ For most programs (array algorithms, business logic, state machines), integer re
 
 ---
 
-## 7. The Boundary: @lemmafit/contracts
+## 7. The Boundary: the runtime guard
 
-LemmaScript does not require verifying an entire codebase. It coexists with regular TypeScript through the `@lemmafit/contracts` boundary layer.
+LemmaScript does not require verifying an entire codebase. It coexists with regular TypeScript through a runtime guard at the boundary.
 
 ```
 ┌─────────────────────────────────────┐
@@ -179,8 +179,7 @@ LemmaScript does not require verifying an entire codebase. It coexists with regu
 │  (unverified, full language)        │
 │                                     │
 │    ┌───────────────────────────┐    │
-│    │   @lemmafit/contracts     │    │
-│    │   (runtime enforcement)   │    │
+│    │   runtime guard           │    │
 │    │                           │    │
 │    │   ┌───────────────────┐   │    │
 │    │   │  Verified TS      │   │    │
@@ -253,7 +252,7 @@ The LLM can help with proof tactics and ghost definitions. It cannot help with m
 | **Velvet** | Sibling project on Loom. LemmaScript currently generates Velvet syntax for the Lean backend. |
 | **Loom** | The foundational framework for the Lean backend. LemmaScript is a Loom client. |
 | **RSC** | Prior art for TS verification. LemmaScript uses explicit annotations on a restricted fragment with full proving power, rather than refinement type inference. |
-| **@lemmafit/contracts** | The interop layer between verified and unverified TypeScript. |
+| **runtime guard** | The enforcement layer between verified and unverified TypeScript. |
 | **lean-lsp-mcp** | The bridge between LLMs and Lean's proof engine. |
 
 ---
