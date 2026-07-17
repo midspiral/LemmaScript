@@ -36,6 +36,7 @@
  */
 
 import type { TModule, TFunction, TStmt, TExpr, Ty } from "./typedir.js";
+import { isTerminatorKind } from "./typedir.js";
 import type { TypeDeclInfo } from "./types.js";
 import { freshName } from "./names.js";
 
@@ -875,8 +876,7 @@ function parseNegativeDiscriminantCond(cond: TExpr): { scrutinee: TExpr & { kind
 
 function isTerminating(stmts: TStmt[]): boolean {
   if (stmts.length === 0) return false;
-  const last = stmts[stmts.length - 1];
-  return last.kind === "return" || last.kind === "throw" || last.kind === "break" || last.kind === "continue";
+  return isTerminatorKind(stmts[stmts.length - 1].kind);
 }
 
 /** Rule (list-level): consecutive `if (x.kind === "v") ...` chain → tagMatch.
