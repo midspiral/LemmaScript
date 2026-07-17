@@ -1,3 +1,58 @@
+/* ============================================================
+   LemmaScript brand theme — mirrors lemmascript-landing's tokens
+   (src/styles/tokens.css there). Twin-sync: if the landing accent
+   or grays change, update these to match.
+   ============================================================ */
+
+/* Fonts: same faces as the landing site */
+:root {
+  --sl-font: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --sl-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* Dark theme — landing dark: bg #0A0E14, text #E6EDF3, accent #2DD4A7 */
+:root {
+  --ls-brand-accent: #2dd4a7; /* landing --accent (dark) */
+  --ls-star: #f5c451; /* landing --state-pending (dark) */
+  --sl-color-accent-low: #0f3a2e;
+  --sl-color-accent: #1b8a6e;
+  --sl-color-accent-high: #2dd4a7;
+  --sl-color-white: #e6edf3;
+  --sl-color-gray-1: #d3dbe3;
+  --sl-color-gray-2: #b3bdc9;
+  --sl-color-gray-3: #8b98a7;
+  --sl-color-gray-4: #55606e;
+  --sl-color-gray-5: #2b3442;
+  --sl-color-gray-6: #141a23;
+  --sl-color-black: #0a0e14;
+}
+
+/* Light theme — landing light: bg #F6F7F9, text #10151C, accent #0D805D */
+:root[data-theme="light"] {
+  --ls-brand-accent: #0d805d; /* landing --accent (light) */
+  --ls-star: #8a6100; /* landing --state-pending (light) */
+  --sl-color-accent-low: #d2ede2;
+  --sl-color-accent: #0d805d;
+  --sl-color-accent-high: #0a5c43;
+  --sl-color-white: #10151c;
+  --sl-color-gray-1: #1e2632;
+  --sl-color-gray-2: #333e4e;
+  --sl-color-gray-3: #55606e;
+  --sl-color-gray-4: #8b98a7;
+  --sl-color-gray-5: #d5dae1;
+  --sl-color-gray-6: #eceef2;
+  --sl-color-gray-7: #f6f7f9;
+  --sl-color-black: #ffffff;
+}
+
+/* Landing-style touches */
+.site-title {
+  font-weight: 700;
+}
+.sidebar-content a[aria-current="page"] {
+  font-weight: 600;
+}
+
 /* Compact code blocks — no window chrome, no copy button, no language badge */
 .expressive-code .frame {
   box-shadow: none !important;
