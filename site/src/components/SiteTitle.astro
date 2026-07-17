@@ -1,0 +1,31 @@
+---
+// Starlight SiteTitle override: brand wordmark split like the landing site —
+// "Lemma" in text color, "Script" in the brand green.
+---
+
+<a href="/" class="ls-site-title">Lemma<span class="ls-script">Script</span><span class="ls-docs-tag">DOCS</span></a>
+
+<style>
+  .ls-site-title {
+    font-family: var(--sl-font);
+    font-weight: 700;
+    font-size: var(--sl-text-h4);
+    color: var(--sl-color-white);
+    text-decoration: none;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+  }
+  .ls-script {
+    color: var(--ls-brand-accent);
+  }
+  .ls-docs-tag {
+    font-family: var(--sl-font-mono);
+    font-weight: 600;
+    font-size: 0.62em;
+    letter-spacing: 0.12em;
+    color: var(--sl-color-gray-3);
+    margin-left: 0.6em;
+    padding-top: 0.15em; /* optically align with the wordmark baseline */
+  }
+</style>

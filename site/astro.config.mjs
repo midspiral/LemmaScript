@@ -83,7 +83,20 @@ export default defineConfig({
   markdown: { rehypePlugins: [rehypeRepoLinks, rehypeLinkNames] },
   integrations: [
     starlight({
-      customCss: ["./src/styles/custom.css"],
+      components: {
+        SiteTitle: "./src/components/SiteTitle.astro",
+        ThemeSelect: "./src/components/ThemeSelect.astro",
+        SocialIcons: "./src/components/SocialIcons.astro",
+      },
+      customCss: [
+        "@fontsource/dm-sans/400.css",
+        "@fontsource/dm-sans/500.css",
+        "@fontsource/dm-sans/600.css",
+        "@fontsource/dm-sans/700.css",
+        "@fontsource/jetbrains-mono/400.css",
+        "@fontsource/jetbrains-mono/600.css",
+        "./src/styles/custom.css",
+      ],
       plugins: [starlightLinksValidator()],
       favicon: "/favicon.svg",
       title: "LemmaScript",
