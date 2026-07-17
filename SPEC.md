@@ -1298,7 +1298,6 @@ Each phase (and the three intermediate representations — Raw IR, Typed IR, IR)
 
 The following TS features are not yet handled by the toolchain:
 
-- Compound pattern matching (nested match on multiple discriminated unions)
 - `await` / true async — a `Promise<T>`-returning function with an `await` in its body is unmodellable. An `async` function with **no** `await` is supported: its `Promise<T>` return type is unwrapped to `T` (the wrapper is just calling convention), so the body verifies normally.
 - Error reporting (mapping prover errors to TS source locations)
 - VS Code extension

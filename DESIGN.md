@@ -1,7 +1,7 @@
 # LemmaScript — Design Rationale
 
-**Version:** 0.4
-**Date:** April 2026
+**Version:** 0.5.x
+**Date:** July 2026
 
 > For implementation details, see [SPEC.md](SPEC.md), [SPEC_LEAN.md](SPEC_LEAN.md), [SPEC_DAFNY.md](SPEC_DAFNY.md).
 > For internal toolchain architecture, see [TOOLS.md](TOOLS.md).
@@ -122,28 +122,11 @@ Regenerating `.dfy.gen` triggers a three-way merge to preserve user additions in
 
 ## 5. The Computational Fragment
 
-LemmaScript verifies a subset of TypeScript chosen for clean, well-defined semantics that align with both backends.
-
-### Supported
-
-- Variables: `let`, `const`
-- Types: `number` (→ `Int`/`int` or `Nat`/`nat`), `boolean`, `string`
-- Arrays: `T[]`, `Array<T>` — access, index assignment (`arr[i] = v`, desugared to `arr.with(i, v)`), length, `with`, `map`, `filter`, `every`, `some`, `includes`, `find`, `push`
-- Maps: `Map<K,V>` — `get`, `set`, `has`, `size`
-- Sets: `Set<T>` — `has`, `add`, `size`, iteration via `for-of`
-- Control flow: `if`/`else`, `while` (with `break`), `for-of`, `return`, `switch`
-- Functions: named, with typed parameters, inter-function calls
-- Higher-order functions: `map`, `filter`, `every`, `some` with lambda callbacks
-- Object/record types: interfaces, discriminated unions, string literal unions
-- String operations: `indexOf`, `slice`, `length`
-- Ghost state: ghost variables, assertions
-- Ternary expressions: `c ? a : b`
+LemmaScript verifies a subset of TypeScript chosen for clean, well-defined semantics that align with both backends: the pure, functional core — variables, the primitive types, arrays, maps, sets, ordinary control flow, named and higher-order functions with lambda callbacks, discriminated-union records, ghost state, and ternaries. [SPEC §3](SPEC.md) is the definitive list of supported operations and how each translates.
 
 ### Not yet supported
 
-- Compound pattern matching (nested match on multiple discriminated unions)
-- Cross-file type imports
-- `async`/`await`
+- `await` / true async (an `async` function with no `await` is supported)
 
 ### Excluded (by design)
 
