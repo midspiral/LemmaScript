@@ -12,24 +12,28 @@ const here = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(here, "..", "..") // repo root: site/scripts -> site -> repo
 const OUT = join(here, "..", "src", "content", "docs")
 
-// Which root docs become site pages.
+// Which root docs become site pages. `title` (optional) overrides the H1-derived
+// page title so synced pages can carry reader-facing names without editing the
+// repo files themselves.
 const DOCS = [
-  { src: "README.md", out: "index.md" }, // home / overview
+  // The site homepage (index.md) is hand-written; the README syncs to its own
+  // page under "Under the hood" as the case-studies/overview reference.
+  { src: "README.md", out: "case-studies.md", title: "Case studies & examples" },
   { src: "SUBSET.md", out: "subset.md" },
   { src: "GETTING_STARTED.md", out: "getting-started.md" },
   { src: "TUTORIAL_GREENFIELD.md", out: "howto_greenfield.md" },
   { src: "SPEC.md", out: "spec.md" },
   { src: "SPEC_DAFNY.md", out: "spec-dafny.md" },
   { src: "SPEC_LEAN.md", out: "spec-lean.md" },
-  { src: "TOOLS.md", out: "tools.md" },
+  { src: "TOOLS.md", out: "tools.md", title: "Toolchain architecture" },
   { src: "DESIGN.md", out: "design.md" },
   { src: "ARCHITECTURE_NARROWING.md", out: "architecture-narrowing.md" },
-  { src: "AGENTS.md", out: "agents.md" },
+  { src: "AGENTS.md", out: "agents.md", title: "Guidance for agents" },
 ]
 
 // filename -> site route, for rewriting cross-doc links so site nav works.
 const ROUTES = {
-  "README.md": "/",
+  "README.md": "/case-studies/",
   "SUBSET.md": "/subset/",
   "GETTING_STARTED.md": "/getting-started/",
   "TUTORIAL_GREENFIELD.md": "/howto_greenfield/",
@@ -94,14 +98,14 @@ for (const d of DOCS) rmSync(join(OUT, d.out), { force: true })
 mkdirSync(OUT, { recursive: true })
 
 const broken = []
-for (const { src, out } of DOCS) {
+for (const { src, out, title: override } of DOCS) {
   const raw = readFileSync(join(ROOT, src), "utf8")
   const { title, body } = titleAndBody(raw)
   const rewritten = rewriteLinks(body)
   broken.push(...missingRepoLinks(src, rewritten))
   const target = join(OUT, out)
   mkdirSync(dirname(target), { recursive: true })
-  writeFileSync(target, `---\ntitle: "${esc(title)}"\n---\n\n${rewritten}`)
+  writeFileSync(target, `---\ntitle: "${esc(override ?? title)}"\n---\n\n${rewritten}`)
 }
 
 if (broken.length) {

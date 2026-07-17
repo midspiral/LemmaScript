@@ -33,7 +33,7 @@ The document has a consistent structure:
 
 For this tutorial, we've written the DESIGN.md for you. It describes a when2meet-style scheduling app whose verified core guarantees:
 
-**Note: When building on your own, you can use our design-doc skill, which is in `quorum-tutorial/.claude/skills/design-doc`**
+**Note: When building on your own, you can use our design-doc skill, which is in `<your/skills/dir>/lemmascript-design-doc`**
 
 1. The heatmap counts are exact
 2. The best-time recommendation flags the actual argmax slots
@@ -44,7 +44,7 @@ For this tutorial, we've written the DESIGN.md for you. It describes a when2meet
 Copy it into your project root:
 
 ```bash
-cp ../.claude/skills/design-doc/DESIGN_QUORUM.md ./DESIGN.md
+cp <your/skills/dir>/lemmascript-design-doc/DESIGN_QUORUM.md ./DESIGN.md
 ```
 
 Read through it. The sections you'll interact with most in the next steps:
@@ -55,7 +55,7 @@ Read through it. The sections you'll interact with most in the next steps:
 
 ## For your own app
 
-When building your own verified app, use the `design-doc` skill provided to tell your agent:
+When building your own verified app, use the `lemmascript-design-doc` skill provided to tell your agent:
 
 > I want to build [description of your app]. Write a DESIGN.md following the LemmaScript
 > design document format.
@@ -64,7 +64,7 @@ The agent will draft the full document. Review it the same way: does the promise
 
 ## A note on design specs
 
-This design doc is a starting point. While having a good understanding of your app domain is important when making initial decisions about what to verify and the shape of the core, iteration will be inevitible.
+This design doc is a starting point. While having a good understanding of your app domain is important when making initial decisions about what to verify and the shape of the core, iteration will be inevitable.
 
 ## What you've done
 

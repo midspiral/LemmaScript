@@ -1,5 +1,5 @@
 ---
-title: "Step 3: Hello LemmaScript"
+title: "Hello, LemmaScript"
 description: "Write your first verified function and see what success and failure look like."
 ---
 

@@ -1,7 +1,6 @@
 node_modules
 dist
 .astro
-src/content/docs/index.md
 src/content/docs/getting-started.md
 src/content/docs/spec.md
 src/content/docs/spec-dafny.md
@@ -10,4 +9,6 @@ src/content/docs/tools.md
 src/content/docs/design.md
 src/content/docs/architecture-narrowing.md
 src/content/docs/agents.md
+src/content/docs/subset.md
+src/content/docs/case-studies.md
 src/content/docs/howto_greenfield.md
