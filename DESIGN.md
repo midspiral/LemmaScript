@@ -255,14 +255,4 @@ The LLM can help with proof tactics and ghost definitions. It cannot help with m
 | **runtime guard** | The enforcement layer between verified and unverified TypeScript. |
 | **lean-lsp-mcp** | The bridge between LLMs and Lean's proof engine. |
 
----
 
-## 11. Why Now
-
-Three things have converged:
-
-1. **Loom exists.** Building verification infrastructure from scratch requires years. Loom gives us WP calculi, SMT integration, proof automation, and machine-checked soundness as a library.
-
-2. **LLMs can fill proofs.** The interactive proof obligations that remain after SMT automation were, until recently, the exclusive domain of expert Lean users. LLMs can now handle many of these, with the prover checking their work.
-
-3. **TypeScript is the world's most popular language** and has zero verified programming story. The market is not "TypeScript developers who want verification" (tiny, today). The market is "AI agents generating TypeScript that should be trustworthy" (enormous, growing). LemmaScript gives agents a target where correctness is provable, not just testable.
