@@ -50,7 +50,7 @@ function rehypeRepoLinks() {
 const LINK_NAMES = {
   "/case-studies/": "Case studies & examples",
   "/subset/": "Supported TypeScript subset",
-  "/getting-started/": "Add to an existing codebase",
+  "/getting-started/": "Getting started in an existing codebase",
   "/howto_greenfield/": "Start a new project",
   "/spec/": "Specification",
   "/spec-dafny/": "Dafny backend spec",
@@ -96,6 +96,7 @@ export default defineConfig({
             { label: "What is LemmaScript?", link: "/" },
             { label: "Installation", link: "/installation/" },
             { label: "How the loop works", link: "/how-the-loop-works/" },
+            { label: "How to: Brownfield", link: "/getting-started/" },
           ],
         },
         {

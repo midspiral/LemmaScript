@@ -20,7 +20,7 @@ const DOCS = [
   // page under "Under the hood" as the case-studies/overview reference.
   { src: "README.md", out: "case-studies.md", title: "Case studies & examples" },
   { src: "SUBSET.md", out: "subset.md" },
-  { src: "GETTING_STARTED.md", out: "getting-started.md" },
+  { src: "GETTING_STARTED.md", out: "getting-started.md", title: "Getting started in an existing codebase" },
   { src: "TUTORIAL_GREENFIELD.md", out: "howto_greenfield.md" },
   { src: "SPEC.md", out: "spec.md" },
   { src: "SPEC_DAFNY.md", out: "spec-dafny.md" },
