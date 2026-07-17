@@ -70,6 +70,33 @@ export function countPositivesNonNested(grid: number[][]): number {
   return total;
 }
 
+// Early `continue` on an optional guard must narrow `x` for the rest of the
+// body — resolve's block-tail narrowing fires on any terminator (return/throw/
+// break/continue), the same set as narrow's isTerminating. The assignment into
+// the optional `cur` then needs a Some-wrap of the narrowed `x`; regression was
+// `cur := i_x_val` (ill-typed Dafny) because only `return` triggered narrowing.
+export function lastPresent(xs: (number | undefined)[]): number | undefined {
+  //@ verify
+  let cur: number | undefined = undefined;
+  for (const x of xs) {
+    if (x === undefined) continue;
+    cur = x;
+  }
+  return cur;
+}
+
+// Same shape with `break`: stop at the first absent entry, keeping the last
+// present value seen. Pins the terminator set beyond `continue`.
+export function lastBeforeGap(xs: (number | undefined)[]): number | undefined {
+  //@ verify
+  let cur: number | undefined = undefined;
+  for (const x of xs) {
+    if (x === undefined) break;
+    cur = x;
+  }
+  return cur;
+}
+
 // A `continue` in a non-last `switch` (→ `match`) arm: the inverter can't fold
 // it (not a trailing-guard `if`, and the match isn't the loop body's last stmt),
 // so it survives to native Dafny `continue` emission — the shape flue's narrowed

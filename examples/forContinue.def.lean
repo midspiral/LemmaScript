@@ -65,6 +65,34 @@ method countPositivesNonNested (grid : Array (Array Int)) return (res : Int)
       i := i + 1
     return total
 
+method lastPresent (xs : Array (Option Int)) return (res : Option Int)
+  do
+    let mut cur : Option Int := none
+    for _x_idx in [:xs.size]
+      invariant _x_idx ≤ xs.size
+    do
+      let x := xs[_x_idx]!
+      if h_x : (x).isSome = true then
+        let _x_val := (x).get h_x
+        cur := some _x_val
+      else
+        pure ()
+    return cur
+
+method lastBeforeGap (xs : Array (Option Int)) return (res : Option Int)
+  do
+    let mut cur : Option Int := none
+    for _x_idx in [:xs.size]
+      invariant _x_idx ≤ xs.size
+    do
+      let x := xs[_x_idx]!
+      if h_x : (x).isSome = true then
+        let _x_val := (x).get h_x
+        cur := some _x_val
+      else
+        break
+    return cur
+
 method countKeep (items : Array Item) return (res : Int)
   ensures 0 ≤ res
   ensures res ≤ items.size

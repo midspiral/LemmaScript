@@ -133,6 +133,13 @@ export type TStmt =
       cases: { variant: string; body: TStmt[] }[];
       fallthrough: TStmt[] }
 
+/** Statement kinds that unconditionally leave the enclosing block. Shared by
+ *  resolve (block-tail narrowing) and narrow (isTerminating); works on raw and
+ *  typed IR alike since both use these kind strings. */
+export function isTerminatorKind(kind: string): boolean {
+  return kind === "return" || kind === "throw" || kind === "break" || kind === "continue";
+}
+
 // ── Top-level ────────────────────────────────────────────────
 
 export interface TParam {

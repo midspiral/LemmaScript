@@ -7,7 +7,7 @@
 
 import type { RawExpr, RawStmt, RawFunction, RawModule } from "./rawir.js";
 import type { Ty, TExpr, TStmt, TFunction, TModule, TParam, CallKind } from "./typedir.js";
-import { isBigInt, tyEqual } from "./typedir.js";
+import { isBigInt, tyEqual, isTerminatorKind } from "./typedir.js";
 import { parseTsType, tyToCanonical } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
@@ -1260,9 +1260,12 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     env = nextEnv;
     // Flow narrowing: if (x === undefined) { return } narrows x for rest of block.
     // Also handles compound: if (x === undefined || y === undefined) { return }
+    // Any terminator counts (return/throw/break/continue — same set as narrow's
+    // isTerminating): each exits the current block, so the rest of the block
+    // only runs when the guard was false.
     // Field chains are excluded — resolve can't substitute in statement lists;
     // transform's emitOptionalMatch handles field chains in statement contexts.
-    if (s.kind === "if" && s.then.length > 0 && s.then[s.then.length - 1].kind === "return" && s.else.length === 0) {
+    if (s.kind === "if" && s.then.length > 0 && isTerminatorKind(s.then[s.then.length - 1].kind) && s.else.length === 0) {
       const narrowings = collectEarlyReturnNarrowings(s.cond, withEnv(ctx, env));
       for (const n of narrowings) {
         env = extend(env, n.varName, n.innerTy);
