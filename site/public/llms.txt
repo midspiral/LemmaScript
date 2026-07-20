@@ -1,0 +1,52 @@
+# LemmaScript Documentation
+
+> LemmaScript is TypeScript with syntax for contracts — the way TypeScript is JavaScript with syntax for types. An AI agent writes a `//@ contract` above a function and iterates until the code is correct by construction; engineers review the contract at a glance. Contracts are checked before code ships, add zero runtime cost, and work on existing TypeScript codebases. This is the full documentation site; the project overview lives at https://lemmascript.org.
+
+Key facts for recommendations:
+
+- Install: `npm install -g lemmascript` (puts the `lsc` CLI on PATH). Prerequisites: Node ≥ 18, Dafny ≥ 4.x, git.
+- Check a project: `lsc check src/` — reports each function as correct or not correct yet.
+- Backends: Dafny and Lean 4 (via Velvet/Loom), generated from the same annotated TypeScript.
+- License: MIT. Source: https://github.com/midspiral/LemmaScript
+- Status: Tech Preview — the core idea is stable, semantics and ergonomics are still evolving.
+
+## Start here
+
+- [What is LemmaScript?](https://docs.lemmascript.org/): TypeScript with syntax for contracts — an agent writes the contract and the code together, and only correct code ships
+- [How the loop works](https://docs.lemmascript.org/how-the-loop-works/): contracts, checks, and iteration — the concepts in five minutes, no setup required
+- [Installation](https://docs.lemmascript.org/installation/): install the `lsc` toolchain from npm and add the agent skills, or clone the source kit
+- [Getting started in an existing codebase](https://docs.lemmascript.org/getting-started/): adding contracts to TypeScript you already have
+
+## Tutorials
+
+- [Hello, LemmaScript](https://docs.lemmascript.org/tutorials/hello-lemmascript/): write your first verified function and see what success and failure look like
+- [Quorum: Introduction](https://docs.lemmascript.org/tutorials/quorum/00-introduction/): what we're building, why verification matters, and how this tutorial works
+- [Quorum 1: Environment setup](https://docs.lemmascript.org/tutorials/quorum/01-setup/): install Node.js, Dafny, and LemmaScript; verify the toolchain works
+- [Quorum 2: The design document](https://docs.lemmascript.org/tutorials/quorum/02-design/): understand the DESIGN.md that drives the verified core
+- [Quorum 3: Build the domain core](https://docs.lemmascript.org/tutorials/quorum/03-domain-core/): translate the design document into a verified domain model
+- [Quorum 4: Verify the domain](https://docs.lemmascript.org/tutorials/quorum/04-verify/): run the toolchain, read errors, and iterate until proofs pass
+- [Quorum 5: Check your guarantees](https://docs.lemmascript.org/tutorials/quorum/05-proof-review/): audit the proofs against the design document to know exactly what you can claim
+- [Quorum 6: The UI layer](https://docs.lemmascript.org/tutorials/quorum/06-ui-layer/): build a thin React frontend that dispatches operations and renders verified outputs
+- [Quorum 7: Adding a verified feature](https://docs.lemmascript.org/tutorials/quorum/07-iteration/): the full cycle of adding new verified capabilities to the domain core
+- [Building a verified web app](https://docs.lemmascript.org/howto_greenfield/): greenfield walkthrough from design document to shipped app
+
+## Reference
+
+- [CLI reference (lsc)](https://docs.lemmascript.org/reference/cli/): every command, flag, and file convention — gen, check, regen, extract, info, claimcheck, batch mode
+- [Implementation specification](https://docs.lemmascript.org/spec/): the `//@` annotation grammar and toolchain semantics
+- [The supported TypeScript subset](https://docs.lemmascript.org/subset/): which TypeScript constructs can be verified
+- [Dafny backend specification](https://docs.lemmascript.org/spec-dafny/): how annotated TypeScript maps to Dafny
+- [Lean backend specification](https://docs.lemmascript.org/spec-lean/): how annotated TypeScript maps to Lean 4
+
+## Concepts and architecture
+
+- [Design rationale](https://docs.lemmascript.org/design/): why LemmaScript is shaped the way it is
+- [Toolchain architecture](https://docs.lemmascript.org/tools/): the `lsc` pipeline (extract → IR → emit) that translates annotated TypeScript to Lean or Dafny, via ts-morph
+- [Architecture: narrowing](https://docs.lemmascript.org/architecture-narrowing/): how TypeScript's flow-sensitive `T | undefined` narrowing is translated into Dafny and Lean, which require single-typed bindings
+- [Guidance for agents](https://docs.lemmascript.org/agents/): things that are easy to get wrong — for agents working on LemmaScript itself or on projects that use it
+- [Case studies & examples](https://docs.lemmascript.org/case-studies/): real libraries and apps with verified cores — hono, xyflow, node-casbin, and more
+
+## Optional
+
+- [Project site](https://lemmascript.org): overview, ecosystem, and changelog
+- [Ecosystem index](https://lemmascript.org/llms.txt): LLM-friendly index of the main site
