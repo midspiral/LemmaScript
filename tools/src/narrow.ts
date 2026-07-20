@@ -102,6 +102,10 @@ const parseSimpleOptionalCheck = parseOptionalCheck;
 // ── Walkers ──────────────────────────────────────────────────
 
 function walkExpr(e: TExpr): TExpr {
+  // Before recurseExpr rewrites the cond's optChain (which would leave
+  // `optChain === lit` unmatchable); the rule walks its own sub-branches.
+  const preCond = ruleConditionalOptChainCompare(e);
+  if (preCond) return preCond;
   const r = recurseExpr(e);
   return ruleNullish(r) ?? ruleNullishIndex(r) ?? ruleOptChainIndex(r) ?? ruleOptChain(r) ?? ruleImplOptional(r) ?? ruleImplArrayIsArray(r) ?? ruleConditionalArrayIsArray(r) ?? ruleConditionalAndArrayIsArray(r) ?? ruleConditionalAndOptional(r) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalInMap(r) ?? ruleConditionalOptionalTruthy(r) ?? r;
 }
@@ -342,34 +346,25 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[]): TStmt | null {
   return inner[0];
 }
 
-/** Rule: `if (opt?.chain !== lit) terminate; rest` where `opt` is optional.
- *  `opt?.chain` is `undefined` when `opt` is None, and `undefined !== lit` is
- *  true, so the None case takes the terminating branch — falling through to
- *  `rest` proves `opt` is Some. Rewrite to
- *    someMatch opt { Some(v) => [if (v.chain !== lit) terminate; rest]; None => terminate }
- *  narrowing `opt` to `v` across `rest` (transform substitutes the scrutinee) and
- *  handing the now-non-optional inner guard to the ordinary rules (e.g.
- *  discriminant narrowing). Bound-optional companion to ruleEarlyReturnConsume,
- *  which handles only a bare presence check (`opt !== undefined`). Restricted to
- *  `!==` so the None case is guaranteed to terminate. */
-function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[]): TStmt | null {
-  if (s.kind !== "if") return null;
-  if (rest.length === 0) return null;
-  if (s.else.length !== 0 || !isTerminating(s.then)) return null;
-  const c = s.cond;
-  if (c.kind !== "binop" || c.op !== "!==") return null;
-  const oc = c.left.kind === "optChain" ? c.left : c.right.kind === "optChain" ? c.right : null;
+/** Shared core of the two `x?.disc <op> 'lit'` narrowings (statement `!==` and
+ *  ternary `===`). Matches an optChain compared to a concrete (non-`undefined`)
+ *  literal and returns the scrutinee `x`, a fresh binder, and the chain applied
+ *  to the binder (discriminant flag restored so the re-test lowers to a match). */
+function parseOptChainLitCompare(cond: TExpr, op: "===" | "!=="): {
+  scrutinee: TExpr; binder: string; binderTy: Ty; unwrapped: TExpr; lit: TExpr;
+} | null {
+  if (cond.kind !== "binop" || cond.op !== op) return null;
+  const oc = cond.left.kind === "optChain" ? cond.left : cond.right.kind === "optChain" ? cond.right : null;
   if (!oc || oc.kind !== "optChain" || oc.obj.ty.kind !== "optional") return null;
-  const lit = c.left === oc ? c.right : c.left;
-  const innerTy = oc.obj.ty.inner;
+  const lit = cond.left === oc ? cond.right : cond.left;
+  if (lit.kind === "var" && lit.name === "undefined") return null;
+  const binderTy = oc.obj.ty.inner;
   const hint = binderHintFor(oc.obj);
   if (hint === null) return null;
   const binder = freshName(hint);
-  const binderVar: TExpr = { kind: "var", name: binder, ty: innerTy };
-  const unwrapped = applyChain(binderVar, oc.chain);
-  // applyChain rebuilds the field without the `isDiscriminant` flag resolve sets
-  // on a direct `x.disc`; restore it when the unwrapped access is the binder
-  // union's discriminant, so the inner guard feeds discriminant narrowing.
+  const unwrapped = applyChain({ kind: "var", name: binder, ty: binderTy }, oc.chain);
+  // applyChain drops the `isDiscriminant` flag resolve sets on a direct `x.disc`;
+  // restore it when the unwrapped field is the binder union's discriminant.
   if (unwrapped.kind === "field" && unwrapped.obj.ty.kind === "user") {
     const base = unwrapped.obj.ty.name.replace(/<.*/, "");
     const decl = _typeDecls.find(d => d.name === base);
@@ -377,13 +372,45 @@ function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[]): TStmt | null {
       unwrapped.isDiscriminant = true;
     }
   }
-  const innerGuard: TExpr = { kind: "binop", op: "!==", left: unwrapped, right: lit, ty: { kind: "bool" } };
+  return { scrutinee: oc.obj, binder, binderTy, unwrapped, lit };
+}
+
+/** Rule: `if (x?.disc !== 'lit') terminate; rest` — the None case takes the
+ *  terminating branch, so falling through to `rest` proves `x` is Some. */
+function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[]): TStmt | null {
+  if (s.kind !== "if") return null;
+  if (rest.length === 0) return null;
+  if (s.else.length !== 0 || !isTerminating(s.then)) return null;
+  const m = parseOptChainLitCompare(s.cond, "!==");
+  if (!m) return null;
+  const innerGuard: TExpr = { kind: "binop", op: "!==", left: m.unwrapped, right: m.lit, ty: { kind: "bool" } };
   // Keep `rest` as trailing statements (not an else branch) — `s.then` terminates,
   // so `if (g) terminate; rest` ≡ `if (g) terminate else rest`, and the trailing
   // form lets the ordinary early-exit rules (e.g. discriminant narrowing) fire on
   // the now-non-optional inner guard when `chain` is a union discriminant.
   const someBody: TStmt[] = [{ kind: "if", cond: innerGuard, then: s.then, else: [] }, ...rest];
-  return { kind: "someMatch", scrutinee: oc.obj, binder, binderTy: innerTy, someBody, noneBody: s.then };
+  return { kind: "someMatch", scrutinee: m.scrutinee, binder: m.binder, binderTy: m.binderTy, someBody, noneBody: s.then };
+}
+
+/** Rule (expression): `x?.disc === 'lit' ? a : b` — ternary analogue of
+ *  `ruleEarlyReturnOptChainCompare`, lowering to
+ *  `someMatch x { Some(binder) => (binder.disc === 'lit' ? a : b), None => b }`.
+ *  Runs *before* `recurseExpr` rewrites the cond's optChain, and walks its own
+ *  sub-branches; `a`/`b` keep referencing `x`, which the someMatch lowering
+ *  (transform.ts) substitutes with the binder. */
+function ruleConditionalOptChainCompare(e: TExpr): TExpr | null {
+  if (e.kind !== "conditional") return null;
+  const m = parseOptChainLitCompare(e.cond, "===");
+  if (!m) return null;
+  const innerCond: TExpr = { kind: "binop", op: "===", left: m.unwrapped, right: m.lit, ty: { kind: "bool" } };
+  const someBody: TExpr = {
+    kind: "conditional", cond: innerCond, then: walkExpr(e.then), else: walkExpr(e.else), ty: e.ty,
+  };
+  return {
+    kind: "someMatch",
+    scrutinee: m.scrutinee, binder: m.binder, binderTy: m.binderTy,
+    someBody, noneBody: walkExpr(e.else), ty: e.ty,
+  };
 }
 
 /** Rule (expression): `e !== undefined ? a : b`. */
