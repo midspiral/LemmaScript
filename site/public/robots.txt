@@ -1,0 +1,27 @@
+# docs.lemmascript.org — everyone is welcome, including AI crawlers.
+
+User-agent: *
+Allow: /
+
+# Explicitly welcome AI/LLM crawlers (per agent-readability guidance)
+User-agent: GPTBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-Web
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+Sitemap: https://docs.lemmascript.org/sitemap-index.xml
+
+# LLM-friendly index of the main site: https://lemmascript.org/llms.txt
