@@ -609,9 +609,26 @@ with no annotation is not started.*
    anonymous record types have no backend model) and `tyEqual`'s
    indexed-`every` calls became recursive `tysEqual`/`stringsEqual`.
    Lean self-compilation stays blocked on the deferred mutual-block
-   emission (step 1). Not yet wired as a CI self-run target. Still ahead:
-   `ir.ts` (same treatment), `names.ts` after its §6 refactor (first P1
-   freshness target), cross-module imports (§8.5).*
+   emission (step 1). Not yet wired as a CI self-run target.
+   `ir.ts` (2026-07-21): one blocker from P0-Dafny — every remaining error
+   is the `Match.scrutinee: string | Expr` union's `typeof` checks (three
+   sites); the fix is the standalone "scrutinee becomes `Expr`" PR
+   (REVIEW_ARCHITECTURE §1, kill strings at layer boundaries; ~98 touch
+   points). Everything else self-compiles: the full `Expr`/`Stmt`/decl
+   datatype family, the mutually recursive walkers, fn-type aliases, rest
+   params. Toolchain gained along the way (all gauntlet byte-for-byte):
+   undeclared user types synthesize opaque decls (imported types are
+   opaque by default — the coarse first half of the cross-module story,
+   matching the `_synthOpaque` doctrine); `CTOR_MAP` lookups are
+   `Object.hasOwn`-guarded (a variant literally named `constructor` hit
+   `Object.prototype.constructor`); collision-suffixed destructor names
+   sanitize. Source-side IR cleanups: `constructor.args` is required
+   (`Expr[]`, not optional — the shared-field-name/different-optionality
+   clash misled variant-blind field typing); ir's inline payload records
+   are named (`Param`, `RecordField`, `MapEntry`, `CtorInfo`,
+   `EmitOption`). Still ahead: the scrutinee PR (completes ir P0),
+   `names.ts` after its §6 refactor (first P1 freshness target), full
+   cross-module imports (§8.5).*
 9. **`peephole`, then `narrow`** in-subset with completeness + freshness
    contracts.
 10. **Portable `resolve` core, `specparser`, emitter cores** — transform

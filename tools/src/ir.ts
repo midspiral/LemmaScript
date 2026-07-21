@@ -14,7 +14,7 @@ export type Expr =
   | { kind: "num"; value: number }
   | { kind: "bool"; value: boolean }
   | { kind: "str"; value: string }
-  | { kind: "constructor"; name: string; type?: string; args?: Expr[] }   // .idle / .some x — name is lowercase; emitters capitalize per backend
+  | { kind: "constructor"; name: string; type?: string; args: Expr[] }   // .idle / .some x — name is lowercase; emitters capitalize per backend
   | { kind: "binop"; op: string; left: Expr; right: Expr }
   | { kind: "unop"; op: string; expr: Expr }
   | { kind: "app"; fn: string; args: Expr[]; ctorOf?: string }  // f a b; ctorOf set ⇒ fn is a datatype constructor of that (base) type. Dafny takes the bare name `fn(args)`; Lean must qualify it as `ctorOf.fn args`.
@@ -24,13 +24,13 @@ export type Expr =
   | { kind: "index"; arr: Expr; idx: Expr }                // arr[idx]!
   | { kind: "tupleLiteral"; elems: Expr[] }                // (a, b) — heterogeneous tuple literal
   | { kind: "tupleProj"; obj: Expr; index: number; arity: number }  // projection at a 0-based position; arity is needed only by Lean, whose right-nested Prod makes the last slot asymmetric (Dafny just uses `t.index`)
-  | { kind: "record"; spread: Expr | null; fields: { name: string; value: Expr }[]; ctor?: string }
+  | { kind: "record"; spread: Expr | null; fields: RecordField[]; ctor?: string }
   | { kind: "arrayLiteral"; elems: Expr[] }
   | { kind: "emptyMap" }
   | { kind: "emptySet" }
-  | { kind: "mapLiteral"; entries: { key: Expr; value: Expr }[] }
+  | { kind: "mapLiteral"; entries: MapEntry[] }
   | { kind: "methodCall"; obj: Expr; objTy: Ty; method: string; args: Expr[]; monadic: boolean }
-  | { kind: "lambda"; params: { name: string; type: Ty }[]; body: Stmt[] }
+  | { kind: "lambda"; params: Param[]; body: Stmt[] }
   | { kind: "if"; cond: Expr; then: Expr; else: Expr }
   | { kind: "match"; scrutinee: string | Expr; arms: MatchArm[] }
   | { kind: "forall"; var: string; type: Ty; body: Expr }
@@ -48,7 +48,17 @@ export type MatchPattern =
   | { kind: "ctor"; ctor: string; binders: string[] };  // ".some x" ⇒ {ctor:"some", binders:["x"]}; ".none" ⇒ binders:[]
 
 export const pWild = (): MatchPattern => ({ kind: "wild" });
-export const pCtor = (ctor: string, ...binders: string[]): MatchPattern => ({ kind: "ctor", ctor, binders });
+export const pCtor = (c: string, ...binders: string[]): MatchPattern => ({ kind: "ctor", ctor: c, binders });
+
+// Named payload records. Naming these (rather than inlining object-literal
+// types) keeps the module inside the LemmaScript subset: inline anonymous
+// record types have no backend model. Purely structural — construction
+// sites are unaffected.
+export interface Param { name: string; type: Ty }
+export interface RecordField { name: string; value: Expr }
+export interface MapEntry { key: Expr; value: Expr }
+export interface CtorInfo { name: string; fields: Param[] }
+export interface EmitOption { key: string; value: string }
 
 /** Binder identifiers a pattern introduces (`[]` for wildcard / nullary ctor). */
 export function patternBinders(p: MatchPattern): string[] {
@@ -97,7 +107,7 @@ export interface Inductive {
   kind: "inductive";
   name: string;
   typeParams?: string[];
-  constructors: { name: string; fields: { name: string; type: Ty }[] }[];
+  constructors: CtorInfo[];
   deriving: string[];
 }
 
@@ -105,7 +115,7 @@ export interface Structure {
   kind: "structure";
   name: string;
   typeParams?: string[];
-  fields: { name: string; type: Ty }[];
+  fields: Param[];
   deriving: string[];
 }
 
@@ -113,7 +123,7 @@ export interface FnDef {
   kind: "def";
   name: string;
   typeParams: string[];
-  params: { name: string; type: Ty }[];
+  params: Param[];
   returnType: Ty;
   requires: Expr[];  // used by Dafny backend; Lean backend ignores
   ensures: Expr[];   // used by Dafny backend for companion lemma
@@ -125,7 +135,7 @@ export interface FnDefByMethod {
   kind: "def-by-method";
   name: string;
   typeParams: string[];
-  params: { name: string; type: Ty }[];
+  params: Param[];
   returnType: Ty;
   requires: Expr[];
   ensures: Expr[];
@@ -137,7 +147,7 @@ export interface FnMethod {
   kind: "method";
   name: string;
   typeParams: string[];
-  params: { name: string; type: Ty }[];
+  params: Param[];
   returnType: Ty;
   requires: Expr[];
   ensures: Expr[];
@@ -154,7 +164,7 @@ export interface Namespace {
 export interface ClassDecl {
   kind: "class";
   name: string;
-  fields: { name: string; type: Ty }[];
+  fields: Param[];
   methods: FnMethod[];
 }
 
@@ -190,7 +200,7 @@ export interface ExternDecl {
   kind: "extern";
   name: string;                                 // flat name (dots → underscores)
   typeParams: string[];                         // generic type parameters (e.g. ["S", "A"])
-  params: { name: string; type: Ty }[];
+  params: Param[];
   returnType: Ty;
   requires: Expr[];
   ensures: Expr[];
@@ -201,7 +211,7 @@ export type Decl = Inductive | Structure | FnDef | FnDefByMethod | FnMethod | Na
 export interface Module {
   comment: string;
   imports: string[];
-  options: { key: string; value: string }[];
+  options: EmitOption[];
   decls: Decl[];
 }
 
@@ -221,7 +231,7 @@ export function anyExpr(e: Expr, pred: ExprPred): boolean {
   switch (e.kind) {
     case "var": case "num": case "bool": case "str":
     case "emptyMap": case "emptySet": case "havoc": case "default": return false;
-    case "constructor": return (e.args ?? []).some(a => anyExpr(a, pred));
+    case "constructor": return e.args.some(a => anyExpr(a, pred));
     case "binop": return anyExpr(e.left, pred) || anyExpr(e.right, pred);
     case "unop": case "toNat": case "toReal": return anyExpr(e.expr, pred);
     case "app": return e.args.some(a => anyExpr(a, pred));
@@ -267,7 +277,7 @@ export function anyExprInStmts(stmts: Stmt[], pred: ExprPred): boolean {
 // (the result out-parameter, comprehension binders): a binder is checked only
 // against the expressions/scope it actually wraps, not the whole module.
 const _refsName = (name: string): ExprPred =>
-  e => (e.kind === "var" && e.name === name) ||
+  (e: Expr) => (e.kind === "var" && e.name === name) ||
        (e.kind === "app" && e.fn === name) ||
        (e.kind === "constructor" && e.name === name) ||
        (e.kind === "match" && typeof e.scrutinee === "string" && e.scrutinee === name);

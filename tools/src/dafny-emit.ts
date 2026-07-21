@@ -727,7 +727,7 @@ function emitDecl(d: Decl): string {
       const collides = new Set([...typesByField].filter(([, s]) => s.size > 1).map(([n]) => n));
       const ctors = d.constructors.map(c => {
         if (c.fields.length === 0) return dafnyCtorName(c.name);
-        const fields = c.fields.map(f => collides.has(f.name) ? { ...f, name: `${f.name}_${c.name}` } : f);
+        const fields = c.fields.map(f => collides.has(f.name) ? { ...f, name: `${f.name}_${c.name.replace(/[^A-Za-z0-9_'?]/g, "_")}` } : f);
         return `${dafnyCtorName(c.name)}(${paramList(fields)})`;
       });
       return `datatype ${escapeName(d.name)}${tp} = ${ctors.join(" | ")}`;
@@ -1330,7 +1330,9 @@ function dafnyCtorName(name: string): string {
 
 function qualifyCtor(name: string, type?: string): string {
   const rawName = name.replace(/^\./, "");
-  const mapped = CTOR_MAP[rawName] ?? dafnyCtorName(rawName);
+  // hasOwn: a ctor literally named "constructor" (the IR's own Expr variant)
+  // must not hit Object.prototype.constructor through the bare index.
+  const mapped = (Object.hasOwn(CTOR_MAP, rawName) ? CTOR_MAP[rawName] : undefined) ?? dafnyCtorName(rawName);
   if (type) return `${type}.${mapped}`;
   return mapped;
 }
@@ -1344,7 +1346,7 @@ const CTOR_MAP: Record<string, string> = { "some": "Some", "none": "None" };
 
 function translatePattern(p: MatchPattern): string {
   if (p.kind === "wild") return "_";
-  const ctorName = CTOR_MAP[p.ctor] ?? dafnyCtorName(p.ctor);
+  const ctorName = (Object.hasOwn(CTOR_MAP, p.ctor) ? CTOR_MAP[p.ctor] : undefined) ?? dafnyCtorName(p.ctor);
   if (p.binders.length === 0) return ctorName;
   return `${ctorName}(${p.binders.map(escapeName).join(", ")})`;
 }

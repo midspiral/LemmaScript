@@ -383,7 +383,7 @@ function wrapOptionalBranch(expr: Expr, raw: TExpr): Expr {
   // The dotted form `.some`/`.none` would be ambiguous in expression positions
   // like the scrutinee of an outer match. Dafny treats `Option.Some` and bare
   // `Some` equivalently — the qualification is harmless there.
-  if (raw.kind === "var" && raw.name === "undefined") return { kind: "constructor", name: "none", type: "Option" };
+  if (raw.kind === "var" && raw.name === "undefined") return { kind: "constructor", name: "none", type: "Option", args: [] };
   if (raw.ty.kind === "optional") return expr;  // already Option<T>, don't double-wrap
   return { kind: "constructor", name: "some", type: "Option", args: [expr] };
 }
@@ -445,7 +445,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     case "bool": return { kind: "bool", value: e.value };
 
     case "str":
-      if (e.ty.kind === "user") return { kind: "constructor", name: e.value, type: e.ty.name };
+      if (e.ty.kind === "user") return { kind: "constructor", name: e.value, type: e.ty.name, args: [] };
       return { kind: "str", value: e.value };
 
     case "unop":
@@ -494,7 +494,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           kind: "binop",
           op: e.op === "===" ? "=" : "≠",
           left: transformExpr(e.left.obj),
-          right: { kind: "constructor", name: e.right.value, type: objTy },
+          right: { kind: "constructor", name: e.right.value, type: objTy, args: [] },
         };
       }
       // String literal comparison — constructor if user type, string literal if string.
@@ -504,7 +504,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const left = lowerExpr(e.left, binds);
         const leftTy = e.left.ty.kind === "user" ? e.left.ty.name : undefined;
         const right: Expr = isUser(e.left.ty)
-          ? { kind: "constructor", name: e.right.value, type: leftTy }
+          ? { kind: "constructor", name: e.right.value, type: leftTy, args: [] }
           : { kind: "str", value: e.right.value };
         return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right };
       }
@@ -529,7 +529,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         // non-optional string-literal rule above.
         const innerTy = optSide.ty.kind === "optional" ? optSide.ty.inner : optSide.ty;
         const valExpr: Expr = valSide.kind === "str" && innerTy.kind === "user"
-          ? { kind: "constructor", name: valSide.value, type: innerTy.name }
+          ? { kind: "constructor", name: valSide.value, type: innerTy.name, args: [] }
           : lowerExpr(valSide, binds);
         const cmpOp = BOOL_OP_MAP[e.op] ?? e.op;
         const noneVal = e.op === "!==" ? true : false;
@@ -772,7 +772,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             return {
               kind: "binop", op: "=",
               left: lowerExpr(arg, binds),
-              right: { kind: "constructor", name: "ArrayBranch", type: arg.ty.name },
+              right: { kind: "constructor", name: "ArrayBranch", type: arg.ty.name, args: [] },
             };
           }
         }
@@ -888,7 +888,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             if (variant) {
               const nonDiscFields = e.fields.filter(f => f.name !== decl.discriminant);
               if (nonDiscFields.length === 0) {
-                return { kind: "constructor", name: variantName, type: tyName };
+                return { kind: "constructor", name: variantName, type: tyName, args: [] };
               }
               // Constructor with args: match variant field order. Emit a bare `app`
               // (Dafny renders `variantName(args)`, a valid unqualified constructor
@@ -1339,7 +1339,7 @@ function matchToIfChains(stmts: Stmt[]): Stmt[] {
         ? { kind: "match", scrutinee: scrutExpr, arms: [
             { pattern: pCtor(ctor), body: { kind: "bool", value: true } },
             { pattern: pWild(), body: { kind: "bool", value: false } }] }
-        : { kind: "binop", op: "=", left: scrutExpr, right: { kind: "constructor", name: ctor, type: decl.name } };
+        : { kind: "binop", op: "=", left: scrutExpr, right: { kind: "constructor", name: ctor, type: decl.name, args: [] } };
       // Bind only the constructor-field binders the body actually uses, pinning the
       // owning ctor so the destructor doesn't guess (variants share field names).
       const lets: Stmt[] = [];
@@ -2391,20 +2391,60 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   // Types file — assembled after all body transforms, so needs discovered
   // there (discriminator kind-helpers) are included.
   const kindHelpers: Decl[] = [..._neededKindHelpers.values()].map(kindHelperDecl);
+
+  // ── Imported / undeclared user types: opaque by default ─────────────
+  // A module may reference types it imports (ir.ts uses typedir's `Ty`).
+  // Standalone compilation has no declaration for them; synthesize an
+  // opaque type — the value passes through, uninspectable, which is the
+  // only sound use of an undeclared type (same doctrine as _synthOpaque).
+  // Any attempted inspection still fails loudly: an opaque type has no
+  // constructors and no operations. Signature-level coverage (type-decl
+  // fields, params, returns, class fields, externs, consts); a body-level
+  // reference to an undeclared type still errors in the backend.
+  const referenced = new Set<string>();
+  const collectTy = (ty: Ty): void => {
+    switch (ty.kind) {
+      case "user": referenced.add(tyBaseName(ty.name)); return;
+      case "array": case "set": collectTy(ty.elem); return;
+      case "optional": collectTy(ty.inner); return;
+      case "map": collectTy(ty.key); collectTy(ty.value); return;
+      case "tuple": ty.elems.forEach(collectTy); return;
+      case "fn": ty.params.forEach(collectTy); collectTy(ty.result); return;
+      default: return;
+    }
+  };
+  const knownTypeNames = new Set<string>(typeDecls.map(d => (d as { name: string }).name));
+  const allTypeParams = new Set<string>();
+  for (const d of typeDecls) {
+    if ((d.kind === "inductive" || d.kind === "structure") && d.typeParams) d.typeParams.forEach(tp => allTypeParams.add(tp));
+    if (d.kind === "inductive") d.constructors.forEach(c => c.fields.forEach(f => collectTy(f.type)));
+    else if (d.kind === "structure") d.fields.forEach(f => collectTy(f.type));
+    else if (d.kind === "type-alias") collectTy(d.target);
+  }
+  for (const fn of mod.functions) { fn.typeParams.forEach(tp => allTypeParams.add(tp)); fn.params.forEach(p => collectTy(p.ty)); collectTy(fn.returnTy); }
+  for (const cls of mod.classes ?? []) {
+    cls.fields.forEach(f => collectTy(f.ty));
+    for (const m of cls.methods) { m.typeParams.forEach(tp => allTypeParams.add(tp)); m.params.forEach(p => collectTy(p.ty)); collectTy(m.returnTy); }
+  }
+  for (const ext of mod.externs ?? []) { ext.typeParams.forEach(tp => allTypeParams.add(tp)); ext.params.forEach(p => collectTy(p.ty)); collectTy(ext.returnTy); }
+  for (const c of mod.constants ?? []) collectTy(c.ty);
+  const opaqueImports: Decl[] = [...referenced]
+    .filter(n => !knownTypeNames.has(n) && !allTypeParams.has(n))
+    .map(n => ({ kind: "opaque-type" as const, name: n }));
   const typesImports: string[] = ["LemmaScript"];
   let typesFile: Module | null = null;
   const pureNamespace: Decl[] = pureDefs.length > 0
     ? [{ kind: "namespace", name: "Pure", decls: pureDefs }]
     : [];
-  if (typeDecls.length > 0 || pureDefs.length > 0 || externDecls.length > 0) {
+  if (typeDecls.length > 0 || pureDefs.length > 0 || externDecls.length > 0 || opaqueImports.length > 0) {
     // Declaration order differs by backend. Dafny allows forward references, so
     // externs go first to be in scope everywhere. Lean requires definition-before-use:
     // an extern's signature may reference a declared type (e.g. `estimateTokens(m: AgentMessage)`),
     // so types must precede externs, which in turn precede the pure mirrors that may call them.
     // Kind-helpers sit right after the datatypes they discriminate.
     const decls = _opts.backend === "lean"
-      ? [...typeDecls, ...kindHelpers, ...externDecls, ...pureNamespace]
-      : [...externDecls, ...typeDecls, ...kindHelpers, ...pureNamespace];
+      ? [...opaqueImports, ...typeDecls, ...kindHelpers, ...externDecls, ...pureNamespace]
+      : [...externDecls, ...opaqueImports, ...typeDecls, ...kindHelpers, ...pureNamespace];
     typesFile = {
       comment: "  Generated by lsc — Lean types and pure function mirrors.",
       imports: typesImports,
