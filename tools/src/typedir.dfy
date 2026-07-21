@@ -81,6 +81,11 @@ function tysEqual(as_: seq<Ty>, bs: seq<Ty>): bool
     ((|as_| == 0) || (tyEqual(as_[0], bs[0]) && tysEqual(as_[1..], bs[1..])))
 }
 
+lemma tysEqual_ensures(as_: seq<Ty>, bs: seq<Ty>)
+  ensures ((tysEqual(as_, bs) == true) ==> (|as_| == |bs|))
+{
+}
+
 function stringsEqual(as_: seq<string>, bs: seq<string>): bool
 {
   if (|as_| != |bs|) then
@@ -148,4 +153,38 @@ function tyEqual(a: Ty, b: Ty): bool
 function isTerminatorKind(kind: string): bool
 {
   ((((kind == "return") || (kind == "throw")) || (kind == "break")) || (kind == "continue"))
+}
+
+// ── Hand-authored P1 lemmas (DESIGN_LS_IN_LS.md §8.4) ───────────────────
+// Preserved by the additions-only regen merge, verified by the self-run.
+
+lemma StringsEqualRefl(ss: seq<string>)
+  ensures stringsEqual(ss, ss)
+{
+  if |ss| > 0 { StringsEqualRefl(ss[1..]); }
+}
+
+lemma TysEqualRefl(ts: seq<Ty>)
+  ensures tysEqual(ts, ts)
+{
+  if |ts| > 0 {
+    TyEqualRefl(ts[0]);
+    TysEqualRefl(ts[1..]);
+  }
+}
+
+lemma TyEqualRefl(a: Ty)
+  ensures tyEqual(a, a)
+{
+  match a {
+    case tuple(elems) => TysEqualRefl(elems);
+    case fn(params, result) => { TysEqualRefl(params); TyEqualRefl(result); }
+    case array_(elem) => TyEqualRefl(elem);
+    case set_(elem) => TyEqualRefl(elem);
+    case map_(key, value) => { TyEqualRefl(key); TyEqualRefl(value); }
+    case optional(inner) => TyEqualRefl(inner);
+    case string_(values) =>
+      match values { case Some(vs) => StringsEqualRefl(vs); case None => {} }
+    case _ => {}
+  }
 }

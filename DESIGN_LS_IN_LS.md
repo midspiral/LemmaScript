@@ -619,6 +619,14 @@ with no annotation is not started.*
    regen merge. CI: a `self-verify` job in `ci.yml` calls the same
    reusable `verify.yml` the case studies use, with `ls-ref` pointed at
    the branch under test so a compiler change is gated by its own code.
+   First P1 content (2026-07-22), lifting `typedir` to P1(partial)/T0:
+   `tysEqual` carries `//@ ensures \result === true ==> as.length ===
+   bs.length` (auto-proved), and `typedir.dfy` hosts hand-authored
+   reflexivity lemmas (`TyEqualRefl` / `TysEqualRefl` /
+   `StringsEqualRefl`, mutual structural induction mirroring the
+   functions' own recursion) — the first exercise of the
+   proofs-are-authored workflow on self-compiled code, preserved by the
+   additions-only merge and verified by the self-run.
    `ir.ts` (2026-07-22): P0 on Dafny — self-compiles and verifies (the
    full `Expr`/`Stmt`/decl datatype family, the mutually recursive
    walkers, fn-type aliases, rest params). The last blocker was

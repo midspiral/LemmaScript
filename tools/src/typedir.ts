@@ -43,6 +43,7 @@ export function isBigInt(ty: Ty): boolean {
 /** Elementwise Ty-list equality — recursive rather than an indexed-callback
  *  HOF, so the module stays inside the LemmaScript subset. */
 export function tysEqual(as: Ty[], bs: Ty[]): boolean {
+  //@ ensures \result === true ==> as.length === bs.length
   if (as.length !== bs.length) return false;
   if (as.length === 0) return true;
   return tyEqual(as[0], bs[0]) && tysEqual(as.slice(1), bs.slice(1));
