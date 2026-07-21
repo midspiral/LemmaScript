@@ -5,6 +5,11 @@
  * The emit phase pretty-prints them to backend syntax (Lean or Dafny).
  */
 
+// Self-application (DESIGN_LS_IN_LS.md §8): this module is inside the
+// LemmaScript subset and is compiled by lsc itself (LemmaScript-files.txt).
+// Dafny-only until the Lean emitter learns mutual blocks (§9 step 1).
+//@ backend dafny
+
 import type { Ty } from "./typedir.js";
 
 // ── Expressions ──────────────────────────────────────────────

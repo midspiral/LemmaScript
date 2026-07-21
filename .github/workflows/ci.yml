@@ -73,6 +73,18 @@ jobs:
       - name: Build
         run: lake build
 
+  # Self-application (DESIGN_LS_IN_LS.md §8): the compiler modules listed in
+  # LemmaScript-files.txt, verified through the same reusable workflow the
+  # case studies use. `ls-ref` points the toolchain at the branch under test,
+  # so a compiler change is gated by its own code. typecheck is off — the
+  # `tools` job already covers it.
+  self-verify:
+    uses: ./.github/workflows/verify.yml
+    with:
+      backend: dafny
+      typecheck: false
+      ls-ref: ${{ github.head_ref || github.ref_name }}
+
   # Dafny verification of the examples, sharded across runners. The `tools` job
   # enforces drift + additions-only (regen --no-verify); this job runs the actual
   # `dafny verify` in parallel. Files are split by index (i % N == shard), so no

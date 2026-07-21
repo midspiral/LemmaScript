@@ -5,6 +5,11 @@
  * Still TS-shaped (not Lean-shaped).
  */
 
+// Self-application (DESIGN_LS_IN_LS.md §8): this module is inside the
+// LemmaScript subset and is compiled by lsc itself (LemmaScript-files.txt).
+// Dafny-only until the Lean emitter learns mutual blocks (§9 step 1).
+//@ backend dafny
+
 // Type-only: erased at runtime, so the builtins ↔ typedir reference cycle
 // never materializes.
 import type { BuiltinId } from "./builtins.js";

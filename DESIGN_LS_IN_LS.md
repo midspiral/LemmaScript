@@ -609,7 +609,16 @@ with no annotation is not started.*
    anonymous record types have no backend model) and `tyEqual`'s
    indexed-`every` calls became recursive `tysEqual`/`stringsEqual`.
    Lean self-compilation stays blocked on the deferred mutual-block
-   emission (step 1). Not yet wired as a CI self-run target.
+   emission (step 1). Self-run wired (2026-07-22) via the ecosystem's own
+   convention: a root `LemmaScript-files.txt` lists the self-applied
+   modules (compiler only — the `examples/` gauntlet is fixtures with its
+   own driver, not the repo's verified surface), sources carry
+   `//@ backend dafny` until Lean un-defers, and `./tools/check.sh dafny`
+   with no arguments is the self-run. The `.dfy` artifacts are checked in
+   beside the sources, ready to host hand-authored P1 lemmas via the
+   regen merge. CI: a `self-verify` job in `ci.yml` calls the same
+   reusable `verify.yml` the case studies use, with `ls-ref` pointed at
+   the branch under test so a compiler change is gated by its own code.
    `ir.ts` (2026-07-22): P0 on Dafny — self-compiles and verifies (the
    full `Expr`/`Stmt`/decl datatype family, the mutually recursive
    walkers, fn-type aliases, rest params). The last blocker was
