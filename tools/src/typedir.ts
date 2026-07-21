@@ -60,7 +60,8 @@ export function tyEqual(a: Ty, b: Ty): boolean {
     }
     case "string": {
       const bs = b as typeof a;
-      return JSON.stringify(a.values ?? null) === JSON.stringify(bs.values ?? null);
+      if (a.values === undefined || bs.values === undefined) return a.values === bs.values;
+      return a.values.length === bs.values.length && a.values.every((v, i) => v === bs.values![i]);
     }
     case "int": case "nat": return !!a.big === !!(b as typeof a).big;
     case "bool": case "real": case "void": case "unknown": return true;   // no payload
