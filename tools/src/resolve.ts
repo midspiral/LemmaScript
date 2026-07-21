@@ -14,6 +14,7 @@ import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
 import { recognizeBuiltin, builtinSpec } from "./builtins.js";
 import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName } from "./typedecls.js";
+import { presentFact } from "./condition-facts.js";
 
 // ── Environment ──────────────────────────────────────────────
 
@@ -164,67 +165,26 @@ function coerceToTargetTy(value: TExpr, targetTy: Ty, typeDecls: TypeDeclInfo[])
   return value;
 }
 
-/** Detect optional checks: `v !== undefined` (positive narrows then-branch),
- *  `v === undefined` (negative narrows else-branch), or `!v` (equivalent to
- *  `=== undefined`).
- *  Returns:
- *    - simple var: `varName` set, `fieldExpr` unset
- *    - complex (field chain or call): `fieldExpr` set, `varName` empty
- *    - inThen: true for `!==` (truthy), false for `===` and `!v` (falsy).
- *  Does NOT recurse into `&&`. */
-function detectOptionalCheck(cond: RawExpr, ctx: Ctx): {
-  varName: string; innerTy: Ty; inThen: boolean;
-  fieldExpr?: RawExpr;
-} | null {
-  // `!v` where v is optional — same shape as `v === undefined` (inThen: false).
-  if (cond.kind === "unop" && cond.op === "!") {
-    const inner = classifyOptExpr(cond.expr, ctx);
-    return inner ? { ...inner, inThen: false } : null;
+/** A negated presence check on a bare var (`v === undefined` / `!v`), via
+ *  the shared condition analyzer (§4) on the *resolved* condition. Narrows
+ *  the else-branch (or the rest of the block, after an early return). */
+function negatedVarPresence(cond: TExpr): { varName: string; innerTy: Ty } | null {
+  const f = presentFact(cond);
+  if (f && f.negated && f.scrutinee.kind === "var") {
+    return { varName: f.scrutinee.name, innerTy: f.innerTy };
   }
-  if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) {
-    // Bare optional truthiness: `if (v)` where v: T | undefined — same as `v !== undefined`.
-    const inner = classifyOptExpr(cond, ctx);
-    return inner ? { ...inner, inThen: true } : null;
-  }
-  // Identify the expression being checked against undefined
-  let optExpr: RawExpr | null = null;
-  if (cond.right.kind === "var" && cond.right.name === "undefined") optExpr = cond.left;
-  if (cond.left.kind === "var" && cond.left.name === "undefined") optExpr = cond.right;
-  if (!optExpr) return null;
-  const inner = classifyOptExpr(optExpr, ctx);
-  return inner ? { ...inner, inThen: cond.op === "!==" } : null;
-}
-
-/** Classify an expression as a simple var or field-chain optional, returning
- *  the shape needed by detectOptionalCheck (sans inThen). */
-function classifyOptExpr(e: RawExpr, ctx: Ctx): { varName: string; innerTy: Ty; fieldExpr?: RawExpr } | null {
-  if (e.kind === "var") {
-    const ty = lookup(ctx.env, e.name);
-    if (!ty || ty.kind !== "optional") return null;
-    return { varName: e.name, innerTy: ty.inner };
-  }
-  if (e.kind === "result") {
-    const ty = lookup(ctx.env, "\\result");
-    if (!ty || ty.kind !== "optional") return null;
-    return { varName: "\\result", innerTy: ty.inner };
-  }
-  const resolved = resolveExpr(e, ctx);
-  if (resolved.ty.kind !== "optional") return null;
-  return { varName: "", innerTy: resolved.ty.inner, fieldExpr: e };
+  return null;
 }
 
 /** Collect all optional narrowings from an early-return condition.
  *  Handles single checks (x === undefined) and compound || chains
  *  (x === undefined || y === undefined). */
-function collectEarlyReturnNarrowings(cond: RawExpr, ctx: Ctx): { varName: string; innerTy: Ty }[] {
+function collectEarlyReturnNarrowings(cond: TExpr): { varName: string; innerTy: Ty }[] {
   if (cond.kind === "binop" && cond.op === "||") {
-    return [...collectEarlyReturnNarrowings(cond.left, ctx), ...collectEarlyReturnNarrowings(cond.right, ctx)];
+    return [...collectEarlyReturnNarrowings(cond.left), ...collectEarlyReturnNarrowings(cond.right)];
   }
-  const narrowed = detectOptionalCheck(cond, ctx);
-  if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
-    return [{ varName: narrowed.varName, innerTy: narrowed.innerTy }];
-  }
-  return [];
+  const n = negatedVarPresence(cond);
+  return n ? [n] : [];
 }
 
 /** TExpr → AccessPath. Counterpart to `asRawAccessPath` for resolved trees.
@@ -281,22 +241,25 @@ function withInAtoms(ctx: Ctx, atoms: NarrowedIndex[]): Ctx {
   return { ...ctx, narrowedIndices: [...existing, ...added] };
 }
 
-/** Walk an `&&` chain of `e !== undefined` checks, returning a Ctx with all
- *  narrowings applied. Earlier checks are in scope for later checks (so the
- *  right side of `&&` sees the left side's narrowings). */
-function collectAndChainNarrowings(cond: RawExpr, ctx: Ctx): Ctx {
+/** Walk an `&&` chain of `e !== undefined` checks on the *resolved*
+ *  condition, returning a Ctx with all narrowings applied. Earlier checks
+ *  are in scope for later checks (the right conjunct was already resolved
+ *  under the left's narrowings by the `&&` case of resolveExpr). Consults
+ *  the shared condition analyzer (§4): a positive presence fact on a bare
+ *  var extends the env; on a pure field path it extends `narrowedPaths`. */
+function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
   if (cond.kind === "binop" && cond.op === "&&") {
     const leftCtx = collectAndChainNarrowings(cond.left, ctx);
     return collectAndChainNarrowings(cond.right, leftCtx);
   }
-  const n = detectOptionalCheck(cond, ctx);
-  if (!n || !n.inThen) return ctx;
-  if (!n.fieldExpr) {
-    return withEnv(ctx, extend(ctx.env, n.varName, n.innerTy));
+  const f = presentFact(cond);
+  if (!f || f.negated) return ctx;
+  if (f.scrutinee.kind === "var") {
+    return withEnv(ctx, extend(ctx.env, f.scrutinee.name, f.innerTy));
   }
-  const path = asRawAccessPath(n.fieldExpr);
+  const path = asTExprAccessPath(f.scrutinee);
   if (path) {
-    return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: n.innerTy }] };
+    return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: f.innerTy }] };
   }
   return ctx;
 }
@@ -749,7 +712,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let rightCtx = ctx;
       let rawRight = e.right;
       if (e.op === "&&" || e.op === "==>") {
-        rightCtx = collectAndChainNarrowings(e.left, ctx);
+        rightCtx = collectAndChainNarrowings(left, ctx);
       }
       let right = resolveExpr(rawRight, rightCtx);
       if (e.op === "===" || e.op === "!==") {
@@ -1133,21 +1096,21 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // with method calls or index ops (bind-first required).
       // For &&-chains, all positive checks narrow the then-branch; earlier
       // checks are in scope when resolving later ones.
-      let thenCtx = collectAndChainNarrowings(e.cond, ctx);
+      let thenCtx = collectAndChainNarrowings(cond, ctx);
       let elseCtx = ctx;
 
       // Truthiness — cond itself is optional (`opt ? a : b`), only for simple vars.
-      if (cond.ty.kind === "optional" && e.cond.kind === "var") {
-        thenCtx = withEnv(thenCtx, extend(thenCtx.env, e.cond.name, cond.ty.inner));
+      if (cond.ty.kind === "optional" && cond.kind === "var") {
+        thenCtx = withEnv(thenCtx, extend(thenCtx.env, cond.name, cond.ty.inner));
       }
 
       // Single === undefined check narrows the else-branch.
-      const single = detectOptionalCheck(e.cond, ctx);
-      if (single && !single.inThen && !single.fieldExpr) {
+      const single = negatedVarPresence(cond);
+      if (single) {
         elseCtx = withEnv(elseCtx, extend(elseCtx.env, single.varName, single.innerTy));
       }
-      if (!single && e.cond.kind === "binop" && e.cond.op === "||") {
-        for (const n of collectEarlyReturnNarrowings(e.cond, ctx)) {
+      if (!single && cond.kind === "binop" && cond.op === "||") {
+        for (const n of collectEarlyReturnNarrowings(cond)) {
           elseCtx = withEnv(elseCtx, extend(elseCtx.env, n.varName, n.innerTy));
         }
       }
@@ -1226,9 +1189,10 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     // Field chains are excluded — resolve can't substitute in statement lists;
     // transform's emitOptionalMatch handles field chains in statement contexts.
     if (s.kind === "if" && s.then.length > 0 && isTerminatorKind(s.then[s.then.length - 1].kind) && s.else.length === 0) {
-      const narrowings = collectEarlyReturnNarrowings(s.cond, withEnv(ctx, env));
-      for (const n of narrowings) {
-        env = extend(env, n.varName, n.innerTy);
+      if (typed.kind === "if") {
+        for (const n of collectEarlyReturnNarrowings(typed.cond)) {
+          env = extend(env, n.varName, n.innerTy);
+        }
       }
       // Map-index narrowing: `if (!(k in m)) return;` means `k in m` holds in rest.
       if (typed.kind === "if") {
@@ -1332,16 +1296,16 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // For &&-chains, all positive optional checks narrow the then-branch;
       // earlier checks are in scope when resolving later ones.
       // Single-check === undefined narrows the else-branch.
-      let thenCtx = collectAndChainNarrowings(s.cond, ctx);
+      const resolvedCond = resolveExpr(s.cond, ctx);
+      let thenCtx = collectAndChainNarrowings(resolvedCond, ctx);
       let elseCtx = ctx;
-      const single = detectOptionalCheck(s.cond, ctx);
-      if (single && !single.inThen && !single.fieldExpr) {
+      const single = negatedVarPresence(resolvedCond);
+      if (single) {
         elseCtx = withEnv(ctx, extend(ctx.env, single.varName, single.innerTy));
       }
       // Narrow map index access across `k in m` / `!(k in m)` in the cond:
       // positive atoms (from `k in m` or &&-chains containing it) → then-branch;
       // negated atoms (from `!(k in m)`) → else-branch.
-      const resolvedCond = resolveExpr(s.cond, ctx);
       thenCtx = withInAtoms(thenCtx, extractInAtoms(resolvedCond));
       elseCtx = withInAtoms(elseCtx, extractInAtomsNegated(resolvedCond));
       return [{ kind: "if", cond: resolvedCond, then: resolveBlock(s.then, thenCtx), else: resolveBlock(s.else, elseCtx) }, ctx.env];

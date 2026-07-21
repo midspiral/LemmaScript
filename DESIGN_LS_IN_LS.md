@@ -196,6 +196,9 @@ classification list remains.
 
 ## 4. Decision: shared condition analysis
 
+*Status: implemented (2026-07-21) — see §9 step 6 for the as-built shape
+and what deliberately differs from §4.1's sketch.*
+
 ### 4.1 Shape
 
 One module (`condition-facts.ts`) owns condition semantics:
@@ -563,8 +566,30 @@ with no annotation is not started.*
 4. **`Result`/`CompileError`** (§5.3) on leaf modules first, then riding
    along with each pass migration.
 5. **Ctx threading and `NameSupply`** (§6.1–6.2) — mostly falls out of 2–4.
+   — *partial (2026-07-21): narrow is fully ctx-threaded (`CondCtx`, no
+   module state). Still module-level: transform's `_typeDecls`/flags, both
+   emitters' state, `names.ts`'s `_userNames`. `NameSupply` (§6.2) not
+   started.*
 6. **Condition analyzer and fact migration** (§4), family by family; delete
-   old rule families; wire `resolve` to the shared analyzer.
+   old rule families; wire `resolve` to the shared analyzer. — *done
+   (2026-07-21), byte-for-byte on both backends. As built:
+   `condition-facts.ts` owns detection (presence, `&&`-leading-fact,
+   `||`/De-Morgan None-detectors, discriminant/isArray/typeof variants,
+   in-bounds, map membership), binder minting, and the someMatch
+   materializers with the falsy gate; `narrow.ts` (1114 → 738 lines) is
+   walkers plus positional drivers; `resolve` consults the shared
+   `presentFact` on resolved conditions (`detectOptionalCheck` /
+   `classifyOptExpr` deleted); the two "restore isDiscriminant" fixups are
+   one `restoreDiscriminantFlag`. Deliberate divergences from §4.1's
+   sketch: analysis yields one leading fact + residual, with nesting from
+   drivers re-walking the residual (the ordered-fact list realized
+   iteratively — recursion order carries the dependency); and the §4.1
+   promise that "coverage gaps close as a side effect" was traded away for
+   byte-for-byte output — the migration adds no new fact×position cells.
+   New cells are now single-driver additions, but each is a behavior
+   change wanting its own example, made deliberately, not en passant.
+   Ride-along (§6.1): narrow's `_ocCounter`/`_typeDecls` module state is
+   gone, replaced by an explicit `CondCtx` threaded through the walk.*
 7. **Backend name allocator** (§6.3) with collision tests.
 8. **Self-apply the leaves:** `names.ts`, portable type helpers/`typedir`,
    IR walkers; P1 contracts (freshness, keywords); CI self-run targets.
