@@ -133,6 +133,7 @@ lean_lib Examples where
     `«leftPad.def», `«leftPad.proof»,
     `«swap.def»,
     `«andChainStmt.types», `«andChainStmt.def»,
+    `«postTags.types», `«postTags.def»,
     `«nameClash.types», `«nameClash.def»,
     `«tuples.types», `«tuples.def», `«tuples.proof»,
     `«forContinue.types», `«forContinue.def», `«forContinue.proof»
