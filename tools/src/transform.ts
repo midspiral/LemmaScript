@@ -11,6 +11,7 @@ import { anyExprInStmts, pWild, pCtor, patternBinders, patternBinds, patternCtor
 import type { TypeDeclInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
+import { builtinSpec } from "./builtins.js";
 
 // ── Generic IR walkers ──────────────────────────────────────
 
@@ -196,9 +197,6 @@ let _typeDecls: TypeDeclInfo[] = [];
  *  in a higher-order position resolves to the monadic method, so it must be
  *  redirected to the pure mirror. Set once per module transform. */
 let _pureDefNames: Set<string> = new Set();
-
-/** Array methods that take a function argument. */
-const HOF_METHODS = new Set(["map", "filter", "every", "some", "find", "findLast", "findIndex", "findLastIndex", "reduce"]);
 
 /** Prefix match-bound field names to avoid capturing user variables.
  *  When prefix is given (the scrutinee name), include it to avoid
@@ -782,7 +780,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.fn.kind === "field") {
         const recv = lowerExpr(e.fn.obj, binds);
         let method = e.fn.field;
-        const isHOF = e.fn.obj.ty.kind === "array" && HOF_METHODS.has(method);
+        const spec = e.builtinId !== undefined ? builtinSpec(e.builtinId) : null;
+        // Lambda-taking array builtins (registry `hof`, comparator excluded —
+        // mirrors the historical HOF_METHODS set).
+        const isHOF = spec?.hof !== undefined && spec.hof.shape !== "comparator";
         const args = e.args.map((a, i) => {
           const lowered = lowerExpr(a, binds);
           // Lean: a pure fn passed to a HOF by name resolves to the monadic
@@ -791,9 +792,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
               lowered.kind === "var" && _pureDefNames.has(lowered.name)) {
             return { kind: "var" as const, name: `Pure.${lowered.name}` };
           }
-          // Array index args must be nat in Lean: `with`'s index (0), includes/indexOf `from` (1).
-          const isArrIdxArg = e.fn.kind === "field" && e.fn.obj.ty.kind === "array" &&
-            ((e.fn.field === "with" && i === 0) || ((e.fn.field === "includes" || e.fn.field === "indexOf") && i === 1));
+          // Array index args must be nat in Lean: `with`'s index (0), includes/indexOf `from` (1)
+          // — registry `intArgPositions`.
+          const isArrIdxArg = spec?.intArgPositions !== undefined && spec.intArgPositions.includes(i);
           if (isArrIdxArg && !isNat(a.ty)) return { kind: "toNat" as const, expr: lowered };
           return lowered;
         });

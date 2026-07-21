@@ -12,6 +12,7 @@ import { parseTsType, tyToCanonical } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
+import { recognizeBuiltin, builtinSpec } from "./builtins.js";
 
 // ── Environment ──────────────────────────────────────────────
 
@@ -411,14 +412,17 @@ function isStringUnionTy(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
  *  If the variable is used as a map/set key (e.g. map.has(k), map.get(k)),
  *  return the collection's key type. Otherwise return null (default to int). */
 function inferQuantVarType(varName: string, body: RawExpr, ctx: Ctx): Ty | null {
-  // Look for calls like map.has(k), map.get(k), or array.includes(k) where k is our variable
+  // Look for membership/lookup builtins (map.has(k), map.get(k),
+  // array.includes(k) — registry `argIsKey`) where k is our variable
   if (body.kind === "call" && body.fn.kind === "field" &&
-      (body.fn.field === "has" || body.fn.field === "get" || body.fn.field === "includes") &&
       body.args.length === 1 && body.args[0].kind === "var" && body.args[0].name === varName) {
     const objTy = lookup(ctx.env, body.fn.obj.kind === "var" ? body.fn.obj.name : "");
-    if (objTy?.kind === "map") return objTy.key;
-    if (objTy?.kind === "set") return objTy.elem;
-    if (objTy?.kind === "array") return objTy.elem;
+    const id = objTy ? recognizeBuiltin(objTy, body.fn.field) : null;
+    if (id && builtinSpec(id).argIsKey && objTy) {
+      if (objTy.kind === "map") return objTy.key;
+      if (objTy.kind === "set") return objTy.elem;
+      if (objTy.kind === "array") return objTy.elem;
+    }
   }
   // Recurse into subexpressions
   if (body.kind === "binop") {
@@ -485,8 +489,11 @@ function tyToTsStr(ty: Ty): string | undefined {
   return undefined;
 }
 function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExpr[] {
+  const hofShape = fn.kind === "field"
+    ? (id => id ? builtinSpec(id).hof?.shape : undefined)(recognizeBuiltin(fn.obj.ty, fn.field))
+    : undefined;
   // sort's comparator takes two params, both the element type.
-  if (fn.kind === "field" && fn.obj.ty.kind === "array" && fn.field === "sort" &&
+  if (hofShape === "comparator" && fn.kind === "field" && fn.obj.ty.kind === "array" &&
       rawArgs.length >= 1 && rawArgs[0].kind === "lambda" && rawArgs[0].params.length >= 1) {
     const tsType = tyToTsStr(fn.obj.ty.elem);
     if (tsType) {
@@ -496,7 +503,7 @@ function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExp
     }
   }
   // reduce's callback is (acc, elem): acc from the init arg's type, elem from the array.
-  if (fn.kind === "field" && fn.obj.ty.kind === "array" && fn.field === "reduce" && ctx &&
+  if (hofShape === "reduce" && fn.kind === "field" && fn.obj.ty.kind === "array" && ctx &&
       rawArgs.length >= 2 && rawArgs[0].kind === "lambda" && rawArgs[0].params.length >= 2) {
     const accTs = tyToTsStr(resolveExpr(rawArgs[1], ctx).ty);
     const elemTs = tyToTsStr(fn.obj.ty.elem);
@@ -507,8 +514,7 @@ function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExp
       return [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
     }
   }
-  if (fn.kind === "field" && fn.obj.ty.kind === "array" &&
-      ["map", "filter", "every", "some", "find", "findLast", "findIndex", "findLastIndex"].includes(fn.field) &&
+  if (hofShape === "unary" && fn.kind === "field" && fn.obj.ty.kind === "array" &&
       rawArgs.length >= 1 && rawArgs[0].kind === "lambda" &&
       rawArgs[0].params.length >= 1 && !rawArgs[0].params[0].tsType) {
     const elemTy = fn.obj.ty.elem;
@@ -593,42 +599,8 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
     if (["floor", "ceil", "round", "trunc"].includes(fn.field)) return { kind: "int" };
   }
   const objTy = fn.obj.ty;
-  if (objTy.kind === "map") {
-    if (fn.field === "get") return ctx.inSpec ? objTy.value : { kind: "optional", inner: objTy.value };
-    if (fn.field === "has") return { kind: "bool" };
-    if (fn.field === "set" || fn.field === "delete") return objTy;
-  } else if (objTy.kind === "set") {
-    if (fn.field === "has") return { kind: "bool" };
-    if (fn.field === "add" || fn.field === "delete") return objTy;
-  } else if (objTy.kind === "array") {
-    if (fn.field === "includes") return { kind: "bool" };
-    if (fn.field === "indexOf") return { kind: "int" };
-    if (fn.field === "shift") return objTy.elem;
-    if (fn.field === "pop") return { kind: "optional", inner: objTy.elem };
-    if (fn.field === "push" || fn.field === "unshift" || fn.field === "concat") return objTy;
-    if (fn.field === "sort") return objTy;
-    if (fn.field === "filter") return objTy;
-    if (fn.field === "every" || fn.field === "some") return { kind: "bool" };
-    if (fn.field === "reduce" && args.length === 2) return args[1].ty;
-    if (fn.field === "find" || fn.field === "findLast") return { kind: "optional", inner: objTy.elem };
-    if (fn.field === "findIndex" || fn.field === "findLastIndex") return { kind: "int" };
-    if (fn.field === "flat" && objTy.elem.kind === "array") return { kind: "array", elem: objTy.elem.elem };
-    if (fn.field === "slice") return objTy;
-    if (fn.field === "join" && objTy.elem.kind === "string") return { kind: "string" };
-    if (fn.field === "map" && args.length >= 1 && args[0].kind === "lambda") {
-      const lam = args[0];
-      // Prefer the lambda's declared return type (handles multi-statement bodies
-      // where body[0] is an `if`, not a `return`); fall back to the body's return.
-      const retTy: Ty = lam.ty.kind === "fn" ? lam.ty.result
-        : lam.body.length > 0 && lam.body[0].kind === "return" ? lam.body[0].value.ty : { kind: "unknown" };
-      return { kind: "array", elem: retTy };
-    }
-  } else if (objTy.kind === "string") {
-    if (fn.field === "trim" || fn.field === "trimEnd" || fn.field === "trimStart" || fn.field === "toLowerCase" || fn.field === "toUpperCase") return { kind: "string" };
-    if (fn.field === "slice" || fn.field === "substring") return { kind: "string" };
-    if (fn.field === "split") return { kind: "array", elem: { kind: "string" } };
-    if (fn.field === "includes" || fn.field === "startsWith" || fn.field === "endsWith") return { kind: "bool" };
-  }
+  const id = recognizeBuiltin(objTy, fn.field);
+  if (id) return builtinSpec(id).ret(objTy, args, { inSpec: ctx.inSpec });
   return { kind: "unknown" };
 }
 
@@ -911,7 +883,9 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           && fn.kind === "field" && fn.obj.ty.kind === "array" && fn.obj.ty.elem.kind === "optional") {
         return { kind: "call", fn: { ...fn, field: "filterSome" }, args: [], ty: { kind: "array", elem: fn.obj.ty.elem.inner }, callKind: "method" };
       }
-      return { kind: "call", fn, args, ty, callKind: classifyCall(e.fn, ctx) };
+      const builtinId = fn.kind === "field" ? recognizeBuiltin(fn.obj.ty, fn.field) : null;
+      return { kind: "call", fn, args, ty, callKind: classifyCall(e.fn, ctx),
+        ...(builtinId ? { builtinId } : {}) };
     }
 
     case "index": {
@@ -1024,7 +998,9 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
             const args = rawArgs.map(a => resolveExpr(a, ctx));
             callTy = inferMethodReturnTy(fakeFn, args, ctx);
             callKind = "method";
-            chain.push({ kind: "call", args, ty: callTy, callKind });
+            const builtinId = recognizeBuiltin(priorInTy, lastField.name);
+            chain.push({ kind: "call", args, ty: callTy, callKind,
+              ...(builtinId ? { builtinId } : {}) });
             stepInTy = callTy;
             continue;
           }

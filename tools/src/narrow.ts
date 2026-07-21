@@ -39,6 +39,7 @@ import type { TModule, TFunction, TStmt, TExpr, Ty } from "./typedir.js";
 import { isTerminatorKind } from "./typedir.js";
 import type { TypeDeclInfo } from "./types.js";
 import { freshName } from "./names.js";
+import { builtinSpec } from "./builtins.js";
 
 // ── Optional-check detection ────────────────────────────────
 
@@ -498,7 +499,8 @@ function applyChain(body: TExpr, chain: OptChain["chain"]): TExpr {
   for (const step of chain) {
     if (step.kind === "field") body = { kind: "field", obj: body, field: step.name, ty: step.ty };
     else if (step.kind === "index") body = { kind: "index", obj: body, idx: step.idx, ty: step.ty };
-    else body = { kind: "call", fn: body, args: step.args, ty: step.ty, callKind: step.callKind };
+    else body = { kind: "call", fn: body, args: step.args, ty: step.ty, callKind: step.callKind,
+      ...(step.builtinId ? { builtinId: step.builtinId } : {}) };
   }
   return body;
 }
@@ -968,20 +970,15 @@ function ruleLetCondAndOptional(s: TStmt): TStmt[] | null {
   ];
 }
 
-/** Built-in collection methods that lower to pure Dafny expressions
- *  (`x in arr`, `x in m`, `x in s`, `|s|`, `s.Keys`, etc.) even though they
- *  carry `callKind: "method"` from resolve. Safe inside match arms. */
-const PURE_BUILTIN_METHODS = new Set([
-  "includes", "has", "size", "length", "keys", "values",
-]);
-
 /** Does this expression contain a method call that would be lifted to a
  *  var binding outside its containing expression by transform? Such calls
  *  are unsafe inside a match arm — the lifted binding would reference a
- *  name only valid in the arm. Built-in pure methods are exempt. */
+ *  name only valid in the arm. Builtins whose registry entry is `pure`
+ *  (they lower to pure Dafny expressions: `x in arr`, `x in m`, `s.Keys`,
+ *  …) are exempt even though they carry `callKind: "method"`. */
 function containsMethodCall(e: TExpr): boolean {
   if (e.kind === "call" && e.callKind === "method" &&
-      !(e.fn.kind === "field" && PURE_BUILTIN_METHODS.has(e.fn.field))) {
+      !(e.builtinId !== undefined && builtinSpec(e.builtinId).pure)) {
     return true;
   }
   switch (e.kind) {

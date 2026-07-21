@@ -24,9 +24,11 @@ by later passes or enforced by crashes.
 This design commits to six decisions:
 
 1. **Builtin registry.** Each builtin operation has one stable `BuiltinId`
-   and one registry entry holding its type rule, classification data, and
-   both backend lowerings side by side. `resolve` assigns the identity once;
-   no later pass re-recognizes `(receiver type, method name)`.
+   and one registry entry holding its type rule and classification data.
+   `resolve` assigns the identity once; `narrow` and `transform` stop
+   re-recognizing `(receiver type, method name)`. The emitters are
+   untouched: they dispatch on the backend IR, where `(objTy, method)` is
+   the correct key (§3.2).
 2. **Shared condition analyzer.** One module answers "what does this
    condition establish" as an ordered fact list plus residual. Both `resolve`
    (for typing branches) and `narrow` (for rewriting) consult it. Narrowing
@@ -89,7 +91,9 @@ byte-for-byte against the `examples/` gauntlet.
 
 ### 3.1 Shape
 
-One stable identity per supported operation, and one entry per identity:
+One stable identity per supported operation, and one classification entry
+per identity. The registry holds recognition and classification only — no
+lowerings:
 
 ```ts
 type BuiltinId = "array.includes" | "array.map" | "string.trim"
@@ -102,55 +106,90 @@ interface BuiltinSpec {
   pure: boolean;                      // safe in expression-only positions
   hof?: { lambdaParamTys(objTy: Ty, args: TExpr[]): Ty[] };
   intArgPositions?: number[];         // nat/int coercion sites
-  needs?: PreambleId[];               // SeqIndexOf, StringTrim, …
-  dafny(obj: string, args: string[], e: MethodCall, ctx: EmitCtx): string;
-  lean(obj: string, args: string[], e: MethodCall, ctx: EmitCtx): string;
 }
 
 const BUILTINS: Record<BuiltinId, BuiltinSpec> = { /* one entry each */ };
 ```
 
 The recognition index (`(recv, method) → BuiltinId`) is *derived* from
-`BUILTINS`, so adding a builtin is literally one entry. `resolve` performs
-recognition once and annotates the typed method-call node with its
-`BuiltinId` (a field on the existing node — no new IR node kind). Downstream:
+`BUILTINS`. `resolve` performs recognition once and annotates the typed
+method-call node with its `BuiltinId` (an optional field on the existing
+node — no new IR node kind). Downstream:
 
 - `narrow` drops its builtin-name allowlists and checks `spec.pure`;
 - `transform` drops `HOF_METHODS` and the coercion special cases, reading
   `spec.hof` / `spec.intArgPositions`;
-- both emitters' method-call cases become a lookup and a call.
+- the emitters are out of scope, deliberately and permanently — not as
+  deferred work. See §3.2: identity dispatch is wrong on their side of
+  the transform boundary.
 
-`Record<BuiltinId, BuiltinSpec>` makes exhaustiveness a type error: a new id
-without an entry, or an entry without both lowerings, fails to compile.
+`Record<BuiltinId, BuiltinSpec>` makes exhaustiveness a type error: a new
+id without a classification entry fails to compile.
 
 ### 3.2 Consequences accepted
 
-- **One file, both lowerings side by side.** The Dafny and Lean emit rules
-  for a method are reviewable together — this is a deliberate property, and
-  the reason the registry is not split into per-backend modules.
-- **Cross-layer types in one module.** The registry imports `Ty`, `TExpr`,
-  and `EmitCtx` types. That is the honest common shape; the alternative
-  (backend-neutral IR rewrites for every builtin) is rejected because
-  `sort`/`split`/`delete` genuinely differ per backend.
+- **A dedup, not a relocation.** What §3 deletes is the scattered
+  re-derivations of the same classification facts across resolve, narrow,
+  and transform. The lowering rules are not part of that duplication —
+  one emit rule per backend is legitimate per-backend knowledge — and
+  they stay in their emitters untouched. Backend-neutral IR rewrites for
+  every builtin remain rejected: `sort`/`split`/`delete` genuinely differ
+  per backend.
+- **Emitter dispatch stays `(objTy, method)`, by design.** The `BuiltinId`
+  stamp lives on the typed IR and does not cross the transform boundary.
+  Transform legitimately *synthesizes* `methodCall` nodes during
+  desugaring (`slice`, `set`, `has`, and internal ops like `getDirect`)
+  that have no source-level identity; dispatching the emitters on
+  `BuiltinId` would force transform to mint identities — defeating
+  resolve-once — and would pollute the registry with internal ops that
+  are not surface builtins. On the backend IR, `(objTy, method)` carried
+  on the node is the honest dispatch key.
+- **No cross-layer module.** The registry imports only mid-pipeline types
+  (`Ty`, `TExpr`), never emitter types. Classification is data plus total
+  functions over `BuiltinId`, which keeps the registry portable to the
+  subset in principle.
+- **Cross-backend agreement lives in the test matrix.** That both
+  backends' lowerings for a builtin model the same JS semantics is not
+  machine-checkable in any layout; the per-builtin matrix (§10.2), which
+  exercises both backends, is where that agreement is validated.
+- **Support asymmetry stays as it is.** Some builtins are Dafny-only today
+  (`sort`, `split`, `trim`, `toLowerCase`, …). The registry classifies
+  them like any other; an unsupported use keeps today's emit-time error,
+  unchanged. Recording per-backend support in the registry — enabling
+  earlier structured rejection or degradation — is deliberately deferred;
+  it can be added later without reshaping anything.
 - **`pure` stays one bit for now.** Purity, totality, and
   expression-lowerability are conceptually distinct, but every current
   consumer asks the same question. The bit splits into named capabilities
   only when a concrete builtin needs the distinction — no speculative
   effect system.
-- **Entries may be long.** Genuinely structural cases (set-comprehension
-  `filter`, `some` with inlined lambda) stay in their entries even at ten
-  lines; they are not evicted to keep entries pretty.
-- **The registry table itself stays outside the verified subset**
-  (function-valued record fields). Verified code reaches registry-derived
-  facts through `//@ extern` contracts if ever needed.
 
 ### 3.3 Migration
 
-Family by family (array, string, map, set), deleting the corresponding
-allowlist/HOF/purity entries as each family moves. Each step is verified
-byte-for-byte against the `examples/` gauntlet output. Done when no pass
-after `resolve` identifies a builtin by receiver/name spelling and no
-duplicated classification list remains.
+One PR, not a staged sequence. Family-by-family staging was considered and
+rejected: the existing lists are not partitioned by family (narrow's
+purity set and resolve's return-type special cases mix array/map/set
+receivers), so a partial migration would split each list into migrated and
+unmigrated halves with precedence rules between the registry path and the
+legacy path — transitional dual-path scaffolding that is itself the
+several-sources-of-truth disease §3 cures. The byte-for-byte gate is
+equally strong at any diff size, and at ~40 entries the whole change is
+one sitting. (This does not generalize to §4: narrow's rule families
+genuinely are partitioned by condition form, so its staged port stands.
+Stage when the old code is partitioned along the migration's seams;
+one-shot when staging would cut seams the code doesn't have.)
+
+Sequence inside the PR, one commit per step with the gauntlet run after
+each: validate the `BuiltinSpec` shape on a few representative builtins
+(one HOF, one coercion case, one plain method); fill the table; then flip
+each consumer wholesale — resolve's return-type chains, narrow's purity
+list, transform's HOF/coercion sets — deleting each list in the commit
+that flips its consumer. Verified byte-for-byte against the `examples/`
+gauntlet with the case-study CI matrix as backstop. Nothing else rides
+along: no emitter changes, no `Result` migration, no error-path changes,
+no type restructuring. Done when neither `narrow` nor `transform`
+identifies a builtin by receiver/name spelling and no duplicated
+classification list remains.
 
 ## 4. Decision: shared condition analysis
 
@@ -410,7 +449,7 @@ P- and T-level accurately.
 | `transform.ts` | 2396 | P1 by stages | Needs ctx work; port stage-by-stage (§7 trigger). |
 | `resolve.ts` | 1778 | Mostly | Push `parseTsType` to extraction; core is pure Raw→Typed. |
 | `specparser.ts` | 330 | P1 | Recursive-descent parser; classic verification fodder. |
-| `dafny-emit.ts`/`lean-emit.ts` | 2292 | Partial | After §3 the residual emitters are smaller; precedence logic is spec-worthy; regexes become string helpers. |
+| `dafny-emit.ts`/`lean-emit.ts` | 2292 | Partial | Untouched by §3; precedence logic is spec-worthy; regexes become string helpers. |
 | `extract.ts` | 2479 | Trusted frontend | Wraps ts-morph; stays unverified; `RawModule` is the trusted input. |
 | `lsc.ts`, commands | ~500 | Unverified driver | CLI, fs, process. |
 
@@ -471,8 +510,8 @@ process phase precedes the first win.
    with a structural fold, one nested exhaustive match, one postcondition,
    verified on both backends. Prices the one hard prerequisite before any
    porting commitment. Blocks §9 steps 8+ only, not the architecture work.
-2. **Builtin registry** (§3), family by family; delete old lists as each
-   family moves.
+2. **Builtin registry** (§3), one PR; consumers flip commit by commit,
+   each list deleted in the commit that flips its consumer.
 3. **Structured user types, structural `tyEqual`, `TypeEnv`** (§5.1–5.2),
    small PRs.
 4. **`Result`/`CompileError`** (§5.3) on leaf modules first, then riding
@@ -499,13 +538,14 @@ permits removing the old path.
 
 Byte-for-byte gauntlet comparison for mechanical migrations; normalized-AST
 comparison where formatting is incidental; temporary old/new differential
-execution during family migrations; every intentional output difference
-documented.
+execution during staged migrations (§4.3); every intentional output
+difference documented.
 
 ### 10.2 Matrices
 
 - **Builtin matrix**, per `BuiltinId`: valid/invalid receiver, arity, HOF
-  param inference, coercions, both lowerings, preamble registration.
+  param inference, coercions, both lowerings (cross-backend semantic
+  agreement is validated here), preamble registration.
 - **Fact matrix**, per fact kind: both polarities, `&&` composition
   (including dependent chains), `||`/De-Morgan handling, every supported
   position, falsy corner cases, evaluation order. Generated tests are
@@ -526,12 +566,14 @@ artifacts/caches unless reviewing them in-tree earns its churn.
 
 ## 11. Risks
 
-- **Registry becomes a god module.** Accepted with eyes open (§3.2): one
-  file importing cross-layer *types* is the cost of side-by-side review.
-  If the file's imports grow beyond types into pass logic, that is the
-  signal to revisit.
-- **Refactor churn hides compiler bugs.** Byte-for-byte gauntlet, family
-  migration, temporary fallback chains, no big-bang deletions.
+- **Registry drifts from emitter coverage.** A builtin classified in the
+  registry may lack a lowering in one emitter; that surfaces exactly as
+  today (an emit-time error), and the builtin matrix (§10.2) pins the
+  intended support per backend.
+- **Refactor churn hides compiler bugs.** Byte-for-byte gauntlet;
+  consumer-by-consumer flips where lists are unpartitioned (§3.3), staged
+  rule families with temporary fallbacks where they are (§4.3); every
+  deletion lands in the commit whose gauntlet run gates it.
 - **Proof work blocks practical fixes.** Executable checks and phase
   predicates land first; P1 proofs accrete; P2 never enters the critical
   path.
@@ -542,9 +584,11 @@ artifacts/caches unless reviewing them in-tree earns its churn.
 
 ## 12. Acceptance criteria
 
-- **Builtins:** no pass after `resolve` identifies a builtin by
-  receiver/name spelling; no duplicated allowlists/HOF/purity sets remain;
-  adding a builtin = one registry entry plus tests.
+- **Builtins:** neither `narrow` nor `transform` identifies a builtin by
+  receiver/name spelling (emitter dispatch stays `(objTy, method)` by
+  design, §3.2); no duplicated allowlists/HOF/purity sets remain; adding
+  a builtin = one registry entry, its per-backend emit rules, and matrix
+  tests.
 - **Conditions:** condition semantics live in one module both passes
   consult; `narrow` is ~6 positional drivers; adding a fact kind = one
   analyzer case + (if needed) one materializer case + matrix tests, with
@@ -575,13 +619,18 @@ For the record, where this document deliberately differs from
   structured `CompileError`; the test matrices.
 - **Builtins:** the RFC split each builtin across four modules
   (`builtin-id` / `builtin-semantics` / `dafny-builtins` /
-  `lean-builtins`) and banned function-valued entries. This document keeps
-  the `BuiltinId` identity and resolve-once principle but restores the
-  single-entry registry with both lowerings side by side — the review
-  property the split silently gave up. The `BuiltinCapabilities` record
-  (five fields) is trimmed back to `pure` until a consumer needs the
-  distinction; `ArgMode` roles are dropped in favor of the concrete
-  `intArgPositions`/`hof` fields the compiler consumes today.
+  `lean-builtins`). This document keeps the `BuiltinId` identity and
+  resolve-once principle but scopes the registry to classification only:
+  lowerings stay inside the existing emitters with their `(objTy, method)`
+  dispatch (no separate lowering modules, no registry-embedded lowering
+  functions, no identity threading across the transform boundary — §3.2).
+  An intermediate draft co-located both backend lowerings in each registry
+  entry for side-by-side review; that was dropped as relocation without
+  deduplication — cross-backend agreement is validated by the builtin test
+  matrix instead. The `BuiltinCapabilities` record (five fields) is
+  trimmed back to `pure` until a consumer needs the distinction; `ArgMode`
+  roles are dropped in favor of the concrete `intArgPositions`/`hof`
+  fields the compiler consumes today.
 - **Conditions:** the RFC's branch-structured `GuardPlan` stored in a
   `TCondition` IR wrapper is replaced by the shared ordered-fact analyzer
   (§4). The RFC's dependent-conjunction objection does not defeat ordered
