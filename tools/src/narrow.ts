@@ -40,6 +40,7 @@ import { isTerminatorKind } from "./typedir.js";
 import type { TypeDeclInfo } from "./types.js";
 import { freshName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
+import { declOfTy, unionDeclOfTy, discriminantOf } from "./typedecls.js";
 
 // ── Optional-check detection ────────────────────────────────
 
@@ -284,10 +285,9 @@ function classifyDisjunct(leaf: TExpr): NoneDetector | null {
       if (hint === null) return null;
       const binder = freshName(hint);
       const unwrapped = applyChain({ kind: "var", name: binder, ty: oc.obj.ty.inner }, oc.chain);
-      if (unwrapped.kind === "field" && unwrapped.obj.ty.kind === "user") {
-        const base = unwrapped.obj.ty.name.replace(/<.*/, "");
-        const decl = _typeDecls.find(d => d.name === base);
-        if (decl?.kind === "discriminated-union" && decl.discriminant === unwrapped.field) unwrapped.isDiscriminant = true;
+      if (unwrapped.kind === "field" &&
+          discriminantOf(_typeDecls, unwrapped.obj.ty) === unwrapped.field) {
+        unwrapped.isDiscriminant = true;
       }
       const lit = leaf.left === oc ? leaf.right : leaf.left;
       return { scrutinee: oc.obj, innerTy: oc.obj.ty.inner, binder, residual: { kind: "binop", op: "!==", left: unwrapped, right: lit, ty: { kind: "bool" } } };
@@ -371,12 +371,9 @@ function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[]): TStmt | null {
   // applyChain rebuilds the field without the `isDiscriminant` flag resolve sets
   // on a direct `x.disc`; restore it when the unwrapped access is the binder
   // union's discriminant, so the inner guard feeds discriminant narrowing.
-  if (unwrapped.kind === "field" && unwrapped.obj.ty.kind === "user") {
-    const base = unwrapped.obj.ty.name.replace(/<.*/, "");
-    const decl = _typeDecls.find(d => d.name === base);
-    if (decl?.kind === "discriminated-union" && decl.discriminant === unwrapped.field) {
-      unwrapped.isDiscriminant = true;
-    }
+  if (unwrapped.kind === "field" &&
+      discriminantOf(_typeDecls, unwrapped.obj.ty) === unwrapped.field) {
+    unwrapped.isDiscriminant = true;
   }
   const innerGuard: TExpr = { kind: "binop", op: "!==", left: unwrapped, right: lit, ty: { kind: "bool" } };
   // Keep `rest` as trailing statements (not an else branch) — `s.then` terminates,
@@ -776,8 +773,7 @@ function parseArrayIsArrayCall(call: TExpr): { scrutinee: TExpr; typeName: strin
   if (call.args.length !== 1) return null;
   const arg = call.args[0];
   if (!isNarrowablePath(arg) || arg.ty.kind !== "user") return null;
-  const baseTyName = arg.ty.name.includes("<") ? arg.ty.name.slice(0, arg.ty.name.indexOf("<")) : arg.ty.name;
-  const decl = _typeDecls.find(d => d.name === baseTyName);
+  const decl = declOfTy(_typeDecls, arg.ty);
   if (decl?.kind !== "discriminated-union" || decl.discriminant !== "__isArray__") return null;
   return { scrutinee: arg, typeName: arg.ty.name, variant: "ArrayBranch" };
 }
@@ -794,8 +790,7 @@ function parseTypeofStringCheck(e: TExpr): { scrutinee: TExpr; typeName: string;
   const lit = e.left.kind === "str" ? e.left.value : e.right.kind === "str" ? e.right.value : null;
   if (!tof || lit !== "string") return null;
   if (!isNarrowablePath(tof) || tof.ty.kind !== "user") return null;
-  const baseTyName = tof.ty.name.includes("<") ? tof.ty.name.slice(0, tof.ty.name.indexOf("<")) : tof.ty.name;
-  const decl = _typeDecls.find(d => d.name === baseTyName);
+  const decl = declOfTy(_typeDecls, tof.ty);
   if (decl?.kind !== "discriminated-union" || decl.discriminant !== "__isArray__") return null;
   const valTy = decl.variants?.find(v => v.name === "NonArrayBranch")?.fields.find(f => f.name === "val")?.type;
   if (valTy?.kind !== "string") return null;   // guard: the non-array branch must actually be `string`
@@ -834,9 +829,8 @@ function parseDiscriminantCond(cond: TExpr): { scrutinee: TExpr & { kind: "var" 
       cond.right.ty.kind === "user") {
     const key = cond.left.value;
     const typeName = cond.right.ty.name;
-    const baseTyName = typeName.includes("<") ? typeName.slice(0, typeName.indexOf("<")) : typeName;
-    const decl = _typeDecls.find(d => d.name === baseTyName);
-    if (decl?.kind === "discriminated-union" && decl.variants) {
+    const decl = unionDeclOfTy(_typeDecls, cond.right.ty);
+    if (decl?.variants) {
       const matches = decl.variants.filter(v => v.fields.some(f => f.name === key));
       if (matches.length === 1) {
         return { scrutinee: cond.right, typeName, variant: matches[0].name };

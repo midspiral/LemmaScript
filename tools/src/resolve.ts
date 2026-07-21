@@ -13,6 +13,7 @@ import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
 import { recognizeBuiltin, builtinSpec } from "./builtins.js";
+import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName } from "./typedecls.js";
 
 // ── Environment ──────────────────────────────────────────────
 
@@ -128,7 +129,7 @@ function wrapSome(value: TExpr, optionalTy: Ty): TExpr {
 
 /** Find the synth array-union TypeDecl named `name` (discriminant `__isArray__`). */
 function findSynthArrayUnion(name: string, typeDecls: TypeDeclInfo[]): TypeDeclInfo | null {
-  const decl = typeDecls.find(d => d.name === name);
+  const decl = declOf(typeDecls, name);
   if (decl?.kind === "discriminated-union" && decl.discriminant === "__isArray__") return decl;
   return null;
 }
@@ -306,14 +307,10 @@ function isRefMutableInTS(ty: Ty): boolean {
 }
 
 function findDecl(ctx: Ctx, name: string): TypeDeclInfo | undefined {
-  const direct = ctx.typeDecls.find(d => d.name === name);
-  if (direct) return direct;
-  // Dotted names (e.g. `Agent.Info`, `Permission.Ruleset`): fall back to the
+  // Dotted names (e.g. `Agent.Info`, `Permission.Ruleset`) fall back to the
   // last segment, so `//@ declare-type Info { ... }` matches a reference to
   // `Agent.Info` without forcing the user to repeat the namespace.
-  const dotIdx = name.lastIndexOf(".");
-  if (dotIdx >= 0) return ctx.typeDecls.find(d => d.name === name.slice(dotIdx + 1));
-  return undefined;
+  return declOfDotted(ctx.typeDecls, name);
 }
 
 /** Expand alias-kind typeDecls when the alias target is structural (array,
@@ -323,11 +320,7 @@ function findDecl(ctx: Ctx, name: string): TypeDeclInfo | undefined {
 function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new Set()): Ty {
   if (ty.kind === "user") {
     if (seen.has(ty.name)) return ty;
-    let decl = typeDecls.find(d => d.name === ty.name);
-    if (!decl && ty.name.includes(".")) {
-      const tail = ty.name.slice(ty.name.lastIndexOf(".") + 1);
-      decl = typeDecls.find(d => d.name === tail);
-    }
+    const decl = declOfDotted(typeDecls, ty.name);
     if (decl?.kind === "alias" && decl.aliasOfTy) {
       const target = decl.aliasOfTy;
       if (target.kind === "array" || target.kind === "map" || target.kind === "set" || target.kind === "optional" || target.kind === "user") {
@@ -358,11 +351,7 @@ function getDiscriminant(ctx: Ctx, typeName: string): string | undefined {
 function refEqHazard(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
   if (ty.kind === "array" || ty.kind === "map" || ty.kind === "set" || ty.kind === "tuple") return true;
   if (ty.kind === "user") {
-    let decl = typeDecls.find(d => d.name === ty.name);
-    if (!decl && ty.name.includes(".")) {
-      const tail = ty.name.slice(ty.name.lastIndexOf(".") + 1);
-      decl = typeDecls.find(d => d.name === tail);
-    }
+    const decl = declOfDotted(typeDecls, ty.name);
     if (!decl) return true;                          // generic type parameter / unknown → assume reference
     if (decl.kind === "string-union") return false;  // runs as a JS string → `===` is structural
     if (decl.kind === "alias") return decl.aliasOfTy ? refEqHazard(decl.aliasOfTy, typeDecls) : false;
@@ -393,19 +382,14 @@ function isUnmodeledTy(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
   if (ty.kind === "tuple") return ty.elems.some(e => isUnmodeledTy(e, typeDecls));
   if (ty.kind === "set") return isUnmodeledTy(ty.elem, typeDecls);
   if (ty.kind === "map") return isUnmodeledTy(ty.key, typeDecls) || isUnmodeledTy(ty.value, typeDecls);
-  if (ty.kind === "user") {
-    const base = ty.name.includes("<") ? ty.name.slice(0, ty.name.indexOf("<")) : ty.name;
-    return !typeDecls.some(d => d.name === base);
-  }
+  if (ty.kind === "user") return declOfTy(typeDecls, ty) === undefined;
   return false;
 }
 
 /** A `user` type that resolves to a string-union declare-type — runs as a plain
  *  string at runtime, so it's a refinement of `string`, not an opaque blob. */
 function isStringUnionTy(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
-  if (ty.kind !== "user") return false;
-  const base = ty.name.includes("<") ? ty.name.slice(0, ty.name.indexOf("<")) : ty.name;
-  return typeDecls.some(d => d.name === base && d.kind === "string-union");
+  return declOfTy(typeDecls, ty)?.kind === "string-union";
 }
 
 /** Infer quantifier variable type from usage in body.
@@ -534,7 +518,7 @@ function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExp
       if (a.kind !== "lambda" || i >= paramTys.length) return a;
       let pTy = paramTys[i];
       if (pTy.kind === "user") {
-        const decl = ctx.typeDecls.find(d => d.name === (pTy as any).name);
+        const decl = declOf(ctx.typeDecls, (pTy as any).name);
         if (decl?.kind === "alias" && decl.aliasOfTy) pTy = decl.aliasOfTy;
         else if (decl?.kind === "alias" && decl.aliasOf) pTy = parseTsType(decl.aliasOf);
       }
@@ -613,7 +597,7 @@ function lookupFieldTy(objTy: Ty, field: string, ctx: Ctx): { ty: Ty; isDiscrimi
     return { ty: { kind: "nat" }, isDiscriminant: false };
   }
   if (objTy.kind === "user") {
-    const baseTyName = objTy.name.includes("<") ? objTy.name.slice(0, objTy.name.indexOf("<")) : objTy.name;
+    const baseTyName = tyBaseName(objTy.name);
     const isDiscriminant = getDiscriminant(ctx, baseTyName) === field;
     const decl = findDecl(ctx, baseTyName);
     if (decl?.kind === "record") {
@@ -648,7 +632,7 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
   // into its inner type), else the base's.
   const rTy = overInner.kind === "user" ? overInner
             : tbase.ty.kind === "user" ? tbase.ty : null;
-  const decl = rTy ? ctx.typeDecls.find(d => d.name === rTy.name && d.kind === "record") : undefined;
+  const decl = rTy ? declOfKind(ctx.typeDecls, rTy.name, "record") : undefined;
   if (!rTy || !decl?.fields) {
     throw new Error(`object spread merge { ...a, ...b } needs a known record type for both operands ` +
       `(base: ${tyToCanonical(tbase.ty)}, override: ${tyToCanonical(tover.ty)})`);
@@ -696,7 +680,7 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
 function tryRecordIndexByEnum(obj: TExpr, idx: TExpr, ctx: Ctx): TExpr | null {
   const objTy = obj.ty, keyTy = idx.ty;
   if (objTy.kind !== "user") return null;
-  const rec = ctx.typeDecls.find(d => d.name === objTy.name && d.kind === "record");
+  const rec = declOfKind(ctx.typeDecls, objTy.name, "record");
   if (!rec?.fields) return null;
   const fieldByName = new Map(rec.fields.map(f => [f.name, f]));
   const fieldTy = (v: string): Ty => fieldByName.get(v)!.type ?? { kind: "unknown" };
@@ -706,7 +690,7 @@ function tryRecordIndexByEnum(obj: TExpr, idx: TExpr, ctx: Ctx): TExpr | null {
   let values: string[] | null = null;
   let datatype: string | null = null;
   if (keyTy.kind === "user") {
-    const keyEnum = ctx.typeDecls.find(d => d.name === keyTy.name && d.kind === "string-union");
+    const keyEnum = declOfKind(ctx.typeDecls, keyTy.name, "string-union");
     if (keyEnum?.values?.length) { values = keyEnum.values; datatype = keyEnum.name; }
   } else if (keyTy.kind === "string" && keyTy.values?.length) {
     values = keyTy.values;
@@ -1030,7 +1014,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // has ctx.returnTy = Option<T>, but the record literal's natural type is T.
       const returnTyUnwrapped = ctx.returnTy.kind === "optional" ? ctx.returnTy.inner : ctx.returnTy;
       const recordTy = ty.kind === "user" ? ty : returnTyUnwrapped.kind === "user" ? returnTyUnwrapped : null;
-      const decl = recordTy ? ctx.typeDecls.find(d => d.name === recordTy.name && d.kind === "record") : undefined;
+      const decl = recordTy ? declOfKind(ctx.typeDecls, recordTy.name, "record") : undefined;
       // Clear returnTy for field values — it applies to THIS record, not nested ones
       const fieldCtx = recordTy ? { ...ctx, returnTy: { kind: "unknown" as const } as Ty } : ctx;
       const fields = e.fields.map(f => {

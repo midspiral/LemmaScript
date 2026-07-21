@@ -33,7 +33,7 @@ This design commits to six decisions:
    condition establish" as an ordered fact list plus residual. Both `resolve`
    (for typing branches) and `narrow` (for rewriting) consult it. Narrowing
    collapses to ~6 positional drivers over shared materializers.
-3. **Structured types and `TypeEnv`.** Generic arguments become structured
+3. **Structured types and `TypeDecls`.** Generic arguments become structured
    (`{ kind: "user"; name; args: Ty[] }`); declaration lookup goes through
    one helper API instead of repeated scans.
 4. **Explicit state.** Module-level mutable state is replaced by threaded
@@ -211,7 +211,7 @@ type Fact =
   | { kind: "inBounds"; arr: TExpr; idx: TExpr };
 
 // Owns &&-splitting, ===/!==/!-negation, ||-De-Morgan:
-function analyze(cond: TExpr, env: TypeEnv):
+function analyze(cond: TExpr, decls: TypeDecls):
   { facts: Fact[]; negFacts: Fact[]; residual: TExpr | null };
 ```
 
@@ -271,7 +271,7 @@ deletes both copies of the "restore `isDiscriminant` after `applyChain`"
 fixup, because the fact carries that knowledge once. Every supported fact
 kind gets a test in every supported position and polarity (§10.2).
 
-## 5. Decision: structured types, `TypeEnv`, `Result`
+## 5. Decision: structured types, `TypeDecls`, `Result`
 
 ### 5.1 Structured generic arguments
 
@@ -284,17 +284,17 @@ disappears, alias expansion receives explicit arguments, and contracts can
 recurse over actual type structure. `parseTsType` stays on the extraction
 side (it depends on ts-morph); `resolve` receives only portable `Ty`.
 
-### 5.2 `TypeEnv`
+### 5.2 `TypeDecls`
 
 One lookup abstraction over `typeDecls`, implemented as a datatype plus
 plain helper functions (portable to the subset — no function-valued record
 fields required):
 
 ```ts
-function declOf(env: TypeEnv, name: string): TypeDeclInfo | null;
-function unionDecl(env: TypeEnv, ty: Ty): UnionDecl | null;
-function discriminantOf(env: TypeEnv, ty: Ty): string | null;
-function variantWithField(env: TypeEnv, ty: Ty, f: string): VariantInfo | null;
+function declOf(decls: TypeDecls, name: string): TypeDeclInfo | null;
+function unionDecl(decls: TypeDecls, ty: Ty): UnionDecl | null;
+function discriminantOf(decls: TypeDecls, ty: Ty): string | null;
+function variantWithField(decls: TypeDecls, ty: Ty, f: string): VariantInfo | null;
 ```
 
 Replaces the `_typeDecls.find(...)` scans re-spelled at every use site.
@@ -537,8 +537,15 @@ with no annotation is not started.*
    stamp; emitters untouched; gauntlet byte-for-byte on both backends;
    pinned by `examples/postTags.ts`. The §10.2 builtin matrix is still
    outstanding.*
-3. **Structured user types, structural `tyEqual`, `TypeEnv`** (§5.1–5.2),
-   small PRs.
+3. **Structured user types, structural `tyEqual`, `TypeDecls`** (§5.1–5.2),
+   small PRs. — *`TypeDecls` half done (2026-07-21): `typedecls.ts`
+   centralizes declaration lookup (exact / dotted / generic-base-sliced
+   semantics documented in its header); ~35 scan sites and all inline
+   base-name slices in resolve/narrow/transform replaced; gauntlet
+   byte-for-byte on both backends. Structured generic args (§5.1) not
+   started — probe generic user-datatype behavior first (the Lean emitter
+   renders `user` names verbatim, so instantiated generics are likely
+   broken there today).*
 4. **`Result`/`CompileError`** (§5.3) on leaf modules first, then riding
    along with each pass migration.
 5. **Ctx threading and `NameSupply`** (§6.1–6.2) — mostly falls out of 2–4.
@@ -619,7 +626,7 @@ artifacts/caches unless reviewing them in-tree earns its churn.
   analyzer case + (if needed) one materializer case + matrix tests, with
   every position inherited for free.
 - **Structure and state:** structured generic args everywhere; declaration
-  lookup via `TypeEnv`; no mutable module-level state in portable passes;
+  lookup via `TypeDecls`; no mutable module-level state in portable passes;
   user-facing failures are `Result`s; all binders and backend names flow
   through the two allocating APIs.
 - **Self-application:** selected portable modules compile through `lsc` on
