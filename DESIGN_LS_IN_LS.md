@@ -1,6 +1,6 @@
 # LS-in-LS: Compiler Architecture and Self-Application
 
-**Status:** Proposed
+**Status:** Adopted — in progress; per-step status is annotated in §9
 **Scope:** `lsc` compiler architecture, refactoring, verification, self-application
 
 This document is standalone: it records the settled design, its consequences,
@@ -88,6 +88,9 @@ byte-for-byte against the `examples/` gauntlet.
   discipline.
 
 ## 3. Decision: the builtin registry
+
+*Status: implemented (2026-07-21) — see §9 step 2. The §10.2 builtin
+matrix is still outstanding.*
 
 ### 3.1 Shape
 
@@ -484,8 +487,21 @@ capture names, which is where its actual bug history lives.
 Each is a generally useful feature independent of self-application:
 
 1. **Recursive and mutually recursive datatypes.** `Expr`/`Stmt` contain
-   each other. Both backends support this natively; the work is extraction.
-   *The single hard prerequisite — spike it first (§9).*
+   each other. *Spiked (2026-07-21); the prerequisite is priced and open.*
+   Findings: extraction and both backends' generation already handle
+   self-recursive, mutually recursive, and array-nested unions; Dafny
+   verifies mutual functions natively, and Lean elaborates nested
+   `Array`-field inductives with `deriving`. The remaining work is
+   Lean-only emission: (a) wrap mutually recursive inductives/defs in
+   `mutual … end` blocks (SCC analysis over type references and the def
+   call graph, topologically ordered); (b) a termination strategy for
+   array folds (`slice(1)`-style recursion is not structural — bridge
+   through `toList` or emit `termination_by`). Dafny needs no change:
+   `_ensures` lemmas over mutual functions stay empty by design — proof
+   authorship belongs to the user/AI via the lemma-file pattern, and the
+   regen merge preserves it. The proof shape is mechanical on both
+   backends (structural induction with mutual lemma calls; on Lean,
+   `match` + IHs + `simp`/`omega` in a `.proof.lean`).
 2. **Structural recursion as default termination.** AST walkers must not
    need hand-written `//@ decreases` for structural recursion.
 3. **Result ergonomics.** Matching `ok`/`err`, propagating and mapping
@@ -506,12 +522,21 @@ incidental); regression tests for the known name-capture and narrowing
 failures are added with the first PR that touches each area. No separate
 process phase precedes the first win.
 
-1. **Mutual-recursion spike** (parallel with 2). A toy `MiniExpr`/`MiniStmt`
-   with a structural fold, one nested exhaustive match, one postcondition,
-   verified on both backends. Prices the one hard prerequisite before any
-   porting commitment. Blocks §9 steps 8+ only, not the architecture work.
+*Progress is annotated in place — `done` / `deferred`, with dates; a step
+with no annotation is not started.*
+
+1. **Mutual-recursion spike** — *done (2026-07-21); findings in §8.5.*
+   The prerequisite reduces to two Lean-emitter items (`mutual` block
+   grouping; array-fold termination); Dafny and extraction need nothing.
+   *The emitter items are deferred (low priority) until step 8 approaches.*
+   Blocks §9 steps 8+ only, not the architecture work.
 2. **Builtin registry** (§3), one PR; consumers flip commit by commit,
-   each list deleted in the commit that flips its consumer.
+   each list deleted in the commit that flips its consumer. — *done
+   (2026-07-21): `builtins.ts` classification table; resolve stamps
+   `BuiltinId` (call nodes and optChain steps); narrow/transform read the
+   stamp; emitters untouched; gauntlet byte-for-byte on both backends;
+   pinned by `examples/postTags.ts`. The §10.2 builtin matrix is still
+   outstanding.*
 3. **Structured user types, structural `tyEqual`, `TypeEnv`** (§5.1–5.2),
    small PRs.
 4. **`Result`/`CompileError`** (§5.3) on leaf modules first, then riding
