@@ -275,6 +275,11 @@ kind gets a test in every supported position and polarity (§10.2).
 
 ### 5.1 Structured generic arguments
 
+*Status: deferred (2026-07-21) — see §9 step 3. The ecosystem doctrine is
+generic erasure to the constraint bound; structured args would add
+parametricity the subset deliberately omits, and the slice-site hygiene
+this section targeted is handled by `typedecls.ts`'s `tyBaseName`.*
+
 ```ts
 { kind: "user"; name: string; args: Ty[] }
 ```
@@ -542,10 +547,19 @@ with no annotation is not started.*
    centralizes declaration lookup (exact / dotted / generic-base-sliced
    semantics documented in its header); ~35 scan sites and all inline
    base-name slices in resolve/narrow/transform replaced; gauntlet
-   byte-for-byte on both backends. Structured generic args (§5.1) not
-   started — probe generic user-datatype behavior first (the Lean emitter
-   renders `user` names verbatim, so instantiated generics are likely
-   broken there today).*
+   byte-for-byte on both backends. §5.1 probed and deferred (2026-07-21):
+   generic datatype *instantiation* emits raw TS spellings today
+   (`Res<number>`, invalid on both backends), but the ecosystem's
+   documented doctrine is **erasure**, not parametricity — generics erase
+   to their constraint bound (xyflow-lemmascript README: `<EdgeType
+   extends EdgeBase>` → `EdgeBase`), so verified signatures never carry
+   instantiated generics and no case study hits the broken path.
+   Structured `args: Ty[]` would add parametric capability the subset
+   deliberately omits; the stripping-hygiene motivation is already
+   satisfied by `tyBaseName` being the single slice site. Deferred with
+   it: making today's partial erasure uniform (record decls erase, Dafny
+   union decls stay parametric, Lean union decls leak a free `T` — the
+   free `T` is a known bug) — pick up if a case study ever hits it.*
 4. **`Result`/`CompileError`** (§5.3) on leaf modules first, then riding
    along with each pass migration.
 5. **Ctx threading and `NameSupply`** (§6.1–6.2) — mostly falls out of 2–4.
