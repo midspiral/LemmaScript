@@ -493,7 +493,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // so any token after an arm body (`→`, another match's `|`, etc.) would
       // bleed into the last `.none` case without explicit bracketing.
       const arms = e.arms.map(a => `| ${renderLeanPattern(a.pattern)} => ${emitExpr(a.body)}`);
-      const scrut = typeof e.scrutinee === "string" ? e.scrutinee : emitExpr(e.scrutinee);
+      const scrut = emitExpr(e.scrutinee);
       return `(match ${scrut} with ${arms.join(" ")})`;
     }
 
@@ -586,7 +586,7 @@ function emitStmt(s: Stmt, indent: number): string {
     }
 
     case "match": {
-      const scrut = typeof s.scrutinee === "string" ? s.scrutinee : emitExpr(s.scrutinee);
+      const scrut = emitExpr(s.scrutinee);
       // Option match (.some/.none) → emit as if/let for WPGen.if compatibility
       if (s.arms.length === 2) {
         const someArm = s.arms.find(a => a.pattern.kind === "ctor" && a.pattern.ctor === "some");
@@ -820,7 +820,7 @@ function emitPureExpr(e: Expr, indent: number): string {
     case "if":
       return `${pad}if ${emitExpr(e.cond)} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
     case "match": {
-      const lines = [`${pad}match ${typeof e.scrutinee === "string" ? e.scrutinee : emitExpr(e.scrutinee)} with`];
+      const lines = [`${pad}match ${emitExpr(e.scrutinee)} with`];
       for (const arm of e.arms) {
         lines.push(`${pad}| ${renderLeanPattern(arm.pattern)} =>`);
         lines.push(emitPureExpr(arm.body, indent + 1));

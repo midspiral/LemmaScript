@@ -190,9 +190,8 @@ function mapOp(op: string): string { return OP_MAP[op] ?? op; }
 
 // ── Expression emission ─────────────────────────────────────
 
-/** Emit a match scrutinee — either a variable name (string) or an expression. */
-function emitScrutinee(s: string | Expr): string {
-  return typeof s === "string" ? escapeName(s) : emitExpr(s);
+function emitScrutinee(s: Expr): string {
+  return emitExpr(s);
 }
 
 /** Collapse nested forall/exists into a single quantifier with multiple bound vars. */

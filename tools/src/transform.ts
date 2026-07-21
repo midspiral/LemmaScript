@@ -43,7 +43,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
     case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
     case "match": {
-      const scr = typeof e.scrutinee === "string" ? e.scrutinee : r(e.scrutinee);
+      const scr = r(e.scrutinee);
       return { ...e, scrutinee: scr, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
     }
     case "forall": return { ...e, body: r(e.body) };
@@ -66,7 +66,7 @@ function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
     case "break": case "continue": return s;
     case "if": return { ...s, cond: r(s.cond), then: s.then.map(t => mapStmt(t, f)), else: s.else.map(t => mapStmt(t, f)) };
     case "match": {
-      const scr = typeof s.scrutinee === "string" ? s.scrutinee : r(s.scrutinee);
+      const scr = r(s.scrutinee);
       return { ...s, scrutinee: scr, arms: s.arms.map(a => ({ ...a, body: a.body.map(t => mapStmt(t, f)) })) };
     }
     case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r), body: s.body.map(t => mapStmt(t, f)) };
@@ -83,6 +83,8 @@ function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
  *  indices. Capture-avoiding: a nested scope that reintroduces `from` keeps its
  *  own binding untouched. `mapExpr` doesn't descend into lambda bodies, so this
  *  walks them by hand. */
+const varE = (name: string): Expr => ({ kind: "var", name });
+
 export function renameFreeVar(e: Expr, from: string, to: string): Expr {
   const f = (x: Expr): Expr | null => {
     if (x.kind === "var") return x.name === from ? { ...x, name: to } : x;
@@ -91,9 +93,7 @@ export function renameFreeVar(e: Expr, from: string, to: string): Expr {
     if (x.kind === "let" && x.name === from) return { ...x, value: mapExpr(x.value, f) };
     if ((x.kind === "forall" || x.kind === "exists") && x.var === from) return x;
     if (x.kind === "match") {
-      const scr = typeof x.scrutinee === "string"
-        ? (x.scrutinee === from ? to : x.scrutinee) : mapExpr(x.scrutinee, f);
-      return { ...x, scrutinee: scr, arms: x.arms.map(a =>
+      return { ...x, scrutinee: mapExpr(x.scrutinee, f), arms: x.arms.map(a =>
         patternBinds(a.pattern, from) ? a : { ...a, body: mapExpr(a.body, f) }) };
     }
     if (x.kind === "lambda") {
@@ -220,7 +220,7 @@ function kindHelperDecl(decl: TypeDeclInfo): Decl {
     returnType: { kind: "string" },
     requires: [], ensures: [], decreases: null,
     body: {
-      kind: "match", scrutinee: "t",
+      kind: "match", scrutinee: varE("t"),
       arms: decl.variants!.map(v => ({
         pattern: { kind: "ctor" as const, ctor: v.name, binders: v.fields.map((_, i) => `_${i}`) },
         body: { kind: "str" as const, value: v.name },
@@ -1040,7 +1040,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         // Bare-var shortcut, but route \result through lowerExpr so the
         // lemma-side replaceVar pass can substitute it with the function call.
         scrutinee = path.fields.length === 0 && path.rootVar !== "\\result"
-          ? path.rootVar
+          ? varE(path.rootVar)
           : lowerExpr(e.scrutinee, binds);
       } else {
         // Complex scrutinee — narrow pre-bound the someBody to use the binder directly,
@@ -1099,7 +1099,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         if (wrapOpt) body = wrapOptionalBranch(body, e.fallthrough);
         arms.push({ pattern: pWild(), body });
       }
-      return { kind: "match", scrutinee: varName ?? scrutinee, arms };
+      return { kind: "match", scrutinee: varName !== undefined ? varE(varName) : scrutinee, arms };
     }
   }
 }
@@ -1141,7 +1141,7 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): Expr | null {
   let rhs = transformExpr(e.right);
   rhs = replaceFieldAccess(rhs, obj.name, fields);
 
-  return { kind: "match", scrutinee: obj.name, arms: [{ pattern, body: rhs }, { pattern: pWild(), body: { kind: "bool", value: true } }] };
+  return { kind: "match", scrutinee: varE(obj.name), arms: [{ pattern, body: rhs }, { pattern: pWild(), body: { kind: "bool", value: true } }] };
 }
 
 function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; tsType: string }[]): Expr {
@@ -1322,7 +1322,7 @@ function matchToIfChains(stmts: Stmt[]): Stmt[] {
     const decl = firstCtor ? declWithVariant(_typeDecls, firstCtor) : undefined;
     if (!decl) return [{ ...s, arms }]; // not a user union (e.g. Option) — leave as match
 
-    const scrutExpr: Expr = typeof s.scrutinee === "string" ? { kind: "var", name: s.scrutinee } : s.scrutinee;
+    const scrutExpr: Expr = s.scrutinee;
     const defaultArm = arms.find(a => a.pattern.kind === "wild");
     let elseBranch: Stmt[] = defaultArm ? defaultArm.body : [];
     for (let k = ctorArms.length - 1; k >= 0; k--) {
@@ -1716,7 +1716,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
         const replaced = replacePathInTStmts(s.someBody, path, s.binder, s.binderTy);
         const someBody = transformStmts(replaced, typeDecls);
         const noneBody = transformStmts(s.noneBody, typeDecls);
-        const scrutinee: Expr | string = path.fields.length === 0 ? path.rootVar : transformExpr(s.scrutinee);
+        const scrutinee: Expr = path.fields.length === 0 ? varE(path.rootVar) : transformExpr(s.scrutinee);
         return [{
           kind: "match", scrutinee,
           arms: [
@@ -1829,7 +1829,7 @@ function emitMatchStmt(
       arms.push({ pattern: pWild(), body: transformStmts(fallthrough, typeDecls) });
     }
   }
-  return { kind: "match", scrutinee: isPath ? transformExpr(scrutinee) : prefix, arms };
+  return { kind: "match", scrutinee: isPath ? transformExpr(scrutinee) : varE(prefix), arms };
 }
 
 /** Replace bare `var(oldName)` references → `var(newName)` with the given type.
@@ -1880,7 +1880,7 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
     : buildMatchArms(cases, s.expr.kind === "var" ? s.expr.name : "?", s.expr.ty.kind === "user" ? s.expr.ty.name : undefined, typeDecls,
         (body, vn, fields) => transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls))!;
   if (s.defaultBody.length > 0) arms.push({ pattern: pWild(), body: transformStmts(s.defaultBody, typeDecls) });
-  return { kind: "match", scrutinee: ef ? ef.scrutinee : (s.expr.kind === "var" ? s.expr.name : "?"), arms };
+  return { kind: "match", scrutinee: ef ? ef.scrutinee : varE(s.expr.kind === "var" ? s.expr.name : "?"), arms };
 }
 
 /** Replace obj.field → replacement var in typed IR.
@@ -2020,7 +2020,7 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
           if (!someExpr) return null;
           const noneExpr = transformPureBody([...s.noneBody, ...rest], typeDecls);
           if (!noneExpr) return null;
-          const scrutinee: Expr | string = path.fields.length === 0 ? path.rootVar : transformExpr(s.scrutinee);
+          const scrutinee: Expr = path.fields.length === 0 ? varE(path.rootVar) : transformExpr(s.scrutinee);
           return {
             kind: "match", scrutinee,
             arms: [
@@ -2068,7 +2068,7 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
     arms.push({ pattern: pWild(), body });
   }
   if (s.expr.kind !== "var") return null;
-  return { kind: "match", scrutinee: s.expr.name, arms };
+  return { kind: "match", scrutinee: varE(s.expr.name), arms };
 }
 
 function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | null {
@@ -2110,7 +2110,7 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
       arms.push({ pattern: pWild(), body });
     }
   }
-  return { kind: "match", scrutinee: chain.varName, arms };
+  return { kind: "match", scrutinee: varE(chain.varName), arms };
 }
 
 // ── Generate type declarations ───────────────────────────────
@@ -2415,18 +2415,23 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   };
   const knownTypeNames = new Set<string>(typeDecls.map(d => (d as { name: string }).name));
   const allTypeParams = new Set<string>();
+  // Exclude type params from the *source* decls — the transformed IR drops
+  // them for aliases (`type Step<S, A> = …`), and a generic alias's params
+  // must not be mistaken for imported types. Params may carry a `//@ type`
+  // decoration ("S(==)"); references collect as the bare name, so strip it.
+  const addTp = (tp: string): void => { allTypeParams.add(tp.replace(/\(.*$/, "").trim()); };
+  for (const d of mod.typeDecls) d.typeParams?.forEach(addTp);
   for (const d of typeDecls) {
-    if ((d.kind === "inductive" || d.kind === "structure") && d.typeParams) d.typeParams.forEach(tp => allTypeParams.add(tp));
     if (d.kind === "inductive") d.constructors.forEach(c => c.fields.forEach(f => collectTy(f.type)));
     else if (d.kind === "structure") d.fields.forEach(f => collectTy(f.type));
     else if (d.kind === "type-alias") collectTy(d.target);
   }
-  for (const fn of mod.functions) { fn.typeParams.forEach(tp => allTypeParams.add(tp)); fn.params.forEach(p => collectTy(p.ty)); collectTy(fn.returnTy); }
+  for (const fn of mod.functions) { fn.typeParams.forEach(addTp); fn.params.forEach(p => collectTy(p.ty)); collectTy(fn.returnTy); }
   for (const cls of mod.classes ?? []) {
     cls.fields.forEach(f => collectTy(f.ty));
-    for (const m of cls.methods) { m.typeParams.forEach(tp => allTypeParams.add(tp)); m.params.forEach(p => collectTy(p.ty)); collectTy(m.returnTy); }
+    for (const m of cls.methods) { m.typeParams.forEach(addTp); m.params.forEach(p => collectTy(p.ty)); collectTy(m.returnTy); }
   }
-  for (const ext of mod.externs ?? []) { ext.typeParams.forEach(tp => allTypeParams.add(tp)); ext.params.forEach(p => collectTy(p.ty)); collectTy(ext.returnTy); }
+  for (const ext of mod.externs ?? []) { ext.typeParams.forEach(addTp); ext.params.forEach(p => collectTy(p.ty)); collectTy(ext.returnTy); }
   for (const c of mod.constants ?? []) collectTy(c.ty);
   const opaqueImports: Decl[] = [...referenced]
     .filter(n => !knownTypeNames.has(n) && !allTypeParams.has(n))

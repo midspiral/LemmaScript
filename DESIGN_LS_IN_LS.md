@@ -610,13 +610,17 @@ with no annotation is not started.*
    indexed-`every` calls became recursive `tysEqual`/`stringsEqual`.
    Lean self-compilation stays blocked on the deferred mutual-block
    emission (step 1). Not yet wired as a CI self-run target.
-   `ir.ts` (2026-07-21): one blocker from P0-Dafny — every remaining error
-   is the `Match.scrutinee: string | Expr` union's `typeof` checks (three
-   sites); the fix is the standalone "scrutinee becomes `Expr`" PR
-   (REVIEW_ARCHITECTURE §1, kill strings at layer boundaries; ~98 touch
-   points). Everything else self-compiles: the full `Expr`/`Stmt`/decl
-   datatype family, the mutually recursive walkers, fn-type aliases, rest
-   params. Toolchain gained along the way (all gauntlet byte-for-byte):
+   `ir.ts` (2026-07-22): P0 on Dafny — self-compiles and verifies (the
+   full `Expr`/`Stmt`/decl datatype family, the mutually recursive
+   walkers, fn-type aliases, rest params). The last blocker was
+   `Match.scrutinee: string | Expr` (a bare string as shorthand for a var
+   scrutinee); it is now `Expr` everywhere — *type the IR seams: a string
+   standing in for a node at a layer boundary makes every consumer pay a
+   `typeof` toll, and such unions are unmodelable in the subset*. The
+   refactor was byte-for-byte (Dafny's scrutinee printer already escaped
+   both forms identically) and deleted the string branch from every match
+   consumer in transform, peephole, and both emitters.
+   Toolchain gained along the way (all gauntlet byte-for-byte):
    undeclared user types synthesize opaque decls (imported types are
    opaque by default — the coarse first half of the cross-module story,
    matching the `_synthOpaque` doctrine); `CTOR_MAP` lookups are

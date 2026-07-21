@@ -32,7 +32,7 @@ export type Expr =
   | { kind: "methodCall"; obj: Expr; objTy: Ty; method: string; args: Expr[]; monadic: boolean }
   | { kind: "lambda"; params: Param[]; body: Stmt[] }
   | { kind: "if"; cond: Expr; then: Expr; else: Expr }
-  | { kind: "match"; scrutinee: string | Expr; arms: MatchArm[] }
+  | { kind: "match"; scrutinee: Expr; arms: MatchArm[] }
   | { kind: "forall"; var: string; type: Ty; body: Expr }
   | { kind: "exists"; var: string; type: Ty; body: Expr }
   | { kind: "implies"; premises: Expr[]; conclusion: Expr }
@@ -88,7 +88,7 @@ export type Stmt =
   | { kind: "break" }
   | { kind: "continue" }
   | { kind: "if"; cond: Expr; then: Stmt[]; else: Stmt[] }
-  | { kind: "match"; scrutinee: string | Expr; arms: StmtMatchArm[] }
+  | { kind: "match"; scrutinee: Expr; arms: StmtMatchArm[] }
   | { kind: "while"; cond: Expr; invariants: Expr[]; decreasing: Expr | null;
       doneWith: Expr | null; body: Stmt[] }
   | { kind: "forin"; idx: string; bound: Expr; invariants: Expr[]; body: Stmt[] }
@@ -246,7 +246,7 @@ export function anyExpr(e: Expr, pred: ExprPred): boolean {
     case "methodCall": return anyExpr(e.obj, pred) || e.args.some(a => anyExpr(a, pred));
     case "lambda": return e.body.some(s => anyExprInStmt(s, pred));
     case "if": return anyExpr(e.cond, pred) || anyExpr(e.then, pred) || anyExpr(e.else, pred);
-    case "match": return (typeof e.scrutinee !== "string" && anyExpr(e.scrutinee, pred)) || e.arms.some(a => anyExpr(a.body, pred));
+    case "match": return anyExpr(e.scrutinee, pred) || e.arms.some(a => anyExpr(a.body, pred));
     case "forall": case "exists": return anyExpr(e.body, pred);
     case "let": return anyExpr(e.value, pred) || anyExpr(e.body, pred);
   }
@@ -259,7 +259,7 @@ export function anyExprInStmt(s: Stmt, pred: ExprPred): boolean {
     case "assert": return anyExpr(s.expr, pred);
     case "break": case "continue": return false;
     case "if": return anyExpr(s.cond, pred) || anyExprInStmts(s.then, pred) || anyExprInStmts(s.else, pred);
-    case "match": return (typeof s.scrutinee !== "string" && anyExpr(s.scrutinee, pred)) || s.arms.some(a => anyExprInStmts(a.body, pred));
+    case "match": return anyExpr(s.scrutinee, pred) || s.arms.some(a => anyExprInStmts(a.body, pred));
     case "while": return anyExpr(s.cond, pred) || s.invariants.some(i => anyExpr(i, pred))
       || (s.decreasing ? anyExpr(s.decreasing, pred) : false) || (s.doneWith ? anyExpr(s.doneWith, pred) : false)
       || anyExprInStmts(s.body, pred);
@@ -279,8 +279,7 @@ export function anyExprInStmts(stmts: Stmt[], pred: ExprPred): boolean {
 const _refsName = (name: string): ExprPred =>
   (e: Expr) => (e.kind === "var" && e.name === name) ||
        (e.kind === "app" && e.fn === name) ||
-       (e.kind === "constructor" && e.name === name) ||
-       (e.kind === "match" && typeof e.scrutinee === "string" && e.scrutinee === name);
+       (e.kind === "constructor" && e.name === name);
 
 export function usesName(e: Expr, name: string): boolean {
   return anyExpr(e, _refsName(name));

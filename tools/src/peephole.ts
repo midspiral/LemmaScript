@@ -40,7 +40,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
     case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
     case "match": {
-      const scr = typeof e.scrutinee === "string" ? e.scrutinee : r(e.scrutinee);
+      const scr = r(e.scrutinee);
       return { ...e, scrutinee: scr, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
     }
     case "forall": return { ...e, body: r(e.body) };
@@ -87,7 +87,7 @@ function getSomeNoneArms<A extends { pattern: MatchPattern; body: any }>(arms: A
  *  Bind once (let-expression) rather than substitute, so the verifier doesn't
  *  re-derive `k in m` at every use of v inside sb. */
 function ruleMatchOnMapGetExpr(e: Expr): Expr | null {
-  if (e.kind !== "match" || typeof e.scrutinee === "string") return null;
+  if (e.kind !== "match") return null;
   const get = isMapGet(e.scrutinee);
   if (!get) return null;
   const arms = getSomeNoneArms(e.arms);
@@ -139,8 +139,7 @@ function ruleLetMatchOnMapGetExpr(e: Expr): Expr | null {
   if (e.body.kind !== "match") return null;
   const m = e.body;
   const matchOnX =
-    (typeof m.scrutinee === "string" && m.scrutinee === e.name) ||
-    (typeof m.scrutinee !== "string" && m.scrutinee.kind === "var" && m.scrutinee.name === e.name);
+    m.scrutinee.kind === "var" && m.scrutinee.name === e.name;
   if (!matchOnX) return null;
   const arms = getSomeNoneArms(m.arms);
   if (!arms) return null;
@@ -194,7 +193,7 @@ let EXPR_RULES: ((e: Expr) => Expr | null)[] = [...MAP_GET_RULES, ...BOOL_RULES]
  *  Bind once (var declaration) rather than substitute — substituting would
  *  re-evaluate m[k] at every use, changing semantics if the body mutates m. */
 function ruleMatchOnMapGetStmt(s: Stmt): Stmt | null {
-  if (s.kind !== "match" || typeof s.scrutinee === "string") return null;
+  if (s.kind !== "match") return null;
   const get = isMapGet(s.scrutinee);
   if (!get) return null;
   const arms = getSomeNoneArms(s.arms);
@@ -236,11 +235,7 @@ function containsVarRefStmt(s: Stmt, name: string): boolean {
         checkExpr(st.cond);
         st.then.forEach(walk); st.else.forEach(walk); return;
       case "match":
-        if (typeof st.scrutinee === "string") {
-          if (st.scrutinee === name) { found = true; return; }
-        } else {
-          checkExpr(st.scrutinee);
-        }
+        checkExpr(st.scrutinee);
         st.arms.forEach(a => a.body.forEach(walk));
         return;
       case "while":
@@ -275,8 +270,7 @@ function tryLetMatchOnMapGet(s1: Stmt, s2: Stmt, restStmts: Stmt[]): Stmt | null
   if (!get) return null;
   if (s2.kind !== "match") return null;
   const matchOnX =
-    (typeof s2.scrutinee === "string" && s2.scrutinee === s1.name) ||
-    (typeof s2.scrutinee !== "string" && s2.scrutinee.kind === "var" && s2.scrutinee.name === s1.name);
+    s2.scrutinee.kind === "var" && s2.scrutinee.name === s1.name;
   if (!matchOnX) return null;
   const arms = getSomeNoneArms(s2.arms);
   if (!arms) return null;
@@ -358,7 +352,7 @@ function rewriteChildrenExpr(e: Expr): Expr {
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
     case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
     case "match": {
-      const scr = typeof e.scrutinee === "string" ? e.scrutinee : r(e.scrutinee);
+      const scr = r(e.scrutinee);
       return { ...e, scrutinee: scr, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
     }
     case "forall": return { ...e, body: r(e.body) };
@@ -399,7 +393,7 @@ function rewriteChildrenStmt(s: Stmt): Stmt {
     case "break": case "continue": return s;
     case "if": return { ...s, cond: re(s.cond), then: rs(s.then), else: rs(s.else) };
     case "match": {
-      const scr = typeof s.scrutinee === "string" ? s.scrutinee : re(s.scrutinee);
+      const scr = re(s.scrutinee);
       return { ...s, scrutinee: scr, arms: s.arms.map(a => ({ ...a, body: rs(a.body) })) };
     }
     case "while": return { ...s, cond: re(s.cond), invariants: s.invariants.map(re), body: rs(s.body) };
