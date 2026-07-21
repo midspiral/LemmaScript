@@ -726,9 +726,9 @@ function emitDecl(d: Decl): string {
         }
       const collides = new Set([...typesByField].filter(([, s]) => s.size > 1).map(([n]) => n));
       const ctors = d.constructors.map(c => {
-        if (c.fields.length === 0) return escapeName(c.name);
+        if (c.fields.length === 0) return dafnyCtorName(c.name);
         const fields = c.fields.map(f => collides.has(f.name) ? { ...f, name: `${f.name}_${c.name}` } : f);
-        return `${escapeName(c.name)}(${paramList(fields)})`;
+        return `${dafnyCtorName(c.name)}(${paramList(fields)})`;
       });
       return `datatype ${escapeName(d.name)}${tp} = ${ctors.join(" | ")}`;
     }
@@ -1319,9 +1319,18 @@ function resolveTy(ty: Ty): Ty {
   return ty;
 }
 
+/** Constructor names come from source strings (string-union values like
+ *  "spec-pure", discriminated-union tags), which may contain characters no
+ *  TS identifier has; map those to `_` before the ordinary escaping. A
+ *  collision after mapping fails loudly in Dafny (duplicate constructor)
+ *  rather than silently merging. */
+function dafnyCtorName(name: string): string {
+  return escapeName(name.replace(/[^A-Za-z0-9_'?]/g, "_"));
+}
+
 function qualifyCtor(name: string, type?: string): string {
   const rawName = name.replace(/^\./, "");
-  const mapped = CTOR_MAP[rawName] ?? escapeName(rawName);
+  const mapped = CTOR_MAP[rawName] ?? dafnyCtorName(rawName);
   if (type) return `${type}.${mapped}`;
   return mapped;
 }
@@ -1335,7 +1344,7 @@ const CTOR_MAP: Record<string, string> = { "some": "Some", "none": "None" };
 
 function translatePattern(p: MatchPattern): string {
   if (p.kind === "wild") return "_";
-  const ctorName = CTOR_MAP[p.ctor] ?? escapeName(p.ctor);
+  const ctorName = CTOR_MAP[p.ctor] ?? dafnyCtorName(p.ctor);
   if (p.binders.length === 0) return ctorName;
   return `${ctorName}(${p.binders.map(escapeName).join(", ")})`;
 }

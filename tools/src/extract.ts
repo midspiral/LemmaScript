@@ -707,6 +707,7 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
             if (prop.getName() === discriminant) continue;
             let tsType = typeToString(prop.getTypeAtLocation(decl));
             const propDecl = prop.getDeclarations()[0];
+            tsType = declaredTypeTextIfBetter(propDecl, tsType);
             if (propDecl && (propDecl as any).hasQuestionToken?.() && !tsType.includes(" | undefined")) {
               tsType = `${tsType} | undefined`;
             }
@@ -796,10 +797,11 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
 
     const propType = prop.getTypeAtLocation(locationNode);
     let tsType = typeToString(propType);
+    const propDecl = prop.getDeclarations()[0];
+    tsType = declaredTypeTextIfBetter(propDecl, tsType);
     // Optional property: `foo?: T` reports as `T` (ts-morph strips the
     // `| undefined` from a question-token type). Add it back so the field
     // resolves to `Optional<T>`.
-    const propDecl = prop.getDeclarations()[0];
     if (propDecl && (propDecl as any).hasQuestionToken?.() && !tsType.includes(" | undefined")) {
       tsType = `${tsType} | undefined`;
     }
@@ -847,6 +849,21 @@ function findDiscriminant(members: Type[]): string | null {
     if (allHave) return name;
   }
   return null;
+}
+
+/** Recover a field's *declared* type text when the semantic printer degraded
+ *  to ts-morph's anonymous `__type` — a self-referential alias reached
+ *  through a `| null` union expands structurally and loses its name. The
+ *  syntactic node text preserves the alias spelling (`TExpr | null`). Only
+ *  plain reference text is used: inline object literals (containing `{`)
+ *  keep the `__type` marker so record synthesis can handle them. */
+function declaredTypeTextIfBetter(propDecl: Node | undefined, tsType: string): string {
+  if (!tsType.includes("__type") || !propDecl) return tsType;
+  const tn = (propDecl as { getTypeNode?: () => Node | undefined }).getTypeNode?.();
+  if (!tn) return tsType;
+  const text = tn.getText();
+  if (text.includes("__type") || text.includes("{")) return tsType;
+  return text;
 }
 
 function typeToString(type: Type): string {

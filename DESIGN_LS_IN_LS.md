@@ -593,6 +593,25 @@ with no annotation is not started.*
 7. **Backend name allocator** (§6.3) with collision tests.
 8. **Self-apply the leaves:** `names.ts`, portable type helpers/`typedir`,
    IR walkers; P1 contracts (freshness, keywords); CI self-run targets.
+   — *partial (2026-07-21): `typedir.ts` is the first self-compiled module —
+   P0/T0 on Dafny (`lsc check` on the live source: generation + Dafny
+   verification clean, including the mutually recursive `TExpr`/`TStmt`
+   datatypes and the `tyEqual`/`tysEqual` mutual recursion, whose
+   termination Dafny proves from default rank measures — explicit
+   `decreases` pragmas are unnecessary and in fact break the joint
+   measure). Enabling toolchain work, all gauntlet byte-for-byte: extract
+   recovers declared type text where the semantic printer degrades
+   self-referential aliases to `__type`; transform generates per-union
+   discriminator functions (`Ty_kind`) for surviving `.kind`-as-value
+   reads; both emitters sanitize constructor names from source strings
+   (`"spec-pure"` → Dafny `spec_pure`, Lean `«spec-pure»`). Source-side:
+   typedir's inline payload records are named (`TRecordField` etc. —
+   anonymous record types have no backend model) and `tyEqual`'s
+   indexed-`every` calls became recursive `tysEqual`/`stringsEqual`.
+   Lean self-compilation stays blocked on the deferred mutual-block
+   emission (step 1). Not yet wired as a CI self-run target. Still ahead:
+   `ir.ts` (same treatment), `names.ts` after its §6 refactor (first P1
+   freshness target), cross-module imports (§8.5).*
 9. **`peephole`, then `narrow`** in-subset with completeness + freshness
    contracts.
 10. **Portable `resolve` core, `specparser`, emitter cores** — transform

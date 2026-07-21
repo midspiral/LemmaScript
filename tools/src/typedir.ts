@@ -35,6 +35,20 @@ export function isBigInt(ty: Ty): boolean {
   return (ty.kind === "int" || ty.kind === "nat") && !!ty.big;
 }
 
+/** Elementwise Ty-list equality — recursive rather than an indexed-callback
+ *  HOF, so the module stays inside the LemmaScript subset. */
+export function tysEqual(as: Ty[], bs: Ty[]): boolean {
+  if (as.length !== bs.length) return false;
+  if (as.length === 0) return true;
+  return tyEqual(as[0], bs[0]) && tysEqual(as.slice(1), bs.slice(1));
+}
+
+function stringsEqual(as: string[], bs: string[]): boolean {
+  if (as.length !== bs.length) return false;
+  if (as.length === 0) return true;
+  return as[0] === bs[0] && stringsEqual(as.slice(1), bs.slice(1));
+}
+
 /** Structural equality on Ty. Used to decide whether a tuple type is homogeneous
  *  (all elements equal ⇒ lower to `seq`) vs heterogeneous (⇒ keep as `tuple`). */
 export function tyEqual(a: Ty, b: Ty): boolean {
@@ -42,10 +56,7 @@ export function tyEqual(a: Ty, b: Ty): boolean {
   switch (a.kind) {
     case "array": return tyEqual(a.elem, (b as typeof a).elem);
     case "set":   return tyEqual(a.elem, (b as typeof a).elem);
-    case "tuple": {
-      const bt = b as typeof a;
-      return a.elems.length === bt.elems.length && a.elems.every((e, i) => tyEqual(e, bt.elems[i]));
-    }
+    case "tuple": return tysEqual(a.elems, (b as typeof a).elems);
     case "map": {
       const bm = b as typeof a;
       return tyEqual(a.key, bm.key) && tyEqual(a.value, bm.value);
@@ -54,14 +65,14 @@ export function tyEqual(a: Ty, b: Ty): boolean {
     case "user":     return a.name === (b as typeof a).name;
     case "fn": {
       const bf = b as typeof a;
-      return a.params.length === bf.params.length
-        && a.params.every((p, i) => tyEqual(p, bf.params[i]))
-        && tyEqual(a.result, bf.result);
+      return tysEqual(a.params, bf.params) && tyEqual(a.result, bf.result);
     }
     case "string": {
-      const bs = b as typeof a;
-      if (a.values === undefined || bs.values === undefined) return a.values === bs.values;
-      return a.values.length === bs.values.length && a.values.every((v, i) => v === bs.values![i]);
+      const av = a.values;
+      const bv = (b as typeof a).values;
+      if (av === undefined) return bv === undefined;
+      if (bv === undefined) return false;
+      return stringsEqual(av, bv);
     }
     case "int": case "nat": return !!a.big === !!(b as typeof a).big;
     case "bool": case "real": case "void": case "unknown": return true;   // no payload
@@ -82,6 +93,15 @@ export type TChainStep =
 
 // ── Expressions ──────────────────────────────────────────────
 
+// Named payload records. Naming these (rather than inlining object-literal
+// types) keeps the module inside the LemmaScript subset: inline anonymous
+// record types have no backend model. Purely structural — construction
+// sites are unaffected.
+export interface TRecordField { name: string; value: TExpr }
+export interface TExprCase { variant: string; body: TExpr }
+export interface TStmtCase { variant: string; body: TStmt[] }
+export interface TSwitchCase { label: string; body: TStmt[] }
+
 export type TExpr =
   | { kind: "var"; name: string; ty: Ty }
   | { kind: "num"; value: number; ty: Ty }
@@ -94,16 +114,16 @@ export type TExpr =
   | { kind: "index"; obj: TExpr; idx: TExpr; ty: Ty }
   | { kind: "field"; obj: TExpr; field: string; ty: Ty;
       isDiscriminant?: boolean }            // true if this is a discriminant field access
-  | { kind: "record"; spread: TExpr | null; fields: { name: string; value: TExpr }[]; ty: Ty }
+  | { kind: "record"; spread: TExpr | null; fields: TRecordField[]; ty: Ty }
   | { kind: "arrayLiteral"; elems: TExpr[]; ty: Ty }
-  | { kind: "lambda"; params: { name: string; ty: Ty }[]; body: TStmt[]; ty: Ty }
+  | { kind: "lambda"; params: TParam[]; body: TStmt[]; ty: Ty }
   | { kind: "conditional"; cond: TExpr; then: TExpr; else: TExpr; ty: Ty }
   | { kind: "optChain"; obj: TExpr; chain: TChainStep[]; ty: Ty }
   | { kind: "nullish"; left: TExpr; right: TExpr; ty: Ty }
   | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
       someBody: TExpr; noneBody: TExpr; ty: Ty }
   | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
-      cases: { variant: string; body: TExpr }[];
+      cases: TExprCase[];
       fallthrough: TExpr | null; ty: Ty }
   // Spec-only (from //@ annotations):
   // Note: \result is desugared by resolve.ts into a regular var named "\\result";
@@ -129,7 +149,7 @@ export type TStmt =
       doneWith: TExpr | null;
       body: TStmt[] }
   | { kind: "switch"; expr: TExpr; discriminant: string;
-      cases: { label: string; body: TStmt[] }[];
+      cases: TSwitchCase[];
       defaultBody: TStmt[] }
   | { kind: "forof"; names: string[]; nameTypes: Ty[]; iterable: TExpr;
       invariants: TExpr[]; doneWith: TExpr | null; body: TStmt[] }
@@ -140,7 +160,7 @@ export type TStmt =
   | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
       someBody: TStmt[]; noneBody: TStmt[] }
   | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
-      cases: { variant: string; body: TStmt[] }[];
+      cases: TStmtCase[];
       fallthrough: TStmt[] }
 
 /** Statement kinds that unconditionally leave the enclosing block. Shared by
@@ -173,7 +193,7 @@ export interface TFunction {
 
 export interface TClass {
   name: string;
-  fields: { name: string; ty: Ty }[];
+  fields: TParam[];
   methods: TFunction[];
 }
 

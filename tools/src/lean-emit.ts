@@ -194,9 +194,16 @@ let _unknownEmitted = false;  // across files in one run — the def file import
 // and stays in the more proof-friendly Prop form.
 let _boolCtx = false;
 
+/** Constructor names come from source strings (string-union values,
+ *  discriminated-union tags) and may contain non-identifier characters
+ *  ("spec-pure"); guillemet-quote those — exact and collision-free. */
+function leanCtorName(name: string): string {
+  return /^[A-Za-z_][A-Za-z0-9_'!?]*$/.test(name) ? name : `«${name}»`;
+}
+
 /** Render a match pattern to Lean syntax: `_`, `.none`, `.some x`, `.syn seq`. */
 function renderLeanPattern(p: MatchPattern): string {
-  return p.kind === "wild" ? "_" : "." + [p.ctor, ...p.binders].join(" ");
+  return p.kind === "wild" ? "_" : "." + [leanCtorName(p.ctor), ...p.binders].join(" ");
 }
 
 // A Bool-valued atom that does NOT coerce to Prop: an inlined union discriminator
@@ -304,7 +311,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // like `match ... | .none => Type.some x` where elaboration can't infer).
       // Without type: emit `.name` (dotted form; works in pattern positions
       // and where the expected type is clear from context).
-      const head = e.type ? `${e.type}.${e.name}` : `.${e.name}`;
+      const head = e.type ? `${e.type}.${leanCtorName(e.name)}` : `.${leanCtorName(e.name)}`;
       if (!e.args || e.args.length === 0) return head;
       const args = e.args.map(a =>
         (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall") ? `(${emitExpr(a)})` : emitExpr(a)
@@ -697,10 +704,10 @@ function emitDecl(d: Decl): string {
       const lines = [`inductive ${d.name} where`];
       for (const c of d.constructors) {
         if (c.fields.length === 0) {
-          lines.push(`  | ${c.name} : ${d.name}`);
+          lines.push(`  | ${leanCtorName(c.name)} : ${d.name}`);
         } else {
           const params = c.fields.map(f => `(${escapeName(f.name)} : ${tyToLean(f.type)})`).join(" ");
-          lines.push(`  | ${c.name} ${params} : ${d.name}`);
+          lines.push(`  | ${leanCtorName(c.name)} ${params} : ${d.name}`);
         }
       }
       return lines.join("\n") + emitDeriving(d.name, d.deriving);
