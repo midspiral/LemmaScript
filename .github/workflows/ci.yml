@@ -73,17 +73,36 @@ jobs:
       - name: Build
         run: lake build
 
-  # Self-application (DESIGN_LS_IN_LS.md §8): the compiler modules listed in
-  # LemmaScript-files.txt, verified through the same reusable workflow the
-  # case studies use. `ls-ref` points the toolchain at the branch under test,
-  # so a compiler change is gated by its own code. typecheck is off — the
-  # `tools` job already covers it.
+  # Self-run (DESIGN_LS_IN_LS.md §8): compile and verify the modules listed
+  # in LemmaScript-files.txt with this checkout's toolchain.
   self-verify:
-    uses: ./.github/workflows/verify.yml
-    with:
-      backend: dafny
-      typecheck: false
-      ls-ref: ${{ github.head_ref || github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install tools dependencies
+        working-directory: tools
+        run: npm ci
+
+      - uses: ./.github/actions/setup-dafny
+
+      - name: Self-run
+        run: ./tools/check.sh dafny
+
+      - name: Check self-run artifacts are up to date
+        run: |
+          git diff --exit-code -- 'tools/src/*.dfy.gen' 'tools/src/*.dfy'
+          untracked=$(git ls-files --others --exclude-standard -- 'tools/src/*.dfy.gen')
+          if [ -n "$untracked" ]; then
+            echo "ERROR: Untracked self-run .dfy.gen files:"
+            echo "$untracked"
+            exit 1
+          fi
 
   # Dafny verification of the examples, sharded across runners. The `tools` job
   # enforces drift + additions-only (regen --no-verify); this job runs the actual

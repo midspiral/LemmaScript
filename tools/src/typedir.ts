@@ -37,12 +37,14 @@ export type Ty =
 
 /** True for an int/nat that came from a TS `bigint` (integer division semantics). */
 export function isBigInt(ty: Ty): boolean {
+  //@ verify
   return (ty.kind === "int" || ty.kind === "nat") && !!ty.big;
 }
 
 /** Elementwise Ty-list equality — recursive rather than an indexed-callback
  *  HOF, so the module stays inside the LemmaScript subset. */
 export function tysEqual(as: Ty[], bs: Ty[]): boolean {
+  //@ verify
   //@ ensures \result === true ==> as.length === bs.length
   if (as.length !== bs.length) return false;
   if (as.length === 0) return true;
@@ -50,6 +52,7 @@ export function tysEqual(as: Ty[], bs: Ty[]): boolean {
 }
 
 function stringsEqual(as: string[], bs: string[]): boolean {
+  //@ verify
   if (as.length !== bs.length) return false;
   if (as.length === 0) return true;
   return as[0] === bs[0] && stringsEqual(as.slice(1), bs.slice(1));
@@ -58,6 +61,7 @@ function stringsEqual(as: string[], bs: string[]): boolean {
 /** Structural equality on Ty. Used to decide whether a tuple type is homogeneous
  *  (all elements equal ⇒ lower to `seq`) vs heterogeneous (⇒ keep as `tuple`). */
 export function tyEqual(a: Ty, b: Ty): boolean {
+  //@ verify
   if (a.kind !== b.kind) return false;
   switch (a.kind) {
     case "array": return tyEqual(a.elem, (b as typeof a).elem);
@@ -83,6 +87,77 @@ export function tyEqual(a: Ty, b: Ty): boolean {
     case "int": case "nat": return !!a.big === !!(b as typeof a).big;
     case "bool": case "real": case "void": case "unknown": return true;   // no payload
   }
+}
+
+// ── P1 lemmas (DESIGN_LS_IN_LS.md §8.4): `tyEqual` is an equivalence ──
+// relation. Stated as functions so what holds is readable from
+// TypeScript; each `ensures` becomes a proof obligation whose inductive
+// proof is hand-authored in the companion .dfy (quorum-style).
+
+/** Lemma: `tyEqual` is reflexive. */
+export function tyEqualRefl(a: Ty): boolean {
+  //@ verify
+  //@ ensures \result === true
+  return tyEqual(a, a);
+}
+
+/** Lemma: `tysEqual` is reflexive. */
+export function tysEqualRefl(ts: Ty[]): boolean {
+  //@ verify
+  //@ ensures \result === true
+  return tysEqual(ts, ts);
+}
+
+/** Lemma: `stringsEqual` is reflexive. */
+export function stringsEqualRefl(ss: string[]): boolean {
+  //@ verify
+  //@ ensures \result === true
+  return stringsEqual(ss, ss);
+}
+
+/** Lemma: `tyEqual` is symmetric. */
+export function tyEqualSym(a: Ty, b: Ty): boolean {
+  //@ verify
+  //@ ensures \result === true
+  return tyEqual(a, b) === tyEqual(b, a);
+}
+
+/** Lemma: `tysEqual` is symmetric. */
+export function tysEqualSym(as: Ty[], bs: Ty[]): boolean {
+  //@ verify
+  //@ ensures \result === true
+  return tysEqual(as, bs) === tysEqual(bs, as);
+}
+
+/** Lemma: `stringsEqual` is symmetric. */
+export function stringsEqualSym(as: string[], bs: string[]): boolean {
+  //@ verify
+  //@ ensures \result === true
+  return stringsEqual(as, bs) === stringsEqual(bs, as);
+}
+
+/** Lemma: `tyEqual` is transitive. */
+export function tyEqualTrans(a: Ty, b: Ty, c: Ty): boolean {
+  //@ verify
+  //@ requires tyEqual(a, b) === true && tyEqual(b, c) === true
+  //@ ensures \result === true
+  return tyEqual(a, c);
+}
+
+/** Lemma: `tysEqual` is transitive. */
+export function tysEqualTrans(as: Ty[], bs: Ty[], cs: Ty[]): boolean {
+  //@ verify
+  //@ requires tysEqual(as, bs) === true && tysEqual(bs, cs) === true
+  //@ ensures \result === true
+  return tysEqual(as, cs);
+}
+
+/** Lemma: `stringsEqual` is transitive. */
+export function stringsEqualTrans(as: string[], bs: string[], cs: string[]): boolean {
+  //@ verify
+  //@ requires stringsEqual(as, bs) === true && stringsEqual(bs, cs) === true
+  //@ ensures \result === true
+  return stringsEqual(as, cs);
 }
 
 export type CallKind = "pure" | "method" | "spec-pure" | "unknown"
@@ -173,6 +248,7 @@ export type TStmt =
  *  resolve (block-tail narrowing) and narrow (isTerminating); works on raw and
  *  typed IR alike since both use these kind strings. */
 export function isTerminatorKind(kind: string): boolean {
+  //@ verify
   return kind === "return" || kind === "throw" || kind === "break" || kind === "continue";
 }
 

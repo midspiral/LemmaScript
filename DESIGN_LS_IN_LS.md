@@ -616,17 +616,27 @@ with no annotation is not started.*
    `//@ backend dafny` until Lean un-defers, and `./tools/check.sh dafny`
    with no arguments is the self-run. The `.dfy` artifacts are checked in
    beside the sources, ready to host hand-authored P1 lemmas via the
-   regen merge. CI: a `self-verify` job in `ci.yml` calls the same
-   reusable `verify.yml` the case studies use, with `ls-ref` pointed at
-   the branch under test so a compiler change is gated by its own code.
+   regen merge. CI: a dedicated `self-verify` job in `ci.yml` runs the
+   same batch (`check.sh dafny`) with the checkout's own toolchain.
+   Deliberately not the reusable `verify.yml`: that workflow means
+   "verify against an external LemmaScript ref" (right for case studies,
+   and its clone path collides with the compiler repo's own workspace);
+   the self-run means "gate the change with its own code" — a real
+   semantic difference, kept visible rather than special-cased.
    First P1 content (2026-07-22), lifting `typedir` to P1(partial)/T0:
-   `tysEqual` carries `//@ ensures \result === true ==> as.length ===
-   bs.length` (auto-proved), and `typedir.dfy` hosts hand-authored
-   reflexivity lemmas (`TyEqualRefl` / `TysEqualRefl` /
-   `StringsEqualRefl`, mutual structural induction mirroring the
-   functions' own recursion) — the first exercise of the
-   proofs-are-authored workflow on self-compiled code, preserved by the
-   additions-only merge and verified by the self-run.
+   **`tyEqual` is an equivalence relation** — reflexivity, symmetry, and
+   transitivity, each with its `tysEqual`/`stringsEqual` companion — the
+   property the compiler implicitly leans on wherever it dedupes or
+   compares types. Convention (quorum-style): each lemma is *stated as a
+   TypeScript function* in `typedir.ts` (`tyEqualTrans(a, b, c)` with
+   `//@ requires`/`//@ ensures \result === true`), so what holds is
+   readable without leaving TS; the inductive proof is hand-authored
+   inside the generated `_ensures` lemma body in `typedir.dfy`, preserved
+   by the regen merge, verified by the self-run (17 obligations, all
+   discharged; `tysEqual` also carries an auto-proved length-preservation
+   ensures). Note the mode rule this surfaced: once any function in a
+   module carries `//@ verify`, generation is opt-in — every function of
+   a self-applied module must be annotated.
    `ir.ts` (2026-07-22): P0 on Dafny — self-compiles and verifies (the
    full `Expr`/`Stmt`/decl datatype family, the mutually recursive
    walkers, fn-type aliases, rest params). The last blocker was

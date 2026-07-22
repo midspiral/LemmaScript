@@ -2,37 +2,7 @@
 
 datatype Option<T> = None | Some(value: T)
 
-type TypeDeclInfo(==)
-
 datatype Ty = bool_ | nat_(big: Option<bool>) | int_(big: Option<bool>) | real_ | string_(values: Option<seq<string>>) | void | array_(elem: Ty) | tuple(elems: seq<Ty>) | map_(key: Ty, value: Ty) | set_(elem: Ty) | optional(inner: Ty) | user(name: string) | fn(params: seq<Ty>, result: Ty) | unknown
-
-datatype CallKind = pure | method_ | spec_pure | unknown
-
-datatype TChainStep = field(name: string, ty: Ty) | call(args: seq<TExpr>, ty: Ty, callKind: CallKind, builtinId: Option<string>) | index(idx: TExpr, ty: Ty)
-
-datatype TRecordField = TRecordField(name: string, value: TExpr)
-
-datatype TExprCase = TExprCase(variant: string, body: TExpr)
-
-datatype TStmtCase = TStmtCase(variant: string, body: seq<TStmt>)
-
-datatype TSwitchCase = TSwitchCase(label_: string, body: seq<TStmt>)
-
-datatype TExpr = var_(name: string, ty: Ty) | num(value_num: int, ty: Ty) | str(value_str: string, ty: Ty) | bool_(value_bool: bool, ty: Ty) | binop(op: string, left: TExpr, right: TExpr, ty: Ty) | unop(op: string, expr: TExpr, ty: Ty) | call(fn: TExpr, args: seq<TExpr>, ty: Ty, callKind: CallKind, builtinId: Option<string>) | index(obj: TExpr, idx: TExpr, ty: Ty) | field(obj: TExpr, field: string, ty: Ty, isDiscriminant: Option<bool>) | record(spread: Option<TExpr>, fields: seq<TRecordField>, ty: Ty) | arrayLiteral(elems: seq<TExpr>, ty: Ty) | lambda(params: seq<TParam>, body_lambda: seq<TStmt>, ty: Ty) | conditional(cond: TExpr, then_: TExpr, else_: TExpr, ty: Ty) | optChain(obj: TExpr, chain: seq<TChainStep>, ty: Ty) | nullish(left: TExpr, right: TExpr, ty: Ty) | someMatch(scrutinee: TExpr, binder: string, binderTy: Ty, someBody: TExpr, noneBody: TExpr, ty: Ty) | tagMatch(scrutinee: TExpr, typeName: string, cases: seq<TExprCase>, fallthrough: Option<TExpr>, ty: Ty) | forall_(var_: string, varTy: Ty, body_forall: TExpr, ty: Ty) | exists_(var_: string, varTy: Ty, body_exists: TExpr, ty: Ty) | havoc(ty: Ty)
-
-datatype TStmt = let(name: string, ty: Ty, mutable: bool, init: TExpr) | assign(target: string, value: TExpr) | return_(value: TExpr) | break_ | continue_ | expr(expr: TExpr) | if_(cond: TExpr, then_: seq<TStmt>, else_: seq<TStmt>) | while_(cond: TExpr, invariants: seq<TExpr>, decreases_: Option<TExpr>, doneWith: Option<TExpr>, body: seq<TStmt>) | switch(expr: TExpr, discriminant: string, cases_switch: seq<TSwitchCase>, defaultBody: seq<TStmt>) | forof(names: seq<string>, nameTypes: seq<Ty>, iterable: TExpr, invariants: seq<TExpr>, doneWith: Option<TExpr>, body: seq<TStmt>) | throw | ghostLet(name: string, ty: Ty, init: TExpr) | ghostAssign(target: string, value: TExpr) | assert_(expr: TExpr, assumed: Option<bool>) | someMatch(scrutinee: TExpr, binder: string, binderTy: Ty, someBody: seq<TStmt>, noneBody: seq<TStmt>) | tagMatch(scrutinee: TExpr, typeName: string, cases_tagMatch: seq<TStmtCase>, fallthrough: seq<TStmt>)
-
-datatype TParam = TParam(name: string, ty: Ty)
-
-datatype TFunction = TFunction(name: string, typeParams: seq<string>, params: seq<TParam>, returnTy: Ty, requires_: seq<TExpr>, ensures_: seq<TExpr>, decreases_: Option<TExpr>, isPure: bool, forcePure: bool, autohavoc: bool, body: seq<TStmt>)
-
-datatype TClass = TClass(name: string, fields: seq<TParam>, methods: seq<TFunction>)
-
-datatype TConst = TConst(name: string, ty: Ty, value: TExpr)
-
-datatype TExtern = TExtern(qualified: string, flat: string, typeParams: seq<string>, params: seq<TParam>, returnTy: Ty, requires_: seq<TExpr>, ensures_: seq<TExpr>)
-
-datatype TModule = TModule(file: string, typeDecls: seq<TypeDeclInfo>, externs: seq<TExtern>, constants: seq<TConst>, functions: seq<TFunction>, classes: seq<TClass>)
 
 function Ty_kind(t: Ty): string
 {
@@ -150,41 +120,169 @@ function tyEqual(a: Ty, b: Ty): bool
     }
 }
 
+function tyEqualRefl(a: Ty): bool
+{
+  tyEqual(a, a)
+}
+
+lemma tyEqualRefl_ensures(a: Ty)
+  ensures (tyEqualRefl(a) == true)
+{
+  match a {
+    case tuple(elems) => tysEqualRefl_ensures(elems);
+    case fn(params, result) => { tysEqualRefl_ensures(params); tyEqualRefl_ensures(result); }
+    case array_(elem) => tyEqualRefl_ensures(elem);
+    case set_(elem) => tyEqualRefl_ensures(elem);
+    case map_(key, value) => { tyEqualRefl_ensures(key); tyEqualRefl_ensures(value); }
+    case optional(inner) => tyEqualRefl_ensures(inner);
+    case string_(values) =>
+      match values { case Some(vs) => stringsEqualRefl_ensures(vs); case None => {} }
+    case _ => {}
+  }
+}
+
+function tysEqualRefl(ts: seq<Ty>): bool
+{
+  tysEqual(ts, ts)
+}
+
+lemma tysEqualRefl_ensures(ts: seq<Ty>)
+  ensures (tysEqualRefl(ts) == true)
+{
+  if |ts| > 0 {
+    tyEqualRefl_ensures(ts[0]);
+    tysEqualRefl_ensures(ts[1..]);
+  }
+}
+
+function stringsEqualRefl(ss: seq<string>): bool
+{
+  stringsEqual(ss, ss)
+}
+
+lemma stringsEqualRefl_ensures(ss: seq<string>)
+  ensures (stringsEqualRefl(ss) == true)
+{
+  if |ss| > 0 { stringsEqualRefl_ensures(ss[1..]); }
+}
+
+function tyEqualSym(a: Ty, b: Ty): bool
+{
+  (tyEqual(a, b) == tyEqual(b, a))
+}
+
+lemma tyEqualSym_ensures(a: Ty, b: Ty)
+  ensures (tyEqualSym(a, b) == true)
+{
+  match a {
+    case array_(ea) => match b { case array_(eb) => tyEqualSym_ensures(ea, eb); case _ => {} }
+    case set_(ea) => match b { case set_(eb) => tyEqualSym_ensures(ea, eb); case _ => {} }
+    case optional(ia) => match b { case optional(ib) => tyEqualSym_ensures(ia, ib); case _ => {} }
+    case map_(ka, va) => match b { case map_(kb, vb) => { tyEqualSym_ensures(ka, kb); tyEqualSym_ensures(va, vb); } case _ => {} }
+    case tuple(ea) => match b { case tuple(eb) => tysEqualSym_ensures(ea, eb); case _ => {} }
+    case fn(pa, ra) => match b { case fn(pb, rb) => { tysEqualSym_ensures(pa, pb); tyEqualSym_ensures(ra, rb); } case _ => {} }
+    case string_(va) =>
+      match b {
+        case string_(vb) =>
+          match (va, vb) { case (Some(xs), Some(ys)) => stringsEqualSym_ensures(xs, ys); case _ => {} }
+        case _ => {}
+      }
+    case _ => {}
+  }
+}
+
+function tysEqualSym(as_: seq<Ty>, bs: seq<Ty>): bool
+{
+  (tysEqual(as_, bs) == tysEqual(bs, as_))
+}
+
+lemma tysEqualSym_ensures(as_: seq<Ty>, bs: seq<Ty>)
+  ensures (tysEqualSym(as_, bs) == true)
+{
+  if |as_| == |bs| && |as_| > 0 {
+    tyEqualSym_ensures(as_[0], bs[0]);
+    tysEqualSym_ensures(as_[1..], bs[1..]);
+  }
+}
+
+function stringsEqualSym(as_: seq<string>, bs: seq<string>): bool
+{
+  (stringsEqual(as_, bs) == stringsEqual(bs, as_))
+}
+
+lemma stringsEqualSym_ensures(as_: seq<string>, bs: seq<string>)
+  ensures (stringsEqualSym(as_, bs) == true)
+{
+  if |as_| == |bs| && |as_| > 0 { stringsEqualSym_ensures(as_[1..], bs[1..]); }
+}
+
+function tyEqualTrans(a: Ty, b: Ty, c: Ty): bool
+  requires (tyEqual(a, b) == true)
+  requires (tyEqual(b, c) == true)
+{
+  tyEqual(a, c)
+}
+
+lemma tyEqualTrans_ensures(a: Ty, b: Ty, c: Ty)
+  requires (tyEqual(a, b) == true)
+  requires (tyEqual(b, c) == true)
+  ensures (tyEqualTrans(a, b, c) == true)
+{
+  match a {
+    case array_(ea) => match b { case array_(eb) => match c { case array_(ec) => tyEqualTrans_ensures(ea, eb, ec); case _ => {} } case _ => {} }
+    case set_(ea) => match b { case set_(eb) => match c { case set_(ec) => tyEqualTrans_ensures(ea, eb, ec); case _ => {} } case _ => {} }
+    case optional(ia) => match b { case optional(ib) => match c { case optional(ic) => tyEqualTrans_ensures(ia, ib, ic); case _ => {} } case _ => {} }
+    case map_(ka, va) => match b { case map_(kb, vb) => match c { case map_(kc, vc) => { tyEqualTrans_ensures(ka, kb, kc); tyEqualTrans_ensures(va, vb, vc); } case _ => {} } case _ => {} }
+    case tuple(ea) => match b { case tuple(eb) => match c { case tuple(ec) => tysEqualTrans_ensures(ea, eb, ec); case _ => {} } case _ => {} }
+    case fn(pa, ra) => match b { case fn(pb, rb) => match c { case fn(pc, rc) => { tysEqualTrans_ensures(pa, pb, pc); tyEqualTrans_ensures(ra, rb, rc); } case _ => {} } case _ => {} }
+    case string_(va) =>
+      match b {
+        case string_(vb) =>
+          match c {
+            case string_(vc) =>
+              match (va, vb, vc) { case (Some(xs), Some(ys), Some(zs)) => stringsEqualTrans_ensures(xs, ys, zs); case _ => {} }
+            case _ => {}
+          }
+        case _ => {}
+      }
+    case _ => {}
+  }
+}
+
+function tysEqualTrans(as_: seq<Ty>, bs: seq<Ty>, cs: seq<Ty>): bool
+  requires (tysEqual(as_, bs) == true)
+  requires (tysEqual(bs, cs) == true)
+{
+  tysEqual(as_, cs)
+}
+
+lemma tysEqualTrans_ensures(as_: seq<Ty>, bs: seq<Ty>, cs: seq<Ty>)
+  requires (tysEqual(as_, bs) == true)
+  requires (tysEqual(bs, cs) == true)
+  ensures (tysEqualTrans(as_, bs, cs) == true)
+{
+  if |as_| > 0 {
+    tyEqualTrans_ensures(as_[0], bs[0], cs[0]);
+    tysEqualTrans_ensures(as_[1..], bs[1..], cs[1..]);
+  }
+}
+
+function stringsEqualTrans(as_: seq<string>, bs: seq<string>, cs: seq<string>): bool
+  requires (stringsEqual(as_, bs) == true)
+  requires (stringsEqual(bs, cs) == true)
+{
+  stringsEqual(as_, cs)
+}
+
+lemma stringsEqualTrans_ensures(as_: seq<string>, bs: seq<string>, cs: seq<string>)
+  requires (stringsEqual(as_, bs) == true)
+  requires (stringsEqual(bs, cs) == true)
+  ensures (stringsEqualTrans(as_, bs, cs) == true)
+{
+  if |as_| > 0 { stringsEqualTrans_ensures(as_[1..], bs[1..], cs[1..]); }
+}
+
 function isTerminatorKind(kind: string): bool
 {
   ((((kind == "return") || (kind == "throw")) || (kind == "break")) || (kind == "continue"))
-}
-
-// ── Hand-authored P1 lemmas (DESIGN_LS_IN_LS.md §8.4) ───────────────────
-// Preserved by the additions-only regen merge, verified by the self-run.
-
-lemma StringsEqualRefl(ss: seq<string>)
-  ensures stringsEqual(ss, ss)
-{
-  if |ss| > 0 { StringsEqualRefl(ss[1..]); }
-}
-
-lemma TysEqualRefl(ts: seq<Ty>)
-  ensures tysEqual(ts, ts)
-{
-  if |ts| > 0 {
-    TyEqualRefl(ts[0]);
-    TysEqualRefl(ts[1..]);
-  }
-}
-
-lemma TyEqualRefl(a: Ty)
-  ensures tyEqual(a, a)
-{
-  match a {
-    case tuple(elems) => TysEqualRefl(elems);
-    case fn(params, result) => { TysEqualRefl(params); TyEqualRefl(result); }
-    case array_(elem) => TyEqualRefl(elem);
-    case set_(elem) => TyEqualRefl(elem);
-    case map_(key, value) => { TyEqualRefl(key); TyEqualRefl(value); }
-    case optional(inner) => TyEqualRefl(inner);
-    case string_(values) =>
-      match values { case Some(vs) => StringsEqualRefl(vs); case None => {} }
-    case _ => {}
-  }
 }
