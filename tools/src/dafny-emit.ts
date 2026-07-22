@@ -3,7 +3,7 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { usesName, usesNameInDecl } from "./ir.js";
+import { usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshName, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
@@ -279,7 +279,31 @@ function emitExpr(e: Expr): string {
           }
           return `${obj}[${args[0]}..${args[1]}]`;
         }
-        if (e.method === "map")    return `Std.Collections.Seq.Map(${args[0]}, ${obj})`;
+        if (e.method === "map") {
+          // Always a seq comprehension: Seq.Map would hide the element access
+          // behind a closure, defeating Dafny's termination checker for
+          // recursive rebuild walkers (§8.6 E2). A literal lambda argument is
+          // beta-reduced through a `var` binding — an applied closure defeats
+          // the checker too; any other argument is applied to the element
+          // directly. Index freshness is a local IR-level check until the
+          // §6.3 backend name allocator exists.
+          const lam = e.args[0];
+          const freshIdx = (taken: (n: string) => boolean): string => {
+            let idx = "i_map";
+            for (let n = 2; taken(idx); n++) idx = `i_map${n}`;
+            return idx;
+          };
+          if (lam.kind === "lambda" && lam.params.length === 1 &&
+              lam.body.length === 1 && lam.body[0].kind === "return") {
+            const p = escapeName(lam.params[0].name);
+            const body = emitExpr(lam.body[0].value);
+            const idx = freshIdx(n => usesName(e.obj, n) ||
+              lam.params[0].name === n || usesNameInStmts(lam.body, n));
+            return `seq(|${obj}|, ${idx} requires 0 <= ${idx} < |${obj}| => var ${p} := ${obj}[${idx}]; ${body})`;
+          }
+          const idx = freshIdx(n => usesName(e.obj, n) || usesName(lam, n));
+          return `seq(|${obj}|, ${idx} requires 0 <= ${idx} < |${obj}| => (${args[0]})(${obj}[${idx}]))`;
+        }
         if (e.method === "filter") return `Std.Collections.Seq.Filter(${args[0]}, ${obj})`;
         // filterMap (synthesized in resolve): drop Nones and unwrap to seq<T>.
         if (e.method === "filterSome") { needPreamble("SeqFilterSome"); needPreamble("OptionType"); return `SeqFilterSome(${obj})`; }

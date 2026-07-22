@@ -2,8 +2,6 @@
 
 datatype Option<T> = None | Some(value: T)
 
-type Ty(==)
-
 datatype Expr = var_(name: string) | num(value_num: int) | bool_(value_bool: bool) | str(value_str: string) | constructor_(name: string, type_constructor: Option<string>, args: seq<Expr>) | binop(op: string, left: Expr, right: Expr) | unop(op: string, expr: Expr) | app(fn: string, args: seq<Expr>, ctorOf: Option<string>) | field(obj: Expr, field: string, fromUnion: Option<string>, ctor: Option<string>, datatypeField: Option<bool>) | toNat(expr: Expr) | toReal(expr: Expr) | index(arr: Expr, idx: Expr) | tupleLiteral(elems: seq<Expr>) | tupleProj(obj: Expr, index: int, arity: int) | record(spread: Option<Expr>, fields: seq<RecordField>, ctor: Option<string>) | arrayLiteral(elems: seq<Expr>) | emptyMap | emptySet | mapLiteral(entries: seq<MapEntry>) | methodCall(obj: Expr, objTy: Ty, method_: string, args: seq<Expr>, monadic: bool) | lambda(params: seq<Param>, body_lambda: seq<Stmt>) | if_(cond: Expr, then_: Expr, else_: Expr) | match_(scrutinee: Expr, arms: seq<MatchArm>) | forall_(var_: string, type_forall: Ty, body_forall: Expr) | exists_(var_: string, type_exists: Ty, body_exists: Expr) | implies(premises: seq<Expr>, conclusion: Expr) | let(name: string, value_let: Expr, body_let: Expr) | havoc(type_havoc: Ty) | default(type_default: Ty)
 
 datatype MatchPattern = wild | ctor(ctor: string, binders: seq<string>)
@@ -51,6 +49,8 @@ datatype Decl = inductive_(name: string, typeParams_inductive: Option<seq<string
 datatype Module = Module(comment: string, imports: seq<string>, options: seq<EmitOption>, decls: seq<Decl>)
 
 type ExprPred = (Expr) -> bool
+
+datatype Ty = bool_ | nat_(big: Option<bool>) | int_(big: Option<bool>) | real_ | string_(values: Option<seq<string>>) | void | array_(elem: Ty) | tuple(elems: seq<Ty>) | map_(key: Ty, value: Ty) | set_(elem: Ty) | optional(inner: Ty) | user(name: string) | fn(params: seq<Ty>, result: Ty) | unknown
 
 function patternBinders(p: MatchPattern): seq<string>
 {

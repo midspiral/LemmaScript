@@ -16,7 +16,7 @@ function keep(p: Part): bool
 method dropOrphans(messages: seq<Message>) returns (res: seq<Message>)
   ensures (|res| <= |messages|)
 {
-  var filteredContents := Std.Collections.Seq.Map((m: Message) => (match m.content { case ArrayBranch(i_content_arr) => Option.Some(i_content_arr) case _ => Option.None }), messages);
+  var filteredContents := seq(|messages|, i_map requires 0 <= i_map < |messages| => var m := messages[i_map]; (match m.content { case ArrayBranch(i_content_arr) => Option.Some(i_content_arr) case _ => Option.None }));
   var i := 0;
   while (i < |messages|)
     invariant (i <= |messages|)

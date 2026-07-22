@@ -2324,7 +2324,14 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // Resolve imported types: extract types referenced in function signatures but not in this file
   const knownTypes = new Set(typeDecls.map(d => d.name));
   const builtins = new Set(["Map", "Set", "Array", "String", "Number", "Boolean", "Promise", "Date", "RegExp", "Error"]);
+  const visitedTypes = new Set<unknown>();
   function resolveType(t: Type, locationNode: Node) {
+    // Recursion guard: recursive unions (Expr → variant → body: Expr) are
+    // reachable now that anonymous variant fields are walked below. Keyed on
+    // the compiler's interned Type object — alias names are not enough,
+    // because getTypeAtLocation can drop the alias symbol.
+    if (visitedTypes.has(t.compilerType)) return;
+    visitedTypes.add(t.compilerType);
     // Unwrap arrays and generics to find user-defined types
     if (t.isArray()) { resolveType(t.getArrayElementTypeOrThrow(), locationNode); return; }
     // Resolve type aliases (e.g. string unions imported from other files)
@@ -2363,6 +2370,14 @@ export function extractModule(sourceFile: SourceFile): RawModule {
         for (const prop of t.getProperties()) {
           resolveType(prop.getTypeAtLocation(locationNode), locationNode);
         }
+      }
+    } else if (t.isObject() && (!name || name.startsWith("__")) && t.getCallSignatures().length === 0) {
+      // Anonymous object type — typically a variant of an imported
+      // discriminated union. There is no decl to extract, but its fields can
+      // reference named types (`arms: MatchArm[]`) that downstream passes
+      // need declared, so walk them.
+      for (const prop of t.getProperties()) {
+        resolveType(prop.getTypeAtLocation(locationNode), locationNode);
       }
     }
   }
