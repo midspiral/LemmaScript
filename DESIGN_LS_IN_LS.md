@@ -622,7 +622,12 @@ with no annotation is not started.*
    "verify against an external LemmaScript ref" (right for case studies,
    and its clone path collides with the compiler repo's own workspace);
    the self-run means "gate the change with its own code" — a real
-   semantic difference, kept visible rather than special-cased.
+   semantic difference, kept visible rather than special-cased. Also
+   deliberately not a case-studies-matrix entry: an entry would verify
+   main's sources/artifacts with the PR's toolchain, going red exactly on
+   PRs that legitimately regenerate the self-run artifacts in-PR. This is
+   T0 per §8.2: the translator is trusted — the proofs are about what
+   this compiler generated from itself, not compiler correctness.
    First P1 content (2026-07-22), lifting `typedir` to P1(partial)/T0:
    **`tyEqual` is an equivalence relation** — reflexivity, symmetry, and
    transitivity, each with its `tysEqual`/`stringsEqual` companion — the
