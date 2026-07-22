@@ -11,8 +11,41 @@ function JSFloorDiv(a: int, b: int): int
     else -((a - 1) / (-b)) - 1
 }
 
-predicate sorted(s: seq<int>) {
-  forall i, j :: 0 <= i < j < |s| ==> s[i] <= s[j]
+function sortedFrom(arr: seq<int>, i: nat): bool
+  decreases (|arr| - i)
+{
+  (((i + 1) >= |arr|) || ((arr[i] <= arr[(i + 1)]) && sortedFrom(arr, (i + 1))))
+}
+
+function sorted(arr: seq<int>): bool
+{
+  sortedFrom(arr, 0)
+}
+
+// `sortedFrom` only relates adjacent elements; these two lemmas lift it to the
+// pairwise form binary search reasons with.
+
+lemma sortedFromSuffix(arr: seq<int>, i: int, j: int)
+  requires 0 <= i <= j
+  requires sortedFrom(arr, i)
+  ensures sortedFrom(arr, j)
+  decreases j - i
+{
+  if i < j && i + 1 < |arr| {
+    sortedFromSuffix(arr, i + 1, j);
+  }
+}
+
+lemma sortedMono(arr: seq<int>, i: int, j: int)
+  requires sorted(arr)
+  requires 0 <= i <= j < |arr|
+  ensures arr[i] <= arr[j]
+  decreases j - i
+{
+  if i < j {
+    sortedMono(arr, i, j - 1);
+    sortedFromSuffix(arr, 0, j - 1);
+  }
 }
 
 method binarySearch(arr: seq<int>, target: int) returns (res: int)
@@ -40,8 +73,10 @@ method binarySearch(arr: seq<int>, target: int) returns (res: int)
       result := mid;
       break;
     } else if (arr[mid] < target) {
+      forall k | 0 <= k <= mid ensures arr[k] != target { sortedMono(arr, k, mid); }
       lo := (mid + 1);
     } else {
+      forall k | mid <= k < |arr| ensures arr[k] != target { sortedMono(arr, mid, k); }
       hi := (mid - 1);
     }
   }

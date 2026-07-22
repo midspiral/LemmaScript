@@ -7,8 +7,16 @@ import «binarySearch.spec»
 set_option loom.semantics.termination "total"
 set_option loom.semantics.choice "demonic"
 
+method sortedFrom (arr : Array Int) (i : Nat) return (res : Bool)
+  do
+    return Pure.sortedFrom arr i
+
+method sorted (arr : Array Int) return (res : Bool)
+  do
+    return Pure.sorted arr
+
 method binarySearch (arr : Array Int) (target : Int) return (res : Int)
-  require sorted arr
+  require Pure.sorted arr
   ensures res ≥ -1
   ensures res < arr.size
   ensures res ≥ 0 → arr[res.toNat]! = target

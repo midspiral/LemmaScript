@@ -1,6 +1,24 @@
 /**
  * Binary search — verified with LemmaScript.
+ *
+ * The `sorted` precondition is written in TypeScript rather than hand-added to
+ * the backends: `sortedFrom` is an ordinary pure recursive function, so it is
+ * compiled to Dafny and Lean like any other definition even though nothing
+ * calls it at runtime — it exists only to be named in `//@ requires`.
  */
+
+/** Adjacent pairs from index `i` onward are non-decreasing. */
+export function sortedFrom(arr: number[], i: number): boolean {
+  //@ type i nat
+  //@ decreases arr.length - i
+  if (i + 1 >= arr.length) return true;
+  return arr[i] <= arr[i + 1] && sortedFrom(arr, i + 1);
+}
+
+/** The whole array is non-decreasing. */
+export function sorted(arr: number[]): boolean {
+  return sortedFrom(arr, 0);
+}
 
 export function binarySearch(arr: number[], target: number): number {
   //@ requires sorted(arr)
