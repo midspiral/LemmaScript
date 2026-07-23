@@ -285,24 +285,35 @@ function emitExpr(e: Expr): string {
           // recursive rebuild walkers (§8.6 E2). A literal lambda argument is
           // beta-reduced through a `var` binding — an applied closure defeats
           // the checker too; any other argument is applied to the element
-          // directly. Index freshness is a local IR-level check until the
-          // §6.3 backend name allocator exists.
+          // directly. A non-variable receiver is bound once up front: the
+          // comprehension mentions it three times, and splicing would make
+          // any closure literal inside it (e.g. a Filter predicate) three
+          // distinct closures, unprovably equal through an opaque callee.
+          // Name freshness is a local IR-level check until the §6.3 backend
+          // name allocator exists.
           const lam = e.args[0];
-          const freshIdx = (taken: (n: string) => boolean): string => {
-            let idx = "i_map";
-            for (let n = 2; taken(idx); n++) idx = `i_map${n}`;
-            return idx;
+          const fresh = (base: string, taken: (n: string) => boolean): string => {
+            let name = base;
+            for (let n = 2; taken(name); n++) name = `${base}${n}`;
+            return name;
           };
+          const taken = (n: string): boolean =>
+            usesName(e.obj, n) || usesName(lam, n) ||
+            (lam.kind === "lambda" && (lam.params.some(pp => pp.name === n) ||
+              usesNameInStmts(lam.body, n)));
+          const bind = e.obj.kind !== "var";
+          const s = bind ? fresh("s_map", taken) : obj;
+          const idx = fresh("i_map", n => taken(n) || n === s);
+          let core: string;
           if (lam.kind === "lambda" && lam.params.length === 1 &&
               lam.body.length === 1 && lam.body[0].kind === "return") {
             const p = escapeName(lam.params[0].name);
-            const body = emitExpr(lam.body[0].value);
-            const idx = freshIdx(n => usesName(e.obj, n) ||
-              lam.params[0].name === n || usesNameInStmts(lam.body, n));
-            return `seq(|${obj}|, ${idx} requires 0 <= ${idx} < |${obj}| => var ${p} := ${obj}[${idx}]; ${body})`;
+            core = `var ${p} := ${s}[${idx}]; ${emitExpr(lam.body[0].value)}`;
+          } else {
+            core = `(${args[0]})(${s}[${idx}])`;
           }
-          const idx = freshIdx(n => usesName(e.obj, n) || usesName(lam, n));
-          return `seq(|${obj}|, ${idx} requires 0 <= ${idx} < |${obj}| => (${args[0]})(${obj}[${idx}]))`;
+          const comp = `seq(|${s}|, ${idx} requires 0 <= ${idx} < |${s}| => ${core})`;
+          return bind ? `(var ${s} := ${obj}; ${comp})` : comp;
         }
         if (e.method === "filter") return `Std.Collections.Seq.Filter(${args[0]}, ${obj})`;
         // filterMap (synthesized in resolve): drop Nones and unwrap to seq<T>.
