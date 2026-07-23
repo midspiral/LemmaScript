@@ -132,17 +132,30 @@ function isBool(e: Expr, v: boolean): boolean {
 //   `if n = 0 then true else ... allExpensesValid expenses (n - 1) ...`
 // where the recursive call needs the if-condition to bound `n > 0`.
 // So they're applied only for Dafny.
-type ExprRule = (e: Expr) => Expr | null;
-const MAP_GET_RULES: ExprRule[] = [
-  ruleMatchOnMapGetExpr,
-  ruleLetMatchOnMapGetExpr,
-];
-const BOOL_RULES: ExprRule[] = [
-  ruleIfFalseElseTrue,
-  ruleIfIdentity,
-  ruleIfThenFalse,
-  ruleIfTrueElse,
-];
+type Backend = "lean" | "dafny";
+
+/** Direct rule chain (R1): first hit wins, in the old EXPR_RULES order —
+ *  map-get rules, then (Dafny only, see comment above) the boolean
+ *  simplifications. A chain of direct calls over a threaded backend flag
+ *  rather than a rule table: the subset has no function-valued collections
+ *  (`rules[i](e)` is out of fragment) and loops lower to methods, so this
+ *  shape is what remains. */
+function applyExprRules(e: Expr, backend: Backend): Expr | null {
+  const r1 = ruleMatchOnMapGetExpr(e);
+  if (r1 !== null) return r1;
+  const r6 = ruleLetMatchOnMapGetExpr(e);
+  if (r6 !== null) return r6;
+  if (backend !== "dafny") return null;
+  const r4 = ruleIfFalseElseTrue(e);
+  if (r4 !== null) return r4;
+  const r5 = ruleIfIdentity(e);
+  if (r5 !== null) return r5;
+  const r2 = ruleIfThenFalse(e);
+  if (r2 !== null) return r2;
+  const r3 = ruleIfTrueElse(e);
+  if (r3 !== null) return r3;
+  return null;
+}
 
 // ── Statement rewrite rules ──────────────────────────────────
 
@@ -165,7 +178,6 @@ function ruleMatchOnMapGetStmt(s: Stmt): Stmt | null {
   return { kind: "if", cond: has, then: someBody, else: arms.noneArm.body };
 }
 
-const STMT_RULES = [ruleMatchOnMapGetStmt];
 
 // ── Statement-list rules (pairs of adjacent stmts) ──────────
 
@@ -194,55 +206,40 @@ function tryLetMatchOnMapGet(s1: Stmt, s2: Stmt, restStmts: Stmt[]): Stmt | null
 }
 
 /** Walk a statement list applying pair rules. */
-function rewriteStmtListPairs(stmts: Stmt[], rules: ExprRule[]): Stmt[] {
-  const result: Stmt[] = [];
-  let i = 0;
-  while (i < stmts.length) {
-    if (i + 1 < stmts.length) {
-      const merged = tryLetMatchOnMapGet(stmts[i], stmts[i + 1], stmts.slice(i + 2));
-      if (merged) {
-        // Recurse into the new stmt's children to peephole them too
-        result.push(peepholeStmt(merged, rules));
-        i += 2;
-        continue;
-      }
+function rewriteStmtListPairs(stmts: Stmt[], backend: Backend): Stmt[] {
+  if (stmts.length === 0) return [];
+  if (stmts.length >= 2) {
+    const merged = tryLetMatchOnMapGet(stmts[0], stmts[1], stmts.slice(2));
+    if (merged) {
+      // Recurse into the new stmt's children to peephole them too
+      return [peepholeStmt(merged, backend), ...rewriteStmtListPairs(stmts.slice(2), backend)];
     }
-    result.push(stmts[i]);
-    i++;
   }
-  return result;
+  return [stmts[0], ...rewriteStmtListPairs(stmts.slice(1), backend)];
 }
 
 /** Peephole a statement list: per-stmt rules first, then pair rules. */
-function peepholeStmts(stmts: Stmt[], rules: ExprRule[]): Stmt[] {
-  return rewriteStmtListPairs(stmts.map(s => peepholeStmt(s, rules)), rules);
+function peepholeStmts(stmts: Stmt[], backend: Backend): Stmt[] {
+  return rewriteStmtListPairs(stmts.map(s => peepholeStmt(s, backend)), backend);
 }
 
 // ── Bottom-up rewrite to fixed point at each node ───────────
 
-function peepholeExpr(e: Expr, rules: ExprRule[]): Expr {
-  // Recurse into children first
-  const rChildren = rewriteChildrenExpr(e, rules);
-  // Apply rules at this node, looping until no rule fires
-  let cur = rChildren;
-  for (let guard = 0; guard < 100; guard++) {
-    let changed = false;
-    for (const rule of rules) {
-      const r = rule(cur);
-      if (r !== null) {
-        // Re-peephole the result (its children may now match new rules)
-        cur = peepholeExpr(r, rules);
-        changed = true;
-        break;
-      }
-    }
-    if (!changed) break;
-  }
-  return cur;
+/** Termination (proved Dafny-side, not exposed here): every rule strictly
+ *  decreases (match-count, if-count) lexicographically — rules 1/6 trade a
+ *  match for an if, rules 2–5 drop an if — so the rule-hit recursion is
+ *  finite; child recursion is structural. No fuel needed: a recursive call's
+ *  root is already at fixed point when it returns, so one hit-then-recurse
+ *  replaces the old retry loop exactly. */
+function peepholeExpr(e: Expr, backend: Backend): Expr {
+  // Recurse into children first, then apply the first matching rule
+  const cur = rewriteChildrenExpr(e, backend);
+  const hit = applyExprRules(cur, backend);
+  return hit !== null ? peepholeExpr(hit, backend) : cur;
 }
 
-function rewriteChildrenExpr(e: Expr, rules: ExprRule[]): Expr {
-  const r = (x: Expr) => peepholeExpr(x, rules);
+function rewriteChildrenExpr(e: Expr, backend: Backend): Expr {
+  const r = (x: Expr) => peepholeExpr(x, backend);
   switch (e.kind) {
     case "var": case "num": case "bool": case "str": case "constructor":
     case "emptyMap": case "emptySet": case "havoc": case "default": case "mapLiteral": return e;
@@ -268,31 +265,19 @@ function rewriteChildrenExpr(e: Expr, rules: ExprRule[]): Expr {
     case "exists": return { ...e, body: r(e.body) };
     case "let": return { ...e, value: r(e.value), body: r(e.body) };
     case "methodCall": return { ...e, obj: r(e.obj), args: e.args.map(r) };
-    case "lambda": return { ...e, body: peepholeStmts(e.body, rules) };
+    case "lambda": return { ...e, body: peepholeStmts(e.body, backend) };
   }
 }
 
-function peepholeStmt(s: Stmt, rules: ExprRule[]): Stmt {
-  const rChildren = rewriteChildrenStmt(s, rules);
-  let cur = rChildren;
-  for (let guard = 0; guard < 100; guard++) {
-    let changed = false;
-    for (const rule of STMT_RULES) {
-      const r = rule(cur);
-      if (r !== null) {
-        cur = peepholeStmt(r, rules);
-        changed = true;
-        break;
-      }
-    }
-    if (!changed) break;
-  }
-  return cur;
+function peepholeStmt(s: Stmt, backend: Backend): Stmt {
+  const cur = rewriteChildrenStmt(s, backend);
+  const r = ruleMatchOnMapGetStmt(cur);
+  return r !== null ? peepholeStmt(r, backend) : cur;
 }
 
-function rewriteChildrenStmt(s: Stmt, rules: ExprRule[]): Stmt {
-  const re = (x: Expr) => peepholeExpr(x, rules);
-  const rs = (x: Stmt[]) => peepholeStmts(x, rules);
+function rewriteChildrenStmt(s: Stmt, backend: Backend): Stmt {
+  const re = (x: Expr) => peepholeExpr(x, backend);
+  const rs = (x: Stmt[]) => peepholeStmts(x, backend);
   switch (s.kind) {
     case "let": return { ...s, value: re(s.value) };
     case "assign": return { ...s, value: re(s.value) };
@@ -315,28 +300,27 @@ function rewriteChildrenStmt(s: Stmt, rules: ExprRule[]): Stmt {
 
 // ── Module entry ────────────────────────────────────────────
 
-export function peepholeModule(mod: Module, backend: "lean" | "dafny" = "dafny"): Module {
-  const rules: ExprRule[] = backend === "dafny" ? [...MAP_GET_RULES, ...BOOL_RULES] : MAP_GET_RULES;
-  return { ...mod, decls: mod.decls.map(d => peepholeDecl(d, rules)) };
+export function peepholeModule(mod: Module, backend: Backend = "dafny"): Module {
+  return { ...mod, decls: mod.decls.map(d => peepholeDecl(d, backend)) };
 }
 
-function peepholeDecl(d: Decl, rules: ExprRule[]): Decl {
-  const re = (x: Expr) => peepholeExpr(x, rules);
+function peepholeDecl(d: Decl, backend: Backend): Decl {
+  const re = (x: Expr) => peepholeExpr(x, backend);
   switch (d.kind) {
     case "def":
       return { ...d, body: re(d.body),
         requires: d.requires.map(re), ensures: d.ensures.map(re),
         decreases: d.decreases ? re(d.decreases) : null };
     case "def-by-method":
-      return { ...d, methodBody: peepholeStmts(d.methodBody, rules),
+      return { ...d, methodBody: peepholeStmts(d.methodBody, backend),
         requires: d.requires.map(re), ensures: d.ensures.map(re),
         decreases: d.decreases ? re(d.decreases) : null };
     case "method":
-      return { ...d, body: peepholeStmts(d.body, rules),
+      return { ...d, body: peepholeStmts(d.body, backend),
         requires: d.requires.map(re), ensures: d.ensures.map(re),
         decreases: d.decreases ? re(d.decreases) : null };
-    case "namespace": return { ...d, decls: d.decls.map(x => peepholeDecl(x, rules)) };
-    case "class": return { ...d, methods: d.methods.map(m => peepholeDecl(m, rules) as typeof m) };
+    case "namespace": return { ...d, decls: d.decls.map(x => peepholeDecl(x, backend)) };
+    case "class": return { ...d, methods: d.methods.map(m => peepholeDecl(m, backend) as typeof m) };
     case "const": return { ...d, value: re(d.value) };
     case "inductive":
     case "structure":
