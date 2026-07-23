@@ -678,10 +678,6 @@ artifacts/caches unless reviewing them in-tree earns its churn.
   both backends in CI; initial P1 contracts verify; docs state each
   module's P/T level; no self-verification claim is made from T0 alone.
 
-On finalization, `DESIGN_SUGGESTIONS.md`, `LS_IN_LS.md`, and
-`LS_IN_LS_RFC.md` are deleted — this document is the single source of
-truth.
-
 ---
 
 ## Appendix: departures from the reviewed RFC draft
