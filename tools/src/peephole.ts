@@ -35,8 +35,9 @@ function isMapGet(e: Expr): { obj: Expr; key: Expr; objTy: MethodCall["objTy"] }
 /** Binder of a Some arm — its name, or null for `.some _` / a non-`some` pattern. */
 function parseSomeBinder(p: MatchPattern): string | null {
   if (patternCtor(p) !== "some") return null;
-  const b = patternBinders(p)[0];
-  return b === undefined || b === "_" ? null : b;
+  const bs = patternBinders(p);
+  if (bs.length === 0) return null;
+  return bs[0] === "_" ? null : bs[0];
 }
 
 /** Identify a Some/None match's arms (R3: monomorphic per arm type — the
