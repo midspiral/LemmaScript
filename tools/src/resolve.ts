@@ -821,6 +821,11 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       if (ty.kind === "unknown" && fn.kind === "var" && ctx.fnReturns.has(fn.name)) {
         ty = ctx.fnReturns.get(fn.name)!;
       }
+      // Call through a function-typed value: its fn type carries the result
+      if (ty.kind === "unknown" && fn.kind === "var") {
+        const varTy = lookup(ctx.env, fn.name);
+        if (varTy?.kind === "fn") ty = varTy.result;
+      }
       // filterMap: `seqOfOption.filter(x => x !== undefined)` (a defined-check,
       // typically with an `x is T` type guard) drops the Nones AND unwraps to
       // seq<T>. Rewrite to a synthetic `filterSome` call lowered to the proven
