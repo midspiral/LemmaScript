@@ -750,7 +750,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             return a && b && !tyEqual(a, b);
           });
           const matching = differ ? owners.filter(v => { const t = ownerTy(v); return t && tyEqual(t, e.ty); }) : [];
-          const ctor = matching.length === 1 ? matching[0].name : undefined;
+          const ctor = e.ofVariant ?? (matching.length === 1 ? matching[0].name : undefined);
           return { kind: "field", obj: transformExpr(e.obj), field: e.field, fromUnion: baseName, ctor, datatypeField: true };
         }
       }
@@ -1096,7 +1096,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const fields = variant?.fields ?? [];
         let body = lowerExpr(c.body, binds);
         if (varName && fields.length > 0) {
-          body = replaceFieldAccess(body, varName, fields, c.variant);
+          body = replaceFieldAccess(body, varName, fields, c.variant, tyBaseName(e.typeName));
           if (isSynthArrayUnion && fields.length === 1) {
             body = replaceVarInExpr(body, varName, matchBinder(fields[0].name, varName));
           }
@@ -1159,7 +1159,7 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): Expr | null {
   return { kind: "match", scrutinee: varE(obj.name), arms: [{ pattern, body: rhs }, { pattern: pWild(), body: { kind: "bool", value: true } }] };
 }
 
-function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; tsType: string }[], ctorName?: string): Expr {
+function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; tsType: string }[], ctorName?: string, ctorOf?: string): Expr {
   return mapExpr(e, x => {
     if (x.kind === "field" && x.obj.kind === "var" && x.obj.name === varName) {
       const f = fields.find(f => f.name === x.field);
@@ -1170,11 +1170,11 @@ function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; ts
     // names. Recurse manually (returning a node stops mapExpr's own descent).
     if (ctorName && x.kind === "record" && !x.ctor && x.spread &&
         x.spread.kind === "var" && x.spread.name === varName) {
-      return { ...x, ctor: ctorName,
-        fields: x.fields.map(f => ({ ...f, value: replaceFieldAccess(f.value, varName, fields, ctorName) })) };
+      return { ...x, ctor: ctorName, ctorOf,
+        fields: x.fields.map(f => ({ ...f, value: replaceFieldAccess(f.value, varName, fields, ctorName, ctorOf) })) };
     }
     // If this let shadows the matched variable, stop replacing in the body
-    if (x.kind === "let" && x.name === varName) return { ...x, value: replaceFieldAccess(x.value, varName, fields, ctorName) };
+    if (x.kind === "let" && x.name === varName) return { ...x, value: replaceFieldAccess(x.value, varName, fields, ctorName, ctorOf) };
     return null;
   });
 }
@@ -2081,7 +2081,7 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
     (body, vn, fields, ctorName) => {
       let result = transformPureBody(body, typeDecls);
       if (!result) return null;
-      if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields, ctorName);
+      if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields, ctorName, tyBaseName(typeName));
       return result;
     });
   if (!arms) return null;
@@ -2105,7 +2105,7 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
     (body, vn, fields, ctorName) => {
       let result = transformPureBody(body, typeDecls);
       if (!result) return null;
-      if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields, ctorName);
+      if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields, ctorName, tyBaseName(chain.typeName));
       if (isSynthArrayUnion && fields.length === 1 && vn) {
         result = replaceVarInExpr(result, vn, matchBinder(fields[0].name, vn));
       }
@@ -2122,7 +2122,7 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
       // Exactly one variant left — destructure for variant-specific field access.
       let body = transformPureBody(chain.fallthrough, typeDecls);
       if (!body) return null;
-      if (remaining.fields.length > 0) body = replaceFieldAccess(body, chain.varName, remaining.fields, remaining.name);
+      if (remaining.fields.length > 0) body = replaceFieldAccess(body, chain.varName, remaining.fields, remaining.name, tyBaseName(chain.typeName));
       if (isSynthArrayUnion && remaining.fields.length === 1) {
         body = replaceVarInExpr(body, chain.varName, matchBinder(remaining.fields[0].name, chain.varName));
       }

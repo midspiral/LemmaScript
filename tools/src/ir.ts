@@ -29,7 +29,7 @@ export type Expr =
   | { kind: "index"; arr: Expr; idx: Expr }                // arr[idx]!
   | { kind: "tupleLiteral"; elems: Expr[] }                // (a, b) — heterogeneous tuple literal
   | { kind: "tupleProj"; obj: Expr; index: number; arity: number }  // projection at a 0-based position; arity is needed only by Lean, whose right-nested Prod makes the last slot asymmetric (Dafny just uses `t.index`)
-  | { kind: "record"; spread: Expr | null; fields: RecordField[]; ctor?: string }
+  | { kind: "record"; spread: Expr | null; fields: RecordField[]; ctor?: string; ctorOf?: string }  // ctorOf: the union whose variant `ctor` is, when a datatype update needs renamed destructors
   | { kind: "arrayLiteral"; elems: Expr[] }
   | { kind: "emptyMap" }
   | { kind: "emptySet" }

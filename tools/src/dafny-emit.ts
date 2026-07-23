@@ -537,8 +537,8 @@ function emitExpr(e: Expr): string {
       if (!e.datatypeField && (e.field === "size" || e.field === "length" || e.field === "collectionSize")) return `|${obj}|`;
       if (!e.datatypeField && e.field === "keys") return `${obj}.Keys`;
       if (e.field === "toNat") return obj;
-      if (e.ctor) {
-        const renamed = _ctorFieldRenames.get(`${e.ctor}.${e.field}`);
+      if (e.ctor && e.fromUnion) {
+        const renamed = _ctorFieldRenames.get(`${e.fromUnion}.${e.ctor}.${e.field}`);
         if (renamed) return `${obj}.${escapeName(renamed)}`;
       }
       return `${obj}.${escapeName(e.field)}`;
@@ -566,7 +566,7 @@ function emitExpr(e: Expr): string {
           return emitExpr(e.spread);
         }
         const updates = e.fields.map(f => {
-          const renamed = e.ctor ? _ctorFieldRenames.get(`${e.ctor}.${f.name}`) : undefined;
+          const renamed = e.ctor && e.ctorOf ? _ctorFieldRenames.get(`${e.ctorOf}.${e.ctor}.${f.name}`) : undefined;
           return `${escapeName(renamed ?? f.name)} := ${emitExpr(f.value)}`;
         });
         return `${emitExpr(e.spread)}.(${updates.join(", ")})`;
@@ -1333,7 +1333,7 @@ let _recordCtors = new Map<string, string>();
 let _structureDecls = new Map<string, { name: string; type: Ty }[]>();
 let _declaredTypes = new Set<string>();
 let _ambiguousCtors = new Set<string>();
-// `"<ctor>.<field>"` → per-constructor destructor name, for fields the
+// `"<union>.<ctor>.<field>"` → per-constructor destructor name, for fields the
 // inductive emission renames (shared name, differing types). Field reads and
 // datatype updates with a pinned ctor must use the renamed destructor.
 let _ctorFieldRenames = new Map<string, string>();
@@ -1372,12 +1372,9 @@ function buildRecordCtorMap(decls: Decl[]) {
       const collides = new Set([...typesByField].filter(([, s]) => s.size > 1).map(([n]) => n));
       for (const c of d.constructors)
         for (const f of c.fields) {
-          const key = `${c.name}.${f.name}`;
-          // Unions disagreeing on a key (Expr.let renames `value`, Stmt.let doesn't) → left bare.
-          const renamed = collides.has(f.name)
-            ? `${f.name}_${c.name.replace(/[^A-Za-z0-9_'?]/g, "_")}` : f.name;
-          if (_ctorFieldRenames.has(key) && _ctorFieldRenames.get(key) !== renamed) _ctorFieldRenames.set(key, f.name);
-          else _ctorFieldRenames.set(key, renamed);
+          if (!collides.has(f.name)) continue;
+          _ctorFieldRenames.set(`${d.name}.${c.name}.${f.name}`,
+            `${f.name}_${c.name.replace(/[^A-Za-z0-9_'?]/g, "_")}`);
         }
     }
     if (d.kind === "type-alias") _declaredTypes.add(d.name);

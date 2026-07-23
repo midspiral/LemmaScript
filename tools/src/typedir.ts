@@ -194,7 +194,8 @@ export type TExpr =
       builtinId?: BuiltinId }
   | { kind: "index"; obj: TExpr; idx: TExpr; ty: Ty }
   | { kind: "field"; obj: TExpr; field: string; ty: Ty;
-      isDiscriminant?: boolean }            // true if this is a discriminant field access
+      isDiscriminant?: boolean;             // true if this is a discriminant field access
+      ofVariant?: string }                  // which union variant the field is read from, when narrowing determined it
   | { kind: "record"; spread: TExpr | null; fields: TRecordField[]; ty: Ty }
   | { kind: "arrayLiteral"; elems: TExpr[]; ty: Ty }
   | { kind: "lambda"; params: TParam[]; body: TStmt[]; ty: Ty }
