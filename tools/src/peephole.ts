@@ -13,7 +13,7 @@
  *
  * Statement-level rule 1 also handles match-statement on m.get.
  */
-import type { Expr, Stmt, Decl, Module, MatchArm, StmtMatchArm, MatchPattern } from "./ir.js";
+import type { Expr, Stmt, Decl, Module, FnMethod, MatchArm, StmtMatchArm, MatchPattern } from "./ir.js";
 import { patternCtor, patternBinders, usesName, usesNameInStmts } from "./ir.js";
 
 // (Note: peephole rules now bind once via let/var rather than substitute,
@@ -323,6 +323,13 @@ export function peepholeModule(mod: Module, backend: Backend = "dafny"): Module 
   return { ...mod, decls: mod.decls.map(d => peepholeDecl(d, backend)) };
 }
 
+function peepholeMethod(m: FnMethod, backend: Backend): FnMethod {
+  const re = (x: Expr) => peepholeExpr(x, backend);
+  return { ...m, body: peepholeStmts(m.body, backend),
+    requires: m.requires.map(re), ensures: m.ensures.map(re),
+    decreases: m.decreases ? re(m.decreases) : null };
+}
+
 function peepholeDecl(d: Decl, backend: Backend): Decl {
   const re = (x: Expr) => peepholeExpr(x, backend);
   switch (d.kind) {
@@ -339,7 +346,7 @@ function peepholeDecl(d: Decl, backend: Backend): Decl {
         requires: d.requires.map(re), ensures: d.ensures.map(re),
         decreases: d.decreases ? re(d.decreases) : null };
     case "namespace": return { ...d, decls: d.decls.map(x => peepholeDecl(x, backend)) };
-    case "class": return { ...d, methods: d.methods.map(m => peepholeDecl(m, backend) as typeof m) };
+    case "class": return { ...d, methods: d.methods.map(m => peepholeMethod(m, backend)) };
     case "const": return { ...d, value: re(d.value) };
     case "inductive":
     case "structure":
