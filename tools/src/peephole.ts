@@ -14,45 +14,13 @@
  * Statement-level rule 1 also handles match-statement on m.get.
  */
 import type { Expr, Stmt, Decl, Module, MatchArm, StmtMatchArm, MatchPattern } from "./ir.js";
-import { patternCtor, patternBinders } from "./ir.js";
-
-// ── Generic walkers (same shape as transform.ts) ─────────────
-
-function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
-  const hit = f(e);
-  if (hit) return hit;
-  const r = (x: Expr) => mapExpr(x, f);
-  switch (e.kind) {
-    case "var": case "num": case "bool": case "str": case "constructor":
-    case "emptyMap": case "emptySet": case "havoc": case "default": case "mapLiteral": return e;
-    case "binop": return { ...e, left: r(e.left), right: r(e.right) };
-    case "unop": return { ...e, expr: r(e.expr) };
-    case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };
-    case "app": return { ...e, args: e.args.map(r) };
-    case "field": return { ...e, obj: r(e.obj) };
-    case "toNat": return { ...e, expr: r(e.expr) };
-    case "toReal": return { ...e, expr: r(e.expr) };
-    case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
-    case "tupleLiteral": return { ...e, elems: e.elems.map(r) };
-    case "tupleProj": return { ...e, obj: r(e.obj) };
-    case "record": return { ...e, spread: e.spread ? r(e.spread) : null,
-      fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
-    case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
-    case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
-    case "match": {
-      const scr = r(e.scrutinee);
-      return { ...e, scrutinee: scr, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
-    }
-    case "forall": return { ...e, body: r(e.body) };
-    case "exists": return { ...e, body: r(e.body) };
-    case "let": return { ...e, value: r(e.value), body: r(e.body) };
-    case "methodCall": return { ...e, obj: r(e.obj), args: e.args.map(r) };
-    case "lambda": return e;
-  }
-}
+import { patternCtor, patternBinders, usesName, usesNameInStmts } from "./ir.js";
 
 // (Note: peephole rules now bind once via let/var rather than substitute,
-//  so semantics are preserved under any mutation. No substVar helpers needed.)
+//  so semantics are preserved under any mutation. No substVar helpers needed.
+//  Reference checks are ir.ts's usesName/usesNameInStmts — conservative in the
+//  right direction for the drop-the-binding gates: also counting app/ctor name
+//  references and lambda bodies can only suppress a rewrite, never misapply one.)
 
 // ── Shape detection ──────────────────────────────────────────
 
@@ -144,23 +112,13 @@ function ruleLetMatchOnMapGetExpr(e: Expr): Expr | null {
   const arms = getSomeNoneArms(m.arms);
   if (!arms) return null;
   // x must not appear in arm bodies (otherwise the binding is needed)
-  if (containsVarRefExpr(arms.someArm.body, e.name) || containsVarRefExpr(arms.noneArm.body, e.name)) return null;
+  if (usesName(arms.someArm.body, e.name) || usesName(arms.noneArm.body, e.name)) return null;
   const idx: Expr = { kind: "index", arr: get.obj, idx: get.key };
   const someBody: Expr = arms.binder
     ? { kind: "let", name: arms.binder, value: idx, body: arms.someArm.body }
     : arms.someArm.body;
   const has: Expr = { kind: "methodCall", obj: get.obj, objTy: get.objTy, method: "has", args: [get.key], monadic: false };
   return { kind: "if", cond: has, then: someBody, else: arms.noneArm.body };
-}
-
-function containsVarRefExpr(e: Expr, name: string): boolean {
-  let found = false;
-  mapExpr(e, x => {
-    if (found) return x;
-    if (x.kind === "var" && x.name === name) { found = true; return x; }
-    return null;
-  });
-  return found;
 }
 
 function isBool(e: Expr, v: boolean): boolean {
@@ -174,17 +132,17 @@ function isBool(e: Expr, v: boolean): boolean {
 //   `if n = 0 then true else ... allExpensesValid expenses (n - 1) ...`
 // where the recursive call needs the if-condition to bound `n > 0`.
 // So they're applied only for Dafny.
-const MAP_GET_RULES = [
+type ExprRule = (e: Expr) => Expr | null;
+const MAP_GET_RULES: ExprRule[] = [
   ruleMatchOnMapGetExpr,
   ruleLetMatchOnMapGetExpr,
 ];
-const BOOL_RULES = [
+const BOOL_RULES: ExprRule[] = [
   ruleIfFalseElseTrue,
   ruleIfIdentity,
   ruleIfThenFalse,
   ruleIfTrueElse,
 ];
-let EXPR_RULES: ((e: Expr) => Expr | null)[] = [...MAP_GET_RULES, ...BOOL_RULES];
 
 // ── Statement rewrite rules ──────────────────────────────────
 
@@ -209,55 +167,6 @@ function ruleMatchOnMapGetStmt(s: Stmt): Stmt | null {
 
 const STMT_RULES = [ruleMatchOnMapGetStmt];
 
-// ── Variable use detection ───────────────────────────────────
-
-/** Conservative reference check: does any expression in this stmt mention `name`?
- *  Doesn't track shadowing — worst case, we miss an inlining opportunity.
- *  Used to gate let-inlining (only inline if the var is not used anywhere after). */
-function containsVarRefStmt(s: Stmt, name: string): boolean {
-  let found = false;
-  const checkExpr = (e: Expr) => {
-    if (found) return;
-    mapExpr(e, x => {
-      if (x.kind === "var" && x.name === name) { found = true; return x; }
-      return null;
-    });
-  };
-  const walk = (st: Stmt): void => {
-    if (found) return;
-    switch (st.kind) {
-      case "let": case "assign": case "bind": case "let-bind":
-      case "return": case "ghostLet": case "ghostAssign":
-        checkExpr(st.value); return;
-      case "assert": checkExpr(st.expr); return;
-      case "break": case "continue": return;
-      case "if":
-        checkExpr(st.cond);
-        st.then.forEach(walk); st.else.forEach(walk); return;
-      case "match":
-        checkExpr(st.scrutinee);
-        st.arms.forEach(a => a.body.forEach(walk));
-        return;
-      case "while":
-        checkExpr(st.cond);
-        st.invariants.forEach(checkExpr);
-        st.body.forEach(walk);
-        return;
-      case "forin":
-        checkExpr(st.bound);
-        st.invariants.forEach(checkExpr);
-        st.body.forEach(walk);
-        return;
-    }
-  };
-  walk(s);
-  return found;
-}
-
-function containsVarRefStmts(stmts: Stmt[], name: string): boolean {
-  return stmts.some(s => containsVarRefStmt(s, name));
-}
-
 // ── Statement-list rules (pairs of adjacent stmts) ──────────
 
 /** Pair rule: let x = m.get(k); match x { Some(v) => sb, None => nb }
@@ -274,7 +183,7 @@ function tryLetMatchOnMapGet(s1: Stmt, s2: Stmt, restStmts: Stmt[]): Stmt | null
   if (!matchOnX) return null;
   const arms = getSomeNoneArms(s2.arms);
   if (!arms) return null;
-  if (containsVarRefStmts(restStmts, s1.name)) return null;
+  if (usesNameInStmts(restStmts, s1.name)) return null;
   const idx: Expr = { kind: "index", arr: get.obj, idx: get.key };
   const valTy = get.objTy.kind === "map" ? get.objTy.value : { kind: "unknown" as const };
   const someBody: Stmt[] = arms.binder
@@ -285,7 +194,7 @@ function tryLetMatchOnMapGet(s1: Stmt, s2: Stmt, restStmts: Stmt[]): Stmt | null
 }
 
 /** Walk a statement list applying pair rules. */
-function rewriteStmtListPairs(stmts: Stmt[]): Stmt[] {
+function rewriteStmtListPairs(stmts: Stmt[], rules: ExprRule[]): Stmt[] {
   const result: Stmt[] = [];
   let i = 0;
   while (i < stmts.length) {
@@ -293,7 +202,7 @@ function rewriteStmtListPairs(stmts: Stmt[]): Stmt[] {
       const merged = tryLetMatchOnMapGet(stmts[i], stmts[i + 1], stmts.slice(i + 2));
       if (merged) {
         // Recurse into the new stmt's children to peephole them too
-        result.push(peepholeStmt(merged));
+        result.push(peepholeStmt(merged, rules));
         i += 2;
         continue;
       }
@@ -305,24 +214,24 @@ function rewriteStmtListPairs(stmts: Stmt[]): Stmt[] {
 }
 
 /** Peephole a statement list: per-stmt rules first, then pair rules. */
-function peepholeStmts(stmts: Stmt[]): Stmt[] {
-  return rewriteStmtListPairs(stmts.map(peepholeStmt));
+function peepholeStmts(stmts: Stmt[], rules: ExprRule[]): Stmt[] {
+  return rewriteStmtListPairs(stmts.map(s => peepholeStmt(s, rules)), rules);
 }
 
 // ── Bottom-up rewrite to fixed point at each node ───────────
 
-function peepholeExpr(e: Expr): Expr {
+function peepholeExpr(e: Expr, rules: ExprRule[]): Expr {
   // Recurse into children first
-  const rChildren = rewriteChildrenExpr(e);
+  const rChildren = rewriteChildrenExpr(e, rules);
   // Apply rules at this node, looping until no rule fires
   let cur = rChildren;
   for (let guard = 0; guard < 100; guard++) {
     let changed = false;
-    for (const rule of EXPR_RULES) {
+    for (const rule of rules) {
       const r = rule(cur);
       if (r !== null) {
         // Re-peephole the result (its children may now match new rules)
-        cur = peepholeExpr(r);
+        cur = peepholeExpr(r, rules);
         changed = true;
         break;
       }
@@ -332,8 +241,8 @@ function peepholeExpr(e: Expr): Expr {
   return cur;
 }
 
-function rewriteChildrenExpr(e: Expr): Expr {
-  const r = peepholeExpr;
+function rewriteChildrenExpr(e: Expr, rules: ExprRule[]): Expr {
+  const r = (x: Expr) => peepholeExpr(x, rules);
   switch (e.kind) {
     case "var": case "num": case "bool": case "str": case "constructor":
     case "emptyMap": case "emptySet": case "havoc": case "default": case "mapLiteral": return e;
@@ -359,19 +268,19 @@ function rewriteChildrenExpr(e: Expr): Expr {
     case "exists": return { ...e, body: r(e.body) };
     case "let": return { ...e, value: r(e.value), body: r(e.body) };
     case "methodCall": return { ...e, obj: r(e.obj), args: e.args.map(r) };
-    case "lambda": return { ...e, body: peepholeStmts(e.body) };
+    case "lambda": return { ...e, body: peepholeStmts(e.body, rules) };
   }
 }
 
-function peepholeStmt(s: Stmt): Stmt {
-  const rChildren = rewriteChildrenStmt(s);
+function peepholeStmt(s: Stmt, rules: ExprRule[]): Stmt {
+  const rChildren = rewriteChildrenStmt(s, rules);
   let cur = rChildren;
   for (let guard = 0; guard < 100; guard++) {
     let changed = false;
     for (const rule of STMT_RULES) {
       const r = rule(cur);
       if (r !== null) {
-        cur = peepholeStmt(r);
+        cur = peepholeStmt(r, rules);
         changed = true;
         break;
       }
@@ -381,9 +290,9 @@ function peepholeStmt(s: Stmt): Stmt {
   return cur;
 }
 
-function rewriteChildrenStmt(s: Stmt): Stmt {
-  const re = peepholeExpr;
-  const rs = peepholeStmts;
+function rewriteChildrenStmt(s: Stmt, rules: ExprRule[]): Stmt {
+  const re = (x: Expr) => peepholeExpr(x, rules);
+  const rs = (x: Stmt[]) => peepholeStmts(x, rules);
   switch (s.kind) {
     case "let": return { ...s, value: re(s.value) };
     case "assign": return { ...s, value: re(s.value) };
@@ -407,27 +316,28 @@ function rewriteChildrenStmt(s: Stmt): Stmt {
 // ── Module entry ────────────────────────────────────────────
 
 export function peepholeModule(mod: Module, backend: "lean" | "dafny" = "dafny"): Module {
-  EXPR_RULES = backend === "dafny" ? [...MAP_GET_RULES, ...BOOL_RULES] : MAP_GET_RULES;
-  return { ...mod, decls: mod.decls.map(peepholeDecl) };
+  const rules: ExprRule[] = backend === "dafny" ? [...MAP_GET_RULES, ...BOOL_RULES] : MAP_GET_RULES;
+  return { ...mod, decls: mod.decls.map(d => peepholeDecl(d, rules)) };
 }
 
-function peepholeDecl(d: Decl): Decl {
+function peepholeDecl(d: Decl, rules: ExprRule[]): Decl {
+  const re = (x: Expr) => peepholeExpr(x, rules);
   switch (d.kind) {
     case "def":
-      return { ...d, body: peepholeExpr(d.body),
-        requires: d.requires.map(peepholeExpr), ensures: d.ensures.map(peepholeExpr),
-        decreases: d.decreases ? peepholeExpr(d.decreases) : null };
+      return { ...d, body: re(d.body),
+        requires: d.requires.map(re), ensures: d.ensures.map(re),
+        decreases: d.decreases ? re(d.decreases) : null };
     case "def-by-method":
-      return { ...d, methodBody: peepholeStmts(d.methodBody),
-        requires: d.requires.map(peepholeExpr), ensures: d.ensures.map(peepholeExpr),
-        decreases: d.decreases ? peepholeExpr(d.decreases) : null };
+      return { ...d, methodBody: peepholeStmts(d.methodBody, rules),
+        requires: d.requires.map(re), ensures: d.ensures.map(re),
+        decreases: d.decreases ? re(d.decreases) : null };
     case "method":
-      return { ...d, body: peepholeStmts(d.body),
-        requires: d.requires.map(peepholeExpr), ensures: d.ensures.map(peepholeExpr),
-        decreases: d.decreases ? peepholeExpr(d.decreases) : null };
-    case "namespace": return { ...d, decls: d.decls.map(peepholeDecl) };
-    case "class": return { ...d, methods: d.methods.map(m => peepholeDecl(m) as typeof m) };
-    case "const": return { ...d, value: peepholeExpr(d.value) };
+      return { ...d, body: peepholeStmts(d.body, rules),
+        requires: d.requires.map(re), ensures: d.ensures.map(re),
+        decreases: d.decreases ? re(d.decreases) : null };
+    case "namespace": return { ...d, decls: d.decls.map(x => peepholeDecl(x, rules)) };
+    case "class": return { ...d, methods: d.methods.map(m => peepholeDecl(m, rules) as typeof m) };
+    case "const": return { ...d, value: re(d.value) };
     case "inductive":
     case "structure":
     case "type-alias":
