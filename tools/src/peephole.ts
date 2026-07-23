@@ -39,12 +39,30 @@ function parseSomeBinder(p: MatchPattern): string | null {
   return b === undefined || b === "_" ? null : b;
 }
 
-/** Identify a Some/None match's arms. */
-function getSomeNoneArms<A extends { pattern: MatchPattern; body: any }>(arms: A[]): { someArm: A; noneArm: A; binder: string | null } | null {
+/** Identify a Some/None match's arms (R3: monomorphic per arm type — the
+ *  generic's `body` would be `Expr` in one instantiation and `Stmt[]` in the
+ *  other, and the erasure doctrine has no honest single bound). */
+interface SomeNoneArms { someArm: MatchArm; noneArm: MatchArm; binder: string | null }
+
+function getSomeNoneArms(arms: MatchArm[]): SomeNoneArms | null {
   if (arms.length !== 2) return null;
-  const someArm = arms.find(a => patternCtor(a.pattern) === "some");
-  const noneArm = arms.find(a => patternCtor(a.pattern) === "none");
-  if (!someArm || !noneArm) return null;
+  const c0 = patternCtor(arms[0].pattern);
+  const c1 = patternCtor(arms[1].pattern);
+  const someArm = c0 === "some" ? arms[0] : c1 === "some" ? arms[1] : null;
+  const noneArm = c0 === "none" ? arms[0] : c1 === "none" ? arms[1] : null;
+  if (someArm === null || noneArm === null) return null;
+  return { someArm, noneArm, binder: parseSomeBinder(someArm.pattern) };
+}
+
+interface SomeNoneStmtArms { someArm: StmtMatchArm; noneArm: StmtMatchArm; binder: string | null }
+
+function getSomeNoneStmtArms(arms: StmtMatchArm[]): SomeNoneStmtArms | null {
+  if (arms.length !== 2) return null;
+  const c0 = patternCtor(arms[0].pattern);
+  const c1 = patternCtor(arms[1].pattern);
+  const someArm = c0 === "some" ? arms[0] : c1 === "some" ? arms[1] : null;
+  const noneArm = c0 === "none" ? arms[0] : c1 === "none" ? arms[1] : null;
+  if (someArm === null || noneArm === null) return null;
   return { someArm, noneArm, binder: parseSomeBinder(someArm.pattern) };
 }
 
@@ -167,7 +185,7 @@ function ruleMatchOnMapGetStmt(s: Stmt): Stmt | null {
   if (s.kind !== "match") return null;
   const get = isMapGet(s.scrutinee);
   if (!get) return null;
-  const arms = getSomeNoneArms(s.arms);
+  const arms = getSomeNoneStmtArms(s.arms);
   if (!arms) return null;
   const idx: Expr = { kind: "index", arr: get.obj, idx: get.key };
   const valTy = get.objTy.kind === "map" ? get.objTy.value : { kind: "unknown" as const };
@@ -193,7 +211,7 @@ function tryLetMatchOnMapGet(s1: Stmt, s2: Stmt, restStmts: Stmt[]): Stmt | null
   const matchOnX =
     s2.scrutinee.kind === "var" && s2.scrutinee.name === s1.name;
   if (!matchOnX) return null;
-  const arms = getSomeNoneArms(s2.arms);
+  const arms = getSomeNoneStmtArms(s2.arms);
   if (!arms) return null;
   if (usesNameInStmts(restStmts, s1.name)) return null;
   const idx: Expr = { kind: "index", arr: get.obj, idx: get.key };
