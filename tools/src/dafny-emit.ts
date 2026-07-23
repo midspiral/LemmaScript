@@ -525,6 +525,8 @@ function emitExpr(e: Expr): string {
       if (e.fn === "MinOfSeq") { needPreamble("MathMin"); needPreamble("MinOfSeq"); }
       if (e.fn === "Perm") needPreamble("Perm");
       if (e.fn === "SetFromSeq") needPreamble("SetFromSeq");
+      if (e.ctorOf && _ambiguousCtors.has(e.fn))
+        return `${e.ctorOf}.${escapeName(e.fn)}(${args.join(", ")})`;
       return `${escapeName(e.fn)}(${args.join(", ")})`;
     }
 
@@ -1323,18 +1325,29 @@ const PREAMBLE_CODE: [string, string][] = [
 let _recordCtors = new Map<string, string>();
 let _structureDecls = new Map<string, { name: string; type: Ty }[]>();
 let _declaredTypes = new Set<string>();
+let _ambiguousCtors = new Set<string>();
 
 function buildRecordCtorMap(decls: Decl[]) {
   _recordCtors = new Map();
   _structureDecls = new Map();
   _declaredTypes = new Set();
+  _ambiguousCtors = new Set();
+  const ctorSeen = new Set<string>();
   function collectDecl(d: Decl) {
     if (d.kind === "structure") {
       _declaredTypes.add(d.name);
       _structureDecls.set(d.name, d.fields);
       if (d.fields.length > 0) _recordCtors.set(d.fields[0].name, d.name);
     }
-    if (d.kind === "inductive") _declaredTypes.add(d.name);
+    if (d.kind === "inductive") {
+      _declaredTypes.add(d.name);
+      // Constructor names shared by two datatypes in this module (Expr.let vs
+      // Stmt.let) can't be used bare — emitters must qualify them.
+      for (const c of d.constructors) {
+        if (ctorSeen.has(c.name)) _ambiguousCtors.add(c.name);
+        ctorSeen.add(c.name);
+      }
+    }
     if (d.kind === "type-alias") _declaredTypes.add(d.name);
     if (d.kind === "def") _declaredTypes.add(d.name);
     if (d.kind === "namespace") for (const inner of d.decls) collectDecl(inner);
