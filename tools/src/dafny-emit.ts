@@ -537,6 +537,10 @@ function emitExpr(e: Expr): string {
       if (!e.datatypeField && (e.field === "size" || e.field === "length" || e.field === "collectionSize")) return `|${obj}|`;
       if (!e.datatypeField && e.field === "keys") return `${obj}.Keys`;
       if (e.field === "toNat") return obj;
+      if (e.ctor) {
+        const renamed = _ctorFieldRenames.get(`${e.ctor}.${e.field}`);
+        if (renamed) return `${obj}.${escapeName(renamed)}`;
+      }
       return `${obj}.${escapeName(e.field)}`;
     }
 
@@ -561,7 +565,10 @@ function emitExpr(e: Expr): string {
         if (e.fields.length === 0) {
           return emitExpr(e.spread);
         }
-        const updates = e.fields.map(f => `${escapeName(f.name)} := ${emitExpr(f.value)}`);
+        const updates = e.fields.map(f => {
+          const renamed = e.ctor ? _ctorFieldRenames.get(`${e.ctor}.${f.name}`) : undefined;
+          return `${escapeName(renamed ?? f.name)} := ${emitExpr(f.value)}`;
+        });
         return `${emitExpr(e.spread)}.(${updates.join(", ")})`;
       }
       // Match constructor by field names — prefer exact match over first-field heuristic
@@ -1326,12 +1333,17 @@ let _recordCtors = new Map<string, string>();
 let _structureDecls = new Map<string, { name: string; type: Ty }[]>();
 let _declaredTypes = new Set<string>();
 let _ambiguousCtors = new Set<string>();
+// `"<ctor>.<field>"` → per-constructor destructor name, for fields the
+// inductive emission renames (shared name, differing types). Field reads and
+// datatype updates with a pinned ctor must use the renamed destructor.
+let _ctorFieldRenames = new Map<string, string>();
 
 function buildRecordCtorMap(decls: Decl[]) {
   _recordCtors = new Map();
   _structureDecls = new Map();
   _declaredTypes = new Set();
   _ambiguousCtors = new Set();
+  _ctorFieldRenames = new Map();
   const ctorSeen = new Set<string>();
   function collectDecl(d: Decl) {
     if (d.kind === "structure") {
@@ -1347,6 +1359,26 @@ function buildRecordCtorMap(decls: Decl[]) {
         if (ctorSeen.has(c.name)) _ambiguousCtors.add(c.name);
         ctorSeen.add(c.name);
       }
+      // Mirror the destructor renaming the inductive case of emitDecl performs
+      // (shared field name, differing types → per-constructor names), so reads
+      // and updates can be translated to the renamed destructors.
+      const typesByField = new Map<string, Set<string>>();
+      for (const c of d.constructors)
+        for (const f of c.fields) {
+          let s = typesByField.get(f.name);
+          if (!s) { s = new Set(); typesByField.set(f.name, s); }
+          s.add(tyToDafny(f.type));
+        }
+      const collides = new Set([...typesByField].filter(([, s]) => s.size > 1).map(([n]) => n));
+      for (const c of d.constructors)
+        for (const f of c.fields) {
+          const key = `${c.name}.${f.name}`;
+          // Unions disagreeing on a key (Expr.let renames `value`, Stmt.let doesn't) → left bare.
+          const renamed = collides.has(f.name)
+            ? `${f.name}_${c.name.replace(/[^A-Za-z0-9_'?]/g, "_")}` : f.name;
+          if (_ctorFieldRenames.has(key) && _ctorFieldRenames.get(key) !== renamed) _ctorFieldRenames.set(key, f.name);
+          else _ctorFieldRenames.set(key, renamed);
+        }
     }
     if (d.kind === "type-alias") _declaredTypes.add(d.name);
     if (d.kind === "def") _declaredTypes.add(d.name);

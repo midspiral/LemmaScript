@@ -6,9 +6,10 @@
  */
 
 import type { TExpr, TStmt, TFunction, TModule, Ty } from "./typedir.js";
+import { tyEqual } from "./typedir.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, StmtMatchArm, ConstDecl, MatchPattern } from "./ir.js";
 import { anyExprInStmts, pWild, pCtor, patternBinders, patternBinds, patternCtor } from "./ir.js";
-import type { TypeDeclInfo } from "./types.js";
+import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
@@ -737,8 +738,20 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.obj.ty.kind === "user") {
         const baseName = tyBaseName(e.obj.ty.name);
         const decl = declOfKind(_typeDecls, baseName, "discriminated-union");
-        if (decl?.variants?.some(v => v.fields.some(f => f.name === e.field))) {
-          return { kind: "field", obj: transformExpr(e.obj), field: e.field, fromUnion: baseName, datatypeField: true };
+        const owners = decl?.variants?.filter(v => v.fields.some(f => f.name === e.field)) ?? [];
+        if (owners.length > 0) {
+          // Shared field name with differing declared types: those destructors
+          // are renamed per-constructor, and the read's own resolved type
+          // identifies the owning variant (the types differ exactly when the
+          // rename happens). Pin it so emitters use the renamed destructor.
+          const ownerTy = (v: VariantInfo) => v.fields.find(f => f.name === e.field)?.type;
+          const differ = owners.some(v => {
+            const a = ownerTy(v), b = ownerTy(owners[0]);
+            return a && b && !tyEqual(a, b);
+          });
+          const matching = differ ? owners.filter(v => { const t = ownerTy(v); return t && tyEqual(t, e.ty); }) : [];
+          const ctor = matching.length === 1 ? matching[0].name : undefined;
+          return { kind: "field", obj: transformExpr(e.obj), field: e.field, fromUnion: baseName, ctor, datatypeField: true };
         }
       }
       return { kind: "field", obj: transformExpr(e.obj), field: e.field, datatypeField: isRecordType(e.obj.ty) };
@@ -1083,7 +1096,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const fields = variant?.fields ?? [];
         let body = lowerExpr(c.body, binds);
         if (varName && fields.length > 0) {
-          body = replaceFieldAccess(body, varName, fields);
+          body = replaceFieldAccess(body, varName, fields, c.variant);
           if (isSynthArrayUnion && fields.length === 1) {
             body = replaceVarInExpr(body, varName, matchBinder(fields[0].name, varName));
           }
@@ -1146,14 +1159,22 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): Expr | null {
   return { kind: "match", scrutinee: varE(obj.name), arms: [{ pattern, body: rhs }, { pattern: pWild(), body: { kind: "bool", value: true } }] };
 }
 
-function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; tsType: string }[]): Expr {
+function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; tsType: string }[], ctorName?: string): Expr {
   return mapExpr(e, x => {
     if (x.kind === "field" && x.obj.kind === "var" && x.obj.name === varName) {
       const f = fields.find(f => f.name === x.field);
       if (f) return { kind: "var", name: matchBinder(f.name, varName) };
     }
+    // Datatype update of the scrutinee (`{ ...vn, f: v }`): the arm knows the
+    // variant, so stamp it — emitters need it for per-constructor destructor
+    // names. Recurse manually (returning a node stops mapExpr's own descent).
+    if (ctorName && x.kind === "record" && !x.ctor && x.spread &&
+        x.spread.kind === "var" && x.spread.name === varName) {
+      return { ...x, ctor: ctorName,
+        fields: x.fields.map(f => ({ ...f, value: replaceFieldAccess(f.value, varName, fields, ctorName) })) };
+    }
     // If this let shadows the matched variable, stop replacing in the body
-    if (x.kind === "let" && x.name === varName) return { ...x, value: replaceFieldAccess(x.value, varName, fields) };
+    if (x.kind === "let" && x.name === varName) return { ...x, value: replaceFieldAccess(x.value, varName, fields, ctorName) };
     return null;
   });
 }
@@ -1756,7 +1777,7 @@ function mapStmtExprs(s: Stmt, r: (e: Expr) => Expr): Stmt {
 function buildMatchArms<T>(
   cases: { name: string; body: TStmt[] }[],
   varName: string | undefined, typeName: string | undefined, typeDecls: TypeDeclInfo[],
-  transformBody: (body: TStmt[], varName: string | undefined, fields: { name: string; tsType: string }[]) => T | null
+  transformBody: (body: TStmt[], varName: string | undefined, fields: { name: string; tsType: string }[], ctorName?: string) => T | null
 ): { pattern: MatchPattern; body: T }[] | null {
   const decl = typeName ? declOf(typeDecls, typeName) : undefined;
   const arms: { pattern: MatchPattern; body: T }[] = [];
@@ -1764,7 +1785,7 @@ function buildMatchArms<T>(
     const variant = decl?.variants?.find(v => v.name === c.name);
     const fields = variant?.fields ?? [];
     const pattern = buildMatchPattern(c.name, fields, varName);
-    const body = transformBody(c.body, varName, fields);
+    const body = transformBody(c.body, varName, fields, c.name);
     if (body === null) return null;
     arms.push({ pattern, body });
   }
@@ -2057,10 +2078,10 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
   const varName = s.expr.kind === "var" ? s.expr.name : undefined;
   const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
   const arms = buildMatchArms(cases, varName, typeName, typeDecls,
-    (body, vn, fields) => {
+    (body, vn, fields, ctorName) => {
       let result = transformPureBody(body, typeDecls);
       if (!result) return null;
-      if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields);
+      if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields, ctorName);
       return result;
     });
   if (!arms) return null;
@@ -2081,10 +2102,10 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
   // the statement-level counterpart of this substitution.
   const isSynthArrayUnion = decl?.discriminant === "__isArray__";
   const arms = buildMatchArms(cases, chain.varName, chain.typeName, typeDecls,
-    (body, vn, fields) => {
+    (body, vn, fields, ctorName) => {
       let result = transformPureBody(body, typeDecls);
       if (!result) return null;
-      if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields);
+      if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields, ctorName);
       if (isSynthArrayUnion && fields.length === 1 && vn) {
         result = replaceVarInExpr(result, vn, matchBinder(fields[0].name, vn));
       }
@@ -2101,7 +2122,7 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
       // Exactly one variant left — destructure for variant-specific field access.
       let body = transformPureBody(chain.fallthrough, typeDecls);
       if (!body) return null;
-      if (remaining.fields.length > 0) body = replaceFieldAccess(body, chain.varName, remaining.fields);
+      if (remaining.fields.length > 0) body = replaceFieldAccess(body, chain.varName, remaining.fields, remaining.name);
       if (isSynthArrayUnion && remaining.fields.length === 1) {
         body = replaceVarInExpr(body, chain.varName, matchBinder(remaining.fields[0].name, chain.varName));
       }
