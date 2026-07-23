@@ -17,10 +17,8 @@
  *
  * Classification values mirror the historical per-pass lists exactly
  * (byte-for-byte gauntlet compatibility), including their quirks — e.g.
- * `array.shift` returns the element type un-wrapped, `array.with` types as
- * `unknown`, and `pure` reproduces narrow's old PURE_BUILTIN_METHODS set
- * (so `startsWith` is not `pure` even though it lowers purely). Widen such
- * bits deliberately, with tests — not while migrating.
+ * `array.shift` returns the element type un-wrapped and `array.with` types
+ * as `unknown`. Widen such bits deliberately, with tests.
  */
 
 import type { Ty, TExpr } from "./typedir.js";
