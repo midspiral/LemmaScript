@@ -59,13 +59,13 @@ export const BUILTINS = {
   // ── array ─────────────────────────────────────────────────
   "array.includes": { ret: BOOL, pure: true,
     intArgPositions: [1], argIsKey: true },
-  "array.indexOf": { ret: INT, pure: false,
+  "array.indexOf": { ret: INT, pure: true,
     intArgPositions: [1] },
   "array.shift": { ret: elem, pure: false },
   "array.pop": { ret: optElem, pure: false },
   "array.push": { ret: self, pure: false },
   "array.unshift": { ret: self, pure: false },
-  "array.concat": { ret: self, pure: false },
+  "array.concat": { ret: self, pure: true },
   "array.sort": { ret: self, pure: false,
     hof: { shape: "comparator" } },
   "array.filter": { ret: self, pure: false,
@@ -85,11 +85,11 @@ export const BUILTINS = {
     hof: { shape: "unary" } },
   "array.findLastIndex": { ret: INT,
     pure: false, hof: { shape: "unary" } },
-  "array.flat": { pure: false,
+  "array.flat": { pure: true,
     ret: (objTy) => objTy.kind === "array" && objTy.elem.kind === "array"
       ? { kind: "array", elem: objTy.elem.elem } : UNKNOWN },
-  "array.slice": { ret: self, pure: false },
-  "array.join": { pure: false,
+  "array.slice": { ret: self, pure: true },
+  "array.join": { pure: true,
     ret: (objTy) => objTy.kind === "array" && objTy.elem.kind === "string"
       ? STRING() : UNKNOWN },
   "array.map": { pure: false,
@@ -105,25 +105,25 @@ export const BUILTINS = {
       }
       return UNKNOWN;
     } },
-  "array.with": { ret: () => UNKNOWN, pure: false,
+  "array.with": { ret: () => UNKNOWN, pure: true,
     intArgPositions: [0] },
 
   // ── string ────────────────────────────────────────────────
-  "string.trim": { ret: STRING, pure: false },
-  "string.trimEnd": { ret: STRING, pure: false },
-  "string.trimStart": { ret: STRING, pure: false },
-  "string.toLowerCase": { ret: STRING, pure: false },
-  "string.toUpperCase": { ret: STRING, pure: false },
-  "string.slice": { ret: STRING, pure: false },
-  "string.substring": { ret: STRING, pure: false },
-  "string.split": { pure: false,
+  "string.trim": { ret: STRING, pure: true },
+  "string.trimEnd": { ret: STRING, pure: true },
+  "string.trimStart": { ret: STRING, pure: true },
+  "string.toLowerCase": { ret: STRING, pure: true },
+  "string.toUpperCase": { ret: STRING, pure: true },
+  "string.slice": { ret: STRING, pure: true },
+  "string.substring": { ret: STRING, pure: true },
+  "string.split": { pure: true,
     ret: () => ({ kind: "array", elem: { kind: "string" } }) },
   "string.includes": { ret: BOOL, pure: true },
-  "string.startsWith": { ret: BOOL, pure: false },
-  "string.endsWith": { ret: BOOL, pure: false },
+  "string.startsWith": { ret: BOOL, pure: true },
+  "string.endsWith": { ret: BOOL, pure: true },
 
   // ── map ───────────────────────────────────────────────────
-  "map.get": { pure: false, argIsKey: true,
+  "map.get": { pure: true, argIsKey: true,
     ret: (objTy, _args, c) => objTy.kind !== "map" ? UNKNOWN
       : c.inSpec ? objTy.value : { kind: "optional", inner: objTy.value } },
   "map.has": { ret: BOOL, pure: true, argIsKey: true },
