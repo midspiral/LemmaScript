@@ -302,7 +302,7 @@ function ruleImplOptional(e: TExpr, ctx: CondCtx): TExpr | null {
   return {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
-    binder: check.binderHint,
+    binder: check.binder,
     someBody: walkExpr(innerBody, ctx),
     noneBody: { kind: "bool", value: true, ty: { kind: "bool" } },
     ty: { kind: "bool" },
