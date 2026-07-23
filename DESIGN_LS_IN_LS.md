@@ -101,7 +101,7 @@ lowerings:
 ```ts
 interface BuiltinSpec {
   ret(objTy: Ty, args: TExpr[]): Ty;  // return-type rule
-  pure: boolean;                      // safe in expression-only positions
+  pure: boolean;                      // under-approximate
   hof?: { lambdaParamTys(objTy: Ty, args: TExpr[]): Ty[] };
   intArgPositions?: number[];         // nat/int coercion sites
 }
@@ -165,7 +165,10 @@ ids *are* the entries.
   expression-lowerability are conceptually distinct, but every current
   consumer asks the same question. The bit splits into named capabilities
   only when a concrete builtin needs the distinction — no speculative
-  effect system.
+  effect system. The lambda-taking HOFs are the known imprecision:
+  `array.map` is pure, but a monadic lambda body makes transform lift the
+  call, so those entries are marked impure. Under-approximating costs only a
+  missed narrowing.
 
 ### 3.3 Migration
 
