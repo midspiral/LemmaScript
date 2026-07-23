@@ -57,8 +57,10 @@ transform takes typed IR and rewrites optional-narrowing patterns into a
 single IR primitive: `someMatch`. Each TS pattern (`if !== undefined`,
 ternary, `&&`, `||`, early return, truthiness, let-with-impure-guard,
 optional chain `?.`) is detected by a focused rule and rewritten
-compositionally. See [TOOLS.md#narrow-rules](TOOLS.md#narrow-rules) for
-the full list.
+compositionally. The rules are positional drivers: *what* each condition
+establishes lives in `condition-facts.ts`, shared with resolve so a check is
+taught once. See [TOOLS.md#narrow-rules](TOOLS.md#narrow-rules) for the full
+list.
 
 **Transform owns lowering.** It receives typed IR with `someMatch` nodes
 and lowers them to backend-IR `match Some/None`, performing a light
@@ -175,8 +177,8 @@ Recognized patterns:
 - `if (x.kind === "v") ... else if (x.kind === "w") ...` — chain of equality
   checks on a discriminator field.
 - `if ('key' in x) ...` — narrows to the unique variant containing `key`.
-  Looks up the variant from the type's declarations (narrow holds module-level
-  `_typeDecls` for this).
+  Looks up the variant from the type's declarations (carried in the `CondCtx`
+  threaded through the pass).
 - `if (x.kind !== "v") terminate; rest` — negative early-return form;
   rest becomes the variant's body, terminator becomes the fallthrough.
 - `switch (x.kind) { case "v": ... }` — exhaustive variant matching

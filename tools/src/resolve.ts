@@ -12,6 +12,9 @@ import { parseTsType, tyToCanonical } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
+import { recognizeBuiltin, builtinSpec } from "./builtins.js";
+import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName } from "./typedecls.js";
+import { presentFact } from "./condition-facts.js";
 
 // ── Environment ──────────────────────────────────────────────
 
@@ -127,7 +130,7 @@ function wrapSome(value: TExpr, optionalTy: Ty): TExpr {
 
 /** Find the synth array-union TypeDecl named `name` (discriminant `__isArray__`). */
 function findSynthArrayUnion(name: string, typeDecls: TypeDeclInfo[]): TypeDeclInfo | null {
-  const decl = typeDecls.find(d => d.name === name);
+  const decl = declOf(typeDecls, name);
   if (decl?.kind === "discriminated-union" && decl.discriminant === "__isArray__") return decl;
   return null;
 }
@@ -162,67 +165,26 @@ function coerceToTargetTy(value: TExpr, targetTy: Ty, typeDecls: TypeDeclInfo[])
   return value;
 }
 
-/** Detect optional checks: `v !== undefined` (positive narrows then-branch),
- *  `v === undefined` (negative narrows else-branch), or `!v` (equivalent to
- *  `=== undefined`).
- *  Returns:
- *    - simple var: `varName` set, `fieldExpr` unset
- *    - complex (field chain or call): `fieldExpr` set, `varName` empty
- *    - inThen: true for `!==` (truthy), false for `===` and `!v` (falsy).
- *  Does NOT recurse into `&&`. */
-function detectOptionalCheck(cond: RawExpr, ctx: Ctx): {
-  varName: string; innerTy: Ty; inThen: boolean;
-  fieldExpr?: RawExpr;
-} | null {
-  // `!v` where v is optional — same shape as `v === undefined` (inThen: false).
-  if (cond.kind === "unop" && cond.op === "!") {
-    const inner = classifyOptExpr(cond.expr, ctx);
-    return inner ? { ...inner, inThen: false } : null;
+/** A negated presence check on a bare var (`v === undefined` / `!v`), via
+ *  the shared condition analyzer (§4) on the *resolved* condition. Narrows
+ *  the else-branch (or the rest of the block, after an early return). */
+function negatedVarPresence(cond: TExpr): { varName: string; innerTy: Ty } | null {
+  const f = presentFact(cond);
+  if (f && f.negated && f.scrutinee.kind === "var") {
+    return { varName: f.scrutinee.name, innerTy: f.innerTy };
   }
-  if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) {
-    // Bare optional truthiness: `if (v)` where v: T | undefined — same as `v !== undefined`.
-    const inner = classifyOptExpr(cond, ctx);
-    return inner ? { ...inner, inThen: true } : null;
-  }
-  // Identify the expression being checked against undefined
-  let optExpr: RawExpr | null = null;
-  if (cond.right.kind === "var" && cond.right.name === "undefined") optExpr = cond.left;
-  if (cond.left.kind === "var" && cond.left.name === "undefined") optExpr = cond.right;
-  if (!optExpr) return null;
-  const inner = classifyOptExpr(optExpr, ctx);
-  return inner ? { ...inner, inThen: cond.op === "!==" } : null;
-}
-
-/** Classify an expression as a simple var or field-chain optional, returning
- *  the shape needed by detectOptionalCheck (sans inThen). */
-function classifyOptExpr(e: RawExpr, ctx: Ctx): { varName: string; innerTy: Ty; fieldExpr?: RawExpr } | null {
-  if (e.kind === "var") {
-    const ty = lookup(ctx.env, e.name);
-    if (!ty || ty.kind !== "optional") return null;
-    return { varName: e.name, innerTy: ty.inner };
-  }
-  if (e.kind === "result") {
-    const ty = lookup(ctx.env, "\\result");
-    if (!ty || ty.kind !== "optional") return null;
-    return { varName: "\\result", innerTy: ty.inner };
-  }
-  const resolved = resolveExpr(e, ctx);
-  if (resolved.ty.kind !== "optional") return null;
-  return { varName: "", innerTy: resolved.ty.inner, fieldExpr: e };
+  return null;
 }
 
 /** Collect all optional narrowings from an early-return condition.
  *  Handles single checks (x === undefined) and compound || chains
  *  (x === undefined || y === undefined). */
-function collectEarlyReturnNarrowings(cond: RawExpr, ctx: Ctx): { varName: string; innerTy: Ty }[] {
+function collectEarlyReturnNarrowings(cond: TExpr): { varName: string; innerTy: Ty }[] {
   if (cond.kind === "binop" && cond.op === "||") {
-    return [...collectEarlyReturnNarrowings(cond.left, ctx), ...collectEarlyReturnNarrowings(cond.right, ctx)];
+    return [...collectEarlyReturnNarrowings(cond.left), ...collectEarlyReturnNarrowings(cond.right)];
   }
-  const narrowed = detectOptionalCheck(cond, ctx);
-  if (narrowed && !narrowed.inThen && !narrowed.fieldExpr) {
-    return [{ varName: narrowed.varName, innerTy: narrowed.innerTy }];
-  }
-  return [];
+  const n = negatedVarPresence(cond);
+  return n ? [n] : [];
 }
 
 /** TExpr → AccessPath. Counterpart to `asRawAccessPath` for resolved trees.
@@ -279,22 +241,25 @@ function withInAtoms(ctx: Ctx, atoms: NarrowedIndex[]): Ctx {
   return { ...ctx, narrowedIndices: [...existing, ...added] };
 }
 
-/** Walk an `&&` chain of `e !== undefined` checks, returning a Ctx with all
- *  narrowings applied. Earlier checks are in scope for later checks (so the
- *  right side of `&&` sees the left side's narrowings). */
-function collectAndChainNarrowings(cond: RawExpr, ctx: Ctx): Ctx {
+/** Walk an `&&` chain of `e !== undefined` checks on the *resolved*
+ *  condition, returning a Ctx with all narrowings applied. Earlier checks
+ *  are in scope for later checks (the right conjunct was already resolved
+ *  under the left's narrowings by the `&&` case of resolveExpr). Consults
+ *  the shared condition analyzer (§4): a positive presence fact on a bare
+ *  var extends the env; on a pure field path it extends `narrowedPaths`. */
+function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
   if (cond.kind === "binop" && cond.op === "&&") {
     const leftCtx = collectAndChainNarrowings(cond.left, ctx);
     return collectAndChainNarrowings(cond.right, leftCtx);
   }
-  const n = detectOptionalCheck(cond, ctx);
-  if (!n || !n.inThen) return ctx;
-  if (!n.fieldExpr) {
-    return withEnv(ctx, extend(ctx.env, n.varName, n.innerTy));
+  const f = presentFact(cond);
+  if (!f || f.negated) return ctx;
+  if (f.scrutinee.kind === "var") {
+    return withEnv(ctx, extend(ctx.env, f.scrutinee.name, f.innerTy));
   }
-  const path = asRawAccessPath(n.fieldExpr);
+  const path = asTExprAccessPath(f.scrutinee);
   if (path) {
-    return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: n.innerTy }] };
+    return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: f.innerTy }] };
   }
   return ctx;
 }
@@ -305,14 +270,10 @@ function isRefMutableInTS(ty: Ty): boolean {
 }
 
 function findDecl(ctx: Ctx, name: string): TypeDeclInfo | undefined {
-  const direct = ctx.typeDecls.find(d => d.name === name);
-  if (direct) return direct;
-  // Dotted names (e.g. `Agent.Info`, `Permission.Ruleset`): fall back to the
+  // Dotted names (e.g. `Agent.Info`, `Permission.Ruleset`) fall back to the
   // last segment, so `//@ declare-type Info { ... }` matches a reference to
   // `Agent.Info` without forcing the user to repeat the namespace.
-  const dotIdx = name.lastIndexOf(".");
-  if (dotIdx >= 0) return ctx.typeDecls.find(d => d.name === name.slice(dotIdx + 1));
-  return undefined;
+  return declOfDotted(ctx.typeDecls, name);
 }
 
 /** Expand alias-kind typeDecls when the alias target is structural (array,
@@ -322,11 +283,7 @@ function findDecl(ctx: Ctx, name: string): TypeDeclInfo | undefined {
 function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new Set()): Ty {
   if (ty.kind === "user") {
     if (seen.has(ty.name)) return ty;
-    let decl = typeDecls.find(d => d.name === ty.name);
-    if (!decl && ty.name.includes(".")) {
-      const tail = ty.name.slice(ty.name.lastIndexOf(".") + 1);
-      decl = typeDecls.find(d => d.name === tail);
-    }
+    const decl = declOfDotted(typeDecls, ty.name);
     if (decl?.kind === "alias" && decl.aliasOfTy) {
       const target = decl.aliasOfTy;
       if (target.kind === "array" || target.kind === "map" || target.kind === "set" || target.kind === "optional" || target.kind === "user") {
@@ -357,11 +314,7 @@ function getDiscriminant(ctx: Ctx, typeName: string): string | undefined {
 function refEqHazard(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
   if (ty.kind === "array" || ty.kind === "map" || ty.kind === "set" || ty.kind === "tuple") return true;
   if (ty.kind === "user") {
-    let decl = typeDecls.find(d => d.name === ty.name);
-    if (!decl && ty.name.includes(".")) {
-      const tail = ty.name.slice(ty.name.lastIndexOf(".") + 1);
-      decl = typeDecls.find(d => d.name === tail);
-    }
+    const decl = declOfDotted(typeDecls, ty.name);
     if (!decl) return true;                          // generic type parameter / unknown → assume reference
     if (decl.kind === "string-union") return false;  // runs as a JS string → `===` is structural
     if (decl.kind === "alias") return decl.aliasOfTy ? refEqHazard(decl.aliasOfTy, typeDecls) : false;
@@ -392,33 +345,31 @@ function isUnmodeledTy(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
   if (ty.kind === "tuple") return ty.elems.some(e => isUnmodeledTy(e, typeDecls));
   if (ty.kind === "set") return isUnmodeledTy(ty.elem, typeDecls);
   if (ty.kind === "map") return isUnmodeledTy(ty.key, typeDecls) || isUnmodeledTy(ty.value, typeDecls);
-  if (ty.kind === "user") {
-    const base = ty.name.includes("<") ? ty.name.slice(0, ty.name.indexOf("<")) : ty.name;
-    return !typeDecls.some(d => d.name === base);
-  }
+  if (ty.kind === "user") return declOfTy(typeDecls, ty) === undefined;
   return false;
 }
 
 /** A `user` type that resolves to a string-union declare-type — runs as a plain
  *  string at runtime, so it's a refinement of `string`, not an opaque blob. */
 function isStringUnionTy(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
-  if (ty.kind !== "user") return false;
-  const base = ty.name.includes("<") ? ty.name.slice(0, ty.name.indexOf("<")) : ty.name;
-  return typeDecls.some(d => d.name === base && d.kind === "string-union");
+  return declOfTy(typeDecls, ty)?.kind === "string-union";
 }
 
 /** Infer quantifier variable type from usage in body.
  *  If the variable is used as a map/set key (e.g. map.has(k), map.get(k)),
  *  return the collection's key type. Otherwise return null (default to int). */
 function inferQuantVarType(varName: string, body: RawExpr, ctx: Ctx): Ty | null {
-  // Look for calls like map.has(k), map.get(k), or array.includes(k) where k is our variable
+  // Look for membership/lookup builtins (map.has(k), map.get(k),
+  // array.includes(k) — registry `argIsKey`) where k is our variable
   if (body.kind === "call" && body.fn.kind === "field" &&
-      (body.fn.field === "has" || body.fn.field === "get" || body.fn.field === "includes") &&
       body.args.length === 1 && body.args[0].kind === "var" && body.args[0].name === varName) {
     const objTy = lookup(ctx.env, body.fn.obj.kind === "var" ? body.fn.obj.name : "");
-    if (objTy?.kind === "map") return objTy.key;
-    if (objTy?.kind === "set") return objTy.elem;
-    if (objTy?.kind === "array") return objTy.elem;
+    const id = objTy ? recognizeBuiltin(objTy, body.fn.field) : null;
+    if (id && builtinSpec(id).argIsKey && objTy) {
+      if (objTy.kind === "map") return objTy.key;
+      if (objTy.kind === "set") return objTy.elem;
+      if (objTy.kind === "array") return objTy.elem;
+    }
   }
   // Recurse into subexpressions
   if (body.kind === "binop") {
@@ -485,8 +436,11 @@ function tyToTsStr(ty: Ty): string | undefined {
   return undefined;
 }
 function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExpr[] {
+  const hofShape = fn.kind === "field"
+    ? (id => id ? builtinSpec(id).hof?.shape : undefined)(recognizeBuiltin(fn.obj.ty, fn.field))
+    : undefined;
   // sort's comparator takes two params, both the element type.
-  if (fn.kind === "field" && fn.obj.ty.kind === "array" && fn.field === "sort" &&
+  if (hofShape === "comparator" && fn.kind === "field" && fn.obj.ty.kind === "array" &&
       rawArgs.length >= 1 && rawArgs[0].kind === "lambda" && rawArgs[0].params.length >= 1) {
     const tsType = tyToTsStr(fn.obj.ty.elem);
     if (tsType) {
@@ -496,7 +450,7 @@ function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExp
     }
   }
   // reduce's callback is (acc, elem): acc from the init arg's type, elem from the array.
-  if (fn.kind === "field" && fn.obj.ty.kind === "array" && fn.field === "reduce" && ctx &&
+  if (hofShape === "reduce" && fn.kind === "field" && fn.obj.ty.kind === "array" && ctx &&
       rawArgs.length >= 2 && rawArgs[0].kind === "lambda" && rawArgs[0].params.length >= 2) {
     const accTs = tyToTsStr(resolveExpr(rawArgs[1], ctx).ty);
     const elemTs = tyToTsStr(fn.obj.ty.elem);
@@ -507,8 +461,7 @@ function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExp
       return [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
     }
   }
-  if (fn.kind === "field" && fn.obj.ty.kind === "array" &&
-      ["map", "filter", "every", "some", "find", "findLast", "findIndex", "findLastIndex"].includes(fn.field) &&
+  if (hofShape === "unary" && fn.kind === "field" && fn.obj.ty.kind === "array" &&
       rawArgs.length >= 1 && rawArgs[0].kind === "lambda" &&
       rawArgs[0].params.length >= 1 && !rawArgs[0].params[0].tsType) {
     const elemTy = fn.obj.ty.elem;
@@ -528,7 +481,7 @@ function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExp
       if (a.kind !== "lambda" || i >= paramTys.length) return a;
       let pTy = paramTys[i];
       if (pTy.kind === "user") {
-        const decl = ctx.typeDecls.find(d => d.name === (pTy as any).name);
+        const decl = declOf(ctx.typeDecls, (pTy as any).name);
         if (decl?.kind === "alias" && decl.aliasOfTy) pTy = decl.aliasOfTy;
         else if (decl?.kind === "alias" && decl.aliasOf) pTy = parseTsType(decl.aliasOf);
       }
@@ -593,42 +546,8 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
     if (["floor", "ceil", "round", "trunc"].includes(fn.field)) return { kind: "int" };
   }
   const objTy = fn.obj.ty;
-  if (objTy.kind === "map") {
-    if (fn.field === "get") return ctx.inSpec ? objTy.value : { kind: "optional", inner: objTy.value };
-    if (fn.field === "has") return { kind: "bool" };
-    if (fn.field === "set" || fn.field === "delete") return objTy;
-  } else if (objTy.kind === "set") {
-    if (fn.field === "has") return { kind: "bool" };
-    if (fn.field === "add" || fn.field === "delete") return objTy;
-  } else if (objTy.kind === "array") {
-    if (fn.field === "includes") return { kind: "bool" };
-    if (fn.field === "indexOf") return { kind: "int" };
-    if (fn.field === "shift") return objTy.elem;
-    if (fn.field === "pop") return { kind: "optional", inner: objTy.elem };
-    if (fn.field === "push" || fn.field === "unshift" || fn.field === "concat") return objTy;
-    if (fn.field === "sort") return objTy;
-    if (fn.field === "filter") return objTy;
-    if (fn.field === "every" || fn.field === "some") return { kind: "bool" };
-    if (fn.field === "reduce" && args.length === 2) return args[1].ty;
-    if (fn.field === "find" || fn.field === "findLast") return { kind: "optional", inner: objTy.elem };
-    if (fn.field === "findIndex" || fn.field === "findLastIndex") return { kind: "int" };
-    if (fn.field === "flat" && objTy.elem.kind === "array") return { kind: "array", elem: objTy.elem.elem };
-    if (fn.field === "slice") return objTy;
-    if (fn.field === "join" && objTy.elem.kind === "string") return { kind: "string" };
-    if (fn.field === "map" && args.length >= 1 && args[0].kind === "lambda") {
-      const lam = args[0];
-      // Prefer the lambda's declared return type (handles multi-statement bodies
-      // where body[0] is an `if`, not a `return`); fall back to the body's return.
-      const retTy: Ty = lam.ty.kind === "fn" ? lam.ty.result
-        : lam.body.length > 0 && lam.body[0].kind === "return" ? lam.body[0].value.ty : { kind: "unknown" };
-      return { kind: "array", elem: retTy };
-    }
-  } else if (objTy.kind === "string") {
-    if (fn.field === "trim" || fn.field === "trimEnd" || fn.field === "trimStart" || fn.field === "toLowerCase" || fn.field === "toUpperCase") return { kind: "string" };
-    if (fn.field === "slice" || fn.field === "substring") return { kind: "string" };
-    if (fn.field === "split") return { kind: "array", elem: { kind: "string" } };
-    if (fn.field === "includes" || fn.field === "startsWith" || fn.field === "endsWith") return { kind: "bool" };
-  }
+  const id = recognizeBuiltin(objTy, fn.field);
+  if (id) return builtinSpec(id).ret(objTy, args, { inSpec: ctx.inSpec });
   return { kind: "unknown" };
 }
 
@@ -641,7 +560,7 @@ function lookupFieldTy(objTy: Ty, field: string, ctx: Ctx): { ty: Ty; isDiscrimi
     return { ty: { kind: "nat" }, isDiscriminant: false };
   }
   if (objTy.kind === "user") {
-    const baseTyName = objTy.name.includes("<") ? objTy.name.slice(0, objTy.name.indexOf("<")) : objTy.name;
+    const baseTyName = tyBaseName(objTy.name);
     const isDiscriminant = getDiscriminant(ctx, baseTyName) === field;
     const decl = findDecl(ctx, baseTyName);
     if (decl?.kind === "record") {
@@ -676,7 +595,7 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
   // into its inner type), else the base's.
   const rTy = overInner.kind === "user" ? overInner
             : tbase.ty.kind === "user" ? tbase.ty : null;
-  const decl = rTy ? ctx.typeDecls.find(d => d.name === rTy.name && d.kind === "record") : undefined;
+  const decl = rTy ? declOfKind(ctx.typeDecls, rTy.name, "record") : undefined;
   if (!rTy || !decl?.fields) {
     throw new Error(`object spread merge { ...a, ...b } needs a known record type for both operands ` +
       `(base: ${tyToCanonical(tbase.ty)}, override: ${tyToCanonical(tover.ty)})`);
@@ -724,7 +643,7 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
 function tryRecordIndexByEnum(obj: TExpr, idx: TExpr, ctx: Ctx): TExpr | null {
   const objTy = obj.ty, keyTy = idx.ty;
   if (objTy.kind !== "user") return null;
-  const rec = ctx.typeDecls.find(d => d.name === objTy.name && d.kind === "record");
+  const rec = declOfKind(ctx.typeDecls, objTy.name, "record");
   if (!rec?.fields) return null;
   const fieldByName = new Map(rec.fields.map(f => [f.name, f]));
   const fieldTy = (v: string): Ty => fieldByName.get(v)!.type ?? { kind: "unknown" };
@@ -734,7 +653,7 @@ function tryRecordIndexByEnum(obj: TExpr, idx: TExpr, ctx: Ctx): TExpr | null {
   let values: string[] | null = null;
   let datatype: string | null = null;
   if (keyTy.kind === "user") {
-    const keyEnum = ctx.typeDecls.find(d => d.name === keyTy.name && d.kind === "string-union");
+    const keyEnum = declOfKind(ctx.typeDecls, keyTy.name, "string-union");
     if (keyEnum?.values?.length) { values = keyEnum.values; datatype = keyEnum.name; }
   } else if (keyTy.kind === "string" && keyTy.values?.length) {
     values = keyTy.values;
@@ -793,7 +712,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let rightCtx = ctx;
       let rawRight = e.right;
       if (e.op === "&&" || e.op === "==>") {
-        rightCtx = collectAndChainNarrowings(e.left, ctx);
+        rightCtx = collectAndChainNarrowings(left, ctx);
       }
       let right = resolveExpr(rawRight, rightCtx);
       if (e.op === "===" || e.op === "!==") {
@@ -911,7 +830,9 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
           && fn.kind === "field" && fn.obj.ty.kind === "array" && fn.obj.ty.elem.kind === "optional") {
         return { kind: "call", fn: { ...fn, field: "filterSome" }, args: [], ty: { kind: "array", elem: fn.obj.ty.elem.inner }, callKind: "method" };
       }
-      return { kind: "call", fn, args, ty, callKind: classifyCall(e.fn, ctx) };
+      const builtinId = fn.kind === "field" ? recognizeBuiltin(fn.obj.ty, fn.field) : null;
+      return { kind: "call", fn, args, ty, callKind: classifyCall(e.fn, ctx),
+        ...(builtinId ? { builtinId } : {}) };
     }
 
     case "index": {
@@ -1024,7 +945,9 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
             const args = rawArgs.map(a => resolveExpr(a, ctx));
             callTy = inferMethodReturnTy(fakeFn, args, ctx);
             callKind = "method";
-            chain.push({ kind: "call", args, ty: callTy, callKind });
+            const builtinId = recognizeBuiltin(priorInTy, lastField.name);
+            chain.push({ kind: "call", args, ty: callTy, callKind,
+              ...(builtinId ? { builtinId } : {}) });
             stepInTy = callTy;
             continue;
           }
@@ -1054,7 +977,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // has ctx.returnTy = Option<T>, but the record literal's natural type is T.
       const returnTyUnwrapped = ctx.returnTy.kind === "optional" ? ctx.returnTy.inner : ctx.returnTy;
       const recordTy = ty.kind === "user" ? ty : returnTyUnwrapped.kind === "user" ? returnTyUnwrapped : null;
-      const decl = recordTy ? ctx.typeDecls.find(d => d.name === recordTy.name && d.kind === "record") : undefined;
+      const decl = recordTy ? declOfKind(ctx.typeDecls, recordTy.name, "record") : undefined;
       // Clear returnTy for field values — it applies to THIS record, not nested ones
       const fieldCtx = recordTy ? { ...ctx, returnTy: { kind: "unknown" as const } as Ty } : ctx;
       const fields = e.fields.map(f => {
@@ -1173,21 +1096,21 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // with method calls or index ops (bind-first required).
       // For &&-chains, all positive checks narrow the then-branch; earlier
       // checks are in scope when resolving later ones.
-      let thenCtx = collectAndChainNarrowings(e.cond, ctx);
+      let thenCtx = collectAndChainNarrowings(cond, ctx);
       let elseCtx = ctx;
 
       // Truthiness — cond itself is optional (`opt ? a : b`), only for simple vars.
-      if (cond.ty.kind === "optional" && e.cond.kind === "var") {
-        thenCtx = withEnv(thenCtx, extend(thenCtx.env, e.cond.name, cond.ty.inner));
+      if (cond.ty.kind === "optional" && cond.kind === "var") {
+        thenCtx = withEnv(thenCtx, extend(thenCtx.env, cond.name, cond.ty.inner));
       }
 
       // Single === undefined check narrows the else-branch.
-      const single = detectOptionalCheck(e.cond, ctx);
-      if (single && !single.inThen && !single.fieldExpr) {
+      const single = negatedVarPresence(cond);
+      if (single) {
         elseCtx = withEnv(elseCtx, extend(elseCtx.env, single.varName, single.innerTy));
       }
-      if (!single && e.cond.kind === "binop" && e.cond.op === "||") {
-        for (const n of collectEarlyReturnNarrowings(e.cond, ctx)) {
+      if (!single && cond.kind === "binop" && cond.op === "||") {
+        for (const n of collectEarlyReturnNarrowings(cond)) {
           elseCtx = withEnv(elseCtx, extend(elseCtx.env, n.varName, n.innerTy));
         }
       }
@@ -1266,9 +1189,10 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     // Field chains are excluded — resolve can't substitute in statement lists;
     // transform's emitOptionalMatch handles field chains in statement contexts.
     if (s.kind === "if" && s.then.length > 0 && isTerminatorKind(s.then[s.then.length - 1].kind) && s.else.length === 0) {
-      const narrowings = collectEarlyReturnNarrowings(s.cond, withEnv(ctx, env));
-      for (const n of narrowings) {
-        env = extend(env, n.varName, n.innerTy);
+      if (typed.kind === "if") {
+        for (const n of collectEarlyReturnNarrowings(typed.cond)) {
+          env = extend(env, n.varName, n.innerTy);
+        }
       }
       // Map-index narrowing: `if (!(k in m)) return;` means `k in m` holds in rest.
       if (typed.kind === "if") {
@@ -1372,16 +1296,16 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // For &&-chains, all positive optional checks narrow the then-branch;
       // earlier checks are in scope when resolving later ones.
       // Single-check === undefined narrows the else-branch.
-      let thenCtx = collectAndChainNarrowings(s.cond, ctx);
+      const resolvedCond = resolveExpr(s.cond, ctx);
+      let thenCtx = collectAndChainNarrowings(resolvedCond, ctx);
       let elseCtx = ctx;
-      const single = detectOptionalCheck(s.cond, ctx);
-      if (single && !single.inThen && !single.fieldExpr) {
+      const single = negatedVarPresence(resolvedCond);
+      if (single) {
         elseCtx = withEnv(ctx, extend(ctx.env, single.varName, single.innerTy));
       }
       // Narrow map index access across `k in m` / `!(k in m)` in the cond:
       // positive atoms (from `k in m` or &&-chains containing it) → then-branch;
       // negated atoms (from `!(k in m)`) → else-branch.
-      const resolvedCond = resolveExpr(s.cond, ctx);
       thenCtx = withInAtoms(thenCtx, extractInAtoms(resolvedCond));
       elseCtx = withInAtoms(elseCtx, extractInAtomsNegated(resolvedCond));
       return [{ kind: "if", cond: resolvedCond, then: resolveBlock(s.then, thenCtx), else: resolveBlock(s.else, elseCtx) }, ctx.env];

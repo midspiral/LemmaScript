@@ -11,6 +11,9 @@ import { anyExprInStmts, pWild, pCtor, patternBinders, patternBinds, patternCtor
 import type { TypeDeclInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
+import { builtinSpec } from "./builtins.js";
+import { isFalsyCapableTy } from "./condition-facts.js";
+import { declOf, declOfKind, declOfTy, unionDeclOfTy, declWithVariant, tyBaseName } from "./typedecls.js";
 
 // ── Generic IR walkers ──────────────────────────────────────
 
@@ -197,9 +200,6 @@ let _typeDecls: TypeDeclInfo[] = [];
  *  redirected to the pure mirror. Set once per module transform. */
 let _pureDefNames: Set<string> = new Set();
 
-/** Array methods that take a function argument. */
-const HOF_METHODS = new Set(["map", "filter", "every", "some", "find", "findLast", "findIndex", "findLastIndex", "reduce"]);
-
 /** Prefix match-bound field names to avoid capturing user variables.
  *  When prefix is given (the scrutinee name), include it to avoid
  *  collisions in nested matches on different variables. `freshName` closes
@@ -221,17 +221,16 @@ function isIntegral(ty: Ty): boolean { return ty.kind === "int" || ty.kind === "
 function isArray(ty: Ty): boolean { return ty.kind === "array"; }
 function isUser(ty: Ty): boolean { return ty.kind === "user"; }
 function isRecordType(ty: Ty): boolean {
-  if (ty.kind !== "user") return false;
-  const base = ty.name.includes("<") ? ty.name.slice(0, ty.name.indexOf("<")) : ty.name;
-  return _typeDecls.find(d => d.name === base)?.kind === "record";
+  return declOfTy(_typeDecls, ty)?.kind === "record";
 }
 
 /** Truthiness test for a *lowered* value of source type `ty`, used by `||`
- *  falsiness lowering. Mirrors narrow.ts's `canBeFalsy`: only int/nat/string/bool
- *  values can be falsy in JS (`0`, `""`, `false`); every other value (array, user
- *  type, …) is always truthy. Returns null for the always-truthy types so callers
- *  can unwrap directly instead of emitting a redundant guard. */
+ *  falsiness lowering. Which types need one is `isFalsyCapableTy` (shared with
+ *  condition-facts' falsy gate); this adds the per-type test. Returns null for
+ *  the always-truthy types so callers can unwrap directly instead of emitting
+ *  a redundant guard. */
 function valueTruthyCond(value: Expr, ty: Ty): Expr | null {
+  if (!isFalsyCapableTy(ty)) return null;
   switch (ty.kind) {
     case "int": case "nat":
       return { kind: "binop", op: "≠", left: value, right: { kind: "num", value: 0 } };
@@ -539,7 +538,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // || on optional → match Some/None with default. JS `||` tests falsiness of
       // the *unwrapped* value, so when the inner type can be falsy the Some arm must
       // re-test (`Some(0) || 1 === 1`); array/user inners are always truthy and
-      // unwrap directly. Mirrors narrow.ts's canBeFalsy gate.
+      // unwrap directly. Same gate as condition-facts' `canBeFalsy`.
       if (e.op === "||" && e.left.ty.kind === "optional") {
         const optExpr = lowerExpr(e.left, binds);
         const defaultExpr = lowerExpr(e.right, binds);
@@ -687,8 +686,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // as bare truthiness checks. Emit as the Dafny discriminator predicate for the
       // 'true' variant: result.ok → result.true_?
       if (e.isDiscriminant && e.obj.ty.kind === "user") {
-        const baseName = e.obj.ty.name.includes("<") ? e.obj.ty.name.slice(0, e.obj.ty.name.indexOf("<")) : e.obj.ty.name;
-        const decl = _typeDecls.find(d => d.name === baseName && d.kind === "discriminated-union");
+        const decl = unionDeclOfTy(_typeDecls, e.obj.ty);
         if (decl?.variants?.some(v => v.name === "true")) {
           return { kind: "field", obj: transformExpr(e.obj), field: "true_?" };
         }
@@ -698,8 +696,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // directly; Lean has no field projection on a multi-ctor inductive, so tag
       // the node with the union's base name and let the Lean emitter `match`.
       if (e.obj.ty.kind === "user") {
-        const baseName = e.obj.ty.name.includes("<") ? e.obj.ty.name.slice(0, e.obj.ty.name.indexOf("<")) : e.obj.ty.name;
-        const decl = _typeDecls.find(d => d.name === baseName && d.kind === "discriminated-union");
+        const baseName = tyBaseName(e.obj.ty.name);
+        const decl = declOfKind(_typeDecls, baseName, "discriminated-union");
         if (decl?.variants?.some(v => v.fields.some(f => f.name === e.field))) {
           return { kind: "field", obj: transformExpr(e.obj), field: e.field, fromUnion: baseName, datatypeField: true };
         }
@@ -732,8 +730,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           e.fn.field === "isArray" && e.args.length === 1) {
         const arg = e.args[0];
         if (arg.ty.kind === "user") {
-          const baseName = arg.ty.name.includes("<") ? arg.ty.name.slice(0, arg.ty.name.indexOf("<")) : arg.ty.name;
-          const decl = _typeDecls.find(d => d.name === baseName);
+          const decl = declOfTy(_typeDecls, arg.ty);
           if (decl?.kind === "discriminated-union" && decl.discriminant === "__isArray__") {
             return {
               kind: "binop", op: "=",
@@ -782,7 +779,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.fn.kind === "field") {
         const recv = lowerExpr(e.fn.obj, binds);
         let method = e.fn.field;
-        const isHOF = e.fn.obj.ty.kind === "array" && HOF_METHODS.has(method);
+        const spec = e.builtinId !== undefined ? builtinSpec(e.builtinId) : null;
+        // Lambda-taking array builtins (registry `hof`, comparator excluded —
+        // mirrors the historical HOF_METHODS set).
+        const isHOF = spec?.hof !== undefined && spec.hof.shape !== "comparator";
         const args = e.args.map((a, i) => {
           const lowered = lowerExpr(a, binds);
           // Lean: a pure fn passed to a HOF by name resolves to the monadic
@@ -791,9 +791,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
               lowered.kind === "var" && _pureDefNames.has(lowered.name)) {
             return { kind: "var" as const, name: `Pure.${lowered.name}` };
           }
-          // Array index args must be nat in Lean: `with`'s index (0), includes/indexOf `from` (1).
-          const isArrIdxArg = e.fn.kind === "field" && e.fn.obj.ty.kind === "array" &&
-            ((e.fn.field === "with" && i === 0) || ((e.fn.field === "includes" || e.fn.field === "indexOf") && i === 1));
+          // Array index args must be nat in Lean: `with`'s index (0), includes/indexOf `from` (1)
+          // — registry `intArgPositions`.
+          const isArrIdxArg = spec?.intArgPositions !== undefined && spec.intArgPositions.includes(i);
           if (isArrIdxArg && !isNat(a.ty)) return { kind: "toNat" as const, expr: lowered };
           return lowered;
         });
@@ -841,8 +841,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.ty.kind === "user" && !e.spread) {
         const tyName = e.ty.name;
         // Match base type name (strip generic args: "Result<Model, Err>" → "Result")
-        const baseName = tyName.includes("<") ? tyName.slice(0, tyName.indexOf("<")) : tyName;
-        const decl = _typeDecls.find(d => d.name === baseName && (d.kind === "discriminated-union" || d.kind === "string-union"));
+        const baseName = tyBaseName(tyName);
+        const decl = declOfKind(_typeDecls, baseName, "discriminated-union", "string-union");
         if (decl && decl.discriminant) {
           const discField = e.fields.find(f => f.name === decl.discriminant);
           if (discField && (discField.value.kind === "str" || discField.value.kind === "bool")) {
@@ -872,9 +872,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.spread) {
         const spreadTy = e.spread.ty.kind === "optional" ? e.spread.ty.inner : e.spread.ty;
         const structName = spreadTy.kind === "user" ? spreadTy.name : undefined;
-        const structDecl = structName ? _typeDecls.find(d => d.name === structName && d.kind === "record") : undefined;
+        const structDecl = structName ? declOfKind(_typeDecls, structName, "record") : undefined;
         // Also check discriminated-union variants for field types
-        const unionDecl = structName ? _typeDecls.find(d => d.name === structName && d.kind === "discriminated-union") : undefined;
+        const unionDecl = structName ? declOfKind(_typeDecls, structName, "discriminated-union") : undefined;
         const loweredFields = e.fields.map(f => {
           // Propagate declared field type onto value if it has unknown type
           let fieldValue = f.value;
@@ -923,10 +923,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // Carry the resolved record type so the emitter can pick the right
       // constructor when two datatypes share a field-name set (Event vs
       // SparseEvent) — structural matching alone would take the first-declared.
-      const recName = e.ty.kind === "user"
-        ? (e.ty.name.includes("<") ? e.ty.name.slice(0, e.ty.name.indexOf("<")) : e.ty.name)
-        : undefined;
-      const ctor = recName && _typeDecls.find(d => d.name === recName && d.kind === "record") ? recName : undefined;
+      const recName = e.ty.kind === "user" ? tyBaseName(e.ty.name) : undefined;
+      const ctor = recName && declOfKind(_typeDecls, recName, "record") ? recName : undefined;
       return { kind: "record", spread: null, ctor, fields: e.fields.map(f => ({ name: f.name, value: lowerExpr(f.value, binds) })) };
     }
 
@@ -1036,7 +1034,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // Path scrutinees (e.g. `m.content`) get a synthesized hint derived
       // from the last field/var name so the binder reads naturally.
       const scrutinee = lowerExpr(e.scrutinee, binds);
-      const decl = _typeDecls.find(d => d.name === e.typeName);
+      const decl = declOf(_typeDecls, e.typeName);
       const isSynthArrayUnion = decl?.discriminant === "__isArray__";
       const varName = e.scrutinee.kind === "var" ? e.scrutinee.name : undefined;
       const pathHint = varName ?? scrutineeHint(e.scrutinee);
@@ -1093,7 +1091,7 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): Expr | null {
   const obj = e.left.left.obj;
   if (obj.kind !== "var" || obj.ty.kind !== "user") return null;
   const typeName = obj.ty.name;
-  const decl = typeDecls.find(d => d.name === typeName && d.kind === "discriminated-union");
+  const decl = declOfKind(typeDecls, typeName, "discriminated-union");
   if (!decl) return null;
 
   const variantName = e.left.right.value;
@@ -1284,10 +1282,7 @@ function matchToIfChains(stmts: Stmt[]): Stmt[] {
     const arms = s.arms.map(a => ({ ...a, body: matchToIfChains(a.body) }));
     const ctorArms = arms.filter(a => a.pattern.kind !== "wild");
     const firstCtor = ctorArms[0] ? patternCtor(ctorArms[0].pattern) : undefined;
-    const decl = firstCtor
-      ? _typeDecls.find(d => (d.kind === "discriminated-union" || d.kind === "string-union") &&
-          ((d.variants?.some(v => v.name === firstCtor)) || (d.values?.includes(firstCtor))))
-      : undefined;
+    const decl = firstCtor ? declWithVariant(_typeDecls, firstCtor) : undefined;
     if (!decl) return [{ ...s, arms }]; // not a user union (e.g. Option) — leave as match
 
     const scrutExpr: Expr = typeof s.scrutinee === "string" ? { kind: "var", name: s.scrutinee } : s.scrutinee;
@@ -1724,7 +1719,7 @@ function buildMatchArms<T>(
   varName: string | undefined, typeName: string | undefined, typeDecls: TypeDeclInfo[],
   transformBody: (body: TStmt[], varName: string | undefined, fields: { name: string; tsType: string }[]) => T | null
 ): { pattern: MatchPattern; body: T }[] | null {
-  const decl = typeName ? typeDecls.find(d => d.name === typeName) : undefined;
+  const decl = typeName ? declOf(typeDecls, typeName) : undefined;
   const arms: { pattern: MatchPattern; body: T }[] = [];
   for (const c of cases) {
     const variant = decl?.variants?.find(v => v.name === c.name);
@@ -1744,7 +1739,7 @@ function emitMatchStmt(
   fallthrough: TStmt[],
   typeDecls: TypeDeclInfo[],
 ): Stmt {
-  const decl = typeDecls.find(d => d.name === typeName);
+  const decl = declOf(typeDecls, typeName);
   // Synth array-unions (discriminant "__isArray__") have single-field variants
   // ArrayBranch(arr) / NonArrayBranch(val). The matched arm refers to the
   // scrutinee by its bare name/path (`content`, `m.content`), not `.arr`, so
@@ -1814,7 +1809,7 @@ function replaceVarInTStmts(stmts: TStmt[], oldName: string, newName: string, ne
 
 /** If the chain has matched all variants but one, return that remaining variant. */
 function remainingVariant(typeName: string, cases: { variant: string }[], typeDecls: TypeDeclInfo[]): { name: string; fields: { name: string; tsType: string; type?: Ty }[] } | null {
-  const decl = typeDecls.find(d => d.name === typeName);
+  const decl = declOf(typeDecls, typeName);
   if (!decl?.variants) return null;
   const matched = new Set(cases.map(c => c.variant));
   const remaining = decl.variants.filter(v => !matched.has(v.name));
@@ -1831,10 +1826,7 @@ function remainingVariant(typeName: string, cases: { variant: string }[], typeDe
  *  their usual way. Shared by emitSwitchStmt and transformPureSwitch. */
 function enumFieldSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): { scrutinee: Expr; enumTyName: string | undefined } | null {
   if (!s.discriminant) return null;
-  const objBase = s.expr.ty.kind === "user"
-    ? (s.expr.ty.name.includes("<") ? s.expr.ty.name.slice(0, s.expr.ty.name.indexOf("<")) : s.expr.ty.name)
-    : undefined;
-  const objDecl = objBase ? typeDecls.find(d => d.name === objBase) : undefined;
+  const objDecl = declOfTy(typeDecls, s.expr.ty);
   if (objDecl?.kind === "discriminated-union" && objDecl.discriminant === s.discriminant) return null;
   const fieldTy = objDecl?.kind === "record" ? objDecl.fields?.find(f => f.name === s.discriminant)?.type : undefined;
   return {
@@ -2022,7 +2014,7 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
     return { kind: "match", scrutinee: ef.scrutinee, arms };
   }
   const typeName = s.expr.ty.kind === "user" ? s.expr.ty.name : "";
-  if (!typeDecls.find(d => d.name === typeName)) return null;
+  if (!declOf(typeDecls, typeName)) return null;
   const varName = s.expr.kind === "var" ? s.expr.name : undefined;
   const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
   const arms = buildMatchArms(cases, varName, typeName, typeDecls,
@@ -2044,7 +2036,7 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
 
 function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | null {
   const cases = chain.cases.map(c => ({ name: c.variant, body: c.body }));
-  const decl = typeDecls.find(d => d.name === chain.typeName);
+  const decl = declOf(typeDecls, chain.typeName);
   // Synth array-unions have single-field variants and user code refers to the
   // scrutinee by its bare name, not field-accessed. See emitMatchStmt for
   // the statement-level counterpart of this substitution.
