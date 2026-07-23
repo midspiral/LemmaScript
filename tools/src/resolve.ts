@@ -410,6 +410,7 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   // don't get lifted to statement-level binds (which would force lambdas to
   // become multi-statement, illegal in Dafny).
   if (fn.kind === "var" && ctx.externs.has(fn.name)) return "pure";
+  if (fn.kind === "var" && lookup(ctx.env, fn.name)?.kind === "fn") return "pure";
   if (fn.kind === "var" && ctx.inSpec) {
     // Not a known pure function — could be external (Lean-defined spec helper).
     // Pass through as "pure" and let Lean catch any errors.
