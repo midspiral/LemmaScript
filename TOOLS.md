@@ -92,6 +92,7 @@ interface Env { name: string; ty: Ty; parent: Env | null }
 ## Known Limitations
 
 - **Data-carrying variant equality**: `//@ requires m.tag === "b"` where `b` carries data throws an error. Use `switch` to destructure instead.
+- **Impure builtin in a narrowing ternary guard**: `opt !== undefined && x?.someHof(...) ? a : b` leaves `opt` un-unwrapped, and the backend rejects the output. Narrow's ternary rule declines on calls transform would hoist out of the arm (where the arm's binder is out of scope), and nothing else unwraps. Affects HOFs and mutators; registry-`pure` builtins are fine (`examples/pureGuard.ts`).
 - **For-of desugaring leaks index variable**: `_x_idx` is visible in `//@ invariant` and `//@ done_with` annotations.
 - **Spec annotations are strings**: `//@ ` expressions are parsed by the specparser, not extracted from ts-morph. They don't benefit from the structured raw IR.
 

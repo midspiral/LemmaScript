@@ -500,14 +500,20 @@ regression gauntlet that grows with itself.
    nodes remain (an `anyExpr`-style predicate, provable by the structural
    induction the prover does for us). Today enforced by "transform would
    crash."
-3. **Backend name legality and injectivity** (§6.3).
-4. **Arm purity** — after transform (Dafny mode), no impure call remains in
+3. **Narrowing completeness** — if `resolve` narrowed a path for a branch,
+   `narrow` introduced the binder that unwraps it. The one property here
+   with a known violation: a rule may decline to fire and leave the branch
+   referencing the optional, which transform lowers into ill-typed backend
+   code (TOOLS.md, known limitations). Nothing catches it but the backend's
+   type checker, and only if that shape is exercised.
+4. **Backend name legality and injectivity** (§6.3).
+5. **Arm purity** — after transform (Dafny mode), no impure call remains in
    a match-expression arm; a guard inside one rule becomes a postcondition
    of the pass.
-5. **Match exhaustiveness** — every emitted `tagMatch` covers all variants
+6. **Match exhaustiveness** — every emitted `tagMatch` covers all variants
    or has a fallthrough, checked against its `TypeDeclInfo`.
-6. **Parser sanity** — `specparser` consumes the whole input or errors.
-7. **Typing boundary** — successful `resolve` leaves no `unknown` where
+7. **Parser sanity** — `specparser` consumes the whole input or errors.
+8. **Typing boundary** — successful `resolve` leaves no `unknown` where
    later passes require a concrete type.
 
 Notably absent: "the generated code means the same as the TS" — that is
