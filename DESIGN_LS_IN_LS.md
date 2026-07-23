@@ -300,18 +300,27 @@ side (it depends on ts-morph); `resolve` receives only portable `Ty`.
 
 ### 5.2 `TypeDecls`
 
+*Status: implemented (2026-07-21) — see §9 step 3.*
+
 One lookup abstraction over `typeDecls`, implemented as a datatype plus
 plain helper functions (portable to the subset — no function-valued record
-fields required):
+fields required). As built in `typedecls.ts`:
 
 ```ts
-function declOf(decls: TypeDecls, name: string): TypeDeclInfo | null;
-function unionDecl(decls: TypeDecls, ty: Ty): UnionDecl | null;
-function discriminantOf(decls: TypeDecls, ty: Ty): string | null;
-function variantWithField(decls: TypeDecls, ty: Ty, f: string): VariantInfo | null;
+function tyBaseName(name: string): string;                    // Foo<Bar> → Foo
+function declOf(decls: TypeDecls, name: string): TypeDeclInfo | undefined;
+function declOfKind(decls: TypeDecls, name: string, ...kinds): TypeDeclInfo | undefined;
+function declOfDotted(decls: TypeDecls, name: string): TypeDeclInfo | undefined;
+function declOfTy(decls: TypeDecls, ty: Ty): TypeDeclInfo | undefined;
+function unionDeclOfTy(decls: TypeDecls, ty: Ty): TypeDeclInfo | undefined;
+function discriminantOf(decls: TypeDecls, ty: Ty): string | undefined;
+function declWithVariant(decls: TypeDecls, ctorOrValue: string): TypeDeclInfo | undefined;
 ```
 
-Replaces the `_typeDecls.find(...)` scans re-spelled at every use site.
+Replaces the `_typeDecls.find(...)` scans re-spelled at every use site. The
+API makes the three name semantics explicit — exact, dotted, generic-base
+sliced — because call sites deliberately differ, and silently "upgrading"
+an exact site to a dotted or sliced one changes which declaration it finds.
 
 ### 5.3 Structured results and errors
 
