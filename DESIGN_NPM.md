@@ -40,9 +40,10 @@ lemmascript/
   reference/          # machine-owned: written only by the release sync (§3)
     SPEC.md           # verbatim copy of the release's SPEC.md
     src/              # snapshot of tools/src from the release
+lemmascript-claimcheck/
 lemmascript-design-doc/
 lemmascript-proof-review/
-lemmascript-verified-codebase/
+lemmascript-verified-codebase-rules/
 ```
 
 - **`reference/` is machine-owned.** Humans never edit it; the release workflow overwrites it wholesale. Humans own everything else. This split means sync commits and human PRs cannot conflict by construction.
@@ -178,4 +179,4 @@ The tampering concern ("readable source invites edits; a patched verifier produc
 ## Open questions
 
 - **Curated examples in `reference/`?** Two or three Dafny triples (`binarySearch`, one lemma-heavy case like `toposort`, `todo-domain`) ride the same sync train at ~150K, giving agents worked proof patterns. Decide after the base sync works.
-- **Companion docs in `reference/`?** `SPEC_DAFNY.md` and `SUBSET.md` are small and load-bearing for agents — lean toward syncing them. Human-facing docs (`GETTING_STARTED.md`, `TOOLS.md`) stay in this repo only; for agents, SKILL.md is the getting-started.
+- **Companion docs in `reference/`?** `SPEC_DAFNY.md` and `SUBSET.md` are small and agents rely on them — lean toward syncing them. Human-facing docs (`GETTING_STARTED.md`, `TOOLS.md`) stay in this repo only; for agents, the skills repo's `lemmascript/SKILL.md` is the getting-started.

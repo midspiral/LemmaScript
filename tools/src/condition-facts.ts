@@ -38,14 +38,16 @@ export function freshOcBinder(ctx: CondCtx): string {
 // ── Presence facts ──────────────────────────────────────────
 
 /** What an optional check establishes: `scrutinee` is present (or absent,
- *  when `negated`), binding `binderHint : innerTy`. `truthiness` marks the
- *  `if (o)` / `!o` / `o ? :` forms, where presence alone isn't enough — a
- *  falsy inner value (`Some(0)`, `Some("")`) must still fail the check. */
+ *  when `negated`), binding `binder : innerTy`. `binder` is the name the
+ *  materializers emit verbatim — `binderHintFor`'s base string, already run
+ *  through `freshName`. `truthiness` marks the `if (o)` / `!o` / `o ? :`
+ *  forms, where presence alone isn't enough — a falsy inner value (`Some(0)`,
+ *  `Some("")`) must still fail the check. */
 export interface PresentFact {
   scrutinee: TExpr;
   innerTy: Ty;
   negated: boolean;
-  binderHint: string;
+  binder: string;
   truthiness: boolean;
 }
 
@@ -74,7 +76,7 @@ export function presentFact(cond: TExpr): PresentFact | null {
     const innerTy = cond.expr.ty.inner;
     const hint = binderHintFor(e);
     if (hint === null) return null;
-    return { scrutinee: e, innerTy, negated: true, binderHint: freshName(hint), truthiness: true };
+    return { scrutinee: e, innerTy, negated: true, binder: freshName(hint), truthiness: true };
   }
   if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) {
     // Bare optional truthiness: `if (e)` where e: T | undefined — true iff e is
@@ -82,7 +84,7 @@ export function presentFact(cond: TExpr): PresentFact | null {
     if (cond.ty.kind === "optional") {
       const hint = binderHintFor(cond);
       if (hint === null) return null;
-      return { scrutinee: cond, innerTy: cond.ty.inner, negated: false, binderHint: freshName(hint), truthiness: true };
+      return { scrutinee: cond, innerTy: cond.ty.inner, negated: false, binder: freshName(hint), truthiness: true };
     }
     return null;
   }
@@ -94,44 +96,61 @@ export function presentFact(cond: TExpr): PresentFact | null {
   if (!e || e.ty.kind !== "optional") return null;
   const hint = binderHintFor(e);
   if (hint === null) return null;
-  return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binderHint: freshName(hint), truthiness: false };
+  return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binder: freshName(hint), truthiness: false };
 }
+
+/** Which types have falsy values in JS (`0`, `""`, `false`); everything else
+ *  (array, user type, …) is always truthy. The single home of that set —
+ *  transform's `valueTruthyCond` gates on it too. */
+export const isFalsyCapableTy = (ty: Ty): boolean =>
+  ["int", "nat", "string", "bool"].includes(ty.kind);
 
 // `Some(0)` / `Some("")` / `Some(false)` are falsy, so a truthiness check
 // (`if (o)`, `!o`, `o ? :`) over a nullable primitive must still test the bound
 // value. Nullable objects/arrays are always truthy, and `!== undefined` is a pure
 // presence check — neither needs the gate.
 export const canBeFalsy = (f: PresentFact): boolean =>
-  f.truthiness && ["int", "nat", "string", "bool"].includes(f.innerTy.kind);
+  f.truthiness && isFalsyCapableTy(f.innerTy);
 export const bound = (f: PresentFact): TExpr =>
-  ({ kind: "var", name: f.binderHint, ty: f.innerTy });
+  ({ kind: "var", name: f.binder, ty: f.innerTy });
 
 // ── `&&`-chain analysis: one leading fact + residual ────────
 
-/** Find the leftmost `parse`-matching conjunct anywhere in an `&&` chain,
- *  returning it plus the remaining conjunction. Conjunct order doesn't carry
- *  semantic weight, so either side is fine.
- *  `(x !== undefined && b) && c` → { check, restCond: b && c }. */
-export function extractLeftmostCheck<C>(cond: TExpr, parse: (e: TExpr) => C | null): { check: C; restCond: TExpr } | null {
+/** Pull one `parse`-matching conjunct out of an `&&` tree, returning it plus
+ *  the tree with that conjunct removed:
+ *  `(x !== undefined && b) && c` → { check, restCond: b && c }.
+ *
+ *  Search order is shallowest-first, left-biased — both immediate operands
+ *  before either nested chain — so the conjunct found is not necessarily the
+ *  source-leftmost one. That is sound because every `parse` passed here
+ *  (`leadingPresent`, `leadingIsArray`) matches only pure, total checks on an
+ *  already-typed path, so hoisting one above the others is observationally
+ *  neutral. The one thing it does change: the residual now sits inside the
+ *  match arm, so a conjunct that would have run before a failing check no
+ *  longer runs at all.
+ *  Harmless while conditions stay pure — revisit if that ever stops holding. */
+export function extractConjunct<C>(cond: TExpr, parse: (e: TExpr) => C | null): { check: C; restCond: TExpr } | null {
   if (cond.kind !== "binop" || cond.op !== "&&") return null;
   const left = parse(cond.left);
   if (left) return { check: left, restCond: cond.right };
   const right = parse(cond.right);
   if (right) return { check: right, restCond: cond.left };
   if (cond.left.kind === "binop" && cond.left.op === "&&") {
-    const inner = extractLeftmostCheck(cond.left, parse);
+    const inner = extractConjunct(cond.left, parse);
     if (inner) return { check: inner.check, restCond: { ...cond, left: inner.restCond } as TExpr };
   }
   if (cond.right.kind === "binop" && cond.right.op === "&&") {
-    const inner = extractLeftmostCheck(cond.right, parse);
+    const inner = extractConjunct(cond.right, parse);
     if (inner) return { check: inner.check, restCond: { ...cond, right: inner.restCond } as TExpr };
   }
   return null;
 }
 
-/** Leading positive presence fact of an `&&` chain, plus the residual. */
+/** The positive presence fact an `&&` chain contributes, plus the residual.
+ *  "Leading" describes the rewrite, not the source: this fact becomes the
+ *  outermost match, wherever in the chain it was written. */
 export function leadingPresent(cond: TExpr): { check: PresentFact; restCond: TExpr } | null {
-  return extractLeftmostCheck(cond, e => {
+  return extractConjunct(cond, e => {
     const f = presentFact(e);
     return f && !f.negated ? f : null;
   });
@@ -169,9 +188,9 @@ export function noneDetector(leaf: TExpr, ctx: CondCtx): NoneDetector | null {
   const f = presentFact(leaf);
   if (f && f.negated) {
     const residual: TExpr | null = canBeFalsy(f)
-      ? { kind: "unop", op: "!", expr: { kind: "var", name: f.binderHint, ty: f.innerTy }, ty: { kind: "bool" } }
+      ? { kind: "unop", op: "!", expr: { kind: "var", name: f.binder, ty: f.innerTy }, ty: { kind: "bool" } }
       : null;
-    return { scrutinee: f.scrutinee, innerTy: f.innerTy, binder: f.binderHint, residual };
+    return { scrutinee: f.scrutinee, innerTy: f.innerTy, binder: f.binder, residual };
   }
   return null;
 }
@@ -302,7 +321,7 @@ export function typeofStringFact(e: TExpr, ctx: CondCtx): (IsArrayFact & { varia
  *  negated `!Array.isArray(...)` would narrow to the wrong variant for then-body
  *  consumers, so those are left to the untouched-conditional path). */
 export function leadingIsArray(cond: TExpr, ctx: CondCtx) {
-  return extractLeftmostCheck(cond, e => isArrayFact(e, ctx));
+  return extractConjunct(cond, e => isArrayFact(e, ctx));
 }
 
 /** Detect `x.kind === "variant"`, `'key' in x`, or `Array.isArray(x)` (synth
@@ -370,7 +389,7 @@ export function presentMatchStmts(f: PresentFact, some: TStmt[], none: TStmt[]):
   return {
     kind: "someMatch",
     scrutinee: f.scrutinee, binderTy: f.innerTy,
-    binder: f.binderHint,
+    binder: f.binder,
     someBody: canBeFalsy(f) ? [{ kind: "if", cond: bound(f), then: some, else: none }] : some,
     noneBody: none,
   };
@@ -381,7 +400,7 @@ export function presentMatchExpr(f: PresentFact, some: TExpr, none: TExpr, ty: T
   return {
     kind: "someMatch",
     scrutinee: f.scrutinee, binderTy: f.innerTy,
-    binder: f.binderHint,
+    binder: f.binder,
     someBody: canBeFalsy(f) ? { kind: "conditional", cond: bound(f), then: some, else: none, ty } : some,
     noneBody: none,
     ty,

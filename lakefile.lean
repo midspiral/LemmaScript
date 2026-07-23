@@ -107,7 +107,7 @@ lean_lib LemmaScript where
 lean_lib Examples where
   srcDir := "examples"
   roots := #[
-    `«binarySearch.spec», `«binarySearch.def», `«binarySearch.proof»,
+    `«binarySearch.types», `«binarySearch.spec», `«binarySearch.def», `«binarySearch.proof»,
     `«arraySum.spec», `«arraySum.def», `«arraySum.proof»,
     `«linearSearch.def», `«linearSearch.proof»,
     `«transition.types», `«transition.spec», `«transition.def», `«transition.proof»,

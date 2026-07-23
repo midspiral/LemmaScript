@@ -27,8 +27,8 @@
  * Walker shape: bottom-up over TExpr/TStmt. At each node, recurse children
  * via the *Recurse* helpers, then try the rules in order. List-level rules
  * (early-return, let-cond) run in `walkStmts` so they can consume the rest
- * of the block. Rule order is load-bearing — see the comments at the two
- * dispatch chains.
+ * of the block. Rule order matters — see the comments at the two dispatch
+ * chains.
  *
  * State is explicit (§6.1): a `CondCtx` (type declarations + optChain
  * binder counter) threads through the walk; no module-level state.
@@ -302,7 +302,7 @@ function ruleImplOptional(e: TExpr, ctx: CondCtx): TExpr | null {
   return {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
-    binder: check.binderHint,
+    binder: check.binder,
     someBody: walkExpr(innerBody, ctx),
     noneBody: { kind: "bool", value: true, ty: { kind: "bool" } },
     ty: { kind: "bool" },

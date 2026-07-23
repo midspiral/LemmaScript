@@ -99,25 +99,24 @@ per identity. The registry holds recognition and classification only — no
 lowerings:
 
 ```ts
-type BuiltinId = "array.includes" | "array.map" | "string.trim"
-  | "map.has" | /* every supported builtin */;
-
 interface BuiltinSpec {
-  recv: RecvKind;                     // recognition key: receiver type kind
-  method: string;                     // recognition key: surface method name
   ret(objTy: Ty, args: TExpr[]): Ty;  // return-type rule
-  pure: boolean;                      // safe in expression-only positions
+  pure: boolean;                      // under-approximate
   hof?: { lambdaParamTys(objTy: Ty, args: TExpr[]): Ty[] };
   intArgPositions?: number[];         // nat/int coercion sites
 }
 
-const BUILTINS: Record<BuiltinId, BuiltinSpec> = { /* one entry each */ };
+const BUILTINS = { /* one entry each, keyed `<RecvKind>.<method>` */ }
+  satisfies Record<`${RecvKind}.${string}`, BuiltinSpec>;
+
+type BuiltinId = keyof typeof BUILTINS;
 ```
 
-The recognition index (`(recv, method) → BuiltinId`) is *derived* from
-`BUILTINS`. `resolve` performs recognition once and annotates the typed
-method-call node with its `BuiltinId` (an optional field on the existing
-node — no new IR node kind). Downstream:
+The key *is* the identity, so recognition needs no separate index and the
+receiver/method pair has no second spelling to drift from. `resolve`
+performs recognition once and annotates the typed method-call node with its
+`BuiltinId` (an optional field on the existing node — no new IR node kind).
+Downstream:
 
 - `narrow` drops its builtin-name allowlists and checks `spec.pure`;
 - `transform` drops `HOF_METHODS` and the coercion special cases, reading
@@ -126,8 +125,9 @@ node — no new IR node kind). Downstream:
   deferred work. See §3.2: identity dispatch is wrong on their side of
   the transform boundary.
 
-`Record<BuiltinId, BuiltinSpec>` makes exhaustiveness a type error: a new
-id without a classification entry fails to compile.
+Deriving `BuiltinId` from the table makes exhaustiveness structural rather
+than checked: an id without a classification entry is unwritable, since the
+ids *are* the entries.
 
 ### 3.2 Consequences accepted
 
@@ -165,7 +165,10 @@ id without a classification entry fails to compile.
   expression-lowerability are conceptually distinct, but every current
   consumer asks the same question. The bit splits into named capabilities
   only when a concrete builtin needs the distinction — no speculative
-  effect system.
+  effect system. The lambda-taking HOFs are the known imprecision:
+  `array.map` is pure, but a monadic lambda body makes transform lift the
+  call, so those entries are marked impure. Under-approximating costs only a
+  missed narrowing.
 
 ### 3.3 Migration
 
@@ -257,6 +260,12 @@ narrowing form is taught once.
 - **Nothing is stored in the IR.** Facts are computed where needed and
   discarded; no condition wrapper node, no plan threading between passes.
   Analysis is cheap and determinism makes recomputation safe.
+- **Key-membership facts need a variable key.** `exprEqual` — the structural
+  equality that recognizes `m[k]` on both sides of `k in m ? m[k] : default`
+  — compares vars, field chains, and indices, not literals, so a literal key
+  (`"a" in m ? m["a"] : d`) doesn't narrow while a variable one does. Adding
+  the literal cases is three lines; it is left undone because it is a
+  behavior change owing an example (§9 step 6), not a migration artifact.
 - **Named escalation path.** If a real program requires narrowing under a
   mixed disjunction, or ordered facts prove unsound for some composition,
   `analyze`'s *output* upgrades to a small and/or tree while `Fact`, the
@@ -294,18 +303,27 @@ side (it depends on ts-morph); `resolve` receives only portable `Ty`.
 
 ### 5.2 `TypeDecls`
 
+*Status: implemented (2026-07-21) — see §9 step 3.*
+
 One lookup abstraction over `typeDecls`, implemented as a datatype plus
 plain helper functions (portable to the subset — no function-valued record
-fields required):
+fields required). As built in `typedecls.ts`:
 
 ```ts
-function declOf(decls: TypeDecls, name: string): TypeDeclInfo | null;
-function unionDecl(decls: TypeDecls, ty: Ty): UnionDecl | null;
-function discriminantOf(decls: TypeDecls, ty: Ty): string | null;
-function variantWithField(decls: TypeDecls, ty: Ty, f: string): VariantInfo | null;
+function tyBaseName(name: string): string;                    // Foo<Bar> → Foo
+function declOf(decls: TypeDecls, name: string): TypeDeclInfo | undefined;
+function declOfKind(decls: TypeDecls, name: string, ...kinds): TypeDeclInfo | undefined;
+function declOfDotted(decls: TypeDecls, name: string): TypeDeclInfo | undefined;
+function declOfTy(decls: TypeDecls, ty: Ty): TypeDeclInfo | undefined;
+function unionDeclOfTy(decls: TypeDecls, ty: Ty): TypeDeclInfo | undefined;
+function discriminantOf(decls: TypeDecls, ty: Ty): string | undefined;
+function declWithVariant(decls: TypeDecls, ctorOrValue: string): TypeDeclInfo | undefined;
 ```
 
-Replaces the `_typeDecls.find(...)` scans re-spelled at every use site.
+Replaces the `_typeDecls.find(...)` scans re-spelled at every use site. The
+API makes the three name semantics explicit — exact, dotted, generic-base
+sliced — because call sites deliberately differ, and silently "upgrading"
+an exact site to a dotted or sliced one changes which declaration it finds.
 
 ### 5.3 Structured results and errors
 
@@ -453,18 +471,24 @@ P- and T-level accurately.
 | Module | LOC | Target | Notes |
 |---|---|---|---|
 | `ir.ts` | 308 | Prime P0/P1 | Pure datatypes + query walkers; structural recursion sweet spot. |
-| `typedir.ts` | 194 | Prime P0/P1 | Structural `tyEqual` (an improvement anyway). |
+| `rawir.ts` | 227 | Prime P0/P1 | Pure datatypes; the extract/specparser output surface. |
+| `typedir.ts` | 203 | Prime P0/P1 | Structural `tyEqual` (an improvement anyway). |
+| `typedecls.ts` | 71 | Prime P0/P1 | Total lookups over a declaration list; no state. |
 | `names.ts` | 56 | Prime P1 | Tiny, real spec content (freshness, keywords). |
+| `builtins.ts` | 175 | P1 after reshaping | Data table + total functions, but `ret` is a function-valued record field — the subset wants a `switch` on `BuiltinId` instead (§5.2). |
+| `condition-facts.ts` | 408 | Prime P1 | Pure detection + materializers; state confined to `CondCtx`. Ports with `narrow`. |
 | `peephole.ts` | 444 | Early pass target | Self-contained IR→IR rewrites. |
-| `narrow.ts` | 1114 | P1 after §4 | Facts×positions roughly halves the surface to port. |
-| `transform.ts` | 2396 | P1 by stages | Needs ctx work; port stage-by-stage (§7 trigger). |
-| `resolve.ts` | 1778 | Mostly | Push `parseTsType` to extraction; core is pure Raw→Typed. |
+| `autohavoc.ts` | 372 | Early pass target | Typed IR → Typed IR; depends only on `typedir`. |
+| `narrow.ts` | 738 | P1 after §4 | Was 1114; §4 moved condition semantics to `condition-facts.ts`. |
+| `transform.ts` | 2388 | P1 by stages | Needs ctx work; port stage-by-stage (§7 trigger). |
+| `resolve.ts` | 1702 | Mostly | Push `parseTsType` to extraction; core is pure Raw→Typed. |
 | `specparser.ts` | 330 | P1 | Recursive-descent parser; classic verification fodder. |
+| `types.ts` | 212 | Split | `TypeDeclInfo` is portable data; `parseTsType` imports ts-morph and stays with extraction (§5.1). |
 | `dafny-emit.ts`/`lean-emit.ts` | 2292 | Partial | Untouched by §3; precedence logic is spec-worthy; regexes become string helpers. |
 | `extract.ts` | 2479 | Trusted frontend | Wraps ts-morph; stays unverified; `RawModule` is the trusted input. |
 | `lsc.ts`, commands | ~500 | Unverified driver | CLI, fs, process. |
 
-Net: roughly 6.5k of 12.7k lines are pure IR-to-IR passes, all portable in
+Net: roughly 6.8k of 12.9k lines are pure IR-to-IR passes, all portable in
 principle. Once a module is in-subset, it joins CI as an `lsc` self-run
 target so it cannot drift back out — the compiler becomes a standing
 regression gauntlet that grows with itself.
@@ -476,14 +500,20 @@ regression gauntlet that grows with itself.
    nodes remain (an `anyExpr`-style predicate, provable by the structural
    induction the prover does for us). Today enforced by "transform would
    crash."
-3. **Backend name legality and injectivity** (§6.3).
-4. **Arm purity** — after transform (Dafny mode), no impure call remains in
+3. **Narrowing completeness** — if `resolve` narrowed a path for a branch,
+   `narrow` introduced the binder that unwraps it. The one property here
+   with a known violation: a rule may decline to fire and leave the branch
+   referencing the optional, which transform lowers into ill-typed backend
+   code (TOOLS.md, known limitations). Nothing catches it but the backend's
+   type checker, and only if that shape is exercised.
+4. **Backend name legality and injectivity** (§6.3).
+5. **Arm purity** — after transform (Dafny mode), no impure call remains in
    a match-expression arm; a guard inside one rule becomes a postcondition
    of the pass.
-5. **Match exhaustiveness** — every emitted `tagMatch` covers all variants
+6. **Match exhaustiveness** — every emitted `tagMatch` covers all variants
    or has a fallthrough, checked against its `TypeDeclInfo`.
-6. **Parser sanity** — `specparser` consumes the whole input or errors.
-7. **Typing boundary** — successful `resolve` leaves no `unknown` where
+7. **Parser sanity** — `specparser` consumes the whole input or errors.
+8. **Typing boundary** — successful `resolve` leaves no `unknown` where
    later passes require a concrete type.
 
 Notably absent: "the generated code means the same as the TS" — that is
@@ -814,16 +844,12 @@ artifacts/caches unless reviewing them in-tree earns its churn.
   both backends in CI; initial P1 contracts verify; docs state each
   module's P/T level; no self-verification claim is made from T0 alone.
 
-On finalization, `DESIGN_SUGGESTIONS.md`, `LS_IN_LS.md`, and
-`LS_IN_LS_RFC.md` are deleted — this document is the single source of
-truth.
-
 ---
 
-## Appendix: departures from the reviewed RFC draft
+## Appendix: departures from an earlier design
 
-For the record, where this document deliberately differs from
-`LS_IN_LS_RFC.md` and why:
+For the record, where this document deliberately differs from an earlier
+reviewed draft of this program (the RFC), and why:
 
 - **Kept from the RFC:** the P/T two-axis trust model, TCB table, and
   claims discipline (§8); backend-name injectivity via an allocating

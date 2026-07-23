@@ -11,6 +11,17 @@ function JSFloorDiv(a: int, b: int): int
     else -((a - 1) / (-b)) - 1
 }
 
+function sortedFrom(arr: seq<int>, i: nat): bool
+  decreases (|arr| - i)
+{
+  (((i + 1) >= |arr|) || ((arr[i] <= arr[(i + 1)]) && sortedFrom(arr, (i + 1))))
+}
+
+function sorted(arr: seq<int>): bool
+{
+  sortedFrom(arr, 0)
+}
+
 method binarySearch(arr: seq<int>, target: int) returns (res: int)
   requires sorted(arr)
   ensures (res >= -1)
