@@ -470,10 +470,9 @@ function extractExpr(node: Expression): RawExpr {
       const typeNode = p.getTypeNode();
       return { name: p.getName(), tsType: typeNode ? typeNode.getText() : undefined };
     });
-    // Capture an explicit return annotation (`(x): Out => …`) so resolve can type
-    // return-position record literals to their named type instead of a tuple.
-    const retNode = node.getReturnTypeNode();
-    const returnTsType = retNode ? typeToString(node.getReturnType()) : undefined;
+    // Return type from the checker — inferred when unannotated — so resolve can
+    // type return-position record literals and give the lambda a real fn type.
+    const returnTsType = typeToString(node.getReturnType());
     const body = node.getBody();
     if (Node.isExpression(body)) {
       return { kind: "lambda", params, body: extractExpr(body), returnTsType };
