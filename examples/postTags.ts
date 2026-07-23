@@ -6,9 +6,9 @@
  *   argument is `intArgPositions` (nat-coerced on Lean, `x in s[from..]`
  *   on Dafny, whose slice bound the requires discharges). An int-typed
  *   `from` matters: a literal is already nat and would skip the coercion.
- * - `visibility`: a pure builtin (`includes`) in the residual of an
- *   `x !== undefined && rest ? a : b` condition — narrow's match-arm safety
- *   check must exempt it (registry `pure`) for the ternary rule to fire.
+ * - `visibility`: `includes` in the residual of an
+ *   `x !== undefined && rest ? a : b` condition — the ternary rule rewrites
+ *   the presence check, and the narrowed path still reaches the call.
  * - `hasTag`: a builtin call as an optional-chain step — the `BuiltinId`
  *   stamp must survive narrow's chain reconstruction (`applyChain`).
  */
