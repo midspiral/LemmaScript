@@ -12,6 +12,7 @@ import type { TypeDeclInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
+import { isFalsyCapableTy } from "./condition-facts.js";
 import { declOf, declOfKind, declOfTy, unionDeclOfTy, declWithVariant, tyBaseName } from "./typedecls.js";
 
 // ── Generic IR walkers ──────────────────────────────────────
@@ -224,11 +225,12 @@ function isRecordType(ty: Ty): boolean {
 }
 
 /** Truthiness test for a *lowered* value of source type `ty`, used by `||`
- *  falsiness lowering. Mirrors narrow.ts's `canBeFalsy`: only int/nat/string/bool
- *  values can be falsy in JS (`0`, `""`, `false`); every other value (array, user
- *  type, …) is always truthy. Returns null for the always-truthy types so callers
- *  can unwrap directly instead of emitting a redundant guard. */
+ *  falsiness lowering. Which types need one is `isFalsyCapableTy` (shared with
+ *  condition-facts' falsy gate); this adds the per-type test. Returns null for
+ *  the always-truthy types so callers can unwrap directly instead of emitting
+ *  a redundant guard. */
 function valueTruthyCond(value: Expr, ty: Ty): Expr | null {
+  if (!isFalsyCapableTy(ty)) return null;
   switch (ty.kind) {
     case "int": case "nat":
       return { kind: "binop", op: "≠", left: value, right: { kind: "num", value: 0 } };
@@ -536,7 +538,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // || on optional → match Some/None with default. JS `||` tests falsiness of
       // the *unwrapped* value, so when the inner type can be falsy the Some arm must
       // re-test (`Some(0) || 1 === 1`); array/user inners are always truthy and
-      // unwrap directly. Mirrors narrow.ts's canBeFalsy gate.
+      // unwrap directly. Same gate as condition-facts' `canBeFalsy`.
       if (e.op === "||" && e.left.ty.kind === "optional") {
         const optExpr = lowerExpr(e.left, binds);
         const defaultExpr = lowerExpr(e.right, binds);

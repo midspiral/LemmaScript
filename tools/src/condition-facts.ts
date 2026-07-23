@@ -99,12 +99,18 @@ export function presentFact(cond: TExpr): PresentFact | null {
   return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binder: freshName(hint), truthiness: false };
 }
 
+/** Which types have falsy values in JS (`0`, `""`, `false`); everything else
+ *  (array, user type, …) is always truthy. The single home of that set —
+ *  transform's `valueTruthyCond` gates on it too. */
+export const isFalsyCapableTy = (ty: Ty): boolean =>
+  ["int", "nat", "string", "bool"].includes(ty.kind);
+
 // `Some(0)` / `Some("")` / `Some(false)` are falsy, so a truthiness check
 // (`if (o)`, `!o`, `o ? :`) over a nullable primitive must still test the bound
 // value. Nullable objects/arrays are always truthy, and `!== undefined` is a pure
 // presence check — neither needs the gate.
 export const canBeFalsy = (f: PresentFact): boolean =>
-  f.truthiness && ["int", "nat", "string", "bool"].includes(f.innerTy.kind);
+  f.truthiness && isFalsyCapableTy(f.innerTy);
 export const bound = (f: PresentFact): TExpr =>
   ({ kind: "var", name: f.binder, ty: f.innerTy });
 

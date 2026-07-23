@@ -257,6 +257,12 @@ narrowing form is taught once.
 - **Nothing is stored in the IR.** Facts are computed where needed and
   discarded; no condition wrapper node, no plan threading between passes.
   Analysis is cheap and determinism makes recomputation safe.
+- **Key-membership facts need a variable key.** `exprEqual` — the structural
+  equality that recognizes `m[k]` on both sides of `k in m ? m[k] : default`
+  — compares vars, field chains, and indices, not literals, so a literal key
+  (`"a" in m ? m["a"] : d`) doesn't narrow while a variable one does. Adding
+  the literal cases is three lines; it is left undone because it is a
+  behavior change owing an example (§9 step 6), not a migration artifact.
 - **Named escalation path.** If a real program requires narrowing under a
   mixed disjunction, or ordered facts prove unsound for some composition,
   `analyze`'s *output* upgrades to a small and/or tree while `Fact`, the
