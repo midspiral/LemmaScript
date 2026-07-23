@@ -680,10 +680,10 @@ artifacts/caches unless reviewing them in-tree earns its churn.
 
 ---
 
-## Appendix: departures from the reviewed RFC draft
+## Appendix: departures from an earlier design
 
-For the record, where this document deliberately differs from
-`LS_IN_LS_RFC.md` and why:
+For the record, where this document deliberately differs from an earlier
+reviewed draft of this program (the RFC), and why:
 
 - **Kept from the RFC:** the P/T two-axis trust model, TCB table, and
   claims discipline (§8); backend-name injectivity via an allocating
