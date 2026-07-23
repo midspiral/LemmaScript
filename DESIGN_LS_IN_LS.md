@@ -468,18 +468,24 @@ P- and T-level accurately.
 | Module | LOC | Target | Notes |
 |---|---|---|---|
 | `ir.ts` | 308 | Prime P0/P1 | Pure datatypes + query walkers; structural recursion sweet spot. |
-| `typedir.ts` | 194 | Prime P0/P1 | Structural `tyEqual` (an improvement anyway). |
+| `rawir.ts` | 227 | Prime P0/P1 | Pure datatypes; the extract/specparser output surface. |
+| `typedir.ts` | 203 | Prime P0/P1 | Structural `tyEqual` (an improvement anyway). |
+| `typedecls.ts` | 71 | Prime P0/P1 | Total lookups over a declaration list; no state. |
 | `names.ts` | 56 | Prime P1 | Tiny, real spec content (freshness, keywords). |
+| `builtins.ts` | 175 | P1 after reshaping | Data table + total functions, but `ret` is a function-valued record field — the subset wants a `switch` on `BuiltinId` instead (§5.2). |
+| `condition-facts.ts` | 408 | Prime P1 | Pure detection + materializers; state confined to `CondCtx`. Ports with `narrow`. |
 | `peephole.ts` | 444 | Early pass target | Self-contained IR→IR rewrites. |
-| `narrow.ts` | 1114 | P1 after §4 | Facts×positions roughly halves the surface to port. |
-| `transform.ts` | 2396 | P1 by stages | Needs ctx work; port stage-by-stage (§7 trigger). |
-| `resolve.ts` | 1778 | Mostly | Push `parseTsType` to extraction; core is pure Raw→Typed. |
+| `autohavoc.ts` | 372 | Early pass target | Typed IR → Typed IR; depends only on `typedir`. |
+| `narrow.ts` | 738 | P1 after §4 | Was 1114; §4 moved condition semantics to `condition-facts.ts`. |
+| `transform.ts` | 2388 | P1 by stages | Needs ctx work; port stage-by-stage (§7 trigger). |
+| `resolve.ts` | 1702 | Mostly | Push `parseTsType` to extraction; core is pure Raw→Typed. |
 | `specparser.ts` | 330 | P1 | Recursive-descent parser; classic verification fodder. |
+| `types.ts` | 212 | Split | `TypeDeclInfo` is portable data; `parseTsType` imports ts-morph and stays with extraction (§5.1). |
 | `dafny-emit.ts`/`lean-emit.ts` | 2292 | Partial | Untouched by §3; precedence logic is spec-worthy; regexes become string helpers. |
 | `extract.ts` | 2479 | Trusted frontend | Wraps ts-morph; stays unverified; `RawModule` is the trusted input. |
 | `lsc.ts`, commands | ~500 | Unverified driver | CLI, fs, process. |
 
-Net: roughly 6.5k of 12.7k lines are pure IR-to-IR passes, all portable in
+Net: roughly 6.8k of 12.9k lines are pure IR-to-IR passes, all portable in
 principle. Once a module is in-subset, it joins CI as an `lsc` self-run
 target so it cannot drift back out — the compiler becomes a standing
 regression gauntlet that grows with itself.
