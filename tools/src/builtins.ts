@@ -27,26 +27,7 @@ import type { Ty, TExpr } from "./typedir.js";
 
 export type RecvKind = "array" | "string" | "map" | "set";
 
-export type BuiltinId =
-  // array
-  | "array.includes" | "array.indexOf" | "array.shift" | "array.pop"
-  | "array.push" | "array.unshift" | "array.concat" | "array.sort"
-  | "array.filter" | "array.every" | "array.some" | "array.reduce"
-  | "array.find" | "array.findLast" | "array.findIndex" | "array.findLastIndex"
-  | "array.flat" | "array.slice" | "array.join" | "array.map" | "array.with"
-  // string
-  | "string.trim" | "string.trimEnd" | "string.trimStart"
-  | "string.toLowerCase" | "string.toUpperCase" | "string.slice"
-  | "string.substring" | "string.split" | "string.includes"
-  | "string.startsWith" | "string.endsWith"
-  // map
-  | "map.get" | "map.has" | "map.set" | "map.delete" | "map.keys" | "map.values"
-  // set
-  | "set.has" | "set.add" | "set.delete";
-
 export interface BuiltinSpec {
-  recv: RecvKind;                     // recognition key: receiver type kind
-  method: string;                     // recognition key: surface method name
   /** Return-type rule. `inSpec` matters for `map.get` (raw value in specs,
    *  Option in code). */
   ret(objTy: Ty, args: TExpr[], c: { inSpec: boolean }): Ty;
@@ -72,44 +53,46 @@ const elem = (objTy: Ty): Ty => objTy.kind === "array" ? objTy.elem : UNKNOWN;
 const optElem = (objTy: Ty): Ty =>
   objTy.kind === "array" ? { kind: "optional", inner: objTy.elem } : UNKNOWN;
 
-export const BUILTINS: Record<BuiltinId, BuiltinSpec> = {
+/** The table is the single source: each key is `<RecvKind>.<method>`, which
+ *  *is* the `BuiltinId`. */
+export const BUILTINS = {
   // ── array ─────────────────────────────────────────────────
-  "array.includes": { recv: "array", method: "includes", ret: BOOL, pure: true,
+  "array.includes": { ret: BOOL, pure: true,
     intArgPositions: [1], argIsKey: true },
-  "array.indexOf": { recv: "array", method: "indexOf", ret: INT, pure: false,
+  "array.indexOf": { ret: INT, pure: false,
     intArgPositions: [1] },
-  "array.shift": { recv: "array", method: "shift", ret: elem, pure: false },
-  "array.pop": { recv: "array", method: "pop", ret: optElem, pure: false },
-  "array.push": { recv: "array", method: "push", ret: self, pure: false },
-  "array.unshift": { recv: "array", method: "unshift", ret: self, pure: false },
-  "array.concat": { recv: "array", method: "concat", ret: self, pure: false },
-  "array.sort": { recv: "array", method: "sort", ret: self, pure: false,
+  "array.shift": { ret: elem, pure: false },
+  "array.pop": { ret: optElem, pure: false },
+  "array.push": { ret: self, pure: false },
+  "array.unshift": { ret: self, pure: false },
+  "array.concat": { ret: self, pure: false },
+  "array.sort": { ret: self, pure: false,
     hof: { shape: "comparator" } },
-  "array.filter": { recv: "array", method: "filter", ret: self, pure: false,
+  "array.filter": { ret: self, pure: false,
     hof: { shape: "unary" } },
-  "array.every": { recv: "array", method: "every", ret: BOOL, pure: false,
+  "array.every": { ret: BOOL, pure: false,
     hof: { shape: "unary" } },
-  "array.some": { recv: "array", method: "some", ret: BOOL, pure: false,
+  "array.some": { ret: BOOL, pure: false,
     hof: { shape: "unary" } },
-  "array.reduce": { recv: "array", method: "reduce", pure: false,
+  "array.reduce": { pure: false,
     hof: { shape: "reduce" },
     ret: (_objTy, args) => args.length === 2 ? args[1].ty : UNKNOWN },
-  "array.find": { recv: "array", method: "find", ret: optElem, pure: false,
+  "array.find": { ret: optElem, pure: false,
     hof: { shape: "unary" } },
-  "array.findLast": { recv: "array", method: "findLast", ret: optElem, pure: false,
+  "array.findLast": { ret: optElem, pure: false,
     hof: { shape: "unary" } },
-  "array.findIndex": { recv: "array", method: "findIndex", ret: INT, pure: false,
+  "array.findIndex": { ret: INT, pure: false,
     hof: { shape: "unary" } },
-  "array.findLastIndex": { recv: "array", method: "findLastIndex", ret: INT,
+  "array.findLastIndex": { ret: INT,
     pure: false, hof: { shape: "unary" } },
-  "array.flat": { recv: "array", method: "flat", pure: false,
+  "array.flat": { pure: false,
     ret: (objTy) => objTy.kind === "array" && objTy.elem.kind === "array"
       ? { kind: "array", elem: objTy.elem.elem } : UNKNOWN },
-  "array.slice": { recv: "array", method: "slice", ret: self, pure: false },
-  "array.join": { recv: "array", method: "join", pure: false,
+  "array.slice": { ret: self, pure: false },
+  "array.join": { pure: false,
     ret: (objTy) => objTy.kind === "array" && objTy.elem.kind === "string"
       ? STRING() : UNKNOWN },
-  "array.map": { recv: "array", method: "map", pure: false,
+  "array.map": { pure: false,
     hof: { shape: "unary" },
     // Prefer the lambda's declared return type (handles multi-statement bodies
     // where body[0] is an `if`, not a `return`); fall back to the body's return.
@@ -122,52 +105,51 @@ export const BUILTINS: Record<BuiltinId, BuiltinSpec> = {
       }
       return UNKNOWN;
     } },
-  "array.with": { recv: "array", method: "with", ret: () => UNKNOWN, pure: false,
+  "array.with": { ret: () => UNKNOWN, pure: false,
     intArgPositions: [0] },
 
   // ── string ────────────────────────────────────────────────
-  "string.trim": { recv: "string", method: "trim", ret: STRING, pure: false },
-  "string.trimEnd": { recv: "string", method: "trimEnd", ret: STRING, pure: false },
-  "string.trimStart": { recv: "string", method: "trimStart", ret: STRING, pure: false },
-  "string.toLowerCase": { recv: "string", method: "toLowerCase", ret: STRING, pure: false },
-  "string.toUpperCase": { recv: "string", method: "toUpperCase", ret: STRING, pure: false },
-  "string.slice": { recv: "string", method: "slice", ret: STRING, pure: false },
-  "string.substring": { recv: "string", method: "substring", ret: STRING, pure: false },
-  "string.split": { recv: "string", method: "split", pure: false,
+  "string.trim": { ret: STRING, pure: false },
+  "string.trimEnd": { ret: STRING, pure: false },
+  "string.trimStart": { ret: STRING, pure: false },
+  "string.toLowerCase": { ret: STRING, pure: false },
+  "string.toUpperCase": { ret: STRING, pure: false },
+  "string.slice": { ret: STRING, pure: false },
+  "string.substring": { ret: STRING, pure: false },
+  "string.split": { pure: false,
     ret: () => ({ kind: "array", elem: { kind: "string" } }) },
-  "string.includes": { recv: "string", method: "includes", ret: BOOL, pure: true },
-  "string.startsWith": { recv: "string", method: "startsWith", ret: BOOL, pure: false },
-  "string.endsWith": { recv: "string", method: "endsWith", ret: BOOL, pure: false },
+  "string.includes": { ret: BOOL, pure: true },
+  "string.startsWith": { ret: BOOL, pure: false },
+  "string.endsWith": { ret: BOOL, pure: false },
 
   // ── map ───────────────────────────────────────────────────
-  "map.get": { recv: "map", method: "get", pure: false, argIsKey: true,
+  "map.get": { pure: false, argIsKey: true,
     ret: (objTy, _args, c) => objTy.kind !== "map" ? UNKNOWN
       : c.inSpec ? objTy.value : { kind: "optional", inner: objTy.value } },
-  "map.has": { recv: "map", method: "has", ret: BOOL, pure: true, argIsKey: true },
-  "map.set": { recv: "map", method: "set", ret: self, pure: false },
-  "map.delete": { recv: "map", method: "delete", ret: self, pure: false },
-  "map.keys": { recv: "map", method: "keys", ret: () => UNKNOWN, pure: true },
-  "map.values": { recv: "map", method: "values", ret: () => UNKNOWN, pure: true },
+  "map.has": { ret: BOOL, pure: true, argIsKey: true },
+  "map.set": { ret: self, pure: false },
+  "map.delete": { ret: self, pure: false },
+  "map.keys": { ret: () => UNKNOWN, pure: true },
+  "map.values": { ret: () => UNKNOWN, pure: true },
 
   // ── set ───────────────────────────────────────────────────
-  "set.has": { recv: "set", method: "has", ret: BOOL, pure: true, argIsKey: true },
-  "set.add": { recv: "set", method: "add", ret: self, pure: false },
-  "set.delete": { recv: "set", method: "delete", ret: self, pure: false },
-};
+  "set.has": { ret: BOOL, pure: true, argIsKey: true },
+  "set.add": { ret: self, pure: false },
+  "set.delete": { ret: self, pure: false },
+} satisfies Record<`${RecvKind}.${string}`, BuiltinSpec>;
 
-/** Recognition index, derived from the table: `(recv, method) → BuiltinId`. */
-const INDEX = new Map<string, BuiltinId>();
-for (const [id, spec] of Object.entries(BUILTINS) as [BuiltinId, BuiltinSpec][]) {
-  INDEX.set(`${spec.recv}.${spec.method}`, id);
-}
+/** One id per table entry. */
+export type BuiltinId = keyof typeof BUILTINS;
 
 /** Recognize a builtin method call by receiver type kind + method name.
  *  Called by resolve (once per call node); everything downstream reads the
- *  stamped id. */
+ *  stamped id. `hasOwn`, not `in`: `method` comes from user source, and `in`
+ *  would match inherited names (`constructor`, `toString`). */
 export function recognizeBuiltin(objTy: Ty, method: string): BuiltinId | null {
   const k = objTy.kind;
   if (k !== "array" && k !== "string" && k !== "map" && k !== "set") return null;
-  return INDEX.get(`${k}.${method}`) ?? null;
+  const id = `${k}.${method}`;
+  return Object.hasOwn(BUILTINS, id) ? id as BuiltinId : null;
 }
 
 export function builtinSpec(id: BuiltinId): BuiltinSpec {

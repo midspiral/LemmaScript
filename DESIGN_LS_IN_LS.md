@@ -99,25 +99,24 @@ per identity. The registry holds recognition and classification only — no
 lowerings:
 
 ```ts
-type BuiltinId = "array.includes" | "array.map" | "string.trim"
-  | "map.has" | /* every supported builtin */;
-
 interface BuiltinSpec {
-  recv: RecvKind;                     // recognition key: receiver type kind
-  method: string;                     // recognition key: surface method name
   ret(objTy: Ty, args: TExpr[]): Ty;  // return-type rule
   pure: boolean;                      // safe in expression-only positions
   hof?: { lambdaParamTys(objTy: Ty, args: TExpr[]): Ty[] };
   intArgPositions?: number[];         // nat/int coercion sites
 }
 
-const BUILTINS: Record<BuiltinId, BuiltinSpec> = { /* one entry each */ };
+const BUILTINS = { /* one entry each, keyed `<RecvKind>.<method>` */ }
+  satisfies Record<`${RecvKind}.${string}`, BuiltinSpec>;
+
+type BuiltinId = keyof typeof BUILTINS;
 ```
 
-The recognition index (`(recv, method) → BuiltinId`) is *derived* from
-`BUILTINS`. `resolve` performs recognition once and annotates the typed
-method-call node with its `BuiltinId` (an optional field on the existing
-node — no new IR node kind). Downstream:
+The key *is* the identity, so recognition needs no separate index and the
+receiver/method pair has no second spelling to drift from. `resolve`
+performs recognition once and annotates the typed method-call node with its
+`BuiltinId` (an optional field on the existing node — no new IR node kind).
+Downstream:
 
 - `narrow` drops its builtin-name allowlists and checks `spec.pure`;
 - `transform` drops `HOF_METHODS` and the coercion special cases, reading
@@ -126,8 +125,9 @@ node — no new IR node kind). Downstream:
   deferred work. See §3.2: identity dispatch is wrong on their side of
   the transform boundary.
 
-`Record<BuiltinId, BuiltinSpec>` makes exhaustiveness a type error: a new
-id without a classification entry fails to compile.
+Deriving `BuiltinId` from the table makes exhaustiveness structural rather
+than checked: an id without a classification entry is unwritable, since the
+ids *are* the entries.
 
 ### 3.2 Consequences accepted
 
