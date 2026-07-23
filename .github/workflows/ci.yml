@@ -218,8 +218,25 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Staging override: on a PR from branch <b>, if the case-study repo has a
+      # branch named <pinned>-<b>, clone that instead of the pinned branch.
+      # Lets case studies be updated against an in-flight LemmaScript branch
+      # without touching the branch that main's CI pins.
       - name: Clone case study
-        run: git clone --branch ${{ matrix.branch }} https://github.com/${{ matrix.repo }}.git ../case-study
+        env:
+          DEFAULT_BRANCH: ${{ matrix.branch }}
+          LS_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          repo="https://github.com/${{ matrix.repo }}.git"
+          branch="$DEFAULT_BRANCH"
+          if [ "$LS_BRANCH" != "main" ]; then
+            staging="$DEFAULT_BRANCH-$LS_BRANCH"
+            if git ls-remote --exit-code --heads "$repo" "$staging" >/dev/null; then
+              echo "Using staging branch $staging (default: $DEFAULT_BRANCH)"
+              branch="$staging"
+            fi
+          fi
+          git clone --branch "$branch" "$repo" ../case-study
 
       - uses: actions/setup-node@v6
         with:
@@ -265,8 +282,25 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Staging override: on a PR from branch <b>, if the case-study repo has a
+      # branch named <pinned>-<b>, clone that instead of the pinned branch.
+      # Lets case studies be updated against an in-flight LemmaScript branch
+      # without touching the branch that main's CI pins.
       - name: Clone case study
-        run: git clone --branch ${{ matrix.branch }} https://github.com/${{ matrix.repo }}.git ../case-study
+        env:
+          DEFAULT_BRANCH: ${{ matrix.branch }}
+          LS_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          repo="https://github.com/${{ matrix.repo }}.git"
+          branch="$DEFAULT_BRANCH"
+          if [ "$LS_BRANCH" != "main" ]; then
+            staging="$DEFAULT_BRANCH-$LS_BRANCH"
+            if git ls-remote --exit-code --heads "$repo" "$staging" >/dev/null; then
+              echo "Using staging branch $staging (default: $DEFAULT_BRANCH)"
+              branch="$staging"
+            fi
+          fi
+          git clone --branch "$branch" "$repo" ../case-study
 
       - uses: actions/setup-node@v6
         with:
