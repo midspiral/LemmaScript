@@ -648,6 +648,63 @@ updates of collision-renamed fields (`value_bool`, `body_let`) translate
 correctly via ctor pinning (by field type, or match-arm context) and
 union-qualified rename keys.*
 
+**Narrow port survey** (minimal repros, 2026-07-24; `narrow.ts` ports
+together with `condition-facts.ts`, §8.3):
+
+- **Confirmed already-supported**, beyond the peephole precedents (spread
+  updates, `??` rule chains, mutual recursion, slice recursion): `Set`
+  locals lower to Dafny `set` with `{}`/`in`/`+` and verify; C-style `for`
+  loops in both directions, including non-null-asserted indexing (`xs[i]!`);
+  template literals — including number interpolation, which synthesizes
+  `NatToString`/`IntToString` (covers `freshOcBinder`'s `` `_oc${n}_val` ``).
+- **Imported records with fn-valued fields synthesize opaque.** narrow reads
+  one bit through such a record (`builtinSpec(id).pure` in
+  `containsMethodCall`); the opaque `Spec(==)` synthesis makes the field
+  read a resolution error. Fix on the builtins side: export a scalar
+  accessor (`builtinPure(id): boolean`), which axiomatizes cleanly — a
+  first, tiny step of §8.3's "builtins.ts P1 after reshaping".
+- **Three new garbage-output shapes for E5**, all avoided by the rewrites
+  below so none blocks the port: datatype-field assignment inside a match
+  arm emits `e.isDiscriminant := true;` (invalid); a generic record decl
+  leaks its free type var (`datatype Found = Found(check: C, …)`);
+  `Extract<>`/indexed-access aliases emit `type Chain["steps"](==)`.
+- **`array.find` has a registry entry but no Dafny lowering**
+  ("Unsupported Dafny method call: .find()") — E4 returns to the critical
+  path via `typeofStringFact`'s `decl.variants?.find(...)`.
+- **`freshName` needs no rewrite for the port**: it is deterministic
+  w.r.t. the module's seeded user-name set (same hint → same result), so
+  at P0/T0 it axiomatizes as a pure imported function. The §6.2
+  `NameSupply` refactor is what the P1 *freshness contract* needs, not the
+  port.
+
+**Rewrite ledger** for `narrow.ts`/`condition-facts.ts`, per doctrine:
+
+| # | Rewrite | Justification | Status |
+|---|---|---|---|
+| N-R1 | `CondCtx.oc` mutable counter (`ctx.oc.n++` — extract rejects the expression outright) → thread it: `freshOcBinder` returns name + next ctx | §6.1/§6.2 already condemn mutation-through-reference; the first real NameSupply-shaped state | open |
+| N-R2 | `restoreDiscriminantFlag`'s in-place `unwrapped.isDiscriminant = true` → return the rebuilt node | the pure fragment has no datatype mutation (today's emission for that shape is invalid Dafny) | open |
+| N-R3 | `extractConjunct<C>` with fn-valued `parse` → two monomorphic extractors (presence, isArray) | genuine parametricity; mirrors peephole R3 | open |
+| N-R4 | `binderHintForMapAccess`'s regex `.replace(/_val$/…)`/`(/^_/…)` → `endsWith`/`slice` string helpers | §8.5 named exactly this; `string.replace` is not a builtin at all | open |
+| N-R5 | `ruleDiscriminantChain`'s nested `function collectElse` closing over mutable `cases` → top-level recursion returning values | mutable-capture closure, the known deep gap (§8.6 anchors); extract rejects nested fn decls anyway | open |
+| N-R6 | no-init `residualLeaves.reduce((a, b) => a \|\| b)` → recursive or-fold helper | the no-init form has no lowering (and an empty-list hazard besides) | open |
+| N-R7 | `Extract<TExpr, {kind:"optChain"}>` / `OptChain["chain"]` → use typedir's already-named `TChainStep[]` | type-level operators have no backend model; two-line change | open |
+| N-R8 | narrow's `builtinSpec(id).pure` → `builtinPure(id)` scalar accessor in `builtins.ts` | fn-valued record fields don't cross the import boundary (repro above) | open |
+
+**Proof outlook.** The engine re-walks freshly constructed terms (every
+`&&`-driver re-walks its residual; `ruleEarlyReturnOrChain` duplicates the
+terminating branch across None arms), so termination is again the
+irreducible price, and peephole's active-weight architecture (§8.7) is the
+template: weigh only un-narrowed condition material (presence checks,
+`optChain`/`nullish` nodes, isArray conjuncts) — every rule strictly
+consumes some of it, and duplicated already-walked branches weigh zero.
+The flagship P1 property is catalog #2, desugaring completeness: engine
+output provably contains no `optChain`/`nullish` node.
+
+Order: N-R7, N-R2, N-R4, N-R6, N-R8 first (small; each is a pure refactor
+gated byte-for-byte); then E4; then N-R3, N-R5, N-R1; then annotate and
+add to `LemmaScript-files.txt` (P0); then the termination + completeness
+proofs (P1).
+
 ### 8.7 Proof-carrying self-run modules: conventions
 
 *Distilled from the peephole proof (2026-07-24); binding for later ports
@@ -850,7 +907,9 @@ with no annotation is not started.*
    contracts. — *peephole done (2026-07-24), at P1/T0 with proofs beyond
    the plan: machine-checked termination (fuel-free), normalization, and
    idempotence; ledger outcomes and the three proof-driven engine fixes
-   are annotated in §8.6. `narrow` is next.*
+   are annotated in §8.6. `narrow` is next: port survey done
+   (2026-07-24) — repro findings and the N-R1–N-R8 rewrite ledger are in
+   §8.6; code not started.*
 10. **Portable `resolve` core, `specparser`, emitter cores** — transform
     ports stage-by-stage here, which is when §7's split naturally happens.
 11. **First T1 experiment:** execute one generated verified pass.
