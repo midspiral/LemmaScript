@@ -14,7 +14,7 @@ import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
 import { recognizeBuiltin, builtinSpec } from "./builtins.js";
 import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName } from "./typedecls.js";
-import { presentFact } from "./condition-facts.js";
+import { presentFact, variantFact } from "./condition-facts.js";
 
 // ── Environment ──────────────────────────────────────────────
 
@@ -69,6 +69,7 @@ function accessPathsEqual(a: AccessPath, b: AccessPath): boolean {
 interface NarrowedPath {
   path: AccessPath;
   narrowedTy: Ty;
+  variant?: string;   // union variant the path is narrowed to (discriminant check)
 }
 
 /** A `k in m` atom known to hold in the current scope. Both sides are pure
@@ -187,6 +188,18 @@ function collectEarlyReturnNarrowings(cond: TExpr): { varName: string; innerTy: 
   return n ? [n] : [];
 }
 
+/** Negated discriminant check (`path.kind !== "lit"`) on a var or field path.
+ *  After `if (path.kind !== "lit") return`, the rest of the block knows the
+ *  path is that variant. */
+function negatedVariantCheck(cond: TExpr): NarrowedPath | null {
+  if (cond.kind === "binop" && cond.op === "!==" && cond.right.kind === "str" &&
+      cond.left.kind === "field" && cond.left.isDiscriminant && cond.left.obj.ty.kind === "user") {
+    const path = asTExprAccessPath(cond.left.obj);
+    if (path) return { path, narrowedTy: cond.left.obj.ty, variant: cond.right.value };
+  }
+  return null;
+}
+
 /** TExpr → AccessPath. Counterpart to `asRawAccessPath` for resolved trees.
  *  Used by `extractInAtoms` when pulling atoms out of typed spec expressions. */
 function asTExprAccessPath(e: TExpr): AccessPath | null {
@@ -253,13 +266,24 @@ function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
     return collectAndChainNarrowings(cond.right, leftCtx);
   }
   const f = presentFact(cond);
-  if (!f || f.negated) return ctx;
-  if (f.scrutinee.kind === "var") {
-    return withEnv(ctx, extend(ctx.env, f.scrutinee.name, f.innerTy));
+  if (f && !f.negated) {
+    if (f.scrutinee.kind === "var") {
+      return withEnv(ctx, extend(ctx.env, f.scrutinee.name, f.innerTy));
+    }
+    const path = asTExprAccessPath(f.scrutinee);
+    if (path) {
+      return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: f.innerTy }] };
+    }
+    return ctx;
   }
-  const path = asTExprAccessPath(f.scrutinee);
-  if (path) {
-    return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: f.innerTy }] };
+  // Positive discriminant check (`x.kind === "bool"`): record the variant so
+  // field reads on the path resolve against that variant's field types.
+  const vf = variantFact(cond, { decls: ctx.typeDecls, oc: { n: 0 } });
+  if (vf) {
+    const path = asTExprAccessPath(vf.scrutinee);
+    if (path) {
+      return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: vf.scrutinee.ty, variant: vf.variant }] };
+    }
   }
   return ctx;
 }
@@ -410,6 +434,7 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   // don't get lifted to statement-level binds (which would force lambdas to
   // become multi-statement, illegal in Dafny).
   if (fn.kind === "var" && ctx.externs.has(fn.name)) return "pure";
+  if (fn.kind === "var" && lookup(ctx.env, fn.name)?.kind === "fn") return "pure";
   if (fn.kind === "var" && ctx.inSpec) {
     // Not a known pure function — could be external (Lean-defined spec helper).
     // Pass through as "pure" and let Lean catch any errors.
@@ -820,6 +845,11 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       if (ty.kind === "unknown" && fn.kind === "var" && ctx.fnReturns.has(fn.name)) {
         ty = ctx.fnReturns.get(fn.name)!;
       }
+      // Call through a function-typed value: its fn type carries the result
+      if (ty.kind === "unknown" && fn.kind === "var") {
+        const varTy = lookup(ctx.env, fn.name);
+        if (varTy?.kind === "fn") ty = varTy.result;
+      }
       // filterMap: `seqOfOption.filter(x => x !== undefined)` (a defined-check,
       // typically with an `x is T` type guard) drops the Nones AND unwraps to
       // seq<T>. Rewrite to a synthetic `filterSome` call lowered to the proven
@@ -885,13 +915,26 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         }
       }
 
+      // A variant narrowing on the object picks the field's type from that
+      // variant (a shared field name can have a different type per variant).
+      let ofVariant: string | undefined;
+      if (ty.kind === "unknown" && ctx.narrowedPaths.length > 0 && obj.ty.kind === "user") {
+        const objPath = asRawAccessPath(e.obj);
+        const np = objPath ? ctx.narrowedPaths.find(n => n.variant && accessPathsEqual(n.path, objPath)) : undefined;
+        if (np?.variant) {
+          const decl = findDecl(ctx, tyBaseName(obj.ty.name));
+          const f = decl?.variants?.find(v => v.name === np.variant)?.fields.find(f => f.name === e.field);
+          if (f?.type) { ty = f.type; ofVariant = np.variant; }
+        }
+      }
+
       if (ty.kind === "unknown") {
         const lookup = lookupFieldTy(obj.ty, e.field, ctx);
         ty = lookup.ty;
         isDiscriminant = lookup.isDiscriminant;
       }
 
-      return { kind: "field", obj, field: e.field, ty, isDiscriminant };
+      return { kind: "field", obj, field: e.field, ty, isDiscriminant, ofVariant };
     }
 
     case "nullish": {
@@ -1176,8 +1219,9 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
   const result: TStmt[] = [];
   let env = ctx.env;
   let narrowedIndices = ctx.narrowedIndices;
+  let narrowedPaths = ctx.narrowedPaths;
   for (const s of stmts) {
-    const currentCtx = { ...ctx, env, narrowedIndices };
+    const currentCtx = { ...ctx, env, narrowedIndices, narrowedPaths };
     const [typed, nextEnv] = resolveStmt(s, currentCtx);
     result.push(typed);
     env = nextEnv;
@@ -1193,6 +1237,8 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
         for (const n of collectEarlyReturnNarrowings(typed.cond)) {
           env = extend(env, n.varName, n.innerTy);
         }
+        const nv = negatedVariantCheck(typed.cond);
+        if (nv) narrowedPaths = [...narrowedPaths, nv];
       }
       // Map-index narrowing: `if (!(k in m)) return;` means `k in m` holds in rest.
       if (typed.kind === "if") {

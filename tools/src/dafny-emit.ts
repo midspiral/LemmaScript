@@ -3,7 +3,7 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { usesName, usesNameInDecl } from "./ir.js";
+import { usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshName, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
@@ -190,9 +190,8 @@ function mapOp(op: string): string { return OP_MAP[op] ?? op; }
 
 // ── Expression emission ─────────────────────────────────────
 
-/** Emit a match scrutinee — either a variable name (string) or an expression. */
-function emitScrutinee(s: string | Expr): string {
-  return typeof s === "string" ? escapeName(s) : emitExpr(s);
+function emitScrutinee(s: Expr): string {
+  return emitExpr(s);
 }
 
 /** Collapse nested forall/exists into a single quantifier with multiple bound vars. */
@@ -280,7 +279,42 @@ function emitExpr(e: Expr): string {
           }
           return `${obj}[${args[0]}..${args[1]}]`;
         }
-        if (e.method === "map")    return `Std.Collections.Seq.Map(${args[0]}, ${obj})`;
+        if (e.method === "map") {
+          // Always a seq comprehension: Seq.Map would hide the element access
+          // behind a closure, defeating Dafny's termination checker for
+          // recursive rebuild walkers (§8.6 E2). A literal lambda argument is
+          // beta-reduced through a `var` binding — an applied closure defeats
+          // the checker too; any other argument is applied to the element
+          // directly. A non-variable receiver is bound once up front: the
+          // comprehension mentions it three times, and splicing would make
+          // any closure literal inside it (e.g. a Filter predicate) three
+          // distinct closures, unprovably equal through an opaque callee.
+          // Name freshness is a local IR-level check until the §6.3 backend
+          // name allocator exists.
+          const lam = e.args[0];
+          const fresh = (base: string, taken: (n: string) => boolean): string => {
+            let name = base;
+            for (let n = 2; taken(name); n++) name = `${base}${n}`;
+            return name;
+          };
+          const taken = (n: string): boolean =>
+            usesName(e.obj, n) || usesName(lam, n) ||
+            (lam.kind === "lambda" && (lam.params.some(pp => pp.name === n) ||
+              usesNameInStmts(lam.body, n)));
+          const bind = e.obj.kind !== "var";
+          const s = bind ? fresh("s_map", taken) : obj;
+          const idx = fresh("i_map", n => taken(n) || n === s);
+          let core: string;
+          if (lam.kind === "lambda" && lam.params.length === 1 &&
+              lam.body.length === 1 && lam.body[0].kind === "return") {
+            const p = escapeName(lam.params[0].name);
+            core = `var ${p} := ${s}[${idx}]; ${emitExpr(lam.body[0].value)}`;
+          } else {
+            core = `(${args[0]})(${s}[${idx}])`;
+          }
+          const comp = `seq(|${s}|, ${idx} requires 0 <= ${idx} < |${s}| => ${core})`;
+          return bind ? `(var ${s} := ${obj}; ${comp})` : comp;
+        }
         if (e.method === "filter") return `Std.Collections.Seq.Filter(${args[0]}, ${obj})`;
         // filterMap (synthesized in resolve): drop Nones and unwrap to seq<T>.
         if (e.method === "filterSome") { needPreamble("SeqFilterSome"); needPreamble("OptionType"); return `SeqFilterSome(${obj})`; }
@@ -491,6 +525,8 @@ function emitExpr(e: Expr): string {
       if (e.fn === "MinOfSeq") { needPreamble("MathMin"); needPreamble("MinOfSeq"); }
       if (e.fn === "Perm") needPreamble("Perm");
       if (e.fn === "SetFromSeq") needPreamble("SetFromSeq");
+      if (e.ctorOf && _ambiguousCtors.has(e.fn))
+        return `${e.ctorOf}.${escapeName(e.fn)}(${args.join(", ")})`;
       return `${escapeName(e.fn)}(${args.join(", ")})`;
     }
 
@@ -501,6 +537,10 @@ function emitExpr(e: Expr): string {
       if (!e.datatypeField && (e.field === "size" || e.field === "length" || e.field === "collectionSize")) return `|${obj}|`;
       if (!e.datatypeField && e.field === "keys") return `${obj}.Keys`;
       if (e.field === "toNat") return obj;
+      if (e.ctor && e.fromUnion) {
+        const renamed = _ctorFieldRenames.get(`${e.fromUnion}.${e.ctor}.${e.field}`);
+        if (renamed) return `${obj}.${escapeName(renamed)}`;
+      }
       return `${obj}.${escapeName(e.field)}`;
     }
 
@@ -525,7 +565,10 @@ function emitExpr(e: Expr): string {
         if (e.fields.length === 0) {
           return emitExpr(e.spread);
         }
-        const updates = e.fields.map(f => `${escapeName(f.name)} := ${emitExpr(f.value)}`);
+        const updates = e.fields.map(f => {
+          const renamed = e.ctor && e.ctorOf ? _ctorFieldRenames.get(`${e.ctorOf}.${e.ctor}.${f.name}`) : undefined;
+          return `${escapeName(renamed ?? f.name)} := ${emitExpr(f.value)}`;
+        });
         return `${emitExpr(e.spread)}.(${updates.join(", ")})`;
       }
       // Match constructor by field names — prefer exact match over first-field heuristic
@@ -726,9 +769,9 @@ function emitDecl(d: Decl): string {
         }
       const collides = new Set([...typesByField].filter(([, s]) => s.size > 1).map(([n]) => n));
       const ctors = d.constructors.map(c => {
-        if (c.fields.length === 0) return escapeName(c.name);
-        const fields = c.fields.map(f => collides.has(f.name) ? { ...f, name: `${f.name}_${c.name}` } : f);
-        return `${escapeName(c.name)}(${paramList(fields)})`;
+        if (c.fields.length === 0) return dafnyCtorName(c.name);
+        const fields = c.fields.map(f => collides.has(f.name) ? { ...f, name: `${f.name}_${c.name.replace(/[^A-Za-z0-9_'?]/g, "_")}` } : f);
+        return `${dafnyCtorName(c.name)}(${paramList(fields)})`;
       });
       return `datatype ${escapeName(d.name)}${tp} = ${ctors.join(" | ")}`;
     }
@@ -1289,18 +1332,51 @@ const PREAMBLE_CODE: [string, string][] = [
 let _recordCtors = new Map<string, string>();
 let _structureDecls = new Map<string, { name: string; type: Ty }[]>();
 let _declaredTypes = new Set<string>();
+let _ambiguousCtors = new Set<string>();
+// `"<union>.<ctor>.<field>"` → per-constructor destructor name, for fields the
+// inductive emission renames (shared name, differing types). Field reads and
+// datatype updates with a pinned ctor must use the renamed destructor.
+let _ctorFieldRenames = new Map<string, string>();
 
 function buildRecordCtorMap(decls: Decl[]) {
   _recordCtors = new Map();
   _structureDecls = new Map();
   _declaredTypes = new Set();
+  _ambiguousCtors = new Set();
+  _ctorFieldRenames = new Map();
+  const ctorSeen = new Set<string>();
   function collectDecl(d: Decl) {
     if (d.kind === "structure") {
       _declaredTypes.add(d.name);
       _structureDecls.set(d.name, d.fields);
       if (d.fields.length > 0) _recordCtors.set(d.fields[0].name, d.name);
     }
-    if (d.kind === "inductive") _declaredTypes.add(d.name);
+    if (d.kind === "inductive") {
+      _declaredTypes.add(d.name);
+      // Constructor names shared by two datatypes in this module (Expr.let vs
+      // Stmt.let) can't be used bare — emitters must qualify them.
+      for (const c of d.constructors) {
+        if (ctorSeen.has(c.name)) _ambiguousCtors.add(c.name);
+        ctorSeen.add(c.name);
+      }
+      // Mirror the destructor renaming the inductive case of emitDecl performs
+      // (shared field name, differing types → per-constructor names), so reads
+      // and updates can be translated to the renamed destructors.
+      const typesByField = new Map<string, Set<string>>();
+      for (const c of d.constructors)
+        for (const f of c.fields) {
+          let s = typesByField.get(f.name);
+          if (!s) { s = new Set(); typesByField.set(f.name, s); }
+          s.add(tyToDafny(f.type));
+        }
+      const collides = new Set([...typesByField].filter(([, s]) => s.size > 1).map(([n]) => n));
+      for (const c of d.constructors)
+        for (const f of c.fields) {
+          if (!collides.has(f.name)) continue;
+          _ctorFieldRenames.set(`${d.name}.${c.name}.${f.name}`,
+            `${f.name}_${c.name.replace(/[^A-Za-z0-9_'?]/g, "_")}`);
+        }
+    }
     if (d.kind === "type-alias") _declaredTypes.add(d.name);
     if (d.kind === "def") _declaredTypes.add(d.name);
     if (d.kind === "namespace") for (const inner of d.decls) collectDecl(inner);
@@ -1319,9 +1395,20 @@ function resolveTy(ty: Ty): Ty {
   return ty;
 }
 
+/** Constructor names come from source strings (string-union values like
+ *  "spec-pure", discriminated-union tags), which may contain characters no
+ *  TS identifier has; map those to `_` before the ordinary escaping. A
+ *  collision after mapping fails loudly in Dafny (duplicate constructor)
+ *  rather than silently merging. */
+function dafnyCtorName(name: string): string {
+  return escapeName(name.replace(/[^A-Za-z0-9_'?]/g, "_"));
+}
+
 function qualifyCtor(name: string, type?: string): string {
   const rawName = name.replace(/^\./, "");
-  const mapped = CTOR_MAP[rawName] ?? escapeName(rawName);
+  // hasOwn: a ctor literally named "constructor" (the IR's own Expr variant)
+  // must not hit Object.prototype.constructor through the bare index.
+  const mapped = (Object.hasOwn(CTOR_MAP, rawName) ? CTOR_MAP[rawName] : undefined) ?? dafnyCtorName(rawName);
   if (type) return `${type}.${mapped}`;
   return mapped;
 }
@@ -1335,7 +1422,7 @@ const CTOR_MAP: Record<string, string> = { "some": "Some", "none": "None" };
 
 function translatePattern(p: MatchPattern): string {
   if (p.kind === "wild") return "_";
-  const ctorName = CTOR_MAP[p.ctor] ?? escapeName(p.ctor);
+  const ctorName = (Object.hasOwn(CTOR_MAP, p.ctor) ? CTOR_MAP[p.ctor] : undefined) ?? dafnyCtorName(p.ctor);
   if (p.binders.length === 0) return ctorName;
   return `${ctorName}(${p.binders.map(escapeName).join(", ")})`;
 }

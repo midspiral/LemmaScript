@@ -2,7 +2,7 @@
 
 function doubleAll(arr: seq<int>): seq<int>
 {
-  Std.Collections.Seq.Map((x: int) => (x * 2), arr)
+  seq(|arr|, i_map requires 0 <= i_map < |arr| => var x := arr[i_map]; (x * 2))
 }
 
 lemma doubleAll_ensures(arr: seq<int>)

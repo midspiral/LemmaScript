@@ -194,9 +194,16 @@ let _unknownEmitted = false;  // across files in one run — the def file import
 // and stays in the more proof-friendly Prop form.
 let _boolCtx = false;
 
+/** Constructor names come from source strings (string-union values,
+ *  discriminated-union tags) and may contain non-identifier characters
+ *  ("spec-pure"); guillemet-quote those — exact and collision-free. */
+function leanCtorName(name: string): string {
+  return /^[A-Za-z_][A-Za-z0-9_'!?]*$/.test(name) ? name : `«${name}»`;
+}
+
 /** Render a match pattern to Lean syntax: `_`, `.none`, `.some x`, `.syn seq`. */
 function renderLeanPattern(p: MatchPattern): string {
-  return p.kind === "wild" ? "_" : "." + [p.ctor, ...p.binders].join(" ");
+  return p.kind === "wild" ? "_" : "." + [leanCtorName(p.ctor), ...p.binders].join(" ");
 }
 
 // A Bool-valued atom that does NOT coerce to Prop: an inlined union discriminator
@@ -304,7 +311,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // like `match ... | .none => Type.some x` where elaboration can't infer).
       // Without type: emit `.name` (dotted form; works in pattern positions
       // and where the expected type is clear from context).
-      const head = e.type ? `${e.type}.${e.name}` : `.${e.name}`;
+      const head = e.type ? `${e.type}.${leanCtorName(e.name)}` : `.${leanCtorName(e.name)}`;
       if (!e.args || e.args.length === 0) return head;
       const args = e.args.map(a =>
         (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall") ? `(${emitExpr(a)})` : emitExpr(a)
@@ -486,7 +493,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // so any token after an arm body (`→`, another match's `|`, etc.) would
       // bleed into the last `.none` case without explicit bracketing.
       const arms = e.arms.map(a => `| ${renderLeanPattern(a.pattern)} => ${emitExpr(a.body)}`);
-      const scrut = typeof e.scrutinee === "string" ? e.scrutinee : emitExpr(e.scrutinee);
+      const scrut = emitExpr(e.scrutinee);
       return `(match ${scrut} with ${arms.join(" ")})`;
     }
 
@@ -579,7 +586,7 @@ function emitStmt(s: Stmt, indent: number): string {
     }
 
     case "match": {
-      const scrut = typeof s.scrutinee === "string" ? s.scrutinee : emitExpr(s.scrutinee);
+      const scrut = emitExpr(s.scrutinee);
       // Option match (.some/.none) → emit as if/let for WPGen.if compatibility
       if (s.arms.length === 2) {
         const someArm = s.arms.find(a => a.pattern.kind === "ctor" && a.pattern.ctor === "some");
@@ -697,10 +704,10 @@ function emitDecl(d: Decl): string {
       const lines = [`inductive ${d.name} where`];
       for (const c of d.constructors) {
         if (c.fields.length === 0) {
-          lines.push(`  | ${c.name} : ${d.name}`);
+          lines.push(`  | ${leanCtorName(c.name)} : ${d.name}`);
         } else {
           const params = c.fields.map(f => `(${escapeName(f.name)} : ${tyToLean(f.type)})`).join(" ");
-          lines.push(`  | ${c.name} ${params} : ${d.name}`);
+          lines.push(`  | ${leanCtorName(c.name)} ${params} : ${d.name}`);
         }
       }
       return lines.join("\n") + emitDeriving(d.name, d.deriving);
@@ -813,7 +820,7 @@ function emitPureExpr(e: Expr, indent: number): string {
     case "if":
       return `${pad}if ${emitExpr(e.cond)} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
     case "match": {
-      const lines = [`${pad}match ${typeof e.scrutinee === "string" ? e.scrutinee : emitExpr(e.scrutinee)} with`];
+      const lines = [`${pad}match ${emitExpr(e.scrutinee)} with`];
       for (const arm of e.arms) {
         lines.push(`${pad}| ${renderLeanPattern(arm.pattern)} =>`);
         lines.push(emitPureExpr(arm.body, indent + 1));

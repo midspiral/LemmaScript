@@ -470,10 +470,9 @@ function extractExpr(node: Expression): RawExpr {
       const typeNode = p.getTypeNode();
       return { name: p.getName(), tsType: typeNode ? typeNode.getText() : undefined };
     });
-    // Capture an explicit return annotation (`(x): Out => …`) so resolve can type
-    // return-position record literals to their named type instead of a tuple.
-    const retNode = node.getReturnTypeNode();
-    const returnTsType = retNode ? typeToString(node.getReturnType()) : undefined;
+    // Return type from the checker — inferred when unannotated — so resolve can
+    // type return-position record literals and give the lambda a real fn type.
+    const returnTsType = typeToString(node.getReturnType());
     const body = node.getBody();
     if (Node.isExpression(body)) {
       return { kind: "lambda", params, body: extractExpr(body), returnTsType };
@@ -707,6 +706,7 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
             if (prop.getName() === discriminant) continue;
             let tsType = typeToString(prop.getTypeAtLocation(decl));
             const propDecl = prop.getDeclarations()[0];
+            tsType = declaredTypeTextIfBetter(propDecl, tsType);
             if (propDecl && (propDecl as any).hasQuestionToken?.() && !tsType.includes(" | undefined")) {
               tsType = `${tsType} | undefined`;
             }
@@ -796,10 +796,11 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
 
     const propType = prop.getTypeAtLocation(locationNode);
     let tsType = typeToString(propType);
+    const propDecl = prop.getDeclarations()[0];
+    tsType = declaredTypeTextIfBetter(propDecl, tsType);
     // Optional property: `foo?: T` reports as `T` (ts-morph strips the
     // `| undefined` from a question-token type). Add it back so the field
     // resolves to `Optional<T>`.
-    const propDecl = prop.getDeclarations()[0];
     if (propDecl && (propDecl as any).hasQuestionToken?.() && !tsType.includes(" | undefined")) {
       tsType = `${tsType} | undefined`;
     }
@@ -847,6 +848,21 @@ function findDiscriminant(members: Type[]): string | null {
     if (allHave) return name;
   }
   return null;
+}
+
+/** Recover a field's *declared* type text when the semantic printer degraded
+ *  to ts-morph's anonymous `__type` — a self-referential alias reached
+ *  through a `| null` union expands structurally and loses its name. The
+ *  syntactic node text preserves the alias spelling (`TExpr | null`). Only
+ *  plain reference text is used: inline object literals (containing `{`)
+ *  keep the `__type` marker so record synthesis can handle them. */
+function declaredTypeTextIfBetter(propDecl: Node | undefined, tsType: string): string {
+  if (!tsType.includes("__type") || !propDecl) return tsType;
+  const tn = (propDecl as { getTypeNode?: () => Node | undefined }).getTypeNode?.();
+  if (!tn) return tsType;
+  const text = tn.getText();
+  if (text.includes("__type") || text.includes("{")) return tsType;
+  return text;
 }
 
 function typeToString(type: Type): string {
@@ -2307,7 +2323,14 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // Resolve imported types: extract types referenced in function signatures but not in this file
   const knownTypes = new Set(typeDecls.map(d => d.name));
   const builtins = new Set(["Map", "Set", "Array", "String", "Number", "Boolean", "Promise", "Date", "RegExp", "Error"]);
+  const visitedTypes = new Set<unknown>();
   function resolveType(t: Type, locationNode: Node) {
+    // Recursion guard: recursive unions (Expr → variant → body: Expr) are
+    // reachable now that anonymous variant fields are walked below. Keyed on
+    // the compiler's interned Type object — alias names are not enough,
+    // because getTypeAtLocation can drop the alias symbol.
+    if (visitedTypes.has(t.compilerType)) return;
+    visitedTypes.add(t.compilerType);
     // Unwrap arrays and generics to find user-defined types
     if (t.isArray()) { resolveType(t.getArrayElementTypeOrThrow(), locationNode); return; }
     // Resolve type aliases (e.g. string unions imported from other files)
@@ -2346,6 +2369,14 @@ export function extractModule(sourceFile: SourceFile): RawModule {
         for (const prop of t.getProperties()) {
           resolveType(prop.getTypeAtLocation(locationNode), locationNode);
         }
+      }
+    } else if (t.isObject() && (!name || name.startsWith("__")) && t.getCallSignatures().length === 0) {
+      // Anonymous object type — typically a variant of an imported
+      // discriminated union. There is no decl to extract, but its fields can
+      // reference named types (`arms: MatchArm[]`) that downstream passes
+      // need declared, so walk them.
+      for (const prop of t.getProperties()) {
+        resolveType(prop.getTypeAtLocation(locationNode), locationNode);
       }
     }
   }

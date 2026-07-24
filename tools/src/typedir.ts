@@ -5,6 +5,11 @@
  * Still TS-shaped (not Lean-shaped).
  */
 
+// Self-application (DESIGN_LS_IN_LS.md §8): this module is inside the
+// LemmaScript subset and is compiled by lsc itself (LemmaScript-files.txt).
+// Dafny-only until the Lean emitter learns mutual blocks (§9 step 1).
+//@ backend dafny
+
 // Type-only: erased at runtime, so the builtins ↔ typedir reference cycle
 // never materializes.
 import type { BuiltinId } from "./builtins.js";
@@ -32,20 +37,36 @@ export type Ty =
 
 /** True for an int/nat that came from a TS `bigint` (integer division semantics). */
 export function isBigInt(ty: Ty): boolean {
+  //@ verify
   return (ty.kind === "int" || ty.kind === "nat") && !!ty.big;
+}
+
+/** Elementwise Ty-list equality — recursive rather than an indexed-callback
+ *  HOF, so the module stays inside the LemmaScript subset. */
+export function tysEqual(as: Ty[], bs: Ty[]): boolean {
+  //@ verify
+  //@ ensures \result === true ==> as.length === bs.length
+  if (as.length !== bs.length) return false;
+  if (as.length === 0) return true;
+  return tyEqual(as[0], bs[0]) && tysEqual(as.slice(1), bs.slice(1));
+}
+
+function stringsEqual(as: string[], bs: string[]): boolean {
+  //@ verify
+  if (as.length !== bs.length) return false;
+  if (as.length === 0) return true;
+  return as[0] === bs[0] && stringsEqual(as.slice(1), bs.slice(1));
 }
 
 /** Structural equality on Ty. Used to decide whether a tuple type is homogeneous
  *  (all elements equal ⇒ lower to `seq`) vs heterogeneous (⇒ keep as `tuple`). */
 export function tyEqual(a: Ty, b: Ty): boolean {
+  //@ verify
   if (a.kind !== b.kind) return false;
   switch (a.kind) {
     case "array": return tyEqual(a.elem, (b as typeof a).elem);
     case "set":   return tyEqual(a.elem, (b as typeof a).elem);
-    case "tuple": {
-      const bt = b as typeof a;
-      return a.elems.length === bt.elems.length && a.elems.every((e, i) => tyEqual(e, bt.elems[i]));
-    }
+    case "tuple": return tysEqual(a.elems, (b as typeof a).elems);
     case "map": {
       const bm = b as typeof a;
       return tyEqual(a.key, bm.key) && tyEqual(a.value, bm.value);
@@ -54,17 +75,89 @@ export function tyEqual(a: Ty, b: Ty): boolean {
     case "user":     return a.name === (b as typeof a).name;
     case "fn": {
       const bf = b as typeof a;
-      return a.params.length === bf.params.length
-        && a.params.every((p, i) => tyEqual(p, bf.params[i]))
-        && tyEqual(a.result, bf.result);
+      return tysEqual(a.params, bf.params) && tyEqual(a.result, bf.result);
     }
     case "string": {
-      const bs = b as typeof a;
-      return JSON.stringify(a.values ?? null) === JSON.stringify(bs.values ?? null);
+      const av = a.values;
+      const bv = (b as typeof a).values;
+      if (av === undefined) return bv === undefined;
+      if (bv === undefined) return false;
+      return stringsEqual(av, bv);
     }
     case "int": case "nat": return !!a.big === !!(b as typeof a).big;
     case "bool": case "real": case "void": case "unknown": return true;   // no payload
   }
+}
+
+// ── P1 lemmas (DESIGN_LS_IN_LS.md §8.4): `tyEqual` is an equivalence ──
+// relation. Stated as functions so what holds is readable from
+// TypeScript; each `ensures` becomes a proof obligation whose inductive
+// proof is hand-authored in the companion .dfy (quorum-style).
+
+/** Lemma: `tyEqual` is reflexive. */
+export function tyEqualRefl(a: Ty): boolean {
+  //@ verify
+  //@ ensures \result === true
+  return tyEqual(a, a);
+}
+
+/** Lemma: `tysEqual` is reflexive. */
+export function tysEqualRefl(ts: Ty[]): boolean {
+  //@ verify
+  //@ ensures \result === true
+  return tysEqual(ts, ts);
+}
+
+/** Lemma: `stringsEqual` is reflexive. */
+export function stringsEqualRefl(ss: string[]): boolean {
+  //@ verify
+  //@ ensures \result === true
+  return stringsEqual(ss, ss);
+}
+
+/** Lemma: `tyEqual` is symmetric. */
+export function tyEqualSym(a: Ty, b: Ty): boolean {
+  //@ verify
+  //@ ensures \result === true
+  return tyEqual(a, b) === tyEqual(b, a);
+}
+
+/** Lemma: `tysEqual` is symmetric. */
+export function tysEqualSym(as: Ty[], bs: Ty[]): boolean {
+  //@ verify
+  //@ ensures \result === true
+  return tysEqual(as, bs) === tysEqual(bs, as);
+}
+
+/** Lemma: `stringsEqual` is symmetric. */
+export function stringsEqualSym(as: string[], bs: string[]): boolean {
+  //@ verify
+  //@ ensures \result === true
+  return stringsEqual(as, bs) === stringsEqual(bs, as);
+}
+
+/** Lemma: `tyEqual` is transitive. */
+export function tyEqualTrans(a: Ty, b: Ty, c: Ty): boolean {
+  //@ verify
+  //@ requires tyEqual(a, b) === true && tyEqual(b, c) === true
+  //@ ensures \result === true
+  return tyEqual(a, c);
+}
+
+/** Lemma: `tysEqual` is transitive. */
+export function tysEqualTrans(as: Ty[], bs: Ty[], cs: Ty[]): boolean {
+  //@ verify
+  //@ requires tysEqual(as, bs) === true && tysEqual(bs, cs) === true
+  //@ ensures \result === true
+  return tysEqual(as, cs);
+}
+
+/** Lemma: `stringsEqual` is transitive. */
+export function stringsEqualTrans(as: string[], bs: string[], cs: string[]): boolean {
+  //@ verify
+  //@ requires stringsEqual(as, bs) === true && stringsEqual(bs, cs) === true
+  //@ ensures \result === true
+  return stringsEqual(as, cs);
 }
 
 export type CallKind = "pure" | "method" | "spec-pure" | "unknown"
@@ -81,6 +174,15 @@ export type TChainStep =
 
 // ── Expressions ──────────────────────────────────────────────
 
+// Named payload records. Naming these (rather than inlining object-literal
+// types) keeps the module inside the LemmaScript subset: inline anonymous
+// record types have no backend model. Purely structural — construction
+// sites are unaffected.
+export interface TRecordField { name: string; value: TExpr }
+export interface TExprCase { variant: string; body: TExpr }
+export interface TStmtCase { variant: string; body: TStmt[] }
+export interface TSwitchCase { label: string; body: TStmt[] }
+
 export type TExpr =
   | { kind: "var"; name: string; ty: Ty }
   | { kind: "num"; value: number; ty: Ty }
@@ -92,17 +194,18 @@ export type TExpr =
       builtinId?: BuiltinId }
   | { kind: "index"; obj: TExpr; idx: TExpr; ty: Ty }
   | { kind: "field"; obj: TExpr; field: string; ty: Ty;
-      isDiscriminant?: boolean }            // true if this is a discriminant field access
-  | { kind: "record"; spread: TExpr | null; fields: { name: string; value: TExpr }[]; ty: Ty }
+      isDiscriminant?: boolean;             // true if this is a discriminant field access
+      ofVariant?: string }                  // which union variant the field is read from, when narrowing determined it
+  | { kind: "record"; spread: TExpr | null; fields: TRecordField[]; ty: Ty }
   | { kind: "arrayLiteral"; elems: TExpr[]; ty: Ty }
-  | { kind: "lambda"; params: { name: string; ty: Ty }[]; body: TStmt[]; ty: Ty }
+  | { kind: "lambda"; params: TParam[]; body: TStmt[]; ty: Ty }
   | { kind: "conditional"; cond: TExpr; then: TExpr; else: TExpr; ty: Ty }
   | { kind: "optChain"; obj: TExpr; chain: TChainStep[]; ty: Ty }
   | { kind: "nullish"; left: TExpr; right: TExpr; ty: Ty }
   | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
       someBody: TExpr; noneBody: TExpr; ty: Ty }
   | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
-      cases: { variant: string; body: TExpr }[];
+      cases: TExprCase[];
       fallthrough: TExpr | null; ty: Ty }
   // Spec-only (from //@ annotations):
   // Note: \result is desugared by resolve.ts into a regular var named "\\result";
@@ -128,7 +231,7 @@ export type TStmt =
       doneWith: TExpr | null;
       body: TStmt[] }
   | { kind: "switch"; expr: TExpr; discriminant: string;
-      cases: { label: string; body: TStmt[] }[];
+      cases: TSwitchCase[];
       defaultBody: TStmt[] }
   | { kind: "forof"; names: string[]; nameTypes: Ty[]; iterable: TExpr;
       invariants: TExpr[]; doneWith: TExpr | null; body: TStmt[] }
@@ -139,13 +242,14 @@ export type TStmt =
   | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
       someBody: TStmt[]; noneBody: TStmt[] }
   | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
-      cases: { variant: string; body: TStmt[] }[];
+      cases: TStmtCase[];
       fallthrough: TStmt[] }
 
 /** Statement kinds that unconditionally leave the enclosing block. Shared by
  *  resolve (block-tail narrowing) and narrow (isTerminating); works on raw and
  *  typed IR alike since both use these kind strings. */
 export function isTerminatorKind(kind: string): boolean {
+  //@ verify
   return kind === "return" || kind === "throw" || kind === "break" || kind === "continue";
 }
 
@@ -172,7 +276,7 @@ export interface TFunction {
 
 export interface TClass {
   name: string;
-  fields: { name: string; ty: Ty }[];
+  fields: TParam[];
   methods: TFunction[];
 }
 

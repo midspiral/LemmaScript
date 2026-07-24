@@ -551,6 +551,214 @@ Each is a generally useful feature independent of self-application:
    spec-carrying LS, pleasingly), no `JSON.stringify` equality, and check
    `flatMap`/`Object.entries` coverage against actual pass usage.
 
+### 8.6 Porting doctrine: extend the toolchain, don't contort the source
+
+*Adopted 2026-07-22, out of the peephole port survey (§9 step 9).*
+
+When a module port hits a subset gap, the default is to extend the
+toolchain, not rewrite the module: if the blocked idiom is one a
+reasonable LemmaScript user would write, the port has found a missing
+feature, and the fix belongs in the compiler — each such extension is a
+generally useful feature independent of self-application (§8.5's own
+test). A source rewrite is justified only when:
+
+- the design already condemns the idiom (module-level mutable state,
+  §6.1; hand-rolling a walker `ir.ts` already exports);
+- the idiom is genuine parametricity, which the ecosystem's erasure
+  doctrine deliberately omits (§5.1); or
+- verification irreducibly demands something no emitter strategy can
+  waive (a termination argument for non-structural recursion).
+
+This keeps §8.3 honest: the port grows the subset as a standing
+gauntlet, rather than bending the codebase to fit today's subset.
+
+Empirical anchors from the survey (minimal repros, 2026-07-22):
+
+- **Imports-as-axioms is the P0 cross-module answer, and it already
+  works.** Imported functions emit as body-less `{:axiom}` functions;
+  imported union types re-synthesize as full datatypes. Each
+  self-applied module stays an independently checkable artifact. Real
+  linking (`include` of the already-generated `.dfy`) is the named
+  escalation path, triggered by the first P1 lemma that must see
+  through an import boundary.
+- **Predicate-position HOFs verify because they lower to quantifiers**
+  (`.some(a => anyExpr(a, pred))` → `exists a :: a in args && …`),
+  whose termination Dafny discharges structurally — this is why
+  `ir.dfy`'s walkers verify. Rebuild-position `.map` lowers to
+  `Std.Collections.Seq.Map`, through which recursive calls do not
+  termination-check; the semantically identical seq comprehension
+  `seq(|s|, i requires 0 <= i < |s| => f(s[i]))` verifies.
+- **Mutable-capture closures** (`let found = false` flipped inside a
+  lambda) are a genuine deep gap — effectful closures have no model in
+  the pure fragment. Not scheduled: every current use in the portable
+  core is a hand-rolled walker that `ir.ts` queries replace (R2 below).
+
+**Extension ledger** (each lands with a gauntlet run; E2 is a
+deliberate output change, documented per §10.1):
+
+| # | Extension | Status |
+|---|---|---|
+| E1 | Imported named record types expand to structures (previously they synthesized opaque, so rebuilding an imported record — `{ ...a, body }` on a `MatchArm` — failed as a datatype update on an opaque type) | done (2026-07-22): the semantic import resolver stopped at anonymous union variants (`__type` symbols), so variant fields were never walked; it now recurses into them, with a compiler-`Type`-keyed visited set since recursive unions become reachable. Gauntlet byte-for-byte on both backends; one deliberate self-run artifact change: `ir.dfy`'s imported `Ty` upgraded from opaque to the full datatype, re-verified |
+| E2 | Array `.map` lowers to a seq comprehension so recursive rebuild walkers termination-check (mirrors the `.some`/`.every` quantifier lowering); also drops the `Std` dependency for map | done (2026-07-22), Dafny only: one uniform lowering — `seq(\|s\|, i requires 0 <= i < \|s\| => …)` with a literal lambda beta-reduced through a `var` binding (an applied closure defeats the termination checker; verified empirically) and any other argument applied to `s[i]` directly; `Seq.Map` is gone. Index freshness is an IR-level `usesName` check (no string scanning), a local check until §6.3. Deliberate output change (§10.1): 7 gauntlet examples + `ir.dfy` re-lowered, all re-verified. Lean's `.map` is untouched — revisit with the deferred mutual-block work if Lean termination needs it |
+| E3 | `const`-bound lambda aliases (`const r = (x) => walk(x, f)`) work when called from inside a nested lambda — direct calls and direct-position uses already work; only this composition breaks | done (2026-07-23), in two general halves: calls through fn-typed values (locals, parameters) classify pure — the fragment has no effectful closures, so lifting them to statement binds (which forced lambdas multi-statement) was never needed; and lambdas always take their return type from the checker, so unannotated lambdas carry a real fn type. Gauntlet byte-for-byte on both backends |
+| E4 | `find` builtin: registry entry, both lowerings, matrix row (§10.2) | open — no longer on peephole's path (R3's monomorphic split uses direct two-arm checks); still generally useful |
+| E5 | Structured rejection instead of garbage output for function-valued consts and anonymous-record generic bounds (today: `type { pattern: MatchPattern; body: any }(==)` — invalid Dafny) | open — peephole's instance dissolved with R3; the general rejection is still owed. Related fixed en route (2026-07-24): a call through an indexed function value (`rules[i](e)`) crashed transform outright rather than rejecting |
+
+**Rewrite ledger** for `peephole.ts`, each justified by doctrine, not
+subset-appeasement:
+
+| # | Rewrite | Justification | Status |
+|---|---|---|---|
+| R1 | `EXPR_RULES` mutable module global with per-backend reassignment → direct rule chain with a threaded backend flag | §6.1, already adopted | done (2026-07-23) — exactly as prescribed; a rules-array attempt confirmed the fragment has no function-valued collections (`rules[i](e)` is out), so the direct chain is what remains |
+| R2 | private `mapExpr` + `containsVarRef*` → ir.ts `usesName`/`usesNameInStmts` (~100 lines deleted) | reuse-walkers agreement; also removes peephole's only mutable-capture closures | done (2026-07-23); also closed a latent hole — the private check didn't look inside lambda bodies before dropping a binding |
+| R3 | `getSomeNoneArms<A>` → two monomorphic helpers (`MatchArm` / `StmtMatchArm` arms) | genuine parametricity — its `body` is `Expr` in one instantiation, `Stmt[]` in the other; erasure doctrine (§5.1) has no honest single bound | done (2026-07-23), with direct two-arm checks (decoupled from E4) and named result records |
+| R4 | fixed-point rewrite loop gets an explicit fuel parameter (`//@ decreases fuel`) | irreducible verification price; the `guard < 100` counter is fuel already. The lexicographic (match-count, if-count) measure — rules 1/6 drop match-count, rules 2–5 preserve it and drop if-count — is shelved as future P1 content | done (2026-07-24), stronger than planned: fuel rejected; the loops became plain recursion and real termination is proven Dafny-side (see the order note below). The lexicographic-count measure itself turned out unsound under rule duplication (`k in m … m[k]` copies the receiver); the proof instead weighs only the non-normal part of the term, which is immune to duplicating already-rewritten subtrees |
+
+Order: E1–E2 first (they gate every rebuild-style walker, not just
+peephole), then E3, then E4–E5 as convenient; then R1–R4; then annotate
+`peephole.ts` and add it to `LemmaScript-files.txt`. Done when peephole
+is P0/T0 on Dafny in the self-run.
+
+*Outcome (2026-07-24): exceeded — peephole is in the self-run at P1/T0.
+`peephole.dfy` (555 generated lines + ~1,400 hand-authored, additions-only
+under the regen merge) machine-checks, per its `LemmaScript-files.txt`
+entry (extra per-file Dafny flags after the timeout; the proof needs a Z3
+quantifier-instantiation throttle, `smt.qi.eager_threshold=30`):*
+
+- *termination of the whole rewrite engine — no fuel, no rule guard: the
+  measure weighs only the non-normal part of a term, so duplicated
+  receivers (already normalized by the bottom-up engine) weigh zero;*
+- *normalization — engine output provably contains no firable rule and no
+  mergeable statement pair;*
+- *idempotence — normal input provably passes through unchanged;*
+- *per-rule strict decrease, and full normality of merged statements.*
+
+*The proof forced three engine fixes, each landed in TS gauntlet-clean:
+the pair scan now iterates to a fixed point (a merge can expose a new
+adjacent pair; each merge shortens the list, bounding the passes);
+constructor arguments and map-literal entries joined the rebuild walk
+(they were silently skipped); and `while`'s `decreasing`/`doneWith` spec
+fields are documented as deliberately un-peepholed rather than silently
+assumed normal. En route, two general toolchain features landed (both
+gauntlet byte-for-byte): variant narrowing in resolve — positive
+discriminant checks in `&&`-chains and negated checks in early-return
+guards now narrow, and union field reads resolve against the narrowed
+variant — and variant-aware destructor naming, where reads and datatype
+updates of collision-renamed fields (`value_bool`, `body_let`) translate
+correctly via ctor pinning (by field type, or match-arm context) and
+union-qualified rename keys.*
+
+**Narrow port survey** (minimal repros, 2026-07-24; `narrow.ts` ports
+together with `condition-facts.ts`, §8.3):
+
+- **Confirmed already-supported**, beyond the peephole precedents (spread
+  updates, `??` rule chains, mutual recursion, slice recursion): `Set`
+  locals lower to Dafny `set` with `{}`/`in`/`+` and verify; C-style `for`
+  loops in both directions, including non-null-asserted indexing (`xs[i]!`);
+  template literals — including number interpolation, which synthesizes
+  `NatToString`/`IntToString` (covers `freshOcBinder`'s `` `_oc${n}_val` ``).
+- **Imported records with fn-valued fields synthesize opaque.** narrow reads
+  one bit through such a record (`builtinSpec(id).pure` in
+  `containsMethodCall`); the opaque `Spec(==)` synthesis makes the field
+  read a resolution error. Fix on the builtins side: export a scalar
+  accessor (`builtinPure(id): boolean`), which axiomatizes cleanly — a
+  first, tiny step of §8.3's "builtins.ts P1 after reshaping".
+- **Three new garbage-output shapes for E5**, all avoided by the rewrites
+  below so none blocks the port: datatype-field assignment inside a match
+  arm emits `e.isDiscriminant := true;` (invalid); a generic record decl
+  leaks its free type var (`datatype Found = Found(check: C, …)`);
+  `Extract<>`/indexed-access aliases emit `type Chain["steps"](==)`.
+- **`array.find` has a registry entry but no Dafny lowering**
+  ("Unsupported Dafny method call: .find()") — E4 returns to the critical
+  path via `typeofStringFact`'s `decl.variants?.find(...)`.
+- **`freshName` needs no rewrite for the port**: it is deterministic
+  w.r.t. the module's seeded user-name set (same hint → same result), so
+  at P0/T0 it axiomatizes as a pure imported function. The §6.2
+  `NameSupply` refactor is what the P1 *freshness contract* needs, not the
+  port.
+
+**Rewrite ledger** for `narrow.ts`/`condition-facts.ts`, per doctrine:
+
+| # | Rewrite | Justification | Status |
+|---|---|---|---|
+| N-R1 | `CondCtx.oc` mutable counter (`ctx.oc.n++` — extract rejects the expression outright) → thread it: `freshOcBinder` returns name + next ctx | §6.1/§6.2 already condemn mutation-through-reference; the first real NameSupply-shaped state | open |
+| N-R2 | `restoreDiscriminantFlag`'s in-place `unwrapped.isDiscriminant = true` → return the rebuilt node | the pure fragment has no datatype mutation (today's emission for that shape is invalid Dafny) | open |
+| N-R3 | `extractConjunct<C>` with fn-valued `parse` → two monomorphic extractors (presence, isArray) | genuine parametricity; mirrors peephole R3 | open |
+| N-R4 | `binderHintForMapAccess`'s regex `.replace(/_val$/…)`/`(/^_/…)` → `endsWith`/`slice` string helpers | §8.5 named exactly this; `string.replace` is not a builtin at all | open |
+| N-R5 | `ruleDiscriminantChain`'s nested `function collectElse` closing over mutable `cases` → top-level recursion returning values | mutable-capture closure, the known deep gap (§8.6 anchors); extract rejects nested fn decls anyway | open |
+| N-R6 | no-init `residualLeaves.reduce((a, b) => a \|\| b)` → recursive or-fold helper | the no-init form has no lowering (and an empty-list hazard besides) | open |
+| N-R7 | `Extract<TExpr, {kind:"optChain"}>` / `OptChain["chain"]` → use typedir's already-named `TChainStep[]` | type-level operators have no backend model; two-line change | open |
+| N-R8 | narrow's `builtinSpec(id).pure` → `builtinPure(id)` scalar accessor in `builtins.ts` | fn-valued record fields don't cross the import boundary (repro above) | open |
+
+**Proof outlook.** The engine re-walks freshly constructed terms (every
+`&&`-driver re-walks its residual; `ruleEarlyReturnOrChain` duplicates the
+terminating branch across None arms), so termination is again the
+irreducible price, and peephole's active-weight architecture (§8.7) is the
+template: weigh only un-narrowed condition material (presence checks,
+`optChain`/`nullish` nodes, isArray conjuncts) — every rule strictly
+consumes some of it, and duplicated already-walked branches weigh zero.
+The flagship P1 property is catalog #2, desugaring completeness: engine
+output provably contains no `optChain`/`nullish` node.
+
+Order: N-R7, N-R2, N-R4, N-R6, N-R8 first (small; each is a pure refactor
+gated byte-for-byte); then E4; then N-R3, N-R5, N-R1; then annotate and
+add to `LemmaScript-files.txt` (P0); then the termination + completeness
+proofs (P1).
+
+### 8.7 Proof-carrying self-run modules: conventions
+
+*Distilled from the peephole proof (2026-07-24); binding for later ports
+(`narrow` next). `peephole.dfy` is the exemplar.*
+
+**Layering.** A proof-carrying `.dfy` is the generated text plus hand
+additions, nothing else — `dafnyCheckDiff` enforces additions-only and the
+three-way regen merge preserves the additions. Hand lines may be inserted
+*between* generated lines, including inside function bodies (assert and
+lemma-call statement-expressions before a case's result expression) and
+between a generated signature and its `{` (requires/ensures/decreases).
+Never modify a generated line, and keep the generated case *order*: when a
+source change reorders the emitted match arms, relocate the hand blocks to
+follow. Prefer standalone lemmas over in-body scaffolding where possible —
+they cannot conflict in the merge.
+
+**Verifier flags.** `LemmaScript-files.txt` entries are
+`filepath [timeout_seconds] [extra dafny flags…]`; a timeout above 60s
+degrades the entry to gen-check in CI unless `--slow`. Peephole needs
+`--boogie /proverOpt:O:smt.qi.eager_threshold=30`: the mutually recursive
+predicate/measure families induce a Z3 quantifier-matching loop that makes
+even trivial assertions diverge, and the threshold tames it. Expect the
+same for future proof-carrying modules.
+
+**Dafny idioms that recur** (each cost an iteration to discover):
+
+- Seq-of-datatype recursion terminates only in single structural steps:
+  the element hop (`ss[0]`) and the field hop (`.body`) must be separate
+  functions — a combined `f(ss[0].body)` defeats the rank axioms.
+- Definitional unfolding at a symbolic term often needs a
+  constructor-reconstruction assert first:
+  `assert e == Expr.match_(e.scrutinee, e.arms);`.
+- A lemma invoked from inside a recursive group must keep function
+  applications out of its `requires` (pass pointwise facts instead), or it
+  joins the call graph and needs its own aligned `decreases`.
+- Same-argument mutual definitions (a predicate and its kids-predicate)
+  need explicit tier decreases: `decreases x, 1` / `decreases x, 0`.
+- Elem-bound lemmas state forall-ensures and bridge slices with
+  `assert forall j | 1 <= j < |es| :: es[j] == es[1..][j-1];`.
+
+**Peephole's proof architecture**, for orientation: a normality-predicate
+family mirrors exactly what the engine can fire on (per-node rules, list
+pair-redexes matching the scan, and a deliberate exclusion — `while`'s
+`decreasing`/`doneWith` spec fields are never rewritten, so normality does
+not claim them). The termination measure is *active weight*: normal
+subtrees weigh zero — which is what makes rule-duplicated receivers
+harmless with no rule guard — with root charges ordering the rule chain
+(match/let 3, if 2, other 1) and a padded list weight (`PSs`) dominating
+elementwise-normalized lists. Engine decreases are 4-component nat tuples
+(active weight, structural size, list length, tier). Rule lemmas prove
+each fired rule strictly shrinks the weight; the engine's ensures give
+normalization (output is normal) and idempotence (normal input is
+returned unchanged).
+
 ## 9. Roadmap
 
 Ordered so the mechanical, immediately-paying work leads. The baseline for
@@ -623,8 +831,85 @@ with no annotation is not started.*
 7. **Backend name allocator** (§6.3) with collision tests.
 8. **Self-apply the leaves:** `names.ts`, portable type helpers/`typedir`,
    IR walkers; P1 contracts (freshness, keywords); CI self-run targets.
+   — *partial (2026-07-21): `typedir.ts` is the first self-compiled module —
+   P0/T0 on Dafny (`lsc check` on the live source: generation + Dafny
+   verification clean, including the mutually recursive `TExpr`/`TStmt`
+   datatypes and the `tyEqual`/`tysEqual` mutual recursion, whose
+   termination Dafny proves from default rank measures — explicit
+   `decreases` pragmas are unnecessary and in fact break the joint
+   measure). Enabling toolchain work, all gauntlet byte-for-byte: extract
+   recovers declared type text where the semantic printer degrades
+   self-referential aliases to `__type`; transform generates per-union
+   discriminator functions (`Ty_kind`) for surviving `.kind`-as-value
+   reads; both emitters sanitize constructor names from source strings
+   (`"spec-pure"` → Dafny `spec_pure`, Lean `«spec-pure»`). Source-side:
+   typedir's inline payload records are named (`TRecordField` etc. —
+   anonymous record types have no backend model) and `tyEqual`'s
+   indexed-`every` calls became recursive `tysEqual`/`stringsEqual`.
+   Lean self-compilation stays blocked on the deferred mutual-block
+   emission (step 1). Self-run wired (2026-07-22) via the ecosystem's own
+   convention: a root `LemmaScript-files.txt` lists the self-applied
+   modules (compiler only — the `examples/` gauntlet is fixtures with its
+   own driver, not the repo's verified surface), sources carry
+   `//@ backend dafny` until Lean un-defers, and `./tools/check.sh dafny`
+   with no arguments is the self-run. The `.dfy` artifacts are checked in
+   beside the sources, ready to host hand-authored P1 lemmas via the
+   regen merge. CI: a dedicated `self-verify` job in `ci.yml` runs the
+   same batch (`check.sh dafny`) with the checkout's own toolchain.
+   Deliberately not the reusable `verify.yml`: that workflow means
+   "verify against an external LemmaScript ref" (right for case studies,
+   and its clone path collides with the compiler repo's own workspace);
+   the self-run means "gate the change with its own code" — a real
+   semantic difference, kept visible rather than special-cased. Also
+   deliberately not a case-studies-matrix entry: an entry would verify
+   main's sources/artifacts with the PR's toolchain, going red exactly on
+   PRs that legitimately regenerate the self-run artifacts in-PR. This is
+   T0 per §8.2: the translator is trusted — the proofs are about what
+   this compiler generated from itself, not compiler correctness.
+   First P1 content (2026-07-22), lifting `typedir` to P1(partial)/T0:
+   **`tyEqual` is an equivalence relation** — reflexivity, symmetry, and
+   transitivity, each with its `tysEqual`/`stringsEqual` companion — the
+   property the compiler implicitly leans on wherever it dedupes or
+   compares types. Convention (quorum-style): each lemma is *stated as a
+   TypeScript function* in `typedir.ts` (`tyEqualTrans(a, b, c)` with
+   `//@ requires`/`//@ ensures \result === true`), so what holds is
+   readable without leaving TS; the inductive proof is hand-authored
+   inside the generated `_ensures` lemma body in `typedir.dfy`, preserved
+   by the regen merge, verified by the self-run (17 obligations, all
+   discharged; `tysEqual` also carries an auto-proved length-preservation
+   ensures). Note the mode rule this surfaced: once any function in a
+   module carries `//@ verify`, generation is opt-in — every function of
+   a self-applied module must be annotated.
+   `ir.ts` (2026-07-22): P0 on Dafny — self-compiles and verifies (the
+   full `Expr`/`Stmt`/decl datatype family, the mutually recursive
+   walkers, fn-type aliases, rest params). The last blocker was
+   `Match.scrutinee: string | Expr` (a bare string as shorthand for a var
+   scrutinee); it is now `Expr` everywhere — *type the IR seams: a string
+   standing in for a node at a layer boundary makes every consumer pay a
+   `typeof` toll, and such unions are unmodelable in the subset*. The
+   refactor was byte-for-byte (Dafny's scrutinee printer already escaped
+   both forms identically) and deleted the string branch from every match
+   consumer in transform, peephole, and both emitters.
+   Toolchain gained along the way (all gauntlet byte-for-byte):
+   undeclared user types synthesize opaque decls (imported types are
+   opaque by default — the coarse first half of the cross-module story,
+   matching the `_synthOpaque` doctrine); `CTOR_MAP` lookups are
+   `Object.hasOwn`-guarded (a variant literally named `constructor` hit
+   `Object.prototype.constructor`); collision-suffixed destructor names
+   sanitize. Source-side IR cleanups: `constructor.args` is required
+   (`Expr[]`, not optional — the shared-field-name/different-optionality
+   clash misled variant-blind field typing); ir's inline payload records
+   are named (`Param`, `RecordField`, `MapEntry`, `CtorInfo`,
+   `EmitOption`). Still ahead: the scrutinee PR (completes ir P0),
+   `names.ts` after its §6 refactor (first P1 freshness target), full
+   cross-module imports (§8.5).*
 9. **`peephole`, then `narrow`** in-subset with completeness + freshness
-   contracts.
+   contracts. — *peephole done (2026-07-24), at P1/T0 with proofs beyond
+   the plan: machine-checked termination (fuel-free), normalization, and
+   idempotence; ledger outcomes and the three proof-driven engine fixes
+   are annotated in §8.6. `narrow` is next: port survey done
+   (2026-07-24) — repro findings and the N-R1–N-R8 rewrite ledger are in
+   §8.6; code not started.*
 10. **Portable `resolve` core, `specparser`, emitter cores** — transform
     ports stage-by-stage here, which is when §7's split naturally happens.
 11. **First T1 experiment:** execute one generated verified pass.
