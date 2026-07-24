@@ -600,24 +600,53 @@ deliberate output change, documented per §10.1):
 |---|---|---|
 | E1 | Imported named record types expand to structures (previously they synthesized opaque, so rebuilding an imported record — `{ ...a, body }` on a `MatchArm` — failed as a datatype update on an opaque type) | done (2026-07-22): the semantic import resolver stopped at anonymous union variants (`__type` symbols), so variant fields were never walked; it now recurses into them, with a compiler-`Type`-keyed visited set since recursive unions become reachable. Gauntlet byte-for-byte on both backends; one deliberate self-run artifact change: `ir.dfy`'s imported `Ty` upgraded from opaque to the full datatype, re-verified |
 | E2 | Array `.map` lowers to a seq comprehension so recursive rebuild walkers termination-check (mirrors the `.some`/`.every` quantifier lowering); also drops the `Std` dependency for map | done (2026-07-22), Dafny only: one uniform lowering — `seq(\|s\|, i requires 0 <= i < \|s\| => …)` with a literal lambda beta-reduced through a `var` binding (an applied closure defeats the termination checker; verified empirically) and any other argument applied to `s[i]` directly; `Seq.Map` is gone. Index freshness is an IR-level `usesName` check (no string scanning), a local check until §6.3. Deliberate output change (§10.1): 7 gauntlet examples + `ir.dfy` re-lowered, all re-verified. Lean's `.map` is untouched — revisit with the deferred mutual-block work if Lean termination needs it |
-| E3 | `const`-bound lambda aliases (`const r = (x) => walk(x, f)`) work when called from inside a nested lambda — direct calls and direct-position uses already work; only this composition breaks | open |
-| E4 | `find` builtin: registry entry, both lowerings, matrix row (§10.2) | open |
-| E5 | Structured rejection instead of garbage output for function-valued consts and anonymous-record generic bounds (today: `type { pattern: MatchPattern; body: any }(==)` — invalid Dafny) | open |
+| E3 | `const`-bound lambda aliases (`const r = (x) => walk(x, f)`) work when called from inside a nested lambda — direct calls and direct-position uses already work; only this composition breaks | done (2026-07-23), in two general halves: calls through fn-typed values (locals, parameters) classify pure — the fragment has no effectful closures, so lifting them to statement binds (which forced lambdas multi-statement) was never needed; and lambdas always take their return type from the checker, so unannotated lambdas carry a real fn type. Gauntlet byte-for-byte on both backends |
+| E4 | `find` builtin: registry entry, both lowerings, matrix row (§10.2) | open — no longer on peephole's path (R3's monomorphic split uses direct two-arm checks); still generally useful |
+| E5 | Structured rejection instead of garbage output for function-valued consts and anonymous-record generic bounds (today: `type { pattern: MatchPattern; body: any }(==)` — invalid Dafny) | open — peephole's instance dissolved with R3; the general rejection is still owed. Related fixed en route (2026-07-24): a call through an indexed function value (`rules[i](e)`) crashed transform outright rather than rejecting |
 
 **Rewrite ledger** for `peephole.ts`, each justified by doctrine, not
 subset-appeasement:
 
 | # | Rewrite | Justification | Status |
 |---|---|---|---|
-| R1 | `EXPR_RULES` mutable module global with per-backend reassignment → direct rule chain with a threaded backend flag | §6.1, already adopted | open |
-| R2 | private `mapExpr` + `containsVarRef*` → ir.ts `usesName`/`usesNameInStmts` (~100 lines deleted) | reuse-walkers agreement; also removes peephole's only mutable-capture closures | open |
-| R3 | `getSomeNoneArms<A>` → two monomorphic helpers (`MatchArm` / `StmtMatchArm` arms) | genuine parametricity — its `body` is `Expr` in one instantiation, `Stmt[]` in the other; erasure doctrine (§5.1) has no honest single bound | open |
-| R4 | fixed-point rewrite loop gets an explicit fuel parameter (`//@ decreases fuel`) | irreducible verification price; the `guard < 100` counter is fuel already. The lexicographic (match-count, if-count) measure — rules 1/6 drop match-count, rules 2–5 preserve it and drop if-count — is shelved as future P1 content | open |
+| R1 | `EXPR_RULES` mutable module global with per-backend reassignment → direct rule chain with a threaded backend flag | §6.1, already adopted | done (2026-07-23) — exactly as prescribed; a rules-array attempt confirmed the fragment has no function-valued collections (`rules[i](e)` is out), so the direct chain is what remains |
+| R2 | private `mapExpr` + `containsVarRef*` → ir.ts `usesName`/`usesNameInStmts` (~100 lines deleted) | reuse-walkers agreement; also removes peephole's only mutable-capture closures | done (2026-07-23); also closed a latent hole — the private check didn't look inside lambda bodies before dropping a binding |
+| R3 | `getSomeNoneArms<A>` → two monomorphic helpers (`MatchArm` / `StmtMatchArm` arms) | genuine parametricity — its `body` is `Expr` in one instantiation, `Stmt[]` in the other; erasure doctrine (§5.1) has no honest single bound | done (2026-07-23), with direct two-arm checks (decoupled from E4) and named result records |
+| R4 | fixed-point rewrite loop gets an explicit fuel parameter (`//@ decreases fuel`) | irreducible verification price; the `guard < 100` counter is fuel already. The lexicographic (match-count, if-count) measure — rules 1/6 drop match-count, rules 2–5 preserve it and drop if-count — is shelved as future P1 content | done (2026-07-24), stronger than planned: fuel rejected; the loops became plain recursion and real termination is proven Dafny-side (see the order note below). The lexicographic-count measure itself turned out unsound under rule duplication (`k in m … m[k]` copies the receiver); the proof instead weighs only the non-normal part of the term, which is immune to duplicating already-rewritten subtrees |
 
 Order: E1–E2 first (they gate every rebuild-style walker, not just
 peephole), then E3, then E4–E5 as convenient; then R1–R4; then annotate
 `peephole.ts` and add it to `LemmaScript-files.txt`. Done when peephole
 is P0/T0 on Dafny in the self-run.
+
+*Outcome (2026-07-24): exceeded — peephole is in the self-run at P1/T0.
+`peephole.dfy` (555 generated lines + ~1,400 hand-authored, additions-only
+under the regen merge) machine-checks, per its `LemmaScript-files.txt`
+entry (extra per-file Dafny flags after the timeout; the proof needs a Z3
+quantifier-instantiation throttle, `smt.qi.eager_threshold=30`):*
+
+- *termination of the whole rewrite engine — no fuel, no rule guard: the
+  measure weighs only the non-normal part of a term, so duplicated
+  receivers (already normalized by the bottom-up engine) weigh zero;*
+- *normalization — engine output provably contains no firable rule and no
+  mergeable statement pair;*
+- *idempotence — normal input provably passes through unchanged;*
+- *per-rule strict decrease, and full normality of merged statements.*
+
+*The proof forced three engine fixes, each landed in TS gauntlet-clean:
+the pair scan now iterates to a fixed point (a merge can expose a new
+adjacent pair; each merge shortens the list, bounding the passes);
+constructor arguments and map-literal entries joined the rebuild walk
+(they were silently skipped); and `while`'s `decreasing`/`doneWith` spec
+fields are documented as deliberately un-peepholed rather than silently
+assumed normal. En route, two general toolchain features landed (both
+gauntlet byte-for-byte): variant narrowing in resolve — positive
+discriminant checks in `&&`-chains and negated checks in early-return
+guards now narrow, and union field reads resolve against the narrowed
+variant — and variant-aware destructor naming, where reads and datatype
+updates of collision-renamed fields (`value_bool`, `body_let`) translate
+correctly via ctor pinning (by field type, or match-arm context) and
+union-qualified rename keys.*
 
 ## 9. Roadmap
 
@@ -764,9 +793,10 @@ with no annotation is not started.*
    `names.ts` after its §6 refactor (first P1 freshness target), full
    cross-module imports (§8.5).*
 9. **`peephole`, then `narrow`** in-subset with completeness + freshness
-   contracts. — *in progress (2026-07-22): peephole blocker survey done;
-   the porting doctrine it produced, the empirical findings, and the
-   tracked extension/rewrite ledgers (E1–E5, R1–R4) are in §8.6.*
+   contracts. — *peephole done (2026-07-24), at P1/T0 with proofs beyond
+   the plan: machine-checked termination (fuel-free), normalization, and
+   idempotence; ledger outcomes and the three proof-driven engine fixes
+   are annotated in §8.6. `narrow` is next.*
 10. **Portable `resolve` core, `specparser`, emitter cores** — transform
     ports stage-by-stage here, which is when §7's split naturally happens.
 11. **First T1 experiment:** execute one generated verified pass.
