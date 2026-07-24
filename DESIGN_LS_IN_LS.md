@@ -648,6 +648,60 @@ updates of collision-renamed fields (`value_bool`, `body_let`) translate
 correctly via ctor pinning (by field type, or match-arm context) and
 union-qualified rename keys.*
 
+### 8.7 Proof-carrying self-run modules: conventions
+
+*Distilled from the peephole proof (2026-07-24); binding for later ports
+(`narrow` next). `peephole.dfy` is the exemplar.*
+
+**Layering.** A proof-carrying `.dfy` is the generated text plus hand
+additions, nothing else — `dafnyCheckDiff` enforces additions-only and the
+three-way regen merge preserves the additions. Hand lines may be inserted
+*between* generated lines, including inside function bodies (assert and
+lemma-call statement-expressions before a case's result expression) and
+between a generated signature and its `{` (requires/ensures/decreases).
+Never modify a generated line, and keep the generated case *order*: when a
+source change reorders the emitted match arms, relocate the hand blocks to
+follow. Prefer standalone lemmas over in-body scaffolding where possible —
+they cannot conflict in the merge.
+
+**Verifier flags.** `LemmaScript-files.txt` entries are
+`filepath [timeout_seconds] [extra dafny flags…]`; a timeout above 60s
+degrades the entry to gen-check in CI unless `--slow`. Peephole needs
+`--boogie /proverOpt:O:smt.qi.eager_threshold=30`: the mutually recursive
+predicate/measure families induce a Z3 quantifier-matching loop that makes
+even trivial assertions diverge, and the threshold tames it. Expect the
+same for future proof-carrying modules.
+
+**Dafny idioms that recur** (each cost an iteration to discover):
+
+- Seq-of-datatype recursion terminates only in single structural steps:
+  the element hop (`ss[0]`) and the field hop (`.body`) must be separate
+  functions — a combined `f(ss[0].body)` defeats the rank axioms.
+- Definitional unfolding at a symbolic term often needs a
+  constructor-reconstruction assert first:
+  `assert e == Expr.match_(e.scrutinee, e.arms);`.
+- A lemma invoked from inside a recursive group must keep function
+  applications out of its `requires` (pass pointwise facts instead), or it
+  joins the call graph and needs its own aligned `decreases`.
+- Same-argument mutual definitions (a predicate and its kids-predicate)
+  need explicit tier decreases: `decreases x, 1` / `decreases x, 0`.
+- Elem-bound lemmas state forall-ensures and bridge slices with
+  `assert forall j | 1 <= j < |es| :: es[j] == es[1..][j-1];`.
+
+**Peephole's proof architecture**, for orientation: a normality-predicate
+family mirrors exactly what the engine can fire on (per-node rules, list
+pair-redexes matching the scan, and a deliberate exclusion — `while`'s
+`decreasing`/`doneWith` spec fields are never rewritten, so normality does
+not claim them). The termination measure is *active weight*: normal
+subtrees weigh zero — which is what makes rule-duplicated receivers
+harmless with no rule guard — with root charges ordering the rule chain
+(match/let 3, if 2, other 1) and a padded list weight (`PSs`) dominating
+elementwise-normalized lists. Engine decreases are 4-component nat tuples
+(active weight, structural size, list length, tier). Rule lemmas prove
+each fired rule strictly shrinks the weight; the engine's ensures give
+normalization (output is normal) and idempotence (normal input is
+returned unchanged).
+
 ## 9. Roadmap
 
 Ordered so the mechanical, immediately-paying work leads. The baseline for
