@@ -237,9 +237,17 @@ function rewriteStmtListPairs(stmts: Stmt[], backend: Backend): Stmt[] {
   return [stmts[0], ...rewriteStmtListPairs(stmts.slice(1), backend)];
 }
 
+/** Pair-scan to a fixed point: a merge can flip a later gate and expose a new
+ *  adjacent pair, so rescan until a pass merges nothing. Each merge shortens
+ *  the list, so passes are bounded by the list length. */
+function pairScanToFix(stmts: Stmt[], backend: Backend): Stmt[] {
+  const once = rewriteStmtListPairs(stmts, backend);
+  return once.length < stmts.length ? pairScanToFix(once, backend) : once;
+}
+
 /** Peephole a statement list: per-stmt rules first, then pair rules. */
 function peepholeStmts(stmts: Stmt[], backend: Backend): Stmt[] {
-  return rewriteStmtListPairs(stmts.map(s => peepholeStmt(s, backend)), backend);
+  return pairScanToFix(stmts.map(s => peepholeStmt(s, backend)), backend);
 }
 
 // ── Bottom-up rewrite to fixed point at each node ───────────
