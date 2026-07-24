@@ -28,6 +28,10 @@ on:
         description: 'Run npm ci && npm run typecheck in the calling repo'
         type: boolean
         default: true
+      setup:
+        description: 'Shell to run before npm ci (e.g. clone file: sibling deps)'
+        type: string
+        default: ''
 
 jobs:
   verify:
@@ -39,6 +43,10 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
+
+      - name: Setup (pre-npm)
+        if: inputs.setup != ''
+        run: ${{ inputs.setup }}
 
       - name: Typecheck
         if: inputs.typecheck
