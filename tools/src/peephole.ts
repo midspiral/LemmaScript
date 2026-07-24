@@ -257,33 +257,36 @@ function peepholeExpr(e: Expr, backend: Backend): Expr {
   return hit !== null ? peepholeExpr(hit, backend) : cur;
 }
 
+// Direct recursive calls throughout (no `const r = (x) => …` shorthand): a
+// call through a lambda-bound alias erases the callee's argument from the
+// termination measure, so the generated Dafny cannot prove these walkers
+// terminate (the closure's parameter is unbounded at its definition site).
 function rewriteChildrenExpr(e: Expr, backend: Backend): Expr {
-  const r = (x: Expr) => peepholeExpr(x, backend);
   switch (e.kind) {
     case "var": case "num": case "bool": case "str": case "constructor":
     case "emptyMap": case "emptySet": case "havoc": case "default": case "mapLiteral": return e;
-    case "binop": return { ...e, left: r(e.left), right: r(e.right) };
-    case "unop": return { ...e, expr: r(e.expr) };
-    case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };
-    case "app": return { ...e, args: e.args.map(r) };
-    case "field": return { ...e, obj: r(e.obj) };
-    case "toNat": return { ...e, expr: r(e.expr) };
-    case "toReal": return { ...e, expr: r(e.expr) };
-    case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
-    case "tupleLiteral": return { ...e, elems: e.elems.map(r) };
-    case "tupleProj": return { ...e, obj: r(e.obj) };
-    case "record": return { ...e, spread: e.spread ? r(e.spread) : null,
-      fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
-    case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
-    case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
+    case "binop": return { ...e, left: peepholeExpr(e.left, backend), right: peepholeExpr(e.right, backend) };
+    case "unop": return { ...e, expr: peepholeExpr(e.expr, backend) };
+    case "implies": return { ...e, premises: e.premises.map(p => peepholeExpr(p, backend)), conclusion: peepholeExpr(e.conclusion, backend) };
+    case "app": return { ...e, args: e.args.map(a => peepholeExpr(a, backend)) };
+    case "field": return { ...e, obj: peepholeExpr(e.obj, backend) };
+    case "toNat": return { ...e, expr: peepholeExpr(e.expr, backend) };
+    case "toReal": return { ...e, expr: peepholeExpr(e.expr, backend) };
+    case "index": return { ...e, arr: peepholeExpr(e.arr, backend), idx: peepholeExpr(e.idx, backend) };
+    case "tupleLiteral": return { ...e, elems: e.elems.map(el => peepholeExpr(el, backend)) };
+    case "tupleProj": return { ...e, obj: peepholeExpr(e.obj, backend) };
+    case "record": return { ...e, spread: e.spread ? peepholeExpr(e.spread, backend) : null,
+      fields: e.fields.map(fi => ({ ...fi, value: peepholeExpr(fi.value, backend) })) };
+    case "arrayLiteral": return { ...e, elems: e.elems.map(el => peepholeExpr(el, backend)) };
+    case "if": return { ...e, cond: peepholeExpr(e.cond, backend), then: peepholeExpr(e.then, backend), else: peepholeExpr(e.else, backend) };
     case "match": {
-      const scr = r(e.scrutinee);
-      return { ...e, scrutinee: scr, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
+      const scr = peepholeExpr(e.scrutinee, backend);
+      return { ...e, scrutinee: scr, arms: e.arms.map(a => ({ ...a, body: peepholeExpr(a.body, backend) })) };
     }
-    case "forall": return { ...e, body: r(e.body) };
-    case "exists": return { ...e, body: r(e.body) };
-    case "let": return { ...e, value: r(e.value), body: r(e.body) };
-    case "methodCall": return { ...e, obj: r(e.obj), args: e.args.map(r) };
+    case "forall": return { ...e, body: peepholeExpr(e.body, backend) };
+    case "exists": return { ...e, body: peepholeExpr(e.body, backend) };
+    case "let": return { ...e, value: peepholeExpr(e.value, backend), body: peepholeExpr(e.body, backend) };
+    case "methodCall": return { ...e, obj: peepholeExpr(e.obj, backend), args: e.args.map(a => peepholeExpr(a, backend)) };
     case "lambda": return { ...e, body: peepholeStmts(e.body, backend) };
   }
 }
@@ -295,25 +298,23 @@ function peepholeStmt(s: Stmt, backend: Backend): Stmt {
 }
 
 function rewriteChildrenStmt(s: Stmt, backend: Backend): Stmt {
-  const re = (x: Expr) => peepholeExpr(x, backend);
-  const rs = (x: Stmt[]) => peepholeStmts(x, backend);
   switch (s.kind) {
-    case "let": return { ...s, value: re(s.value) };
-    case "assign": return { ...s, value: re(s.value) };
-    case "bind": return { ...s, value: re(s.value) };
-    case "let-bind": return { ...s, value: re(s.value) };
-    case "return": return { ...s, value: re(s.value) };
+    case "let": return { ...s, value: peepholeExpr(s.value, backend) };
+    case "assign": return { ...s, value: peepholeExpr(s.value, backend) };
+    case "bind": return { ...s, value: peepholeExpr(s.value, backend) };
+    case "let-bind": return { ...s, value: peepholeExpr(s.value, backend) };
+    case "return": return { ...s, value: peepholeExpr(s.value, backend) };
     case "break": case "continue": return s;
-    case "if": return { ...s, cond: re(s.cond), then: rs(s.then), else: rs(s.else) };
+    case "if": return { ...s, cond: peepholeExpr(s.cond, backend), then: peepholeStmts(s.then, backend), else: peepholeStmts(s.else, backend) };
     case "match": {
-      const scr = re(s.scrutinee);
-      return { ...s, scrutinee: scr, arms: s.arms.map(a => ({ ...a, body: rs(a.body) })) };
+      const scr = peepholeExpr(s.scrutinee, backend);
+      return { ...s, scrutinee: scr, arms: s.arms.map(a => ({ ...a, body: peepholeStmts(a.body, backend) })) };
     }
-    case "while": return { ...s, cond: re(s.cond), invariants: s.invariants.map(re), body: rs(s.body) };
-    case "forin": return { ...s, bound: re(s.bound), invariants: s.invariants.map(re), body: rs(s.body) };
-    case "ghostLet": return { ...s, value: re(s.value) };
-    case "ghostAssign": return { ...s, value: re(s.value) };
-    case "assert": return { ...s, expr: re(s.expr) };
+    case "while": return { ...s, cond: peepholeExpr(s.cond, backend), invariants: s.invariants.map(i => peepholeExpr(i, backend)), body: peepholeStmts(s.body, backend) };
+    case "forin": return { ...s, bound: peepholeExpr(s.bound, backend), invariants: s.invariants.map(i => peepholeExpr(i, backend)), body: peepholeStmts(s.body, backend) };
+    case "ghostLet": return { ...s, value: peepholeExpr(s.value, backend) };
+    case "ghostAssign": return { ...s, value: peepholeExpr(s.value, backend) };
+    case "assert": return { ...s, expr: peepholeExpr(s.expr, backend) };
   }
 }
 
