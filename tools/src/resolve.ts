@@ -1336,7 +1336,12 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
 
     case "assign": {
       const targetTy = lookup(ctx.env, s.target) ?? { kind: "unknown" as const };
-      let value = coerceStr(resolveExpr(s.value, ctx), targetTy);
+      // Propagate the target's type as returnTy, mirroring the annotated-let
+      // case, so record/union literals and array literals in the RHS resolve
+      // to their named datatypes.
+      const valueCtx = (targetTy.kind === "user" || targetTy.kind === "array" || targetTy.kind === "optional")
+        ? { ...ctx, returnTy: targetTy } : ctx;
+      let value = coerceStr(resolveExpr(s.value, valueCtx), targetTy);
       // Auto-wrap non-optional value in Some when target is optional
       const isUndef = value.kind === "var" && value.name === "undefined";
       if (targetTy.kind === "optional" && value.ty.kind !== "optional" && value.ty.kind !== "unknown" && !isUndef) {

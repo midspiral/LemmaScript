@@ -241,7 +241,9 @@ function walkStmts(stmts: TStmt[], ctx: CondCtx): StmtsOut {
     const after = walkStmts(stmts.slice(tagged.consumed), w.ctx);
     return { stmts: [w.stmt].concat(after.stmts), ctx: after.ctx };
   }
-  const consumed = ruleEarlyReturnOrChain(s, rest, ctx) ?? ruleEarlyReturnConsume(s, rest) ?? ruleEarlyReturnOptChainCompare(s, rest, ctx);
+  const orRewrite = ruleEarlyReturnOrChain(s, rest, ctx);
+  if (orRewrite) return { stmts: [orRewrite.stmt], ctx: orRewrite.ctx };
+  const consumed = ruleEarlyReturnConsume(s, rest) ?? ruleEarlyReturnOptChainCompare(s, rest, ctx);
   if (consumed) {
     const w = walkStmt(consumed, ctx);
     return { stmts: [w.stmt], ctx: w.ctx };
@@ -399,8 +401,16 @@ function orChain(leaves: TExpr[]): TExpr {
  *  `x?.chain !== lit`) narrows that `x` to Some across `rest`; the rest —
  *  value guards reading a narrowed `x` directly, plus the detectors' Some-case
  *  residuals — become a trailing early-return. Sound: reaching `rest` means
- *  every disjunct was false, so every detected optional is present. */
-function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | null {
+ *  every disjunct was false, so every detected optional is present.
+ *
+ *  Returns a PRE-WALKED result, unlike the other consumed rules, and
+ *  walkStmts must not walk it again. The terminating branch is duplicated
+ *  into every None arm, and a decreasing termination measure exists only
+ *  when duplicated statements are already walked — walked output is inert,
+ *  while un-walked material weighs in once per copy. Walk order mirrors
+ *  recurseStmt on someMatch (someBody before noneBody, innermost arms
+ *  first), so minted binder numbering agrees with machine-walked nests. */
+function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): StmtOut | null {
   if (s.kind !== "if") return null;
   if (rest.length === 0) return null;
   if (s.then.length === 0 || s.else.length !== 0 || !isTerminating(s.then)) return null;
@@ -429,12 +439,18 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | 
   if (residualLeaves.length > 0) {
     inner = [{ kind: "if", cond: orChain(residualLeaves), then: s.then, else: [] }, ...rest];
   }
+  const wInner = walkStmts(inner, ctx);
+  let nest: TStmt[] = wInner.stmts;
+  let c = wInner.ctx;
   for (let i = detectors.length - 1; i >= 0; i--) {
-    //@ invariant inner.length > 0
+    // Non-empty after any iteration; the loop runs at least once (detectors ≠ []).
+    //@ invariant nest.length > 0 || i === detectors.length - 1
     const d = detectors[i]!;
-    inner = [{ kind: "someMatch", scrutinee: d.scrutinee, binderTy: d.innerTy, binder: d.binder, someBody: inner, noneBody: s.then }];
+    const wThen = walkStmts(s.then, c);
+    c = wThen.ctx;
+    nest = [{ kind: "someMatch", scrutinee: d.scrutinee, binderTy: d.innerTy, binder: d.binder, someBody: nest, noneBody: wThen.stmts }];
   }
-  return inner[0];
+  return { stmt: nest[0], ctx: c };
 }
 
 /** Driver: `if (opt?.chain !== lit) terminate; rest` — bound-optional

@@ -740,11 +740,41 @@ byte-for-byte with the self-run re-verified unchanged:
   and without its alias symbol); `NoTruncation` on extern type text (a
   truncated string-literal-union expansion was unparseable); question-token
   optionality normalized when the checker prints `undefined` first;
+- assignment statements propagate the target's type into the RHS (mirroring
+  the annotated-let case), so union/array literals assigned to a declared
+  local resolve to their named datatypes;
 - `names.ts`: `freshName(base)` + `freshNameWhere(base, taken)` — a default
   parameter doesn't cross the axiom boundary; the 1-arg form axiomatizes;
 - `typedecls.ts`: `TypeDecls` is no longer `readonly` (the modifier has no
   backend model and made the alias synthesize opaque);
 - transform's surviving-optChain/nullish crashes now print the node.
+
+**Termination blueprint (narrow).** All remaining errors are one SCC:
+`walkExpr`/`recurseExpr`/`walkStmt`/`walkStmts`/the list folds/the
+re-walking rules. The proof is peephole's architecture, hand-authored in
+`narrow.dfy` under the additions-only convention:
+
+- a structural size family (`SE`/`SS` + padded list sizes) over the
+  module's `TExpr`/`TStmt` datatypes, with single-structural-step helpers
+  per §8.7;
+- an active-weight family mirroring what the rules can fire on — the
+  un-narrowed condition material (presence-checkable conjuncts,
+  `optChain`/`nullish` nodes, isArray/typeof guard calls, discriminant
+  compares). Walker outputs are weight-non-increasing (ensures inserted
+  into the generated signatures and proven); each `&&`-driver's residual
+  re-walk loses one conjunct. The shrink facts for the imported extractors
+  (`leadingPresent`, `leadingIsArray`) live as ensures on their `{:axiom}`
+  signatures — a deliberate widening of the imports-as-axioms trust
+  surface, to be discharged in `condition-facts.dfy` when real
+  cross-module linking lands (§8.6 anchors);
+- 4-component decreases tuples (active weight, size, list length, tier),
+  walkers tiered above their recurse halves;
+- prerequisite in the source (landed 2026-07-25): `ruleEarlyReturnOrChain`
+  pre-walks its pieces and duplicates only walked statements into the None
+  arms — the measure treats walked output as inert, and duplicating
+  un-walked material has no decreasing measure. The other consumed rules
+  construct from distinct un-walked pieces (no duplication) and stay
+  construct-then-walk.
 
 Two proof-world findings, binding for later ports: **Dafny 4.11's
 translator asserts (process abort) on match-expressions as `&&`/`||`
