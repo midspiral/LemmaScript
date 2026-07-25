@@ -1418,6 +1418,26 @@ function requireDoneWithForBreaks(stmts: Stmt[], fnName: string): void {
   }
 }
 
+/** The forin emission places the index increment at the loop-body end, so a
+ *  surviving `continue` would skip it. Insert the increment immediately
+ *  before every same-scope continue (nested loops own their continues),
+ *  mirroring the C-style-for desugar's discipline. */
+function insertIncrementBeforeContinue(stmts: Stmt[], idxName: string): Stmt[] {
+  const incr: Stmt = { kind: "assign", target: idxName,
+    value: { kind: "binop", op: "+", left: { kind: "var", name: idxName }, right: { kind: "num", value: 1 } } };
+  const walk = (ss: Stmt[]): Stmt[] => {
+    const out: Stmt[] = [];
+    for (const s of ss) {
+      if (s.kind === "continue") { out.push(incr, s); continue; }
+      if (s.kind === "if") { out.push({ ...s, then: walk(s.then), else: walk(s.else) }); continue; }
+      if (s.kind === "match") { out.push({ ...s, arms: s.arms.map(a => ({ ...a, body: walk(a.body) })) }); continue; }
+      out.push(s);
+    }
+    return out;
+  };
+  return walk(stmts);
+}
+
 function eliminateTopLevelContinue(stmts: Stmt[]): Stmt[] {
   const out: Stmt[] = [];
   for (let i = 0; i < stmts.length; i++) {
@@ -1526,7 +1546,8 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
       const arrSize: Expr = { kind: "field", obj: seq, field: "size" };
       // Auto-add bound invariant: idx ≤ bound (always true for range loops)
       const boundInv: Expr = { kind: "binop", op: "≤", left: idxVar, right: arrSize };
-      const bodyStmts = eliminateTopLevelContinue(transformStmts(s.body, typeDecls));
+      const bodyStmts = insertIncrementBeforeContinue(
+        eliminateTopLevelContinue(transformStmts(s.body, typeDecls)), idxName);
       result.push({
         kind: "forin", idx: idxName, bound: arrSize,
         invariants: [boundInv, ...s.invariants.map(transformExpr)],

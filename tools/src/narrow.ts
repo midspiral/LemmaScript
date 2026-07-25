@@ -425,8 +425,14 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): StmtOut 
     const d = noneDetector(leaf, ctx);
     if (!d) { residualLeaves.push(leaf); continue; }
     const key = binderHintFor(d.scrutinee);
-    if (key === null) return null;  // unreachable: detector scrutinees are path-shaped
-    if (seen.has(key)) return null;  // two detectors on one optional: rare; leave to other rules
+    // A keyless detector (unreachable: detector scrutinees are path-shaped)
+    // or a second detector on an already-bound optional demotes to a
+    // residual — the substitution inside the arm reads the bound value, so
+    // the residual guard keeps its meaning. Termination needs demotion, not
+    // a bail: a bailed head could be re-armed by walking (a consumed
+    // optChain dropping one of two same-key detectors) and would then carry
+    // firable weight the walk never revisits.
+    if (key === null || seen.has(key)) { residualLeaves.push(leaf); continue; }
     seen.add(key);
     detectors.push(d);
     if (d.residual) residualLeaves.push(d.residual);
@@ -948,6 +954,15 @@ function collectElseChain(s: TStmt, scrutineeName: string, ctx: CondCtx): ElseCh
  *  so their `??` join has a single shape. */
 interface ConsumedRewrite { stmt: TStmt; consumed: number }
 
+/** Every case body ends in a terminator. (A recursive helper rather than
+ *  `.every`, whose Dafny lowering pulls in the standard library — which is
+ *  incompatible with the prover flags the termination proof needs.) */
+function allCasesTerminate(cases: TStmtCase[]): boolean {
+  if (cases.length === 0) return true;
+  if (!isTerminating(cases[0].body)) return false;
+  return allCasesTerminate(cases.slice(1));
+}
+
 /** Driver (list-level): consecutive `if (x.kind === "v") ...` chain →
  *  tagMatch. Walks consecutive top-level ifs on the same discriminator var;
  *  the first one with an else-branch ends the chain (else becomes
@@ -984,7 +999,7 @@ function ruleDiscriminantChain(stmts: TStmt[], ctx: CondCtx): ConsumedRewrite | 
   // (preserving the clean dispatch-as-expression shape). Otherwise the tail runs
   // after the match for every variant, so leave it to the caller (empty default)
   // rather than mis-routing it into the default arm only.
-  if (cases.every(c => isTerminating(c.body))) {
+  if (allCasesTerminate(cases)) {
     return { stmt: { kind: "tagMatch", scrutinee: first.scrutinee, typeName: first.typeName,
       cases, fallthrough: stmts.slice(consumed) }, consumed: stmts.length };
   }
