@@ -60,7 +60,7 @@ method countPositivesNonNested (grid : Array (Array Int)) return (res : Int)
         invariant total ≥ 0
       do
         let x := row[_x_idx]!
-        if (-x ≤ 0) then
+        if !(x ≤ 0) then
           total := total + 1
       i := i + 1
     return total
