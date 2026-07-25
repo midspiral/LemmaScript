@@ -84,9 +84,10 @@ function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
  *  rest of the block), `match` arm patterns, `forall`/`exists`, and `for-in`
  *  indices. Capture-avoiding: a nested scope that reintroduces `from` keeps its
  *  own binding untouched. `mapExpr` doesn't descend into lambda bodies, so this
- *  walks them by hand. */
+ *  walks them by hand — statement binders are tracked only at that body's top
+ *  level, which is enough for the sole caller (dafny-emit's
+ *  `comprehensionBinder`). TODO: generalize if more callers need this. */
 const varE = (name: string): Expr => ({ kind: "var", name });
-
 export function renameFreeVar(e: Expr, from: string, to: string): Expr {
   const f = (x: Expr): Expr | null => {
     if (x.kind === "var") return x.name === from ? { ...x, name: to } : x;
@@ -1229,10 +1230,11 @@ function scrutineeHint(e: TExpr): string {
 // `if (X) continue; rest` → `if (!X) { rest }` at the top of a loop body.
 // Dafny's lowered while-loops have the index increment at the bottom, so a
 // `continue` would skip it and loop forever; rewriting to if/else lets the
-// loop fall through normally.
+// loop fall through normally. The operand is already-lowered IR, where
+// negation is spelled `¬` (lowerExpr rewrites `!`).
 function negateExpr(e: Expr): Expr {
-  if (e.kind === "unop" && e.op === "!") return e.expr;
-  return { kind: "unop", op: "!", expr: e };
+  if (e.kind === "unop" && e.op === "¬") return e.expr;
+  return { kind: "unop", op: "¬", expr: e };
 }
 
 /** Build the two pieces of an `arr.pop()` lowering on a named array variable:
