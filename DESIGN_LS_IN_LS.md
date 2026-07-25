@@ -756,19 +756,41 @@ re-walking rules. The proof is peephole's architecture, hand-authored in
 
 - a structural size family (`SE`/`SS` + padded list sizes) over the
   module's `TExpr`/`TStmt` datatypes, with single-structural-step helpers
-  per §8.7;
-- an active-weight family mirroring what the rules can fire on — the
-  un-narrowed condition material (presence-checkable conjuncts,
-  `optChain`/`nullish` nodes, isArray/typeof guard calls, discriminant
-  compares). Walker outputs are weight-non-increasing (ensures inserted
-  into the generated signatures and proven); each `&&`-driver's residual
-  re-walk loses one conjunct. The shrink facts for the imported extractors
-  (`leadingPresent`, `leadingIsArray`) live as ensures on their `{:axiom}`
-  signatures — a deliberate widening of the imports-as-axioms trust
-  surface, to be discharged in `condition-facts.dfy` when real
-  cross-module linking lands (§8.6 anchors);
+  per §8.7 — *landed and verified (2026-07-25)*;
+- conjunct counts (`PC`/`AC`/`DET` — presence, isArray/typeof, and
+  None-detector atoms in `&&`/`||` trees) and an active-weight family
+  (`AWE`/`AWS`/`AWSs` + per-shape helpers) summing root charges over the
+  term — *structure landed and verified (2026-07-25); the root charges
+  `WE`/`WS` are flat over-approximations and MUST be revised to exact
+  positional firability before wiring*. The reason charges must be exact:
+  rule outputs duplicate **walked** material — `presentMatchStmts`'s falsy
+  gate carries `none` both as the gate's else and as the None arm — and an
+  over-approximated charge (e.g. every `if_` charging regardless of
+  firability, or a block-final early-return shape whose rule only fires
+  with a non-empty tail) gives duplicated walked statements weight,
+  breaking AW-monotonicity. Exact charges make walked output provably
+  weightless (positional normality, in weight form), so duplicating it is
+  free. Consequences: the pure-function rules give exact firability as
+  `rule(e, ctx).Some?` directly; method rules need hand-restated guards
+  *including their bail conditions* (the or-chain rule's detector-key
+  uniqueness, `ruleIfOptionalSimple`'s non-empty-Some-branch); and the
+  list weight must be position-aware (the head's charge sees the tail,
+  for the early-return/discriminant list rules);
+- walker ensures: weight-non-increase plus weight-equality-implies-
+  identity (inserted into the generated signatures and proven inductively
+  with termination); each `&&`-driver's residual re-walk loses one
+  conjunct. The shrink facts for the imported extractors
+  (`leadingPresent`, `leadingIsArray`, `noneDetector` residual bounds,
+  `presentMatchStmts`/`Expr` output shapes, `presentFact` requiring an
+  optional type) live as ensures on their `{:axiom}` signatures — a
+  deliberate widening of the imports-as-axioms trust surface, to be
+  discharged in `condition-facts.dfy` when real cross-module linking
+  lands (§8.6 anchors). Ctx-invariance axioms (detection reads only
+  `ctx.decls`) are landed;
 - 4-component decreases tuples (active weight, size, list length, tier),
-  walkers tiered above their recurse halves;
+  walkers tiered above their recurse halves; subterm walks need only
+  weight-monotonicity (size strictly drops), constructed-node re-walks
+  need weight-strictness;
 - prerequisite in the source (landed 2026-07-25): `ruleEarlyReturnOrChain`
   pre-walks its pieces and duplicates only walked statements into the None
   arms — the measure treats walked output as inert, and duplicating
