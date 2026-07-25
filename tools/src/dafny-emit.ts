@@ -5,14 +5,14 @@
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
 import { usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
-import { freshName, userNames } from "./names.js";
+import { freshName, freshNameWhere, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
 
 /** Fresh binder for a comprehension wrapping the given subexpressions: `base`
  *  verbatim unless one of them references it, then primed until free. A *local*
  *  check — a same-named name elsewhere in the module keeps the plain binder. */
 function freshBinder(base: string, ...wrapped: Expr[]): string {
-  return freshName(base, name => wrapped.some(w => usesName(w, name)));
+  return freshNameWhere(base, name => wrapped.some(w => usesName(w, name)));
 }
 
 /** Binder + body for lowering a single-return lambda to a comprehension whose
@@ -173,7 +173,7 @@ function methodHeader(prefix: string, params: { name: string; type: Ty }[], retu
   const taken = (n: string): boolean =>
     params.some(p => escapeName(p.name) === n) ||
     (scope !== undefined && usesNameInDecl(scope.requires, scope.ensures, scope.body, n));
-  const resName = freshName("res", taken);
+  const resName = freshNameWhere("res", taken);
   _resultName = resName;
   return `${sig} returns (${resName}: ${tyToDafny(returnType)})`;
 }

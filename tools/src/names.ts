@@ -44,12 +44,19 @@ export function userNames(): readonly string[] {
   return [..._userNames];
 }
 
-/** A toolchain-internal name: `base` verbatim, primed on collision. The one
- *  place the priming rule lives. `taken` says what counts as a collision —
- *  by default a user-written name anywhere in the module; callers that know
- *  the exact scope (e.g. a comprehension binder checking only the expressions
- *  it wraps) pass their own predicate. */
-export function freshName(base: string, taken: (name: string) => boolean = isUserName): string {
+/** A toolchain-internal name: `base` verbatim, primed on collision against
+ *  user-written names anywhere in the module. The common form — deterministic
+ *  per module, so the self-run can axiomatize it as a pure function (a default
+ *  parameter would synthesize a two-argument axiom no portable caller can
+ *  satisfy). */
+export function freshName(base: string): string {
+  return freshNameWhere(base, isUserName);
+}
+
+/** The priming rule, against a caller-chosen collision predicate — for
+ *  callers that know the exact scope (e.g. a comprehension binder checking
+ *  only the expressions it wraps). The one place the rule lives. */
+export function freshNameWhere(base: string, taken: (name: string) => boolean): string {
   let name = base;
   while (taken(name)) name += "'";
   return name;

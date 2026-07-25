@@ -1,3 +1,4 @@
 tools/src/typedir.ts
 tools/src/ir.ts
 tools/src/peephole.ts 60 --boogie /proverOpt:O:smt.qi.eager_threshold=30
+tools/src/condition-facts.ts

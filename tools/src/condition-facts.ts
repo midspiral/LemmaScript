@@ -19,15 +19,17 @@
  * State is explicit (§6.1): detection that mints binders or consults type
  * declarations takes a `CondCtx`; nothing module-level.
  */
+//@ backend dafny
 
 import type { TExpr, TStmt, Ty, TChainStep } from "./typedir.js";
 import { freshName } from "./names.js";
 import type { TypeDecls } from "./typedecls.js";
+import type { VariantInfo, FieldInfo } from "./types.js";
 import { unionDeclOfTy, discriminantOf } from "./typedecls.js";
 
 /** Explicit context: type declarations plus the next optChain binder index.
- *  Threaded, never mutated (§6.1/§6.2 — N-R1): minting returns the advanced
- *  ctx, and the walkers pass it along. */
+ *  Threaded, never mutated (§6.1/§6.2): minting returns the advanced ctx,
+ *  and the walkers pass it along. */
 export interface CondCtx {
   decls: TypeDecls;
   ocN: number;
@@ -62,7 +64,11 @@ export interface PresentFact {
 export function binderHintFor(e: TExpr): string | null {
   const fields: string[] = [];
   let cur = e;
-  while (cur.kind === "field") { fields.unshift(cur.field); cur = cur.obj; }
+  while (cur.kind === "field") {
+    //@ decreases cur
+    fields.unshift(cur.field);
+    cur = cur.obj;
+  }
   if (cur.kind !== "var") return null;
   // \result is stored as the IR var name "\\result"; sanitize for a valid identifier.
   const root = cur.name === "\\result" ? "result" : cur.name;
@@ -98,7 +104,8 @@ export function presentFact(cond: TExpr): PresentFact | null {
   let e: TExpr | null = null;
   if (cond.right.kind === "var" && cond.right.name === "undefined") e = cond.left;
   if (cond.left.kind === "var" && cond.left.name === "undefined") e = cond.right;
-  if (!e || e.ty.kind !== "optional") return null;
+  if (e === null) return null;
+  if (e.ty.kind !== "optional") return null;
   const hint = binderHintFor(e);
   if (hint === null) return null;
   return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binder: freshName(hint), truthiness: false };
@@ -134,10 +141,10 @@ export const bound = (f: PresentFact): TExpr =>
  *  before a failing check no longer runs at all.
  *  Harmless while conditions stay pure — revisit if that ever stops holding.
  *
- *  Two monomorphic copies of the tree surgery, deliberately: the generic
- *  `extractConjunct<C>(cond, parse)` they replace is genuine parametricity
- *  with a fn-valued parameter — neither survives the subset's erasure
- *  doctrine (§8.6 N-R3, mirroring peephole R3). */
+ *  Two monomorphic copies of the tree surgery, deliberately: a shared
+ *  generic `extractConjunct<C>(cond, parse)` is parametricity with a
+ *  fn-valued parameter, and neither has a model in the subset's erasure
+ *  doctrine (§8.6). */
 export interface LeadingPresent { check: PresentFact; restCond: TExpr }
 
 function positivePresent(e: TExpr): PresentFact | null {
@@ -183,14 +190,15 @@ export type NoneDetector = { scrutinee: TExpr; innerTy: Ty; binder: string; resi
 export function noneDetector(leaf: TExpr, ctx: CondCtx): NoneDetector | null {
   // `x?.chain !== lit` — `undefined !== lit` is true when x is None.
   if (leaf.kind === "binop" && leaf.op === "!==") {
-    const oc = leaf.left.kind === "optChain" ? leaf.left : leaf.right.kind === "optChain" ? leaf.right : null;
+    const ocOnLeft = leaf.left.kind === "optChain";
+    const oc = ocOnLeft ? leaf.left : leaf.right.kind === "optChain" ? leaf.right : null;
     if (oc && oc.kind === "optChain" && oc.obj.ty.kind === "optional") {
       const hint = binderHintFor(oc.obj);
       if (hint === null) return null;
       const binder = freshName(hint);
       const unwrapped = restoreDiscriminantFlag(
         applyChain({ kind: "var", name: binder, ty: oc.obj.ty.inner }, oc.chain), ctx.decls);
-      const lit = leaf.left === oc ? leaf.right : leaf.left;
+      const lit = ocOnLeft ? leaf.right : leaf.left;
       return { scrutinee: oc.obj, innerTy: oc.obj.ty.inner, binder, residual: { kind: "binop", op: "!==", left: unwrapped, right: lit, ty: { kind: "bool" } } };
     }
   }
@@ -209,13 +217,18 @@ export function noneDetector(leaf: TExpr, ctx: CondCtx): NoneDetector | null {
 
 /** Apply an optional chain's steps (field / index / call) to a base expr. */
 export function applyChain(body: TExpr, chain: TChainStep[]): TExpr {
+  let acc = body;
   for (const step of chain) {
-    if (step.kind === "field") body = { kind: "field", obj: body, field: step.name, ty: step.ty };
-    else if (step.kind === "index") body = { kind: "index", obj: body, idx: step.idx, ty: step.ty };
-    else body = { kind: "call", fn: body, args: step.args, ty: step.ty, callKind: step.callKind,
-      ...(step.builtinId ? { builtinId: step.builtinId } : {}) };
+    if (step.kind === "field") acc = { kind: "field", obj: acc, field: step.name, ty: step.ty };
+    else if (step.kind === "index") acc = { kind: "index", obj: acc, idx: step.idx, ty: step.ty };
+    else if (step.builtinId !== undefined) {
+      acc = { kind: "call", fn: acc, args: step.args, ty: step.ty, callKind: step.callKind,
+        builtinId: step.builtinId };
+    } else {
+      acc = { kind: "call", fn: acc, args: step.args, ty: step.ty, callKind: step.callKind };
+    }
   }
-  return body;
+  return acc;
 }
 
 /** `applyChain` rebuilds a field access without the `isDiscriminant` flag
@@ -280,8 +293,12 @@ export function binderHintForMapAccess(m: TExpr, k: TExpr, ctx: CondCtx): Minted
 
 // ── Variant facts (discriminants and synth array-unions) ────
 
+/** `scrutinee` is always a bare var (the rules only match that shape);
+ *  `scrutineeName` carries its name so consumers need no shape refinement —
+ *  intersection types like `TExpr & { kind: "var" }` have no backend model. */
 export interface VariantFact {
-  scrutinee: TExpr & { kind: "var" };
+  scrutinee: TExpr;
+  scrutineeName: string;
   typeName: string;
   variant: string;
 }
@@ -302,8 +319,9 @@ export function isNarrowablePath(e: TExpr): boolean {
 }
 
 /** Detect `Array.isArray(<path>)` where `<path>` is a narrowable path whose
- *  type is a synthesized array-union (discriminant `"__isArray__"`). */
-export function isArrayFact(call: TExpr, ctx: CondCtx): (IsArrayFact & { variant: "ArrayBranch" }) | null {
+ *  type is a synthesized array-union (discriminant `"__isArray__"`). Always
+ *  returns the `ArrayBranch` variant. */
+export function isArrayFact(call: TExpr, ctx: CondCtx): IsArrayFact | null {
   if (call.kind !== "call") return null;
   if (call.fn.kind !== "field" || call.fn.field !== "isArray") return null;
   if (call.fn.obj.kind !== "var" || call.fn.obj.name !== "Array") return null;
@@ -311,7 +329,8 @@ export function isArrayFact(call: TExpr, ctx: CondCtx): (IsArrayFact & { variant
   const arg = call.args[0];
   if (!isNarrowablePath(arg) || arg.ty.kind !== "user") return null;
   const decl = unionDeclOfTy(ctx.decls, arg.ty);
-  if (decl?.discriminant !== "__isArray__") return null;
+  if (decl === undefined) return null;
+  if (decl.discriminant !== "__isArray__") return null;
   return { scrutinee: arg, typeName: arg.ty.name, variant: "ArrayBranch" };
 }
 
@@ -320,21 +339,33 @@ export function isArrayFact(call: TExpr, ctx: CondCtx): (IsArrayFact & { variant
  *  The runtime `=== "string"` test matches that branch only when `U` is string —
  *  for any other non-array payload (`number | T[]`, …) it never holds, so we must
  *  NOT narrow. Returns the `NonArrayBranch` variant; the dual of `Array.isArray`. */
-export function typeofStringFact(e: TExpr, ctx: CondCtx): (IsArrayFact & { variant: "NonArrayBranch" }) | null {
+export function typeofStringFact(e: TExpr, ctx: CondCtx): IsArrayFact | null {
   if (e.kind !== "binop" || e.op !== "===") return null;
   const tof = e.left.kind === "unop" && e.left.op === "typeof" ? e.left.expr
     : e.right.kind === "unop" && e.right.op === "typeof" ? e.right.expr : null;
-  const lit = e.left.kind === "str" ? e.left.value : e.right.kind === "str" ? e.right.value : null;
-  if (!tof || lit !== "string") return null;
+  if (tof === null) return null;
+  // Bind-first for the literal read, as in variantFact.
+  const strOnLeft = e.left.kind === "str";
+  const litE = strOnLeft ? e.left : e.right;
+  if (litE.kind !== "str") return null;
+  if (litE.value !== "string") return null;
   if (!isNarrowablePath(tof) || tof.ty.kind !== "user") return null;
   const decl = unionDeclOfTy(ctx.decls, tof.ty);
-  if (decl?.discriminant !== "__isArray__") return null;
-  const valTy = decl.variants?.find(v => v.name === "NonArrayBranch")?.fields.find(f => f.name === "val")?.type;
-  if (valTy?.kind !== "string") return null;   // guard: the non-array branch must actually be `string`
+  if (decl === undefined) return null;
+  if (decl.discriminant !== "__isArray__") return null;
+  // Guard: the non-array branch's payload must actually be `string`.
+  if (decl.variants === undefined) return null;
+  const nab = decl.variants.find((v: VariantInfo) => v.name === "NonArrayBranch");
+  if (nab === undefined) return null;
+  const valField = nab.fields.find((f: FieldInfo) => f.name === "val");
+  if (valField === undefined) return null;
+  const valTy = valField.type;
+  if (valTy === undefined) return null;
+  if (valTy.kind !== "string") return null;
   return { scrutinee: tof, typeName: tof.ty.name, variant: "NonArrayBranch" };
 }
 
-export interface LeadingIsArray { check: IsArrayFact & { variant: "ArrayBranch" }; restCond: TExpr }
+export interface LeadingIsArray { check: IsArrayFact; restCond: TExpr }
 
 /** Leading `Array.isArray(path)` fact of an `&&` chain (positive form only — a
  *  negated `!Array.isArray(...)` would narrow to the wrong variant for then-body
@@ -360,23 +391,36 @@ export function leadingIsArray(cond: TExpr, ctx: CondCtx): LeadingIsArray | null
 /** Detect `x.kind === "variant"`, `'key' in x`, or `Array.isArray(x)` (synth
  *  array-union) as a positive discriminant check on a bare-var scrutinee. */
 export function variantFact(cond: TExpr, ctx: CondCtx): VariantFact | null {
-  // Pattern: x.discriminant === "variant"
-  if (cond.kind === "binop" && cond.op === "===" && cond.right.kind === "str" &&
-      cond.left.kind === "field" && cond.left.isDiscriminant &&
+  // Pattern: x.discriminant === "variant". Bind-first: the literal read
+  // (`lit.value`) sits inside the `lit.kind !== "str"` guard's narrowed
+  // scope, so the self-run's variant-aware destructor naming can pin it.
+  // The `isDiscriminant` read sits inside the shape-guarded branch: in the
+  // proof, `.isDiscriminant` is a partial destructor (legal only on `field`
+  // nodes), and a truthiness conjunct in the `&&`-chain gets hoisted above
+  // the shape guards by the leading-fact rewrite.
+  if (cond.kind === "binop" && cond.op === "===" &&
+      cond.left.kind === "field" &&
       cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
-    return { scrutinee: cond.left.obj, typeName: cond.left.obj.ty.name, variant: cond.right.value };
+    const disc = cond.left.isDiscriminant;
+    if (!disc) return null;
+    const lit = cond.right;
+    if (lit.kind !== "str") return null;
+    return { scrutinee: cond.left.obj, scrutineeName: cond.left.obj.name,
+      typeName: cond.left.obj.ty.name, variant: lit.value };
   }
   // Pattern: 'key' in x — narrows x to the unique variant containing `key`.
   if (cond.kind === "binop" && cond.op === "in" &&
-      cond.left.kind === "str" && cond.right.kind === "var" &&
-      cond.right.ty.kind === "user") {
-    const key = cond.left.value;
+      cond.right.kind === "var" && cond.right.ty.kind === "user") {
+    const keyLit = cond.left;
+    if (keyLit.kind !== "str") return null;
+    const key = keyLit.value;
     const typeName = cond.right.ty.name;
     const decl = unionDeclOfTy(ctx.decls, cond.right.ty);
-    if (decl?.variants) {
-      const matches = decl.variants.filter(v => v.fields.some(f => f.name === key));
+    if (decl !== undefined && decl.variants !== undefined) {
+      const matches = decl.variants.filter((v: VariantInfo) => v.fields.some(f => f.name === key));
       if (matches.length === 1) {
-        return { scrutinee: cond.right, typeName, variant: matches[0].name };
+        return { scrutinee: cond.right, scrutineeName: cond.right.name,
+          typeName, variant: matches[0].name };
       }
     }
   }
@@ -389,7 +433,8 @@ export function variantFact(cond: TExpr, ctx: CondCtx): VariantFact | null {
   // conditional/expression tagMatch drivers.
   const arrCheck = isArrayFact(cond, ctx);
   if (arrCheck && arrCheck.scrutinee.kind === "var") {
-    return { scrutinee: arrCheck.scrutinee, typeName: arrCheck.typeName, variant: arrCheck.variant };
+    return { scrutinee: arrCheck.scrutinee, scrutineeName: arrCheck.scrutinee.name,
+      typeName: arrCheck.typeName, variant: arrCheck.variant };
   }
   return null;
 }
@@ -397,17 +442,24 @@ export function variantFact(cond: TExpr, ctx: CondCtx): VariantFact | null {
 /** Detect `x.kind !== "variant"` (negative discriminant check) or
  *  `!Array.isArray(x)` (synth array-union, narrows to NonArrayBranch). */
 export function negVariantFact(cond: TExpr, ctx: CondCtx): VariantFact | null {
-  if (cond.kind === "binop" && cond.op === "!==" && cond.right.kind === "str" &&
-      cond.left.kind === "field" && cond.left.isDiscriminant &&
+  // Same bind-first + guarded-flag-read shape as variantFact — see the note there.
+  if (cond.kind === "binop" && cond.op === "!==" &&
+      cond.left.kind === "field" &&
       cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
-    return { scrutinee: cond.left.obj, typeName: cond.left.obj.ty.name, variant: cond.right.value };
+    const disc = cond.left.isDiscriminant;
+    if (!disc) return null;
+    const lit = cond.right;
+    if (lit.kind !== "str") return null;
+    return { scrutinee: cond.left.obj, scrutineeName: cond.left.obj.name,
+      typeName: cond.left.obj.ty.name, variant: lit.value };
   }
   // Pattern: !Array.isArray(x) — narrows x to the NonArrayBranch variant.
   // Same var-scrutinee restriction as variantFact.
   if (cond.kind === "unop" && cond.op === "!") {
     const arrCheck = isArrayFact(cond.expr, ctx);
     if (arrCheck && arrCheck.scrutinee.kind === "var") {
-      return { scrutinee: arrCheck.scrutinee, typeName: arrCheck.typeName, variant: "NonArrayBranch" };
+      return { scrutinee: arrCheck.scrutinee, scrutineeName: arrCheck.scrutinee.name,
+        typeName: arrCheck.typeName, variant: "NonArrayBranch" };
     }
   }
   return null;

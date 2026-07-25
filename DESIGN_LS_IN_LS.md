@@ -709,6 +709,58 @@ add to `LemmaScript-files.txt` (P0); then the termination + completeness
 proofs (P1). *As of 2026-07-25 the rewrites and E4 are done; next is the
 annotate + self-run step, then the proofs.*
 
+**Port progress (2026-07-25, second pass).** `condition-facts.ts` is in the
+self-run at P0/T0 — 22 obligations, `LemmaScript-files.txt` entry, no hand
+additions yet. `narrow.ts` generates cleanly and verifies everything except
+the walker family's termination (32 verified / 13 termination errors — the
+active-weight project per the proof outlook above); it joins the files list
+when that proof lands. Toolchain gained en route, each gauntlet
+byte-for-byte with the self-run re-verified unchanged:
+
+- `??` typing: the result stays optional when the right operand is optional
+  (rule-chain `ruleA(e) ?? ruleB(e) ?? null` — previously the chain lost
+  optionality one level up and narrowing couldn't rewrite it);
+- expected-type propagation: union-variant literals get contextual field
+  types (the record case consults the discriminant-selected variant, not
+  just record decls); optional/array field types propagate into values;
+  optional-annotated lets and optional-of-array return positions propagate
+  through ternaries and array literals;
+- bare-constructor shortcut only for truly field-less variants — a variant
+  with only optional fields gets its None-filled argument list
+  (`Ty.int_(None)`, not `Ty.int_`);
+- statement-position switch arms stamp ctor pins on datatype updates of the
+  scrutinee (`stampScrutineeUpdates`), so collision-renamed destructors
+  translate in `{ ...e, body: … }` rebuild walkers — the statement twin of
+  the pure-switch path's pinning;
+- import resolver: extern *signature* types (and the source declaration's
+  syntactic type nodes, which keep alias symbols) seed the imported-type
+  walk — previously a type reachable only through an imported function's
+  return (PresentFact et al.) synthesized opaque; alias extraction hoisted
+  above the visited-set guard (the same interned compilerType arrives with
+  and without its alias symbol); `NoTruncation` on extern type text (a
+  truncated string-literal-union expansion was unparseable); question-token
+  optionality normalized when the checker prints `undefined` first;
+- `names.ts`: `freshName(base)` + `freshNameWhere(base, taken)` — a default
+  parameter doesn't cross the axiom boundary; the 1-arg form axiomatizes;
+- `typedecls.ts`: `TypeDecls` is no longer `readonly` (the modifier has no
+  backend model and made the alias synthesize opaque);
+- transform's surviving-optChain/nullish crashes now print the node.
+
+Two proof-world findings, binding for later ports: **Dafny 4.11's
+translator asserts (process abort) on match-expressions as `&&`/`||`
+operands in statement wellformedness** — and the `x === undefined` → match
+lowering makes that easy to hit, so keep optional tests out of compound
+statement guards (nested ifs / early returns); a Dafny-side `.None?`
+ctor-test lowering is the named future fix (it needs an IR node, which
+ripples into peephole's proof — deliberately deferred). And **`&&`-chain
+leading-fact extraction can hoist a partial destructor read above its shape
+guards** — total in TS where absent fields read `undefined`, partial in the
+proof (`.isDiscriminant` on a non-field). Source discipline until narrow's
+own completeness proof addresses it: read optional flags inside the
+shape-guarded branch (see `variantFact`), bind-first for literal reads, and
+split presence guards from dependent reads (resolve narrows per early
+return, but not within `||` evaluation or optChain-compare guards).
+
 ### 8.7 Proof-carrying self-run modules: conventions
 
 *Distilled from the peephole proof (2026-07-24); binding for later ports
@@ -914,9 +966,12 @@ with no annotation is not started.*
    are annotated in §8.6. `narrow` in progress: port survey done
    (2026-07-24) — repro findings and the N-R1–N-R8 rewrite ledger are in
    §8.6; all eight rewrites plus E4 landed (2026-07-24/25), gauntlet
-   byte-for-byte, self-run re-verified. Remaining: annotate
-   narrow/condition-facts, add to `LemmaScript-files.txt` (P0), then the
-   termination + desugaring-completeness proofs (P1).*
+   byte-for-byte, self-run re-verified. Second pass (2026-07-25):
+   `condition-facts.ts` is P0/T0 in the self-run (22 obligations);
+   `narrow.ts` verifies everything but walker-family termination (32/13) —
+   toolchain gains and proof-world findings in §8.6. Remaining: the
+   termination proof (active-weight, §8.7 template), then narrow joins
+   `LemmaScript-files.txt`; then the desugaring-completeness contract (P1).*
 10. **Portable `resolve` core, `specparser`, emitter cores** — transform
     ports stage-by-stage here, which is when §7's split naturally happens.
 11. **First T1 experiment:** execute one generated verified pass.

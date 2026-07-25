@@ -33,9 +33,9 @@
  * State is explicit (§6.1): a `CondCtx` (type declarations + the next
  * optChain binder index) threads through the walk — every walker returns
  * its rewritten node plus the (possibly advanced) ctx, list walks are
- * state-threaded folds, and nothing is mutated (§6.2, N-R1). Rules take
- * the recursed node and the post-recursion ctx; a rule that mints a binder
- * or re-walks a constructed node returns the advanced ctx, all others pass
+ * state-threaded folds, and nothing is mutated (§6.2). Rules take the
+ * recursed node and the post-recursion ctx; a rule that mints a binder or
+ * re-walks a constructed node returns the advanced ctx, all others pass
  * it through.
  */
 
@@ -45,7 +45,7 @@ import { isTerminatorKind } from "./typedir.js";
 import { freshName } from "./names.js";
 import { builtinPure } from "./builtins.js";
 import {
-  type CondCtx, type PresentFact, type NoneDetector,
+  type CondCtx, type PresentFact, type NoneDetector, type IsArrayFact,
   presentFact, leadingPresent, leadingIsArray, flattenOr, noneDetector,
   binderHintFor, binderHintForMapAccess, freshOcBinder,
   applyChain, restoreDiscriminantFlag, arrayBoundsCond, exprEqual,
@@ -158,7 +158,13 @@ function recurseExpr(e: TExpr, ctx: CondCtx): ExprOut {
       return { expr: { ...e, obj: obj.expr }, ctx: obj.ctx };
     }
     case "record": {
-      const spread = e.spread !== null ? walkExpr(e.spread, ctx) : null;
+      // Statement form, not `e.spread !== null ? walkExpr(…) : null`: the
+      // walkers lower to methods, and a method call inside a match-expression
+      // arm gets lifted out of the binder's scope. Statement-position arms
+      // keep the call in place (same hazard `ruleConditionalAndOptional`
+      // guards against with containsMethodCall).
+      let spread: ExprOut | null = null;
+      if (e.spread !== null) spread = walkExpr(e.spread, ctx);
       const fields = walkRecordFields(e.fields, spread ? spread.ctx : ctx);
       return { expr: { ...e, spread: spread ? spread.expr : null, fields: fields.fields },
         ctx: fields.ctx };
@@ -203,7 +209,8 @@ function recurseExpr(e: TExpr, ctx: CondCtx): ExprOut {
     case "tagMatch": {
       const scrut = walkExpr(e.scrutinee, ctx);
       const cases = walkExprCases(e.cases, scrut.ctx);
-      const ft = e.fallthrough !== null ? walkExpr(e.fallthrough, cases.ctx) : null;
+      let ft: ExprOut | null = null;
+      if (e.fallthrough !== null) ft = walkExpr(e.fallthrough, cases.ctx);
       return { expr: { ...e, scrutinee: scrut.expr, cases: cases.cases,
         fallthrough: ft ? ft.expr : null }, ctx: ft ? ft.ctx : cases.ctx };
     }
@@ -253,8 +260,8 @@ function walkStmts(stmts: TStmt[], ctx: CondCtx): StmtsOut {
 }
 
 /** State-threaded `walkStmt` over each statement — unlike `walkStmts`, no
- *  list-level rules (used for the let-cond expansion, which re-walks its
- *  pieces individually exactly as the old loop did). */
+ *  list-level rules. Used for the let-cond expansion, whose pieces are
+ *  re-walked individually. */
 function walkEach(stmts: TStmt[], ctx: CondCtx): StmtsOut {
   if (stmts.length === 0) return { stmts: [], ctx };
   const h = walkStmt(stmts[0], ctx);
@@ -290,8 +297,10 @@ function recurseStmt(s: TStmt, ctx: CondCtx): StmtOut {
     case "while": {
       const cond = walkExpr(s.cond, ctx);
       const invs = walkExprs(s.invariants, cond.ctx);
-      const dec = s.decreases !== null ? walkExpr(s.decreases, invs.ctx) : null;
-      const dw = s.doneWith !== null ? walkExpr(s.doneWith, dec ? dec.ctx : invs.ctx) : null;
+      let dec: ExprOut | null = null;
+      if (s.decreases !== null) dec = walkExpr(s.decreases, invs.ctx);
+      let dw: ExprOut | null = null;
+      if (s.doneWith !== null) dw = walkExpr(s.doneWith, dec ? dec.ctx : invs.ctx);
       const body = walkStmts(s.body, dw ? dw.ctx : dec ? dec.ctx : invs.ctx);
       return { stmt: { ...s, cond: cond.expr, invariants: invs.exprs,
         decreases: dec ? dec.expr : null, doneWith: dw ? dw.expr : null,
@@ -307,7 +316,8 @@ function recurseStmt(s: TStmt, ctx: CondCtx): StmtOut {
     case "forof": {
       const it = walkExpr(s.iterable, ctx);
       const invs = walkExprs(s.invariants, it.ctx);
-      const dw = s.doneWith !== null ? walkExpr(s.doneWith, invs.ctx) : null;
+      let dw: ExprOut | null = null;
+      if (s.doneWith !== null) dw = walkExpr(s.doneWith, invs.ctx);
       const body = walkStmts(s.body, dw ? dw.ctx : invs.ctx);
       return { stmt: { ...s, iterable: it.expr, invariants: invs.exprs,
         doneWith: dw ? dw.expr : null, body: body.stmts }, ctx: body.ctx };
@@ -376,6 +386,7 @@ function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[]): TStmt | null {
 
 /** Left-nested `||` of non-empty leaves — the inverse of `flattenOr`. */
 function orChain(leaves: TExpr[]): TExpr {
+  //@ requires leaves.length > 0
   let acc: TExpr = leaves[0];
   for (let i = 1; i < leaves.length; i++) {
     acc = { kind: "binop", op: "||", left: acc, right: leaves[i], ty: { kind: "bool" } };
@@ -403,7 +414,8 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | 
   for (const leaf of leaves) {
     const d = noneDetector(leaf, ctx);
     if (!d) { residualLeaves.push(leaf); continue; }
-    const key = binderHintFor(d.scrutinee)!;
+    const key = binderHintFor(d.scrutinee);
+    if (key === null) return null;  // unreachable: detector scrutinees are path-shaped
     if (seen.has(key)) return null;  // two detectors on one optional: rare; leave to other rules
     seen.add(key);
     detectors.push(d);
@@ -411,10 +423,14 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | 
   }
   if (detectors.length === 0) return null;
 
-  let inner: TStmt[] = residualLeaves.length === 0
-    ? rest
-    : [{ kind: "if", cond: orChain(residualLeaves), then: s.then, else: [] }, ...rest];
+  // Statement form: a ternary would let transform lift the orChain call above
+  // the emptiness guard, where its non-empty precondition can't hold.
+  let inner: TStmt[] = rest;
+  if (residualLeaves.length > 0) {
+    inner = [{ kind: "if", cond: orChain(residualLeaves), then: s.then, else: [] }, ...rest];
+  }
   for (let i = detectors.length - 1; i >= 0; i--) {
+    //@ invariant inner.length > 0
     const d = detectors[i]!;
     inner = [{ kind: "someMatch", scrutinee: d.scrutinee, binderTy: d.innerTy, binder: d.binder, someBody: inner, noneBody: s.then }];
   }
@@ -435,9 +451,12 @@ function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[], ctx: CondCtx): 
   if (s.else.length !== 0 || !isTerminating(s.then)) return null;
   const c = s.cond;
   if (c.kind !== "binop" || c.op !== "!==") return null;
-  const oc = c.left.kind === "optChain" ? c.left : c.right.kind === "optChain" ? c.right : null;
-  if (!oc || oc.kind !== "optChain" || oc.obj.ty.kind !== "optional") return null;
-  const lit = c.left === oc ? c.right : c.left;
+  const ocOnLeft = c.left.kind === "optChain";
+  const oc = ocOnLeft ? c.left : c.right.kind === "optChain" ? c.right : null;
+  if (oc === null) return null;
+  if (oc.kind !== "optChain") return null;
+  if (oc.obj.ty.kind !== "optional") return null;
+  const lit = ocOnLeft ? c.right : c.left;
   const innerTy = oc.obj.ty.inner;
   const hint = binderHintFor(oc.obj);
   if (hint === null) return null;
@@ -473,7 +492,9 @@ function ruleConditionalOptionalSimple(e: TExpr, ctx: CondCtx): ExprOut | null {
  *  suffices in the premise). */
 function ruleImplOptional(e: TExpr, ctx: CondCtx): ExprOut | null {
   if (e.kind !== "binop" || e.op !== "==>") return null;
-  let check: PresentFact;
+  // No uninitialized let (it has no backend model), and presence guards are
+  // split from dependent reads so each early return narrows on its own.
+  let check: PresentFact | null = null;
   let restCond: TExpr | null = null;
   const extracted = leadingPresent(e.left);
   if (extracted) {
@@ -481,9 +502,11 @@ function ruleImplOptional(e: TExpr, ctx: CondCtx): ExprOut | null {
     restCond = extracted.restCond;
   } else {
     const c = presentFact(e.left);
-    if (!c || c.negated) return null;
+    if (c === null) return null;
+    if (c.negated) return null;
     check = c;
   }
+  if (check === null) return null;
   const innerBody: TExpr = restCond
     ? { kind: "binop", op: "==>", left: restCond, right: e.right, ty: { kind: "bool" } }
     : e.right;
@@ -707,9 +730,10 @@ function ruleLetCondAndOptional(s: TStmt): TStmt[] | null {
  *  (they lower to pure Dafny expressions: `x in arr`, `x in m`, `s.Keys`,
  *  …) are exempt even though they carry `callKind: "method"`. */
 function containsMethodCall(e: TExpr): boolean {
-  if (e.kind === "call" && e.callKind === "method" &&
-      !(e.builtinId !== undefined && builtinPure(e.builtinId))) {
-    return true;
+  if (e.kind === "call" && e.callKind === "method") {
+    const bid = e.builtinId;
+    if (bid === undefined) return true;
+    if (!builtinPure(bid)) return true;
   }
   switch (e.kind) {
     case "var": case "num": case "str": case "bool":
@@ -798,10 +822,19 @@ function ruleConditionalArrayIsArray(e: TExpr, ctx: CondCtx): ExprOut | null {
   const pos = isArrayFact(e.cond, ctx);
   // `typeof x === "string"` is a positive check like `Array.isArray`, but selects
   // the NonArrayBranch — its then-branch is the matched-variant body.
-  const tof = pos ? null : typeofStringFact(e.cond, ctx);
-  const neg = !pos && !tof && e.cond.kind === "unop" && e.cond.op === "!"
-    ? isArrayFact(e.cond.expr, ctx)
-    : null;
+  // Statement form with explicit null tests (not `pos ? … : …` truthiness or
+  // `!pos && !tof && …` chains): optional truthiness inside `&&` lowers to
+  // match-expression operands, a shape Dafny 4.11's translator asserts on.
+  let tof: IsArrayFact | null = null;
+  if (pos === null) tof = typeofStringFact(e.cond, ctx);
+  let neg: IsArrayFact | null = null;
+  if (pos === null) {
+    if (tof === null) {
+      if (e.cond.kind === "unop" && e.cond.op === "!") {
+        neg = isArrayFact(e.cond.expr, ctx);
+      }
+    }
+  }
   const matched = pos ?? tof ?? (neg ? { scrutinee: neg.scrutinee, typeName: neg.typeName, variant: "NonArrayBranch" as const } : null);
   if (!matched) return null;
   const positive = pos ?? tof;
@@ -881,9 +914,10 @@ interface ElseChain { cases: TStmtCase[]; fallthrough: TStmt[] }
 /** Flatten an else-spine of `if (x.kind === "v")` tests on `scrutineeName`
  *  into cases; the first non-matching statement (or multi-statement else)
  *  becomes the fallthrough. */
-function collectElseChain(s: TStmt & { kind: "if" }, scrutineeName: string, ctx: CondCtx): ElseChain {
+function collectElseChain(s: TStmt, scrutineeName: string, ctx: CondCtx): ElseChain {
+  if (s.kind !== "if") return { cases: [], fallthrough: [s] };
   const p = variantFact(s.cond, ctx);
-  if (!p || p.scrutinee.name !== scrutineeName) return { cases: [], fallthrough: [s] };
+  if (!p || p.scrutineeName !== scrutineeName) return { cases: [], fallthrough: [s] };
   const here: TStmtCase = { variant: p.variant, body: s.then };
   if (s.else.length === 0) return { cases: [here], fallthrough: [] };
   if (s.else.length === 1 && s.else[0].kind === "if") {
@@ -893,12 +927,18 @@ function collectElseChain(s: TStmt & { kind: "if" }, scrutineeName: string, ctx:
   return { cases: [here], fallthrough: s.else };
 }
 
+/** A list-level rewrite: the replacement statement plus how many input
+ *  statements it consumed. One named type shared by both discriminant rules
+ *  so their `??` join has a single shape. */
+interface ConsumedRewrite { stmt: TStmt; consumed: number }
+
 /** Driver (list-level): consecutive `if (x.kind === "v") ...` chain →
  *  tagMatch. Walks consecutive top-level ifs on the same discriminator var;
  *  the first one with an else-branch ends the chain (else becomes
  *  fallthrough; if-else-if flattens into more cases). Returns the tagMatch
  *  and how many stmts consumed. */
-function ruleDiscriminantChain(stmts: TStmt[], ctx: CondCtx): { stmt: TStmt; consumed: number } | null {
+function ruleDiscriminantChain(stmts: TStmt[], ctx: CondCtx): ConsumedRewrite | null {
+  //@ ensures \result !== null ==> \result.consumed >= 0 && \result.consumed <= stmts.length
   if (stmts.length === 0 || stmts[0].kind !== "if") return null;
   const first = variantFact(stmts[0].cond, ctx);
   if (!first) return null;
@@ -907,15 +947,17 @@ function ruleDiscriminantChain(stmts: TStmt[], ctx: CondCtx): { stmt: TStmt; con
 
   let consumed = 0;
   for (let i = 0; i < stmts.length; i++) {
+    //@ invariant consumed >= 0 && consumed <= stmts.length
+    //@ invariant i <= stmts.length
     const s = stmts[i];
     if (s.kind !== "if") break;
     const p = variantFact(s.cond, ctx);
-    if (!p || p.scrutinee.name !== first.scrutinee.name) break;
+    if (!p || p.scrutineeName !== first.scrutineeName) break;
     cases.push({ variant: p.variant, body: s.then });
     consumed = i + 1;
     if (s.else.length > 0) {
       const tail: ElseChain = (s.else.length === 1 && s.else[0].kind === "if")
-        ? collectElseChain(s.else[0], first.scrutinee.name, ctx)
+        ? collectElseChain(s.else[0], first.scrutineeName, ctx)
         : { cases: [], fallthrough: s.else };
       return { stmt: { kind: "tagMatch", scrutinee: first.scrutinee, typeName: first.typeName,
         cases: cases.concat(tail.cases), fallthrough: tail.fallthrough }, consumed };
@@ -936,7 +978,8 @@ function ruleDiscriminantChain(stmts: TStmt[], ctx: CondCtx): { stmt: TStmt; con
 
 /** Driver (list-level): `if (x.kind !== "v") terminate; rest` → tagMatch
  *  with cases = [{ variant: v, body: rest }] and fallthrough = terminate. */
-function ruleDiscriminantNegEarlyReturn(stmts: TStmt[], ctx: CondCtx): { stmt: TStmt; consumed: number } | null {
+function ruleDiscriminantNegEarlyReturn(stmts: TStmt[], ctx: CondCtx): ConsumedRewrite | null {
+  //@ ensures \result !== null ==> \result.consumed >= 0 && \result.consumed <= stmts.length
   if (stmts.length < 2) return null;
   const first = stmts[0];
   if (first.kind !== "if" || first.else.length > 0) return null;
@@ -955,7 +998,8 @@ interface FunctionOut { fn: TFunction; ctx: CondCtx }
 function narrowFunction(fn: TFunction, ctx: CondCtx): FunctionOut {
   const reqs = walkExprs(fn.requires, ctx);
   const enss = walkExprs(fn.ensures, reqs.ctx);
-  const dec = fn.decreases !== null ? walkExpr(fn.decreases, enss.ctx) : null;
+  let dec: ExprOut | null = null;
+  if (fn.decreases !== null) dec = walkExpr(fn.decreases, enss.ctx);
   const body = walkStmts(fn.body, dec ? dec.ctx : enss.ctx);
   return {
     fn: {

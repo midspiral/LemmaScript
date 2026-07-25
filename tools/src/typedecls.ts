@@ -16,7 +16,9 @@
 import type { Ty } from "./typedir.js";
 import type { TypeDeclInfo } from "./types.js";
 
-export type TypeDecls = readonly TypeDeclInfo[];
+// Not `readonly TypeDeclInfo[]`: the readonly array modifier has no backend
+// model, so the self-run would synthesize an opaque type for the alias.
+export type TypeDecls = TypeDeclInfo[];
 
 /** `Foo<Bar>` → `Foo`. The single home of the generic-base slice; §5.1
  *  (structured generic args) retires it. */

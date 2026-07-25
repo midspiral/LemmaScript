@@ -902,7 +902,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             const variant = decl.variants?.find(v => v.name === variantName);
             if (variant) {
               const nonDiscFields = e.fields.filter(f => f.name !== decl.discriminant);
-              if (nonDiscFields.length === 0) {
+              // Bare-constructor shortcut only when the variant truly has no
+              // fields — a variant with only optional fields still needs its
+              // None-filled argument list (`int_(None)`, not `int_`).
+              if (variant.fields.length === 0) {
                 return { kind: "constructor", name: variantName, type: tyName, args: [] };
               }
               // Constructor with args: match variant field order. Emit a bare `app`
@@ -1028,11 +1031,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
 
     case "optChain":
       // Narrow should have rewritten optChain to someMatch.
-      throw new Error(`optChain reached transform — narrow should have rewritten it`);
+      throw new Error(`optChain reached transform — narrow should have rewritten it: ${JSON.stringify(e).slice(0, 400)}`);
 
     case "nullish":
       // Narrow should have rewritten nullish to someMatch.
-      throw new Error(`nullish reached transform — narrow should have rewritten it`);
+      throw new Error(`nullish reached transform — narrow should have rewritten it: ${JSON.stringify(e).slice(0, 300)}`);
 
     case "havoc":
       // Dafny's * only works in var/assign positions — lift to own declaration
@@ -1895,13 +1898,34 @@ function enumFieldSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[
   };
 }
 
+/** Stamp variant ctor info onto datatype updates of the match scrutinee in
+ *  lowered arm bodies (`{ ...vn, f: v }`) — the statement-path twin of
+ *  `replaceFieldAccess`'s stamping. Emitters need the pin to use
+ *  per-constructor destructor names for collision-renamed fields. */
+function stampScrutineeUpdates(body: Stmt[], varName: string, ctorName: string, ctorOf: string): Stmt[] {
+  const stamp = (x: Expr): Expr | null => {
+    if (x.kind === "record" && !x.ctor && x.spread &&
+        x.spread.kind === "var" && x.spread.name === varName) {
+      return { ...x, ctor: ctorName, ctorOf,
+        fields: x.fields.map(f => ({ ...f, value: mapExpr(f.value, stamp) })) };
+    }
+    return null;
+  };
+  return body.map(st => mapStmt(st, stamp));
+}
+
 function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Stmt {
   const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
   const ef = enumFieldSwitch(s, typeDecls);
+  const baseName = s.expr.ty.kind === "user" ? tyBaseName(s.expr.ty.name) : undefined;
   const arms = ef
     ? buildMatchArms(cases, undefined, ef.enumTyName, typeDecls, (body) => transformStmts(body, typeDecls))!
     : buildMatchArms(cases, s.expr.kind === "var" ? s.expr.name : "?", s.expr.ty.kind === "user" ? s.expr.ty.name : undefined, typeDecls,
-        (body, vn, fields) => transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls))!;
+        (body, vn, fields, ctorName) => {
+          let out = transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls);
+          if (ctorName && vn && baseName) out = stampScrutineeUpdates(out, vn, ctorName, baseName);
+          return out;
+        })!;
   if (s.defaultBody.length > 0) arms.push({ pattern: pWild(), body: transformStmts(s.defaultBody, typeDecls) });
   return { kind: "match", scrutinee: ef ? ef.scrutinee : varE(s.expr.kind === "var" ? s.expr.name : "?"), arms };
 }

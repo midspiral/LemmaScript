@@ -8,7 +8,7 @@
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
 import { anyExpr, usesNameInDecl, patternBinders } from "./ir.js";
 import type { Ty } from "./typedir.js";
-import { freshName } from "./names.js";
+import { freshName, freshNameWhere } from "./names.js";
 
 // ── Ty → Lean type string ──────────────────────────────────
 
@@ -764,7 +764,7 @@ function emitDecl(d: Decl): string {
       // Prime the return binder only on a collision within *this method's own*
       // signature/body — `res` is a common identifier module-wide (record
       // fields, unrelated params), so a module-wide check would prime spuriously.
-      _resultName = freshName("res", n =>
+      _resultName = freshNameWhere("res", n =>
         d.params.some(p => escapeName(p.name) === n) ||
         usesNameInDecl(d.requires, d.ensures, d.body, n));
       const lines = [`method ${d.name} ${params} return (${_resultName} : ${tyToLean(d.returnType)})`];

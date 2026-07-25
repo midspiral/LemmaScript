@@ -941,10 +941,15 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // left ?? right — result type is left's inner (when left is optional)
       // or just left's type, unified with right's type.
       const left = resolveExpr(e.left, ctx);
-      const ty: Ty = left.ty.kind === "optional" ? left.ty.inner : left.ty;
+      const inner: Ty = left.ty.kind === "optional" ? left.ty.inner : left.ty;
       // The default shares the result type, so coerce a string literal to a
       // string-union enum (e.g. `availableLevels[0] ?? "off"`).
-      const right = coerceStr(resolveExpr(e.right, ctx), ty);
+      const right = coerceStr(resolveExpr(e.right, ctx), inner);
+      // `??` is only total when its default is: with a nullable right operand
+      // (rule-chain style `ruleA(e) ?? ruleB(e) ?? null`), the result stays
+      // optional — otherwise the enclosing chain level loses its optionality
+      // and narrowing can't rewrite it.
+      const ty: Ty = right.ty.kind === "optional" ? right.ty : inner;
       return { kind: "nullish", left, right, ty };
     }
 
@@ -1021,14 +1026,32 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       const returnTyUnwrapped = ctx.returnTy.kind === "optional" ? ctx.returnTy.inner : ctx.returnTy;
       const recordTy = ty.kind === "user" ? ty : returnTyUnwrapped.kind === "user" ? returnTyUnwrapped : null;
       const decl = recordTy ? declOfKind(ctx.typeDecls, recordTy.name, "record") : undefined;
+      // Union-variant literal in union-typed context (a constructed IR node,
+      // `{ kind: "if", … }: TStmt`): contextual field types come from the
+      // variant the literal's discriminant field selects.
+      let declFields = decl?.fields;
+      if (!declFields && recordTy) {
+        const udecl = declOfKind(ctx.typeDecls, recordTy.name, "discriminated-union");
+        if (udecl?.discriminant && udecl.variants) {
+          const tagRaw = e.fields.find(f => f.name === udecl.discriminant)?.value;
+          if (tagRaw?.kind === "str") {
+            declFields = udecl.variants.find(v => v.name === tagRaw.value)?.fields;
+          }
+        }
+      }
       // Clear returnTy for field values — it applies to THIS record, not nested ones
       const fieldCtx = recordTy ? { ...ctx, returnTy: { kind: "unknown" as const } as Ty } : ctx;
       const fields = e.fields.map(f => {
-        const fieldDecl = decl?.fields?.find(df => df.name === f.name);
+        const fieldDecl = declFields?.find(df => df.name === f.name);
         // Propagate declared field type into context so nested records resolve
-        // their union variant correctly (e.g., { kind: 'Idle' } → EffectMode.Idle)
-        const valueCtx = (fieldDecl?.type?.kind === "user")
-          ? { ...fieldCtx, returnTy: fieldDecl.type }
+        // their union variant correctly (e.g., { kind: 'Idle' } → EffectMode.Idle).
+        // Optional fields propagate their inner type (the Some-wrap is restored
+        // by coerceToTargetTy below); array fields propagate whole, so the
+        // arrayLiteral case can thread the element type.
+        const fdTy = fieldDecl?.type;
+        const fdCtxTy = fdTy?.kind === "optional" ? fdTy.inner : fdTy;
+        const valueCtx = fdCtxTy && (fdCtxTy.kind === "user" || fdCtxTy.kind === "array")
+          ? { ...fieldCtx, returnTy: fdCtxTy }
           : fieldCtx;
         let value = resolveExpr(f.value, valueCtx);
         if (fieldDecl) {
@@ -1086,8 +1109,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       // literal in an array resolves to its named datatype rather than an
       // anonymous tuple (mirrors return-position and call-argument records, which
       // get their type via ctx.returnTy). Only narrow when the context type is an
-      // array; otherwise leave ctx untouched.
-      const expectedElem = ctx.returnTy.kind === "array" ? ctx.returnTy.elem : null;
+      // array (unwrapping one optional level — `TStmt[] | null` return positions);
+      // otherwise leave ctx untouched.
+      const rtUnwrapped = ctx.returnTy.kind === "optional" ? ctx.returnTy.inner : ctx.returnTy;
+      const expectedElem = rtUnwrapped.kind === "array" ? rtUnwrapped.elem : null;
       const elemCtx = expectedElem ? { ...ctx, returnTy: expectedElem } : ctx;
       const elems = e.elems.map(el => {
         const r = resolveExpr(el, elemCtx);
@@ -1276,8 +1301,11 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // Propagate declared type as returnTy so nested record expressions resolve
       // union variants correctly (e.g., EffectState → mode: EffectMode → { kind:
       // 'Idle' }). Arrays too, so `const xs: Foo[] = [{...}]` threads the element
-      // type into the array literal (see the arrayLiteral case).
-      const initCtx = (declTy.kind === "user" || declTy.kind === "array") ? { ...ctx, returnTy: declTy } : ctx;
+      // type into the array literal (see the arrayLiteral case). Optionals too
+      // (`const r: TExpr | null = cond ? {…} : null`) — the record case unwraps
+      // one optional level when consulting returnTy.
+      const initCtx = (declTy.kind === "user" || declTy.kind === "array" || declTy.kind === "optional")
+        ? { ...ctx, returnTy: declTy } : ctx;
       const init = coerceStr(resolveExpr(s.init, initCtx), declTy);
       let ty: Ty;
       if (isUnmodeledTy(declTy, ctx.typeDecls) && !isUnmodeledTy(init.ty, ctx.typeDecls)) {
