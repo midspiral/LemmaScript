@@ -83,7 +83,9 @@ function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
  *  rest of the block), `match` arm patterns, `forall`/`exists`, and `for-in`
  *  indices. Capture-avoiding: a nested scope that reintroduces `from` keeps its
  *  own binding untouched. `mapExpr` doesn't descend into lambda bodies, so this
- *  walks them by hand. */
+ *  walks them by hand — statement binders are tracked only at that body's top
+ *  level, which is enough for the sole caller (dafny-emit's
+ *  `comprehensionBinder`). TODO: generalize if more callers need this. */
 export function renameFreeVar(e: Expr, from: string, to: string): Expr {
   const f = (x: Expr): Expr | null => {
     if (x.kind === "var") return x.name === from ? { ...x, name: to } : x;
