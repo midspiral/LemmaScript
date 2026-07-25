@@ -21,10 +21,13 @@ let _havocKey: string | null = null;
  *  different `.ts` source file. Emitted in Dafny as `function {:axiom} <flat>`.
  *  Cleared at the start of every `extractModule`. */
 const _externs = new Map<string, import("./rawir.js").RawExtern>();
-/** Signature types of collected externs, for the imported-type resolver:
- *  a type reachable ONLY through an imported function's signature (e.g. an
- *  extern returning PresentFact that no local signature mentions) must still
- *  be resolved into a full decl, or it synthesizes opaque. */
+/** Signature types of *kept* externs, for the imported-type resolver: a type
+ *  reachable ONLY through an imported function's signature (e.g. an extern
+ *  returning PresentFact that no local signature mentions) must still be
+ *  resolved into a full decl, or it synthesizes opaque. Filled only after the
+ *  extern survives the `_externs` dedup — a cross-file signature superseded by a
+ *  same-file `//@ extern` contributes nothing to the output, so resolving its
+ *  types would emit decls that no emitted declaration mentions. */
 const _externSigTypes: { type: Type; node: Node }[] = [];
 let _currentSourceFile: SourceFile | null = null;
 /** True only while extracting a function body. Module-level constants that
@@ -45,9 +48,13 @@ function registerExternIfCrossFile(
   callee: import("ts-morph").PropertyAccessExpression | import("ts-morph").Identifier,
   sourceFile: SourceFile,
 ): void {
-  const ext = detectCrossFileExtern(callee, sourceFile);
+  const sigTypes: { type: Type; node: Node }[] = [];
+  const ext = detectCrossFileExtern(callee, sourceFile, sigTypes);
   if (!ext || _externs.has(ext.qualified)) return;
   _externs.set(ext.qualified, ext);
+  // Only now that the extern is kept do its signature types become resolver
+  // seeds — see `_externSigTypes`.
+  _externSigTypes.push(...sigTypes);
   // Recurse: scan the source decl's body for nested cross-file calls so any
   // symbol referenced by the copied spec is itself declared in the output.
   let symbol = callee.getSymbol();
@@ -72,6 +79,7 @@ function registerExternIfCrossFile(
 function detectCrossFileExtern(
   callee: import("ts-morph").PropertyAccessExpression | import("ts-morph").Identifier,
   sourceFile: SourceFile,
+  sigTypesOut: { type: Type; node: Node }[],
 ): import("./rawir.js").RawExtern | null {
   let symbol = callee.getSymbol();
   if (!symbol) return null;
@@ -112,9 +120,9 @@ function detectCrossFileExtern(
   }));
   const returnType = externTypeText(sig.getReturnType());
   for (const p of sig.getParameters()) {
-    _externSigTypes.push({ type: p.getTypeAtLocation(callee), node: callee });
+    sigTypesOut.push({ type: p.getTypeAtLocation(callee), node: callee });
   }
-  _externSigTypes.push({ type: sig.getReturnType(), node: callee });
+  sigTypesOut.push({ type: sig.getReturnType(), node: callee });
   // Also seed from the source declaration's syntactic type nodes: symbol-based
   // types can drop the alias symbol (the printed signature then names an alias
   // like `TypeDecls` that would otherwise synthesize opaque), while a type
@@ -122,10 +130,10 @@ function detectCrossFileExtern(
   const srcDecl = externalDecl as { getParameters?: () => { getTypeNode?: () => Node | undefined }[]; getReturnTypeNode?: () => Node | undefined };
   for (const sp of srcDecl.getParameters?.() ?? []) {
     const tn = sp.getTypeNode?.();
-    if (tn) _externSigTypes.push({ type: tn.getType(), node: tn });
+    if (tn) sigTypesOut.push({ type: tn.getType(), node: tn });
   }
   const rtn = srcDecl.getReturnTypeNode?.();
-  if (rtn) _externSigTypes.push({ type: rtn.getType(), node: rtn });
+  if (rtn) sigTypesOut.push({ type: rtn.getType(), node: rtn });
   let qualified: string;
   if (Node.isPropertyAccessExpression(callee)) {
     qualified = `${callee.getExpression().getText()}.${callee.getName()}`;
