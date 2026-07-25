@@ -1166,10 +1166,11 @@ function scrutineeHint(e: TExpr): string {
 // `if (X) continue; rest` → `if (!X) { rest }` at the top of a loop body.
 // Dafny's lowered while-loops have the index increment at the bottom, so a
 // `continue` would skip it and loop forever; rewriting to if/else lets the
-// loop fall through normally.
+// loop fall through normally. The operand is already-lowered IR, where
+// negation is spelled `¬` (lowerExpr rewrites `!`).
 function negateExpr(e: Expr): Expr {
-  if (e.kind === "unop" && e.op === "!") return e.expr;
-  return { kind: "unop", op: "!", expr: e };
+  if (e.kind === "unop" && e.op === "¬") return e.expr;
+  return { kind: "unop", op: "¬", expr: e };
 }
 
 /** Build the two pieces of an `arr.pop()` lowering on a named array variable:

@@ -349,8 +349,8 @@ function emitExpr(e: Expr, parentPrec?: number): string {
 
     case "unop":
       if (e.op === "¬") return _boolCtx ? `!(${emitExpr(e.expr)})` : `¬(${emitExpr(e.expr)})`;
-      if (e.op === "-" && e.expr.kind === "num") return `-${e.expr.value}`;
-      return `(-${emitExpr(e.expr)})`;
+      if (e.op !== "-") throw new Error(`Unsupported Lean unary operator: ${e.op}`);
+      return e.expr.kind === "num" ? `-${e.expr.value}` : `(-${emitExpr(e.expr)})`;
 
     case "binop": {
       // Discriminator test against a constructor that carries fields:
