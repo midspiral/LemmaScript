@@ -20,19 +20,24 @@
  * declarations takes a `CondCtx`; nothing module-level.
  */
 
-import type { TExpr, TStmt, Ty } from "./typedir.js";
+import type { TExpr, TStmt, Ty, TChainStep } from "./typedir.js";
 import { freshName } from "./names.js";
 import type { TypeDecls } from "./typedecls.js";
 import { unionDeclOfTy, discriminantOf } from "./typedecls.js";
 
-/** Explicit context: type declarations plus the optChain binder counter. */
+/** Explicit context: type declarations plus the next optChain binder index.
+ *  Threaded, never mutated (§6.1/§6.2 — N-R1): minting returns the advanced
+ *  ctx, and the walkers pass it along. */
 export interface CondCtx {
   decls: TypeDecls;
-  oc: { n: number };
+  ocN: number;
 }
 
-export function freshOcBinder(ctx: CondCtx): string {
-  return freshName(`_oc${ctx.oc.n++}_val`);
+/** A minted binder plus the ctx that reserves it. */
+export interface MintedBinder { name: string; ctx: CondCtx }
+
+export function freshOcBinder(ctx: CondCtx): MintedBinder {
+  return { name: freshName(`_oc${ctx.ocN}_val`), ctx: { ...ctx, ocN: ctx.ocN + 1 } };
 }
 
 // ── Presence facts ──────────────────────────────────────────
@@ -116,44 +121,49 @@ export const bound = (f: PresentFact): TExpr =>
 
 // ── `&&`-chain analysis: one leading fact + residual ────────
 
-/** Pull one `parse`-matching conjunct out of an `&&` tree, returning it plus
- *  the tree with that conjunct removed:
+/** The `leading*` extractors pull one matching conjunct out of an `&&`
+ *  tree, returning it plus the tree with that conjunct removed:
  *  `(x !== undefined && b) && c` → { check, restCond: b && c }.
  *
  *  Search order is shallowest-first, left-biased — both immediate operands
  *  before either nested chain — so the conjunct found is not necessarily the
- *  source-leftmost one. That is sound because every `parse` passed here
- *  (`leadingPresent`, `leadingIsArray`) matches only pure, total checks on an
- *  already-typed path, so hoisting one above the others is observationally
- *  neutral. The one thing it does change: the residual now sits inside the
- *  match arm, so a conjunct that would have run before a failing check no
- *  longer runs at all.
- *  Harmless while conditions stay pure — revisit if that ever stops holding. */
-export function extractConjunct<C>(cond: TExpr, parse: (e: TExpr) => C | null): { check: C; restCond: TExpr } | null {
-  if (cond.kind !== "binop" || cond.op !== "&&") return null;
-  const left = parse(cond.left);
-  if (left) return { check: left, restCond: cond.right };
-  const right = parse(cond.right);
-  if (right) return { check: right, restCond: cond.left };
-  if (cond.left.kind === "binop" && cond.left.op === "&&") {
-    const inner = extractConjunct(cond.left, parse);
-    if (inner) return { check: inner.check, restCond: { ...cond, left: inner.restCond } as TExpr };
-  }
-  if (cond.right.kind === "binop" && cond.right.op === "&&") {
-    const inner = extractConjunct(cond.right, parse);
-    if (inner) return { check: inner.check, restCond: { ...cond, right: inner.restCond } as TExpr };
-  }
-  return null;
+ *  source-leftmost one. That is sound because both extractors match only
+ *  pure, total checks on an already-typed path, so hoisting one above the
+ *  others is observationally neutral. The one thing it does change: the
+ *  residual now sits inside the match arm, so a conjunct that would have run
+ *  before a failing check no longer runs at all.
+ *  Harmless while conditions stay pure — revisit if that ever stops holding.
+ *
+ *  Two monomorphic copies of the tree surgery, deliberately: the generic
+ *  `extractConjunct<C>(cond, parse)` they replace is genuine parametricity
+ *  with a fn-valued parameter — neither survives the subset's erasure
+ *  doctrine (§8.6 N-R3, mirroring peephole R3). */
+export interface LeadingPresent { check: PresentFact; restCond: TExpr }
+
+function positivePresent(e: TExpr): PresentFact | null {
+  const f = presentFact(e);
+  if (f === null || f.negated) return null;
+  return f;
 }
 
 /** The positive presence fact an `&&` chain contributes, plus the residual.
  *  "Leading" describes the rewrite, not the source: this fact becomes the
  *  outermost match, wherever in the chain it was written. */
-export function leadingPresent(cond: TExpr): { check: PresentFact; restCond: TExpr } | null {
-  return extractConjunct(cond, e => {
-    const f = presentFact(e);
-    return f && !f.negated ? f : null;
-  });
+export function leadingPresent(cond: TExpr): LeadingPresent | null {
+  if (cond.kind !== "binop" || cond.op !== "&&") return null;
+  const left = positivePresent(cond.left);
+  if (left) return { check: left, restCond: cond.right };
+  const right = positivePresent(cond.right);
+  if (right) return { check: right, restCond: cond.left };
+  if (cond.left.kind === "binop" && cond.left.op === "&&") {
+    const inner = leadingPresent(cond.left);
+    if (inner) return { check: inner.check, restCond: { ...cond, left: inner.restCond } };
+  }
+  if (cond.right.kind === "binop" && cond.right.op === "&&") {
+    const inner = leadingPresent(cond.right);
+    if (inner) return { check: inner.check, restCond: { ...cond, right: inner.restCond } };
+  }
+  return null;
 }
 
 // ── `||`-chain analysis (De Morgan): None-detectors ─────────
@@ -178,8 +188,8 @@ export function noneDetector(leaf: TExpr, ctx: CondCtx): NoneDetector | null {
       const hint = binderHintFor(oc.obj);
       if (hint === null) return null;
       const binder = freshName(hint);
-      const unwrapped = applyChain({ kind: "var", name: binder, ty: oc.obj.ty.inner }, oc.chain);
-      restoreDiscriminantFlag(unwrapped, ctx.decls);
+      const unwrapped = restoreDiscriminantFlag(
+        applyChain({ kind: "var", name: binder, ty: oc.obj.ty.inner }, oc.chain), ctx.decls);
       const lit = leaf.left === oc ? leaf.right : leaf.left;
       return { scrutinee: oc.obj, innerTy: oc.obj.ty.inner, binder, residual: { kind: "binop", op: "!==", left: unwrapped, right: lit, ty: { kind: "bool" } } };
     }
@@ -197,10 +207,8 @@ export function noneDetector(leaf: TExpr, ctx: CondCtx): NoneDetector | null {
 
 // ── Optional chains ─────────────────────────────────────────
 
-type OptChain = Extract<TExpr, { kind: "optChain" }>;
-
 /** Apply an optional chain's steps (field / index / call) to a base expr. */
-export function applyChain(body: TExpr, chain: OptChain["chain"]): TExpr {
+export function applyChain(body: TExpr, chain: TChainStep[]): TExpr {
   for (const step of chain) {
     if (step.kind === "field") body = { kind: "field", obj: body, field: step.name, ty: step.ty };
     else if (step.kind === "index") body = { kind: "index", obj: body, idx: step.idx, ty: step.ty };
@@ -214,11 +222,12 @@ export function applyChain(body: TExpr, chain: OptChain["chain"]): TExpr {
  *  resolve sets on a direct `x.disc`; restore it when the unwrapped access
  *  is the binder union's discriminant, so the guard feeds discriminant
  *  narrowing. (The single home of a fixup formerly duplicated per rule.) */
-export function restoreDiscriminantFlag(unwrapped: TExpr, decls: TypeDecls): void {
+export function restoreDiscriminantFlag(unwrapped: TExpr, decls: TypeDecls): TExpr {
   if (unwrapped.kind === "field" &&
       discriminantOf(decls, unwrapped.obj.ty) === unwrapped.field) {
-    unwrapped.isDiscriminant = true;
+    return { ...unwrapped, isDiscriminant: true };
   }
+  return unwrapped;
 }
 
 // ── In-bounds facts ─────────────────────────────────────────
@@ -246,17 +255,25 @@ export function exprEqual(a: TExpr, b: TExpr): boolean {
   return false;
 }
 
+function stripValSuffix(s: string): string {
+  return s.endsWith("_val") ? s.slice(0, s.length - 4) : s;
+}
+
+function stripLeadingUnderscore(s: string): string {
+  return s.startsWith("_") ? s.slice(1) : s;
+}
+
 /** Produce a reader-friendly binder hint for `m[k]` when both m and k are
  *  access-path shaped (var / field chain). Falls back to a generic counter
  *  name for computed keys. */
-export function binderHintForMapAccess(m: TExpr, k: TExpr, ctx: CondCtx): string {
+export function binderHintForMapAccess(m: TExpr, k: TExpr, ctx: CondCtx): MintedBinder {
   const mHint = binderHintFor(m);
   const kHint = binderHintFor(k);
   if (mHint && kHint) {
     // mHint is `_m_val`, kHint is `_k_val` — stitch into `_m_k_val`.
-    const mStem = mHint.replace(/_val$/, "");
-    const kStem = kHint.replace(/^_/, "").replace(/_val$/, "");
-    return freshName(`${mStem}_${kStem}_val`);
+    const mStem = stripValSuffix(mHint);
+    const kStem = stripValSuffix(stripLeadingUnderscore(kHint));
+    return { name: freshName(`${mStem}_${kStem}_val`), ctx };
   }
   return freshOcBinder(ctx);
 }
@@ -317,11 +334,27 @@ export function typeofStringFact(e: TExpr, ctx: CondCtx): (IsArrayFact & { varia
   return { scrutinee: tof, typeName: tof.ty.name, variant: "NonArrayBranch" };
 }
 
+export interface LeadingIsArray { check: IsArrayFact & { variant: "ArrayBranch" }; restCond: TExpr }
+
 /** Leading `Array.isArray(path)` fact of an `&&` chain (positive form only — a
  *  negated `!Array.isArray(...)` would narrow to the wrong variant for then-body
- *  consumers, so those are left to the untouched-conditional path). */
-export function leadingIsArray(cond: TExpr, ctx: CondCtx) {
-  return extractConjunct(cond, e => isArrayFact(e, ctx));
+ *  consumers, so those are left to the untouched-conditional path).
+ *  Monomorphic sibling of `leadingPresent` — see the note there. */
+export function leadingIsArray(cond: TExpr, ctx: CondCtx): LeadingIsArray | null {
+  if (cond.kind !== "binop" || cond.op !== "&&") return null;
+  const left = isArrayFact(cond.left, ctx);
+  if (left) return { check: left, restCond: cond.right };
+  const right = isArrayFact(cond.right, ctx);
+  if (right) return { check: right, restCond: cond.left };
+  if (cond.left.kind === "binop" && cond.left.op === "&&") {
+    const inner = leadingIsArray(cond.left, ctx);
+    if (inner) return { check: inner.check, restCond: { ...cond, left: inner.restCond } };
+  }
+  if (cond.right.kind === "binop" && cond.right.op === "&&") {
+    const inner = leadingIsArray(cond.right, ctx);
+    if (inner) return { check: inner.check, restCond: { ...cond, right: inner.restCond } };
+  }
+  return null;
 }
 
 /** Detect `x.kind === "variant"`, `'key' in x`, or `Array.isArray(x)` (synth

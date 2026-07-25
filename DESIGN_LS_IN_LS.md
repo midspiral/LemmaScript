@@ -601,7 +601,7 @@ deliberate output change, documented per §10.1):
 | E1 | Imported named record types expand to structures (previously they synthesized opaque, so rebuilding an imported record — `{ ...a, body }` on a `MatchArm` — failed as a datatype update on an opaque type) | done (2026-07-22): the semantic import resolver stopped at anonymous union variants (`__type` symbols), so variant fields were never walked; it now recurses into them, with a compiler-`Type`-keyed visited set since recursive unions become reachable. Gauntlet byte-for-byte on both backends; one deliberate self-run artifact change: `ir.dfy`'s imported `Ty` upgraded from opaque to the full datatype, re-verified |
 | E2 | Array `.map` lowers to a seq comprehension so recursive rebuild walkers termination-check (mirrors the `.some`/`.every` quantifier lowering); also drops the `Std` dependency for map | done (2026-07-22), Dafny only: one uniform lowering — `seq(\|s\|, i requires 0 <= i < \|s\| => …)` with a literal lambda beta-reduced through a `var` binding (an applied closure defeats the termination checker; verified empirically) and any other argument applied to `s[i]` directly; `Seq.Map` is gone. Index freshness is an IR-level `usesName` check (no string scanning), a local check until §6.3. Deliberate output change (§10.1): 7 gauntlet examples + `ir.dfy` re-lowered, all re-verified. Lean's `.map` is untouched — revisit with the deferred mutual-block work if Lean termination needs it |
 | E3 | `const`-bound lambda aliases (`const r = (x) => walk(x, f)`) work when called from inside a nested lambda — direct calls and direct-position uses already work; only this composition breaks | done (2026-07-23), in two general halves: calls through fn-typed values (locals, parameters) classify pure — the fragment has no effectful closures, so lifting them to statement binds (which forced lambdas multi-statement) was never needed; and lambdas always take their return type from the checker, so unannotated lambdas carry a real fn type. Gauntlet byte-for-byte on both backends |
-| E4 | `find` builtin: registry entry, both lowerings, matrix row (§10.2) | open — no longer on peephole's path (R3's monomorphic split uses direct two-arm checks); still generally useful |
+| E4 | `find` builtin: registry entry, both lowerings, matrix row (§10.2) | done (2026-07-24), back on the critical path via narrow's `typeofStringFact`: registry entry pre-existed; Dafny lowers to a `SeqFind` preamble helper with first-match ensures (mirrors `SeqFindLast`), Lean's `.find?` lowering pre-existed; pinned by `examples/arrayFind.ts` (find + optChain/nullish on the result) on both backends. The §10.2 matrix row waits with the matrix |
 | E5 | Structured rejection instead of garbage output for function-valued consts and anonymous-record generic bounds (today: `type { pattern: MatchPattern; body: any }(==)` — invalid Dafny) | open — peephole's instance dissolved with R3; the general rejection is still owed. Related fixed en route (2026-07-24): a call through an indexed function value (`rules[i](e)`) crashed transform outright rather than rejecting |
 
 **Rewrite ledger** for `peephole.ts`, each justified by doctrine, not
@@ -681,14 +681,17 @@ together with `condition-facts.ts`, §8.3):
 
 | # | Rewrite | Justification | Status |
 |---|---|---|---|
-| N-R1 | `CondCtx.oc` mutable counter (`ctx.oc.n++` — extract rejects the expression outright) → thread it: `freshOcBinder` returns name + next ctx | §6.1/§6.2 already condemn mutation-through-reference; the first real NameSupply-shaped state | open |
-| N-R2 | `restoreDiscriminantFlag`'s in-place `unwrapped.isDiscriminant = true` → return the rebuilt node | the pure fragment has no datatype mutation (today's emission for that shape is invalid Dafny) | open |
-| N-R3 | `extractConjunct<C>` with fn-valued `parse` → two monomorphic extractors (presence, isArray) | genuine parametricity; mirrors peephole R3 | open |
-| N-R4 | `binderHintForMapAccess`'s regex `.replace(/_val$/…)`/`(/^_/…)` → `endsWith`/`slice` string helpers | §8.5 named exactly this; `string.replace` is not a builtin at all | open |
-| N-R5 | `ruleDiscriminantChain`'s nested `function collectElse` closing over mutable `cases` → top-level recursion returning values | mutable-capture closure, the known deep gap (§8.6 anchors); extract rejects nested fn decls anyway | open |
-| N-R6 | no-init `residualLeaves.reduce((a, b) => a \|\| b)` → recursive or-fold helper | the no-init form has no lowering (and an empty-list hazard besides) | open |
-| N-R7 | `Extract<TExpr, {kind:"optChain"}>` / `OptChain["chain"]` → use typedir's already-named `TChainStep[]` | type-level operators have no backend model; two-line change | open |
-| N-R8 | narrow's `builtinSpec(id).pure` → `builtinPure(id)` scalar accessor in `builtins.ts` | fn-valued record fields don't cross the import boundary (repro above) | open |
+| N-R1 | `CondCtx.oc` mutable counter (`ctx.oc.n++` — extract rejects the expression outright) → thread it: `freshOcBinder` returns name + next ctx | §6.1/§6.2 already condemn mutation-through-reference; the first real NameSupply-shaped state | done (2026-07-25): every walker returns node + ctx (`ExprOut`/`StmtOut`/…), list walks are state-threaded recursive folds, rules take the post-recursion ctx and advance it only when they mint or re-walk; resolve's throwaway ctx site updated. Byte-for-byte — the threading provably reproduces the old mutation order |
+| N-R2 | `restoreDiscriminantFlag`'s in-place `unwrapped.isDiscriminant = true` → return the rebuilt node | the pure fragment has no datatype mutation (today's emission for that shape is invalid Dafny) | done (2026-07-24) |
+| N-R3 | `extractConjunct<C>` with fn-valued `parse` → two monomorphic extractors (presence, isArray) | genuine parametricity; mirrors peephole R3 | done (2026-07-24): `leadingPresent`/`leadingIsArray` each own the tree surgery, named result records |
+| N-R4 | `binderHintForMapAccess`'s regex `.replace(/_val$/…)`/`(/^_/…)` → `endsWith`/`slice` string helpers | §8.5 named exactly this; `string.replace` is not a builtin at all | done (2026-07-24) |
+| N-R5 | `ruleDiscriminantChain`'s nested `function collectElse` closing over mutable `cases` → top-level recursion returning values | mutable-capture closure, the known deep gap (§8.6 anchors); extract rejects nested fn decls anyway | done (2026-07-24): `collectElseChain` returns `{cases, fallthrough}` |
+| N-R6 | no-init `residualLeaves.reduce((a, b) => a \|\| b)` → recursive or-fold helper | the no-init form has no lowering (and an empty-list hazard besides) | done (2026-07-24): `orChain`, the inverse of `flattenOr` |
+| N-R7 | `Extract<TExpr, {kind:"optChain"}>` / `OptChain["chain"]` → use typedir's already-named `TChainStep[]` | type-level operators have no backend model; two-line change | done (2026-07-24) |
+| N-R8 | narrow's `builtinSpec(id).pure` → `builtinPure(id)` scalar accessor in `builtins.ts` | fn-valued record fields don't cross the import boundary (repro above) | done (2026-07-24) |
+
+All eight landed gauntlet byte-for-byte on both backends, with the Dafny
+self-run (typedir/ir/peephole) re-verified unchanged.
 
 **Proof outlook.** The engine re-walks freshly constructed terms (every
 `&&`-driver re-walks its residual; `ruleEarlyReturnOrChain` duplicates the
@@ -703,7 +706,8 @@ output provably contains no `optChain`/`nullish` node.
 Order: N-R7, N-R2, N-R4, N-R6, N-R8 first (small; each is a pure refactor
 gated byte-for-byte); then E4; then N-R3, N-R5, N-R1; then annotate and
 add to `LemmaScript-files.txt` (P0); then the termination + completeness
-proofs (P1).
+proofs (P1). *As of 2026-07-25 the rewrites and E4 are done; next is the
+annotate + self-run step, then the proofs.*
 
 ### 8.7 Proof-carrying self-run modules: conventions
 
@@ -907,9 +911,12 @@ with no annotation is not started.*
    contracts. — *peephole done (2026-07-24), at P1/T0 with proofs beyond
    the plan: machine-checked termination (fuel-free), normalization, and
    idempotence; ledger outcomes and the three proof-driven engine fixes
-   are annotated in §8.6. `narrow` is next: port survey done
+   are annotated in §8.6. `narrow` in progress: port survey done
    (2026-07-24) — repro findings and the N-R1–N-R8 rewrite ledger are in
-   §8.6; code not started.*
+   §8.6; all eight rewrites plus E4 landed (2026-07-24/25), gauntlet
+   byte-for-byte, self-run re-verified. Remaining: annotate
+   narrow/condition-facts, add to `LemmaScript-files.txt` (P0), then the
+   termination + desugaring-completeness proofs (P1).*
 10. **Portable `resolve` core, `specparser`, emitter cores** — transform
     ports stage-by-stage here, which is when §7's split naturally happens.
 11. **First T1 experiment:** execute one generated verified pass.

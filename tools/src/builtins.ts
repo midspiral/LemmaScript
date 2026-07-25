@@ -153,3 +153,10 @@ export function recognizeBuiltin(objTy: Ty, method: string): BuiltinId | null {
 export function builtinSpec(id: BuiltinId): BuiltinSpec {
   return BUILTINS[id];
 }
+
+/** The one classification bit narrow reads, as a scalar: fn-valued
+ *  `BuiltinSpec` fields don't cross the self-run import boundary (§8.6),
+ *  so the self-applied narrow imports this instead of `builtinSpec`. */
+export function builtinPure(id: BuiltinId): boolean {
+  return BUILTINS[id].pure;
+}

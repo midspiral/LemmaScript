@@ -319,6 +319,11 @@ function emitExpr(e: Expr): string {
         // filterMap (synthesized in resolve): drop Nones and unwrap to seq<T>.
         if (e.method === "filterSome") { needPreamble("SeqFilterSome"); needPreamble("OptionType"); return `SeqFilterSome(${obj})`; }
         if (e.method === "every")  return `Std.Collections.Seq.All(${obj}, ${args[0]})`;
+        if (e.method === "find") {
+          needPreamble("OptionType");
+          needPreamble("SeqFind");
+          return `SeqFind(${obj}, ${args[0]})`;
+        }
         if (e.method === "findLast") {
           needPreamble("OptionType");
           needPreamble("SeqFindLast");
@@ -1027,6 +1032,20 @@ const SEQ_FIND_LAST_INDEX = `function SeqFindLastIndex<T>(s: seq<T>, p: T -> boo
   else SeqFindLastIndex(s[..|s|-1], p)
 }`;
 
+const SEQ_FIND = `function SeqFind<T>(s: seq<T>, p: T -> bool): Option<T>
+  ensures SeqFind(s, p).Some? ==> p(SeqFind(s, p).value)
+  ensures SeqFind(s, p).Some? ==> SeqFind(s, p).value in s
+  ensures SeqFind(s, p).Some? ==>
+    exists i: nat :: i < |s| && s[i] == SeqFind(s, p).value && p(s[i]) &&
+                     (forall j: nat :: j < i ==> !p(s[j]))
+  ensures SeqFind(s, p).None? ==> forall i :: 0 <= i < |s| ==> !p(s[i])
+  decreases |s|
+{
+  if |s| == 0 then None
+  else if p(s[0]) then Some(s[0])
+  else SeqFind(s[1..], p)
+}`;
+
 const SEQ_FIND_LAST = `function SeqFindLast<T>(s: seq<T>, p: T -> bool): Option<T>
   ensures SeqFindLast(s, p).Some? ==> p(SeqFindLast(s, p).value)
   ensures SeqFindLast(s, p).Some? ==> SeqFindLast(s, p).value in s
@@ -1305,6 +1324,7 @@ const PREAMBLE_CODE: [string, string][] = [
   ["SeqFindIndex", SEQ_FIND_INDEX],
   ["SeqFindLastIndex", SEQ_FIND_LAST_INDEX],
   ["SeqFilterSome", SEQ_FILTER_SOME],
+  ["SeqFind", SEQ_FIND],
   ["SeqFindLast", SEQ_FIND_LAST],
   ["SeqFlatten", SEQ_FLATTEN],
   ["SeqJoin", SEQ_JOIN],
