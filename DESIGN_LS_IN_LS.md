@@ -903,17 +903,38 @@ with new leafwise `PCs`/`ACs` sums, plus residual bounds on them
 `ruleEarlyReturnConsume` half of the consumed site needs none of this and
 is proved (`ConsumeSiteShrinks`).
 
-*Status (2026-07-25): 289 verified / 2 errors, no timeouts, from
-167/24+1. Every walker and every rule is verified; the two failures are
-both instances of the charge shape above, each flagged in place. Splitting
-the or-chain method (extracting `OrChainInnerShrinks`, plus
-`assert {:split_here}` in the collection loop) was worth doing for its own
-sake: the timeout had been masking three genuine unproven obligations —
-two loop invariants and a missing `FOrChain` witness. Their fix also
-simplified the rule, since the `firstDet` ghost bookkeeping turned out to
-be redundant given the detector-count invariant, and it surfaced one more
-honest fact about the imported detectors: `noneDetector`'s scrutinee always
-has a binder hint, so the rule's keyless-detector branch is dead.*
+*Status (2026-07-26): the module verifies — 301 obligations, 0 errors, no
+timeouts — and is in `LemmaScript-files.txt` as*
+
+```
+tools/src/narrow.ts 300 --boogie /proverOpt:O:smt.qi.eager_threshold=30
+```
+
+*A per-symbol limit above 60s means normal CI gen-checks it and
+`check.sh dafny-slow` verifies it in full; `ruleEarlyReturnOrChain` is the
+one symbol needing more than 120s. The full self-run is green: typedir 17,
+ir 7, peephole 551, condition-facts 22, narrow 301.*
+
+***This is green modulo three assumptions, and they are the whole
+remaining proof.*** *Each is an ordinary lemma whose body is
+`assume {:axiom} false;` — grep for `assume` to find them, and note they
+are the only assumptions here that are not facts about an imported
+function. Two are the charge-design defect above:
+`OrChainSingleResidualShrinks` and `OptChainCompareSiteShrinks`. The third,
+`WalkedHeadDeclines`, is not a design gap — it is true and was going
+through inside `walkStmts`' monolithic VC before the site lemmas were
+introduced; it just does not converge standalone (44 of its sub-VCs
+discharge; the `ruleEarlyReturnConsume` and `FOrChain` cases are the
+holdouts). Until all three are discharged, do not read this module's P1
+claim as established.*
+
+*Splitting the or-chain method was worth doing for its own sake: the
+timeout had been masking three genuine unproven obligations — two loop
+invariants and a missing `FOrChain` witness. Their fix also simplified the
+rule, since the `firstDet` ghost bookkeeping turned out to be redundant
+given the detector-count invariant, and it surfaced one more honest fact
+about the imported detectors: `noneDetector`'s scrutinee always has a
+binder hint, so the rule's keyless-detector branch is dead.*
 
 Iterate with `dafny verify --filter-symbol=<name>` — seconds per symbol
 against ~25 minutes for the file, and the only practical way to work a
