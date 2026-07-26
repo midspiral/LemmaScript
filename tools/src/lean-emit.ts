@@ -414,7 +414,10 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // Datatype constructor (tagged by transform): Lean needs the qualified name
       // `BaseType.variant`; a bare `variant` is an unknown identifier. (Dafny keeps
       // the bare form, so its output is unaffected.)
-      if (e.ctorOf) return args.length ? `${e.ctorOf}.${e.fn} ${args.join(" ")}` : `${e.ctorOf}.${e.fn}`;
+      if (e.ctorOf) {
+        const ctor = leanCtorName(e.fn);
+        return args.length ? `${e.ctorOf}.${ctor} ${args.join(" ")}` : `${e.ctorOf}.${ctor}`;
+      }
       // Option constructors arrive Dafny-spelled from transform (`app "Some"`);
       // Lean core exports the lowercase forms as top-level names.
       if (e.fn === "Some" && args.length === 1) return `some ${args[0]}`;
