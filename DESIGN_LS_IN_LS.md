@@ -884,25 +884,39 @@ a **residual guard** that carries charges of its own, so the inner node's
 head charge re-bills what the outer one already paid. A constant charge
 cannot fix that — the inner charge has the same coefficient and cancels.
 The measure was simply *additive* where a duplicating rewrite needs a
-*multiplicative* one:
+*multiplicative* one. Both sites take the same shape, scaled by a count
+the rewrite provably reduces:
 
 ```dafny
-function SiteCharge(cond: TExpr, branchWeight: nat): nat
-{ SE(cond) * (12 + 4 * branchWeight) }
+// bound-optional early return: the rewrite trades the optChain node for
+// its application, so SE(innerGuard) + 1 <= SE(cond)
+SE(cond) * (12 + 4 * AWSs(then_))
+// or-chain: it drops a detector, and each dropped disjunct takes at least
+// two units of guard size with it
+(DET(cond) + SE(cond)) * (16 + 4 * AWSs(then_))
 ```
 
-Scaling by the guard's size does not cancel, because the rewrite strictly
-shrinks the guard: `ruleEarlyReturnOptChainCompare` trades the `optChain`
-node for its application, so `SE(innerGuard) + 1 <= SE(cond)`. That closes
-the site. Two details make it go through: a `!==` guard is not an `&&`, so
-its `PC` and `AC` are each at most 1 (which is what bounds the inner
-`if`'s own charge); and the product needs `MulMonotone` spelled out, since
-Z3 will not do nonlinear arithmetic on its own. Keep `SiteCharge` out of
-the `HC`/`AWSs` recursion by passing the branch weight in — calling
-`AWSs` from inside it puts it in the cycle without a `decreases`.
+The or-chain's `+ SE(cond)` is what pays for the residual guard's *own*
+charges in the single-leaf case, where the guard is that leaf and so can be
+an `&&` chain: `PC` and `AC` are bounded by `SE`, and the guard shrinks by
+at least two because the consumed detector's disjunct is gone.
 
-*Status (2026-07-26): the module verifies — 444 obligations, 0 errors, no
-timeouts — and is in `LemmaScript-files.txt` as*
+**Nonlinear arithmetic is the tax.** Three rules, learned the hard way:
+a *product of two* counts is tolerable but a *product of three* poisons
+Z3 — asserts that verified for weeks started timing out, so
+`DET * SE * (…)` had to become `(DET + SE) * (…)`. Every multiplication
+step needs an explicit `MulMonotone`/`MulStrict`/`MulAtLeast`, and the
+final inequality of each site lemma must be lifted into a lemma over
+**bare nats** (`OrChainArith`, `OrChainMultiArith`) so the solver has no
+datatypes in scope. Name each product in a `ghost var` — left inline, Z3
+re-expands it at every use and the combining assert never closes.
+
+*Status (2026-07-26): **the module verifies with no assumptions** —
+499 obligations, 0 errors, no timeouts, and `grep -E "^[[:space:]]*assume"`
+over `narrow.dfy` is empty. The only remaining trust surface is the
+imports-as-axioms boundary (facts about `condition-facts.ts`'s extractors),
+to be discharged when real cross-module linking lands. It is in
+`LemmaScript-files.txt` as*
 
 ```
 tools/src/narrow.ts 300 --boogie /proverOpt:O:smt.qi.eager_threshold=30
@@ -910,21 +924,9 @@ tools/src/narrow.ts 300 --boogie /proverOpt:O:smt.qi.eager_threshold=30
 
 *A per-symbol limit above 60s means normal CI gen-checks it and
 `check.sh dafny-slow` verifies it in full. The whole self-run is green:
-typedir 17, ir 7, peephole 551, condition-facts 22, narrow 444.*
-
-***One assumption remains***, and it is the whole of what is left:
-`OrChainSingleResidualShrinks`, an ordinary lemma whose body is
-`assume {:axiom} false;` — grep for `assume`. The or-chain rule with two or
-more residual leaves builds a `||` guard, which no if-position driver
-reads, and that case *is* proved (`OrChainInnerShrinks`). With exactly one
-residual leaf the guard **is** that leaf, so it can be an `&&` chain, and
-then `WS(innerIf)` bills `PC`/`AC` of it. `SiteCharge` does not transfer:
-there the rewrite provably shrinks the guard, whereas a residual can be the
-same size as the disjunct it replaces, and its `PC`/`AC` are bounded by
-nothing in the original — `PC` of a `||` is 0 by definition, so the cond
-carries no budget for them. Closing it wants leafwise `PCs`/`ACs` sums over
-`flattenOr(cond)` as measure components, with residual bounds on them added
-to `noneDetectorResidualBounds` (which bounds `SE` and `AWE` only).
+typedir 17, ir 7, peephole 551, condition-facts 22, narrow 499.
+`narrow.ts` is unchanged — the entire proof is hand additions to the
+generated `.dfy`, and the additions-only gate reports zero deletions.*
 
 *Splitting the or-chain method was worth doing for its own sake: the
 timeout had been masking three genuine unproven obligations — two loop

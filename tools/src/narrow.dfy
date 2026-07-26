@@ -527,6 +527,8 @@ lemma OrChainHasWeight(s: TStmt, rest: seq<TStmt>, decls: seq<TypeDeclInfo>)
   var k :| 0 <= k < |leaves| && noneDetector(leaves[k], CondCtx(decls, 0)).Some?;
   DETsPositive(leaves, k, decls);
   flattenOrSize(s.cond);
+  assert SE(s.cond) >= 1;
+  MulAtLeast(DET(s.cond, decls) + SE(s.cond), 16 + 4 * AWSs(s.then_, decls));
 }
 
 // The early-return rules build a match whose arms are the block's own
@@ -583,6 +585,68 @@ lemma ConsumeSiteShrinks(s: TStmt, rest: seq<TStmt>, out: TStmt, decls: seq<Type
 // leafwise `PCs`/`ACs` sums over `flattenOr(cond)` as measure components,
 // with residual bounds on them added to `noneDetectorResidualBounds`
 // (which bounds `SE` and `AWE` only).
+lemma FlattenOrSingleton(e: TExpr, xs: seq<TExpr>)
+  requires flattenOr(e) == xs && |xs| == 1
+  ensures !(e.binop? && e.op == "||")
+{
+  if e.binop? && e.op == "||" {
+    flattenOrSize(e.left);
+    flattenOrSize(e.right);
+  }
+}
+
+// What the residual guard can cost: its own root charge plus the two
+// early-return rules it can arm, each bounded by the guard's size.
+lemma {:vcs_split_on_every_assert} OrChainInnerBound(oc: TExpr, thenS: seq<TStmt>, rest: seq<TStmt>, decls: seq<TypeDeclInfo>)
+  requires !(oc.binop? && oc.op == "||")
+  ensures AWSs([TStmt.if_(oc, thenS, [])] + rest, decls)
+       <= 4 + 3 * SE(oc) + 3 * AWSs(thenS, decls)
+        + SE(oc) * (12 + 4 * AWSs(thenS, decls))
+        + AWE(oc, decls) + AWSs(rest, decls)
+{
+  var innerIf := TStmt.if_(oc, thenS, []);
+  var A := AWSs(thenS, decls);
+  PCleSE(oc);
+  ACleSE(oc, decls);
+  leadingIsArrayDeclsOnly(oc, CondCtx(decls, 0), CondCtx(decls, 0));
+  assert !FOrChain(innerIf, rest, decls);
+  assert WS(innerIf, decls) <= 2 + PC(oc) + AC(oc, decls) + A;
+  assert HC(innerIf, rest, decls) <= 2 + PC(oc) + A + SE(oc) * (12 + 4 * A);
+  assert AWS(innerIf, decls) == WS(innerIf, decls) + AWE(oc, decls) + A + AWSs([], decls);
+  assert ([innerIf] + rest)[1..] == rest;
+  assert AWSs([innerIf] + rest, decls)
+      == HC(innerIf, rest, decls) + AWS(innerIf, decls) + AWSs(rest, decls);
+}
+
+// What the original `||` guard is charged: no if-position or early-return
+// driver reads a `||`, so its whole charge is the or-chain one.
+lemma OrChainOuterCharge(s: TStmt, rest: seq<TStmt>, decls: seq<TypeDeclInfo>)
+  requires s.if_? && s.else_ == [] && s.cond.binop? && s.cond.op == "||"
+  requires FOrChain(s, rest, decls)
+  ensures HC(s, rest, decls)
+       == (DET(s.cond, decls) + SE(s.cond)) * (16 + 4 * AWSs(s.then_, decls))
+  ensures AWS(s, decls) == AWE(s.cond, decls) + AWSs(s.then_, decls)
+{
+  assert s == TStmt.if_(s.cond, s.then_, s.else_);
+  leadingIsArrayDeclsOnly(s.cond, CondCtx(decls, 0), CondCtx(decls, 0));
+  assert WS(s, decls) == 0;
+}
+
+// The site's arithmetic, over bare nats: the guard shrinks by at least two
+// units of size and one detector, and 3 * (16 + 4A) of charge outweighs
+// everything the residual guard can be billed for.
+lemma OrChainArith(seOc: nat, seCond: nat, det: nat, a: nat,
+                   aweOc: nat, aweCond: nat, tail: nat, hc: nat, aws: nat, lhs: nat)
+  requires seOc + 2 <= seCond && det >= 1 && aweOc <= aweCond
+  requires lhs <= 4 + 3 * seOc + 3 * a + seOc * (12 + 4 * a) + aweOc + tail
+  requires hc == (det + seCond) * (16 + 4 * a)
+  requires aws == aweCond + a
+  ensures lhs < hc + aws + tail
+{
+  MulMonotone(seOc + 3, det + seCond, 16 + 4 * a);
+  assert (seOc + 3) * (16 + 4 * a) == seOc * (12 + 4 * a) + 4 * seOc + 48 + 12 * a;
+}
+
 lemma OrChainSingleResidualShrinks(s: TStmt, rest: seq<TStmt>, oc: TExpr, residualLeaves: seq<TExpr>, decls: seq<TypeDeclInfo>)
   requires s.if_? && |rest| >= 1 && s.else_ == [] && |s.then_| > 0 && isTerminating(s.then_)
   requires FOrChain(s, rest, decls)
@@ -591,19 +655,68 @@ lemma OrChainSingleResidualShrinks(s: TStmt, rest: seq<TStmt>, oc: TExpr, residu
   requires AWE(oc, decls) <= AWEs(residualLeaves, decls)
   requires AWEs(residualLeaves, decls) <= AWE(s.cond, decls)
   requires DETs(residualLeaves, decls) + 1 <= DET(s.cond, decls)
+  requires SE(oc) + 2 <= SE(s.cond)
   ensures AWSs([TStmt.if_(oc, s.then_, [])] + rest, decls)
         < HC(s, rest, decls) + AWS(s, decls) + AWSs(rest, decls)
 {
-  assume {:axiom} false;
+  var A := AWSs(s.then_, decls);
+  var M := 16 + 4 * A;
+  FlattenOrSingleton(oc, residualLeaves);
+  OrChainInnerBound(oc, s.then_, rest, decls);
+  OrChainOuterCharge(s, rest, decls);
+  assert DET(s.cond, decls) >= 1;
+  OrChainArith(SE(oc), SE(s.cond), DET(s.cond, decls), A,
+               AWE(oc, decls), AWE(s.cond, decls), AWSs(rest, decls),
+               HC(s, rest, decls), AWS(s, decls),
+               AWSs([TStmt.if_(oc, s.then_, [])] + rest, decls));
 }
 
 // Bound-optional early return: `a?.x !== b?.y` leaves the second chain in
 // the rewritten inner guard, so the inner `if` re-arms this same rule.
 // (The `ruleEarlyReturnConsume` half of the site is proved, in
 // `ConsumeSiteShrinks`.)
+// Atom counts never exceed the term's size.
+lemma PCleSE(c: TExpr)
+  ensures PC(c) <= SE(c)
+  decreases c
+{
+  if c.binop? && c.op == "&&" { PCleSE(c.left); PCleSE(c.right); }
+}
+
+lemma ACleSE(c: TExpr, decls: seq<TypeDeclInfo>)
+  ensures AC(c, decls) <= SE(c)
+  decreases c
+{
+  if c.binop? && c.op == "&&" { ACleSE(c.left, decls); ACleSE(c.right, decls); }
+}
+
 lemma MulMonotone(a: nat, b: nat, m: nat)
   requires a <= b
   ensures a * m <= b * m
+{
+}
+
+// The multi-leaf site's arithmetic, over bare nats.
+lemma OrChainMultiArith(inner: nat, outer: nat, m: nat, aweOc: nat, aweCond: nat,
+                        a: nat, tail: nat, lhs: nat, hc: nat, aws: nat)
+  requires inner < outer && m >= 1 && aweOc <= aweCond
+  requires lhs <= inner * m + aweOc + a + tail
+  requires hc >= outer * m
+  requires aws == aweCond + a
+  ensures lhs < hc + aws + tail
+{
+  MulStrict(inner, outer, m);
+}
+
+lemma MulStrict(a: nat, b: nat, m: nat)
+  requires a < b && m >= 1
+  ensures a * m < b * m
+{
+}
+
+lemma MulAtLeast(a: nat, m: nat)
+  requires a >= 1
+  ensures a * m >= m
 {
 }
 
@@ -675,10 +788,15 @@ lemma {:vcs_split_on_every_assert} OrChainInnerShrinks(s: TStmt, rest: seq<TStmt
   requires AWE(oc, decls) <= AWEs(residualLeaves, decls)
   requires AWEs(residualLeaves, decls) <= AWE(s.cond, decls)
   requires DETs(residualLeaves, decls) + 1 <= DET(s.cond, decls)
+  requires SEs(residualLeaves) <= SE(s.cond) + 1
   ensures AWSs([TStmt.if_(oc, s.then_, [])] + rest, decls)
         < HC(s, rest, decls) + AWS(s, decls) + AWSs(rest, decls)
 {
   var innerIf := TStmt.if_(oc, s.then_, []);
+  var A := AWSs(s.then_, decls);
+  var M := 16 + 4 * A;
+  var lo := DET(oc, decls) + SE(oc);
+  var hi := DET(s.cond, decls) + SE(s.cond);
   // With two or more residual leaves the guard is itself a `||`, which no
   // if-position or early-return driver reads — so the inner head and root
   // charges collapse to the detector count, and the rewrite consumed one.
@@ -687,7 +805,13 @@ lemma {:vcs_split_on_every_assert} OrChainInnerShrinks(s: TStmt, rest: seq<TStmt
   assert WS(innerIf, decls) == 0;
   assert ruleEarlyReturnConsume(innerIf, rest).None?;
   assert ruleEarlyReturnOptChainCompare(innerIf, rest, CondCtx(decls, 0)).None?;
-  assert HC(innerIf, rest, decls) <= DET(oc, decls);
+  assert innerIf.cond == oc && innerIf.then_ == s.then_ && innerIf.else_ == [];
+  if FOrChain(innerIf, rest, decls) {
+    assert HC(innerIf, rest, decls) == lo * M;
+  } else {
+    assert HC(innerIf, rest, decls) == 0;
+  }
+  assert HC(innerIf, rest, decls) <= lo * M;
   assert ([innerIf] + rest)[1..] == rest;
   assert AWSs([innerIf] + rest, decls)
       == HC(innerIf, rest, decls) + AWS(innerIf, decls) + AWSs(rest, decls);
@@ -697,7 +821,16 @@ lemma {:vcs_split_on_every_assert} OrChainInnerShrinks(s: TStmt, rest: seq<TStmt
   assert AWS(s, decls) == WS(s, decls) + AWE(s.cond, decls) + AWSs(s.then_, decls);
   flattenOrSize(oc);
   assert DET(oc, decls) == DETs(residualLeaves, decls);
-  assert HC(s, rest, decls) >= DET(s.cond, decls);
+  assert SEs(residualLeaves) == SE(oc) + 1;
+  assert SE(oc) <= SE(s.cond);
+  assert WS(s, decls) == 0;
+  leadingIsArrayDeclsOnly(s.cond, CondCtx(decls, 0), CondCtx(decls, 0));
+  assert HC(s, rest, decls) == hi * M;
+  assert AWSs([innerIf] + rest, decls) <= lo * M + AWE(oc, decls) + A + AWSs(rest, decls);
+  assert lo < hi;
+  OrChainMultiArith(lo, hi, M, AWE(oc, decls), AWE(s.cond, decls), A,
+                    AWSs(rest, decls),
+                    AWSs([innerIf] + rest, decls), HC(s, rest, decls), AWS(s, decls));
 }
 
 // Stated as the bare decreases fact the caller needs: the head/tail
@@ -961,6 +1094,18 @@ lemma DETsSnoc(es: seq<TExpr>, x: TExpr, decls: seq<TypeDeclInfo>)
   }
 }
 
+lemma SEsSnoc(es: seq<TExpr>, x: TExpr)
+  ensures SEs(es + [x]) == SEs(es) + 1 + SE(x)
+  decreases es
+{
+  if |es| == 0 {
+    assert es + [x] == [x];
+  } else {
+    SEsSnoc(es[1..], x);
+    assert (es + [x])[1..] == es[1..] + [x];
+  }
+}
+
 lemma AWEsSnoc(es: seq<TExpr>, x: TExpr, decls: seq<TypeDeclInfo>)
   ensures AWEs(es + [x], decls) == AWEs(es, decls) + AWE(x, decls)
   decreases es
@@ -1110,7 +1255,13 @@ function HC(head: TStmt, tail: seq<TStmt>, decls: seq<TypeDeclInfo>): nat
    else 0) +
   (if ruleEarlyReturnOptChainCompare(head, tail, CondCtx(decls, 0)).Some?
    then SiteCharge(head.cond, AWSs(head.then_, decls)) else 0) +
-  (if FOrChain(head, tail, decls) then DET(head.cond, decls) else 0)
+  // Scaled the same way, and by the detector count too: the rewrite drops
+  // at least one detector, and each dropped disjunct takes at least two
+  // units of guard size with it — enough to dominate the charges the
+  // residual guard can carry in turn (its own root charge, and the
+  // early-return rules it can arm when it is a single leaf).
+  (if FOrChain(head, tail, decls)
+   then (DET(head.cond, decls) + SE(head.cond)) * (16 + 4 * AWSs(head.then_, decls)) else 0)
 }
 
 function AWE(e: TExpr, decls: seq<TypeDeclInfo>): nat
@@ -3028,6 +3179,7 @@ method orChain(leaves: seq<TExpr>) returns (res: TExpr)
   requires forall k :: 0 <= k < |leaves| ==> !(leaves[k].binop? && leaves[k].op == "||")
   ensures forall decls: seq<TypeDeclInfo> :: AWE(res, decls) <= AWEs(leaves, decls)
   ensures flattenOr(res) == leaves
+  ensures SE(res) + 1 == SEs(leaves)
 {
   var acc := leaves[0];
   var i := 1;
@@ -3036,8 +3188,10 @@ method orChain(leaves: seq<TExpr>) returns (res: TExpr)
     invariant 1 <= i <= |leaves|
     invariant forall decls: seq<TypeDeclInfo> :: AWE(acc, decls) <= AWEs(leaves[..i], decls)
     invariant flattenOr(acc) == leaves[..i]
+    invariant SE(acc) + 1 == SEs(leaves[..i])
   {
     assert leaves[..i+1] == leaves[..i] + [leaves[i]];
+    SEsSnoc(leaves[..i], leaves[i]);
     forall decls: seq<TypeDeclInfo> ensures AWEs(leaves[..i+1], decls) == AWEs(leaves[..i], decls) + AWE(leaves[i], decls) {
       AWEsSnoc(leaves[..i], leaves[i], decls);
     }
@@ -3045,6 +3199,7 @@ method orChain(leaves: seq<TExpr>) returns (res: TExpr)
     assert flattenOr(TExpr.binop("||", acc, leaves[i], Ty.bool_))
       == flattenOr(acc) + flattenOr(leaves[i]);
     assert flattenOr(TExpr.binop("||", acc, leaves[i], Ty.bool_)) == leaves[..i+1];
+    assert SE(TExpr.binop("||", acc, leaves[i], Ty.bool_)) == 1 + SE(acc) + SE(leaves[i]);
     acc := binop("||", acc, leaves[i], Ty.bool_);
     i := (i + 1);
   }
@@ -3086,6 +3241,8 @@ method ruleEarlyReturnOrChain(s: TStmt, rest: seq<TStmt>, ctx: CondCtx) returns 
         invariant (i_leaf_idx <= |leaves|)
         invariant forall j :: 0 <= j < |detectors| ==> AWE(detectors[j].scrutinee, ctx.decls) == 0
         invariant AWEs(residualLeaves, ctx.decls) <= AWEs(leaves[..i_leaf_idx], ctx.decls)
+        invariant |residualLeaves| <= i_leaf_idx
+        invariant SEs(residualLeaves) + 2 * (i_leaf_idx - |residualLeaves|) <= SEs(leaves[..i_leaf_idx])
         invariant forall k :: 0 <= k < |residualLeaves| ==> !(residualLeaves[k].binop? && residualLeaves[k].op == "||")
         invariant DETs(residualLeaves, ctx.decls) == resDet
         invariant resDet + |detectors| == DETs(leaves[..i_leaf_idx], ctx.decls)
@@ -3097,6 +3254,7 @@ method ruleEarlyReturnOrChain(s: TStmt, rest: seq<TStmt>, ctx: CondCtx) returns 
         assert |leaves[..i_leaf_idx+1]| == i_leaf_idx + 1;
         assert forall j :: 0 <= j <= i_leaf_idx ==> leaves[..i_leaf_idx+1][j] == (leaves[..i_leaf_idx] + [leaf])[j];
         assert leaves[..i_leaf_idx+1] == leaves[..i_leaf_idx] + [leaf];
+        SEsSnoc(leaves[..i_leaf_idx], leaf);
         AWEsSnoc(leaves[..i_leaf_idx], leaf, ctx.decls);
         DETsSnoc(leaves[..i_leaf_idx], leaf, ctx.decls);
         var d := noneDetector(leaf, ctx);
@@ -3106,6 +3264,7 @@ method ruleEarlyReturnOrChain(s: TStmt, rest: seq<TStmt>, ctx: CondCtx) returns 
             match key {
               case Some(i_key_val) =>
                 if (i_key_val in seen) {
+                  SEsSnoc(residualLeaves, leaf);
                   AWEsSnoc(residualLeaves, leaf, ctx.decls);
                   DETsSnoc(residualLeaves, leaf, ctx.decls);
                   residualLeaves := (residualLeaves + [leaf]);
@@ -3121,6 +3280,7 @@ method ruleEarlyReturnOrChain(s: TStmt, rest: seq<TStmt>, ctx: CondCtx) returns 
                 match i_d_val.residual {
                   case Some(i_d_residual_val) =>
                     noneDetectorResidualBounds(leaf, ctx);
+                    SEsSnoc(residualLeaves, i_d_residual_val);
                     AWEsSnoc(residualLeaves, i_d_residual_val, ctx.decls);
                     DETsSnoc(residualLeaves, i_d_residual_val, ctx.decls);
                     noneDetectorDeclsOnly(i_d_residual_val, ctx, CondCtx(ctx.decls, 0));
@@ -3129,7 +3289,8 @@ method ruleEarlyReturnOrChain(s: TStmt, rest: seq<TStmt>, ctx: CondCtx) returns 
 
                 }
               case None =>
-                AWEsSnoc(residualLeaves, leaf, ctx.decls);
+                SEsSnoc(residualLeaves, leaf);
+                  AWEsSnoc(residualLeaves, leaf, ctx.decls);
                 DETsSnoc(residualLeaves, leaf, ctx.decls);
                 residualLeaves := (residualLeaves + [leaf]);
                 resDet := resDet + 1;
@@ -3138,7 +3299,8 @@ method ruleEarlyReturnOrChain(s: TStmt, rest: seq<TStmt>, ctx: CondCtx) returns 
             }
           case None =>
             assert {:split_here} true;
-            AWEsSnoc(residualLeaves, leaf, ctx.decls);
+            SEsSnoc(residualLeaves, leaf);
+                  AWEsSnoc(residualLeaves, leaf, ctx.decls);
             DETsSnoc(residualLeaves, leaf, ctx.decls);
             residualLeaves := (residualLeaves + [leaf]);
         }
@@ -3171,11 +3333,20 @@ method ruleEarlyReturnOrChain(s: TStmt, rest: seq<TStmt>, ctx: CondCtx) returns 
       // the or-chain head charge is a flat detector count. Same shape as
       // the `ruleEarlyReturnOptChainCompare` gap: the charge has to scale
       // with the branch, e.g. `DET(cond) * (A + B*AWSs(then_) + ...)`.
+      if (|residualLeaves| == 0) {
+        OrChainHasWeight(s, rest, ctx.decls);
+        assert inner == rest;
+      }
       if (|residualLeaves| >= 2) {
+        assert SEs(residualLeaves) <= SE(i_s_cond) + 1;
         OrChainInnerShrinks(s, rest, inner[0].cond, residualLeaves, ctx.decls);
+        assert inner == [TStmt.if_(inner[0].cond, i_s_then, [])] + rest;
       }
       if (|residualLeaves| == 1) {
+        assert SEs(residualLeaves) == 1 + SE(residualLeaves[0]);
+        assert SE(inner[0].cond) + 2 <= SE(i_s_cond);
         OrChainSingleResidualShrinks(s, rest, inner[0].cond, residualLeaves, ctx.decls);
+        assert inner == [TStmt.if_(inner[0].cond, i_s_then, [])] + rest;
       }
       assert AWSs(inner, ctx.decls) < HC(s, rest, ctx.decls) + AWS(s, ctx.decls) + AWSs(rest, ctx.decls);
       var i_t102 := walkStmts(inner, ctx);
@@ -3195,6 +3366,7 @@ method ruleEarlyReturnOrChain(s: TStmt, rest: seq<TStmt>, ctx: CondCtx) returns 
         var wThen := i_t103;
         c := wThen.ctx;
         ghost var i_sm := TStmt.someMatch(d.scrutinee, d.binder, d.innerTy, nest, wThen.stmts);
+        assert WS(i_sm, ctx.decls) == 0;
         assert HC(i_sm, [], ctx.decls) == 0;
         assert AWS(i_sm, ctx.decls) == AWSs(nest, ctx.decls) + AWSs(wThen.stmts, ctx.decls);
         assert AWSs([i_sm], ctx.decls) == HC(i_sm, [], ctx.decls) + AWS(i_sm, ctx.decls);
