@@ -878,20 +878,42 @@ arm (`ruleIfAndOptional` installs its inner `if` without going back through
 `walkStmts`), which would break weightless-output. The size ensures is
 enough.
 
-*Status (2026-07-25): 247 verified / 1 error + 1 timeout, from
-167/24+1. Every walker and every rule is verified. Two sites remain, both
-documented in place:*
+**The consumed sites, and the one charge shape still missing.** Both
+remaining failures are the same defect, and it is a charge-design defect,
+not proof effort. `ruleEarlyReturnOrChain` and
+`ruleEarlyReturnOptChainCompare` each re-walk a construction that holds an
+**un-walked** copy of the terminating branch under a **residual guard** —
+and that guard can carry charges of its own. The or-chain rule with two or
+more residual leaves is fine, because the guard is then a `||`, which no
+if-position or early-return driver reads (`OrChainInnerShrinks` proves
+exactly that case). With a single residual leaf, the guard *is* that leaf:
+an `&&` chain, or a demoted duplicate detector, either of which pays
+`AWSs(then_)` again — and the head charge is a flat detector count. Same
+for `a?.x !== b?.y`, where the second chain survives into the rewritten
+inner guard and re-arms the same rule. Raising a constant does not help:
+the inner charge has the same coefficient, so it cancels. The head charge
+has to **scale with the redexes left in the guard**, i.e.
 
-1. *`ruleEarlyReturnOptChainCompare`'s consumed site in `walkStmts`.
-   `a?.x !== b?.y` leaves the second chain in the rewritten inner guard, so
-   the inner `if` can arm the same rule again, and the head charge's
-   `AWSs(then_)` term is then paid once outside but four times inside. No
-   constant coefficient closes it — the charge has to shrink with the number
-   of chains left in the guard, e.g. `(C1 + C2*AWSs(then_)) * OC(cond)` with
-   `OC` counting optional-headed chains and `C2 >= 4`. The
-   `ruleEarlyReturnConsume` half of the same site is proved
-   (`ConsumeSiteShrinks`).*
-2. *`ruleEarlyReturnOrChain`'s pre-existing timeout.*
+```
+DET(cond) * (A + B*AWSs(then_) + C*PCs(flattenOr(cond)) + D*ACs(flattenOr(cond)))
+```
+
+with new leafwise `PCs`/`ACs` sums, plus residual bounds on them
+(`noneDetectorResidualBounds` currently bounds `SE` and `AWE` only). The
+`ruleEarlyReturnConsume` half of the consumed site needs none of this and
+is proved (`ConsumeSiteShrinks`).
+
+*Status (2026-07-25): 289 verified / 2 errors, no timeouts, from
+167/24+1. Every walker and every rule is verified; the two failures are
+both instances of the charge shape above, each flagged in place. Splitting
+the or-chain method (extracting `OrChainInnerShrinks`, plus
+`assert {:split_here}` in the collection loop) was worth doing for its own
+sake: the timeout had been masking three genuine unproven obligations —
+two loop invariants and a missing `FOrChain` witness. Their fix also
+simplified the rule, since the `firstDet` ghost bookkeeping turned out to
+be redundant given the detector-count invariant, and it surfaced one more
+honest fact about the imported detectors: `noneDetector`'s scrutinee always
+has a binder hint, so the rule's keyless-detector branch is dead.*
 
 Iterate with `dafny verify --filter-symbol=<name>` — seconds per symbol
 against ~25 minutes for the file, and the only practical way to work a
