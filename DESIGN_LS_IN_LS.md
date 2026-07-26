@@ -798,6 +798,67 @@ re-walking rules. The proof is peephole's architecture, hand-authored in
   construct from distinct un-walked pieces (no duplication) and stay
   construct-then-walk.
 
+**Walk stability: the load-bearing lemma (2026-07-25, second sitting).**
+Exact charges create an obligation the blueprint above did not name: a rule
+must never become firable *because of* the walk, or `recurseExpr`'s
+rebuild could carry a charge its input never paid for. It doesn't, and the
+reason is one predicate. The condition detectors match only **inert**
+shapes — access paths and the boolean spines built over them (`Inert` /
+`InertEs`: var/num/str/bool/havoc, field, unop, binop, index, call) —
+while every rule outputs a `someMatch`, `tagMatch` or guarded ternary,
+which no detector reads, and the recursive rebuild keeps the head. So:
+
+> **`Inert(res.expr) ==> res.expr == e`** — an inert walker result is the
+> untouched input. Walking can remove a redex; it can never arm one.
+
+Everything else is a corollary, bundled as `Tame(e2, e, decls)`: binop-head
+preservation, `PC`/`AC`/`DET` non-increase, `leadingPresent` /
+`leadingIsArray` firability non-increase (via defining-equation axioms that
+push firability through the `&&` spine conjunct by conjunct), and
+`containsMethodCall` monotonicity — calls only accumulate, since the rules
+re-embed every call they move (chain steps become real calls) and drop only
+call-free path checks. Two facts feed it that the earlier list missed:
+`binderHintFor(e).Some? ==> Inert(e)` and `exprEqual(a, b) ==> Inert(a) &&
+Inert(b)`, both honest readings of `condition-facts.ts`.
+
+Three corrections to the charge design fell out, each a real defect:
+
+- **`AWE`/`AWS` must not weigh a `someMatch` scrutinee.** The walkers
+  descend into the arms only (mirroring `narrow.ts`), so a weighty
+  scrutinee made `AWE(recurse(e)) == WE(recurse(e))` false outright.
+- **The ternary charges must be merged, not summed.** Several driver
+  shapes hold at once — a `!Array.isArray(p)` cond is both a
+  presence-shaped unop and an isArray check — and a per-driver sum exceeds
+  what the fired rule's residual re-walk can pay back. One merged charge
+  `2 + 2*PC(cond) + 2*AC(cond) + AWE(then) + AWE(else)` covers the four
+  cond-reading drivers; the two that copy their branches rather than
+  re-walking them take a flat charge beside it. `AC` weighs double so that
+  the isArray residual's one-conjunct drop outweighs a flat charge
+  reappearing.
+- **A rule that only ever shrinks the term can lean on the size
+  component**, but then weight-equality no longer implies identity, so the
+  walker ensures weakens to `AWE(e) == 0 ==> SE(res.expr) <= SE(e)`.
+
+*Status (2026-07-25): 232 verified / 11 errors + 1 timeout, from
+167/24+1. Verified: `walkExpr`, all six list walkers, `recurseStmt`,
+`orChain`, `ruleDiscriminantNegEarlyReturn`, `WEConditionalBound`, and all
+five expression method rules. Remaining: the statement-side mirror of the
+layer (`walkStmt`/`walkStmts`/`walkEach`), which needs charges for the
+three still-uncharged statement rules (`ruleOptionalIndexBinding` and the
+two discriminant list rules) so that `AWS == 0` again means "unchanged";
+`ruleEarlyReturnOrChain`'s pre-existing timeout; and one localized gap —
+`ruleConditionalInMap` is the only rule that **retypes** (`Option<V>` →
+`V`), so its guard, which reads the branches' types, is not walk-stable,
+and the nullish drivers read the left operand's type for the same reason.
+That gap is isolated in a single named lemma (`InMapChargeMonotone`) left
+as a visible verification error rather than papered over with an
+`{:axiom}`; closing it wants a type-preservation ensures on the walkers,
+which wants every rule charged.*
+
+Iterate with `dafny verify --filter-symbol=<name>` — seconds per symbol
+against ~25 minutes for the file, and the only practical way to work a
+mutually recursive SCC this size.
+
 Two proof-world findings, binding for later ports: **Dafny 4.11's
 translator asserts (process abort) on match-expressions as `&&`/`||`
 operands in statement wellformedness** — and the `x === undefined` → match
@@ -844,7 +905,11 @@ same for future proof-carrying modules.
   functions — a combined `f(ss[0].body)` defeats the rank axioms.
 - Definitional unfolding at a symbolic term often needs a
   constructor-reconstruction assert first:
-  `assert e == Expr.match_(e.scrutinee, e.arms);`.
+  `assert e == Expr.match_(e.scrutinee, e.arms);`. A walk of an
+  `Option`-typed child needs the reconstruction *and* both option-hop
+  unfolds before its `decreases` goes through
+  (`assert AWOE(opt, decls) == AWE(v, decls); assert SOE(opt) == 1 + SE(v);`)
+  — that pattern alone cleared five `decreases` failures in `narrow.dfy`.
 - A lemma invoked from inside a recursive group must keep function
   applications out of its `requires` (pass pointwise facts instead), or it
   joins the call graph and needs its own aligned `decreases`.
