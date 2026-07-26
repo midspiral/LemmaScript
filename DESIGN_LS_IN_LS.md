@@ -499,21 +499,46 @@ regression gauntlet that grows with itself.
 2. **Desugaring completeness** — after `narrow`, no `optChain`/`nullish`
    nodes remain (an `anyExpr`-style predicate, provable by the structural
    induction the prover does for us). Today enforced by "transform would
-   crash."
-3. **Narrowing completeness** — if `resolve` narrowed a path for a branch,
+   crash." Note it is *not* unconditionally true: `ruleOptChain` fires only
+   for an optional-typed receiver and `ruleOptChainIndex` only for an array
+   index, so a chain with neither survives. Proving it therefore forces the
+   well-formedness predicate `resolve` is assumed to guarantee to be written
+   down — which is most of the value. The root case is already proved in
+   `narrow.dfy` (no optional-headed `optChain` survives a walk).
+3. **The transform contract** — every `someMatch` `narrow` emits has a pure
+   access-path scrutinee, *or* a `someBody` that references the binder
+   directly. Half-enforced today: the statement form throws (`someMatch stmt
+   scrutinee must be a pure access path`), while the expression form takes
+   the no-substitution branch, so a body that was not pre-bound would
+   reference the scrutinee expression instead of the binder. Proving it
+   replaces a runtime throw plus one unchecked case with a single invariant.
+   Cheap now: `Inert`/`PurePath` and `binderHintFor(e).Some? ==> Inert(e)`
+   already exist in `narrow.dfy`.
+4. **Narrowing completeness** — if `resolve` narrowed a path for a branch,
    `narrow` introduced the binder that unwraps it. The one property here
-   with a known violation: a rule may decline to fire and leave the branch
+   with known violations: a rule may decline to fire and leave the branch
    referencing the optional, which transform lowers into ill-typed backend
    code (TOOLS.md, known limitations). Nothing catches it but the backend's
-   type checker, and only if that shape is exercised.
-4. **Backend name legality and injectivity** (§6.3).
-5. **Arm purity** — after transform (Dafny mode), no impure call remains in
+   type checker, and only if that shape is exercised. A second, milder
+   instance — predating this branch, and present on `main` too — is that the
+   `&&`-drivers re-walk their residual with `walkStmt`, which applies
+   node-level rules only, so the discriminant rules never see it.
+   `if (x !== undefined && x.kind === "circle") return x.r` keeps the inner
+   test as an `if` and lowers the field read defensively, where the same read
+   without the presence check destructures in the pattern
+   (`ruleEarlyReturnOrChain` uses `walkStmts` and has no such gap). Both
+   backends still verify, so this one costs output quality rather than
+   correctness — but it also makes `narrow` non-idempotent, which is why
+   idempotence is worth proving only *after* it is fixed: the proof would
+   drive the change rather than decorate it.
+5. **Backend name legality and injectivity** (§6.3).
+6. **Arm purity** — after transform (Dafny mode), no impure call remains in
    a match-expression arm; a guard inside one rule becomes a postcondition
    of the pass.
-6. **Match exhaustiveness** — every emitted `tagMatch` covers all variants
+7. **Match exhaustiveness** — every emitted `tagMatch` covers all variants
    or has a fallthrough, checked against its `TypeDeclInfo`.
-7. **Parser sanity** — `specparser` consumes the whole input or errors.
-8. **Typing boundary** — successful `resolve` leaves no `unknown` where
+8. **Parser sanity** — `specparser` consumes the whole input or errors.
+9. **Typing boundary** — successful `resolve` leaves no `unknown` where
    later passes require a concrete type.
 
 Notably absent: "the generated code means the same as the TS" — that is
