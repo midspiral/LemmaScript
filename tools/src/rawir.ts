@@ -10,6 +10,21 @@
 
 // ── Expressions ──────────────────────────────────────────────
 
+/** Source text of a BigInt literal → the canonical decimal string stored in a
+ *  `bigint` node. Shared by the body extractor and the spec parser so both
+ *  sides of a function (code and `//@ ` annotations) agree exactly.
+ *
+ *  A BigInt literal must never pass through `Number`/`parseInt`: `9007199254740993n`
+ *  and `9007199254740992n` are distinct values that collapse to the same double.
+ *  Hence the string payload — it also keeps the raw IR `JSON.stringify`-able,
+ *  which `lsc extract` relies on. */
+export function normalizeBigIntLiteral(text: string): string {
+  const withoutSuffix = text.endsWith("n") ? text.slice(0, -1) : text;
+  // BigInt() understands decimal, hex, binary, and octal; numeric separators
+  // are source syntax and must be stripped first.
+  return BigInt(withoutSuffix.replace(/_/g, "")).toString(10);
+}
+
 /** A step in an optional chain — what to do with the binder after `?.`.
  *  field: `?.foo` or `.foo` after `?.`.
  *  call:  `?.foo()` or `.foo()` / `()` after `?.`.
@@ -21,7 +36,8 @@ export type RawChainStep =
 
 export type RawExpr =
   | { kind: "var"; name: string }
-  | { kind: "num"; value: number; big?: boolean }   // `big` = BigInt literal (123n)
+  | { kind: "num"; value: number }
+  | { kind: "bigint"; value: string }   // BigInt literal (123n) — canonical decimal, no `n`
   | { kind: "str"; value: string }
   | { kind: "bool"; value: boolean }
   | { kind: "binop"; op: string; left: RawExpr; right: RawExpr }

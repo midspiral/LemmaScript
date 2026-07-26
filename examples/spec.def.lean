@@ -59,6 +59,18 @@ method midpoint (lo : Int) (hi : Int) return (res : Int)
   do
     return Pure.midpoint lo hi
 
+method exactBigIntLiteral  return (res : Int)
+  ensures res = 9007199254740993
+  ensures res ≠ 9007199254740992
+  do
+    return Pure.exactBigIntLiteral 
+
+method exactNegativeBigIntLiteral  return (res : Int)
+  ensures res = -9007199254740993
+  ensures res ≠ -9007199254740992
+  do
+    return Pure.exactNegativeBigIntLiteral 
+
 method wrapOne (x : Int) return (res : Array Int)
   ensures res.size = 1
   do

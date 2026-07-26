@@ -84,6 +84,7 @@ export type TChainStep =
 export type TExpr =
   | { kind: "var"; name: string; ty: Ty }
   | { kind: "num"; value: number; ty: Ty }
+  | { kind: "bigint"; value: string; ty: Ty }   // exact integer, canonical decimal
   | { kind: "str"; value: string; ty: Ty }
   | { kind: "bool"; value: boolean; ty: Ty }
   | { kind: "binop"; op: string; left: TExpr; right: TExpr; ty: Ty }

@@ -57,7 +57,7 @@ function walkExpr(e: TExpr, ctx: CondCtx): TExpr {
 function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
   const re = (x: TExpr) => walkExpr(x, ctx);
   switch (e.kind) {
-    case "var": case "num": case "str": case "bool":
+    case "var": case "num": case "bigint": case "str": case "bool":
     case "havoc":
       return e;
     case "binop": return { ...e, left: re(e.left), right: re(e.right) };
@@ -506,7 +506,7 @@ function containsMethodCall(e: TExpr): boolean {
     return true;
   }
   switch (e.kind) {
-    case "var": case "num": case "str": case "bool":
+    case "var": case "num": case "bigint": case "str": case "bool":
     case "havoc":
       return false;
     case "binop": return containsMethodCall(e.left) || containsMethodCall(e.right);

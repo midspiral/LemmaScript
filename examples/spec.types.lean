@@ -105,6 +105,12 @@ def makeHighItem (v : Int) : PriorityItem :=
 def midpoint (lo : Int) (hi : Int) : Int :=
   (lo + hi) / 2
 
+def exactBigIntLiteral  : Int :=
+  9007199254740993
+
+def exactNegativeBigIntLiteral  : Int :=
+  -9007199254740993
+
 def wrapOne (x : Int) : Array Int :=
   #[x]
 

@@ -12,6 +12,7 @@ import type { Ty } from "./typedir.js";
 export type Expr =
   | { kind: "var"; name: string }
   | { kind: "num"; value: number }
+  | { kind: "bigint"; value: string }   // exact integer literal, canonical decimal — emitted verbatim
   | { kind: "bool"; value: boolean }
   | { kind: "str"; value: string }
   | { kind: "constructor"; name: string; type?: string; args: Expr[] }   // .idle / .some x — name is lowercase; emitters capitalize per backend
@@ -214,6 +215,26 @@ export interface Module {
   decls: Decl[];
 }
 
+// ── Literal queries ──────────────────────────────────────────
+
+/** The exact value of an integer-literal operand (possibly negated), or null
+ *  when `e` isn't one. Answers in compiler-side `bigint` so a backend folding a
+ *  literal into arithmetic stays exact: JS bitwise operators truncate to 32 bits
+ *  and `Math.pow(2, n)` is a double, both of which lie past 2^53. A `num`
+ *  outside the safe-integer range has already lost precision, so it is not a
+ *  usable answer — hence null. */
+export function exactIntegerLiteral(e: Expr): bigint | null {
+  if (e.kind === "bigint") return BigInt(e.value);
+  if (e.kind === "num") return Number.isSafeInteger(e.value) ? BigInt(e.value) : null;
+  // Transform folds `-<num>` into a negative `num`, but leaves a negated
+  // `bigint` structural (folding it would coerce the payload through Number).
+  if (e.kind === "unop" && e.op === "-") {
+    const inner = exactIntegerLiteral(e.expr);
+    return inner === null ? null : -inner;
+  }
+  return null;
+}
+
 // ── Traversal ────────────────────────────────────────────────
 //
 // A single generic query visitor. `mapExpr`/`mapStmt` (in transform.ts) rewrite
@@ -228,7 +249,7 @@ type ExprPred = (e: Expr) => boolean;
 export function anyExpr(e: Expr, pred: ExprPred): boolean {
   if (pred(e)) return true;
   switch (e.kind) {
-    case "var": case "num": case "bool": case "str":
+    case "var": case "num": case "bigint": case "bool": case "str":
     case "emptyMap": case "emptySet": case "havoc": case "default": return false;
     case "constructor": return e.args.some(a => anyExpr(a, pred));
     case "binop": return anyExpr(e.left, pred) || anyExpr(e.right, pred);
