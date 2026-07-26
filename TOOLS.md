@@ -59,7 +59,7 @@ Type names: `Expr`, `Stmt`, `Module`, `MatchArm`, `StmtMatchArm`, and `Decl` = `
 
 All TS `receiver.method(args)` calls produce `methodCall` IR nodes carrying the receiver, its type, the TS method name, the args, and a `monadic` flag. No renaming — the IR stores the TS name (`"map"`, `"indexOf"`, `"with"`, `"get"`, etc.) and the receiver type disambiguates.
 
-Each emitter dispatches on `(receiverTy, method)` to decide syntax. For example, `(array, "map")` → Lean: `arr.map f`, Dafny: `Seq.Map(f, arr)`. Unsupported `(type, method)` pairs error at emit time.
+Each emitter dispatches on `(receiverTy, method)` to decide syntax. For example, `(array, "filter")` → Lean: `arr.filter f`, Dafny: `Seq.Filter(f, arr)`. Unsupported `(type, method)` pairs error at emit time.
 
 `app` is reserved for receiver-less calls: user-defined functions, `Pure.fnName(...)`, `JSFloorDiv(a, b)`, `SetToSeq(s)`.
 

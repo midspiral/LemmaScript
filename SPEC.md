@@ -469,13 +469,13 @@ The same coercion applies to non-bool conditions in `if`/`while`/`?:` positions:
 | `s.length` | `s.length` | `\|s\|` |
 | `Math.max(...s)` / `Math.min(...s)` | — | `MaxOfSeq(s)` / `MinOfSeq(s)` (requires `\|s\| > 0`) |
 | `perm(a, b)` (spec-only) | — | `Perm(a, b)` (preamble: `predicate Perm<T(==)>(a, b) { multiset(a) == multiset(b) }`) |
-| `arr.map((x) => e)` | `arr.map (fun x => e)` | `Std.Collections.Seq.Map((x) => e, arr)` |
+| `arr.map((x) => e)` | `arr.map (fun x => e)` | `seq(\|arr\|, i requires 0 <= i < \|arr\| => var x := arr[i]; e)` (§3.7) |
 | `arr.filter((x) => e)` | `arr.filter (fun x => e)` | `Std.Collections.Seq.Filter((x) => e, arr)` |
 | `arr.every((x) => e)` | `arr.all (fun x => e)` | `Std.Collections.Seq.All(arr, (x) => e)` |
 | `arr.some((x) => e)` | `arr.any (fun x => e)` | `exists x :: x in arr && e` |
 | `arr.includes(x)` | `arr.contains x` | `(x in arr)` |
 | `arr.indexOf(x)` | — | `SeqIndexOf(arr, x)` (preamble) |
-| `arr.find((x) => e)` | `arr.find? (fun x => e)` | — |
+| `arr.find((x) => e)` | `arr.find? (fun x => e)` | `SeqFind(arr, (x) => e)` (preamble) |
 | `arr.findIndex((x) => e)` | — | `SeqFindIndex(arr, (x) => e)` (preamble: `-1 ⇔ no match`, `≥0 ⇔ first match with no earlier match`) |
 | `arr.findLast((x) => e)` | — | `SeqFindLast(arr, (x) => e)` (preamble) |
 | `arr.findLastIndex((x) => e)` | — | `SeqFindLastIndex(arr, (x) => e)` (preamble: `-1 ⇔ no match`, `≥0 ⇔ last match with no later match`) |
@@ -622,6 +622,8 @@ Lambda bodies can be expressions (`(x) => x + 1`) or statement blocks (`(x) => {
 
 **filterMap.** `xs.map(x => ... | undefined).filter((x): x is T => x !== undefined)` drops the `undefined`s *and* unwraps to `seq<T>` — lowered to the proven `SeqFilterSome` preamble (a plain `Map(.value, Filter(.Some?, ...))` wouldn't verify, since `.value` is partial).
 
+**`.map` (Dafny).** Lowered to a `seq` comprehension with the element access inlined (`var x := arr[i]; e`), not `Seq.Map`. `Seq.Map` hides the element behind a closure, so a recursive rebuild walker (`Node(kids.map(walk))`) fails Dafny's termination check — the obligation gets quantified over the lambda's parameter instead of anchored at `kids[i]`. Applying a lambda inside the comprehension fails the same way, hence the inlining.
+
 **Monadic callbacks (Lean):** When the callback calls a method, the HOF call uses the monadic variant (e.g., `arr.mapM f`). Pure callbacks use the non-monadic variant (`arr.map f`). The transform checks the transformed lambda body for monadic binds and selects the variant accordingly.
 
 | Pure | Monadic | When |
@@ -647,13 +649,13 @@ The transform uses two strategies for translating `receiver.method(args)`:
 | `s.slice(start, end)` | `stringSlice` | `JSString.slice s start end` | `s[start..end]` |
 | `[...arr, e]` | `arrayPush` | `Array.push arr e` | `(arr + [e])` |
 | `arr.with(i, v)` | `arraySet` | `arr.set! i v` | `arr[i := v]` |
-| `arr.map(f)` | `map` | `arr.map f` | `Std.Collections.Seq.Map(f, arr)` |
+| `arr.map(f)` | `map` | `arr.map f` | seq comprehension (§3.7) |
 | `arr.filter(f)` | `filter` | `arr.filter f` | `Std.Collections.Seq.Filter(f, arr)` |
 | `arr.every(f)` | `every` | `arr.all f` | `Std.Collections.Seq.All(arr, f)` |
 | `arr.some(f)` | `some` | `arr.any f` | `exists x :: x in arr && ...` |
 | `arr.includes(x)` | `includes` | `arr.contains x` | `(x in arr)` |
 | `arr.indexOf(x)` | `indexOf` | — | `SeqIndexOf(arr, x)` |
-| `arr.find(f)` | `find` | `arr.find? f` | — |
+| `arr.find(f)` | `find` | `arr.find? f` | `SeqFind(arr, f)` |
 | `m.get(k)` | `mapGet` | `m.get? k` | `if k in m then Some(m[k]) else None` |
 | `m.has(k)` | `mapHas` | `m.contains k` | `(k in m)` |
 | `m.set(k, v)` | `mapSet` | `m.insert k v` | `m[k := v]` |
