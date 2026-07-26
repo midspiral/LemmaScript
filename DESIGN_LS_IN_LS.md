@@ -839,21 +839,37 @@ Three corrections to the charge design fell out, each a real defect:
   component**, but then weight-equality no longer implies identity, so the
   walker ensures weakens to `AWE(e) == 0 ==> SE(res.expr) <= SE(e)`.
 
-*Status (2026-07-25): 232 verified / 11 errors + 1 timeout, from
-167/24+1. Verified: `walkExpr`, all six list walkers, `recurseStmt`,
-`orChain`, `ruleDiscriminantNegEarlyReturn`, `WEConditionalBound`, and all
-five expression method rules. Remaining: the statement-side mirror of the
-layer (`walkStmt`/`walkStmts`/`walkEach`), which needs charges for the
-three still-uncharged statement rules (`ruleOptionalIndexBinding` and the
-two discriminant list rules) so that `AWS == 0` again means "unchanged";
-`ruleEarlyReturnOrChain`'s pre-existing timeout; and one localized gap —
-`ruleConditionalInMap` is the only rule that **retypes** (`Option<V>` →
-`V`), so its guard, which reads the branches' types, is not walk-stable,
-and the nullish drivers read the left operand's type for the same reason.
-That gap is isolated in a single named lemma (`InMapChargeMonotone`) left
-as a visible verification error rather than papered over with an
-`{:axiom}`; closing it wants a type-preservation ensures on the walkers,
-which wants every rule charged.*
+The statement side mirrors it, with one addition: `walkStmt` must expose
+enough of a surviving `if`'s children (cond tameness, branch emptiness,
+branch termination, and the cond's *operands*) for `walkStmts` to prove
+`HC(walked, tail) == 0` — that the walked head arms no list rule. Two
+supporting facts: `isTerminatorKind` only holds of `return`/`break`/
+`continue`/`throw`, and the list walk preserves emptiness and
+non-termination. `ruleOptionalIndexBinding` had to be given a charge (it
+grows the term, wrapping the initializer in a bounds-guarded ternary) — a
+charge of **1**, not 2, precisely so that a retyped receiver, which always
+costs at least 2, can never make the charge appear in the
+weight-equality case.
+
+*Status (2026-07-25): 245 verified / 3 errors + 1 timeout, from
+167/24+1. Every walker and every rule is verified except the three sites
+below. Remaining, each documented in place:*
+
+1. *`ruleConditionalInMap` is the only rule that **retypes**
+   (`Option<V>` → `V`), so its firability guard, which reads the branches'
+   types, is not walk-stable; the optChain drivers read the receiver's type
+   for the same reason. Isolated in `InMapChargeMonotone` and in
+   `recurseExpr`'s optChain arm, left as visible verification errors rather
+   than papered over with an `{:axiom}`. Closing it wants a
+   type-preservation ensures on the walkers.*
+2. *`ruleEarlyReturnOptChainCompare`'s consumed site in `walkStmts`.
+   `a?.x !== b?.y` leaves the second chain in the rewritten inner guard, so
+   the inner `if` can arm the same rule again, and the head charge's
+   `AWSs(then_)` term is then paid once outside but four times inside. No
+   constant coefficient closes it — the charge would have to shrink with
+   the number of chains left in the guard. The `ruleEarlyReturnConsume`
+   half of the same site is proved (`ConsumeSiteShrinks`).*
+3. *`ruleEarlyReturnOrChain`'s pre-existing timeout.*
 
 Iterate with `dafny verify --filter-symbol=<name>` — seconds per symbol
 against ~25 minutes for the file, and the only practical way to work a
