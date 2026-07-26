@@ -131,7 +131,7 @@ function walkSwitchCases(cases: TSwitchCase[], ctx: CondCtx): SwitchCasesOut {
 
 function recurseExpr(e: TExpr, ctx: CondCtx): ExprOut {
   switch (e.kind) {
-    case "var": case "num": case "str": case "bool":
+    case "var": case "num": case "bigint": case "str": case "bool":
     case "havoc":
       return { expr: e, ctx };
     case "binop": {
@@ -758,7 +758,7 @@ function containsMethodCall(e: TExpr): boolean {
     if (!builtinPure(bid)) return true;
   }
   switch (e.kind) {
-    case "var": case "num": case "str": case "bool":
+    case "var": case "num": case "bigint": case "str": case "bool":
     case "havoc":
       return false;
     case "binop": return containsMethodCall(e.left) || containsMethodCall(e.right);

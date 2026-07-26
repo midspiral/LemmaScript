@@ -303,6 +303,8 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     // `undefined` is the IR's spelling of the absent optional (mirrors dafny-emit's None)
     case "var": return e.name === "undefined" ? "none" : escapeName(e.name);
     case "num": return `${e.value}`;
+    // Already canonical decimal; Lean's `Int` is mathematical, so no `n` suffix.
+    case "bigint": return e.value;
     case "bool": return e.value ? "true" : "false";
     case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 
@@ -357,7 +359,8 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "unop":
       if (e.op === "¬") return _boolCtx ? `!(${emitExpr(e.expr)})` : `¬(${emitExpr(e.expr)})`;
       if (e.op !== "-") throw new Error(`Unsupported Lean unary operator: ${e.op}`);
-      return e.expr.kind === "num" ? `-${e.expr.value}` : `(-${emitExpr(e.expr)})`;
+      return (e.expr.kind === "num" || e.expr.kind === "bigint")
+        ? `-${e.expr.value}` : `(-${emitExpr(e.expr)})`;
 
     case "binop": {
       // Discriminator test against a constructor that carries fields:
@@ -459,13 +462,13 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       }
       const obj = emitExpr(e.obj);
       if (e.field === "collectionSize") return `${obj}.size`;
-      const wrap = e.obj.kind !== "var" && e.obj.kind !== "num" && e.obj.kind !== "bool";
+      const wrap = e.obj.kind !== "var" && e.obj.kind !== "num" && e.obj.kind !== "bigint" && e.obj.kind !== "bool";
       return wrap ? `(${obj}).${escapeName(e.field)}` : `${obj}.${escapeName(e.field)}`;
     }
 
     case "toNat": {
       const inner = emitExpr(e.expr);
-      const wrap = e.expr.kind !== "var" && e.expr.kind !== "num";
+      const wrap = e.expr.kind !== "var" && e.expr.kind !== "num" && e.expr.kind !== "bigint";
       return wrap ? `(${inner}).toNat` : `${inner}.toNat`;
     }
 

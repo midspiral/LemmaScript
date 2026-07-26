@@ -28,7 +28,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
   if (hit) return hit;
   const r = (x: Expr) => mapExpr(x, f);
   switch (e.kind) {
-    case "var": case "num": case "bool": case "str": case "emptyMap": case "emptySet": case "havoc": case "default": return e;
+    case "var": case "num": case "bigint": case "bool": case "str": case "emptyMap": case "emptySet": case "havoc": case "default": return e;
     case "mapLiteral": return { ...e, entries: e.entries.map(en => ({ key: r(en.key), value: r(en.value) })) };
     case "constructor": return e.args ? { ...e, args: e.args.map(r) } : e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
@@ -125,7 +125,7 @@ function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
   if (hit) return hit;
   const r = (x: TExpr) => mapTExpr(x, f);
   switch (e.kind) {
-    case "var": case "num": case "str": case "bool": case "havoc": return e;
+    case "var": case "num": case "bigint": case "str": case "bool": case "havoc": return e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
     case "call": return { ...e, fn: r(e.fn), args: e.args.map(r) };
@@ -446,6 +446,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
   switch (e.kind) {
     case "var": return { kind: "var", name: e.name };
     case "num": return { kind: "num", value: e.value };
+    case "bigint": return { kind: "bigint", value: e.value };
     case "bool": return { kind: "bool", value: e.value };
 
     case "str":
@@ -453,6 +454,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "str", value: e.value };
 
     case "unop":
+      // Only `num` folds. A `bigint` payload is a string, so negating it here
+      // would coerce through `Number` and round: `-9007199254740993n` stays a
+      // structural `unop("-", bigint(...))` and is negated by the emitter.
       if (e.op === "-" && e.expr.kind === "num")
         return { kind: "num", value: -e.expr.value };
       // String truthiness: !str → str == ""

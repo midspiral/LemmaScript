@@ -30,7 +30,7 @@ import type { TExpr, TStmt, TModule } from "./typedir.js";
  *  havoc'd variable is fine; only the *source* expression is replaced. */
 function isBadNode(e: TExpr): boolean {
   switch (e.kind) {
-    case "var": case "num": case "str": case "bool": case "havoc":
+    case "var": case "num": case "bigint": case "str": case "bool": case "havoc":
       return false;
     // A field/index is unmodellable when its *object* is opaque (`req.body`,
     // `process.env.X`). It is NOT unmodellable just because its own type is
@@ -239,7 +239,7 @@ function rewriteExpr(e: TExpr, hoisted: TStmt[]): TExpr {
     return { kind: "havoc", ty: e.ty };
   }
   switch (e.kind) {
-    case "var": case "num": case "str": case "bool": case "havoc": return e;
+    case "var": case "num": case "bigint": case "str": case "bool": case "havoc": return e;
     case "binop": return { ...e, left: rewriteExpr(e.left, hoisted), right: rewriteExpr(e.right, hoisted) };
     case "unop": return { ...e, expr: rewriteExpr(e.expr, hoisted) };
     case "call": return { ...e, fn: rewriteExpr(e.fn, hoisted), args: e.args.map(a => rewriteExpr(a, hoisted)) };

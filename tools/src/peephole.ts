@@ -271,7 +271,7 @@ function peepholeExpr(e: Expr, backend: Backend): Expr {
 // terminate (the closure's parameter is unbounded at its definition site).
 function rewriteChildrenExpr(e: Expr, backend: Backend): Expr {
   switch (e.kind) {
-    case "var": case "num": case "bool": case "str":
+    case "var": case "num": case "bigint": case "bool": case "str":
     case "emptyMap": case "emptySet": case "havoc": case "default": return e;
     case "constructor": return { ...e, args: e.args.map(a => peepholeExpr(a, backend)) };
     case "mapLiteral": return { ...e, entries: e.entries.map(en => ({ key: peepholeExpr(en.key, backend), value: peepholeExpr(en.value, backend) })) };

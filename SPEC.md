@@ -981,12 +981,13 @@ The spec body is purely additive — `regen` three-way-merges and preserves user
 
 ### 6.1.1 BigInt
 
-TypeScript's `bigint` type maps to `Int`/`int` (same as `number`). BigInt literals like `32n`, `0xffffn` are treated as integer literals with the `n` suffix stripped. Hex literals (`0x...`) and the `n` suffix are supported in both function bodies and `//@ ` annotations:
+TypeScript's `bigint` type maps to `Int`/`int` (same as `number`). BigInt literals like `32n`, `0xffffn` are treated as integer literals with the `n` suffix stripped. Decimal, hex (`0x…`), binary (`0b…`), and octal (`0o…`) spellings, numeric separators (`1_000_000n`), and the `n` suffix are all supported in both function bodies and `//@ ` annotations. Since the backends have unbounded integers, a BigInt literal is carried exactly — never through a JS `number` — so values past `Number.MAX_SAFE_INTEGER` keep their identity:
 
 | TypeScript | Dafny | Lean |
 |-----------|-------|------|
 | `32n` | `32` (int) | `32` (Int) |
 | `0xffffn` | `65535` (int) | `65535` (Int) |
+| `0x20000000000001n` | `9007199254740993` (int) | `9007199254740993` (Int) |
 
 **Bitwise operators (Dafny only):** Since Dafny's `int` has no native bitwise ops, they are translated to arithmetic when the right operand is a literal:
 
@@ -995,6 +996,8 @@ TypeScript's `bigint` type maps to `Int`/`int` (same as `number`). BigInt litera
 | `x >> 32n` | `x / 4294967296` |
 | `x << 8n` | `x * 256` |
 | `x & 0xffffffffn` | `x % 4294967296` (only when mask+1 is a power of 2) |
+
+The shift factor and the mask modulus are computed exactly too, so wide operands (`x << 70n`, `x & 0xffffffffffffffffn`) fold correctly rather than through a double. See [`examples/bigintBits.ts`](examples/bigintBits.ts).
 
 Lean backend does not yet support bitwise operators.
 

@@ -59,7 +59,7 @@ datatype IsArrayFact = IsArrayFact(scrutinee: TExpr, typeName: string, variant: 
 
 datatype LeadingIsArray = LeadingIsArray(check: IsArrayFact, restCond: TExpr)
 
-datatype TExpr = var_(name: string, ty: Ty) | num(value_num: int, ty: Ty) | str(value_str: string, ty: Ty) | bool_(value_bool: bool, ty: Ty) | binop(op: string, left: TExpr, right: TExpr, ty: Ty) | unop(op: string, expr: TExpr, ty: Ty) | call(fn: TExpr, args: seq<TExpr>, ty: Ty, callKind: CallKind, builtinId: Option<string>) | index(obj: TExpr, idx: TExpr, ty: Ty) | field(obj: TExpr, field: string, ty: Ty, isDiscriminant: Option<bool>, ofVariant: Option<string>) | record(spread: Option<TExpr>, fields: seq<TRecordField>, ty: Ty) | arrayLiteral(elems: seq<TExpr>, ty: Ty) | lambda(params: seq<TParam>, body_lambda: seq<TStmt>, ty: Ty) | conditional(cond: TExpr, then_: TExpr, else_: TExpr, ty: Ty) | optChain(obj: TExpr, chain: seq<TChainStep>, ty: Ty) | nullish(left: TExpr, right: TExpr, ty: Ty) | someMatch(scrutinee: TExpr, binder: string, binderTy: Ty, someBody: TExpr, noneBody: TExpr, ty: Ty) | tagMatch(scrutinee: TExpr, typeName: string, cases: seq<TExprCase>, fallthrough: Option<TExpr>, ty: Ty) | forall_(var_: string, varTy: Ty, body_forall: TExpr, ty: Ty) | exists_(var_: string, varTy: Ty, body_exists: TExpr, ty: Ty) | havoc(ty: Ty)
+datatype TExpr = var_(name: string, ty: Ty) | num(value_num: int, ty: Ty) | bigint(value_bigint: string, ty: Ty) | str(value_str: string, ty: Ty) | bool_(value_bool: bool, ty: Ty) | binop(op: string, left: TExpr, right: TExpr, ty: Ty) | unop(op: string, expr: TExpr, ty: Ty) | call(fn: TExpr, args: seq<TExpr>, ty: Ty, callKind: CallKind, builtinId: Option<string>) | index(obj: TExpr, idx: TExpr, ty: Ty) | field(obj: TExpr, field: string, ty: Ty, isDiscriminant: Option<bool>, ofVariant: Option<string>) | record(spread: Option<TExpr>, fields: seq<TRecordField>, ty: Ty) | arrayLiteral(elems: seq<TExpr>, ty: Ty) | lambda(params: seq<TParam>, body_lambda: seq<TStmt>, ty: Ty) | conditional(cond: TExpr, then_: TExpr, else_: TExpr, ty: Ty) | optChain(obj: TExpr, chain: seq<TChainStep>, ty: Ty) | nullish(left: TExpr, right: TExpr, ty: Ty) | someMatch(scrutinee: TExpr, binder: string, binderTy: Ty, someBody: TExpr, noneBody: TExpr, ty: Ty) | tagMatch(scrutinee: TExpr, typeName: string, cases: seq<TExprCase>, fallthrough: Option<TExpr>, ty: Ty) | forall_(var_: string, varTy: Ty, body_forall: TExpr, ty: Ty) | exists_(var_: string, varTy: Ty, body_exists: TExpr, ty: Ty) | havoc(ty: Ty)
 
 datatype Ty = bool_ | nat_(big: Option<bool>) | int_(big: Option<bool>) | real_ | string_(values: Option<seq<string>>) | void | array_(elem: Ty) | tuple(elems: seq<Ty>) | map_(key: Ty, value: Ty) | set_(elem: Ty) | optional(inner: Ty) | user(name: string) | fn(params: seq<Ty>, result: Ty) | unknown
 
@@ -94,6 +94,8 @@ function TExpr_kind(t: TExpr): string
       "var"
     case num(i_0, i_1) =>
       "num"
+    case bigint(i_0, i_1) =>
+      "bigint"
     case str(i_0, i_1) =>
       "str"
     case bool_(i_0, i_1) =>
