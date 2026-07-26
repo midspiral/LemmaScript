@@ -32,7 +32,7 @@ Two things shape what you can verify:
 |-----------|-----------|-------|
 | `number` | integer | Maps to `int` by default. Add `//@ type nat` for a non-negative integer. |
 | `number` (non-integer literal) | real | `0.8`, `3.14` become reals; mixed int/real arithmetic coerces automatically. |
-| `bigint` | integer | Same as `number`; `32n`, `0xffffn` literals supported. |
+| `bigint` | integer | Same as `number`; `32n`, `0xffffn` literals supported, exact past 2^53. |
 | `boolean` | bool | |
 | `string` | string | |
 | `T[]` / `Array<T>` / `readonly T[]` | sequence | |

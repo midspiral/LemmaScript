@@ -3,7 +3,7 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
+import { exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshName, freshNameWhere, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
@@ -221,6 +221,8 @@ function emitExpr(e: Expr): string {
   switch (e.kind) {
     case "var": return e.name === "undefined" ? "None" : escapeName(e.name);
     case "num": return `${e.value}`;
+    // Already canonical decimal; Dafny's `int` is mathematical, so no `n` suffix.
+    case "bigint": return e.value;
     case "bool": return e.value ? "true" : "false";
     case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 
@@ -374,11 +376,14 @@ function emitExpr(e: Expr): string {
         }
         if (e.method === "split")   { needPreamble("StringSplit"); return `StringSplit(${obj}, ${args[0]})`; }
         if (e.method === "slice") {
-          // JS negative index: arr.slice(0, -N) → arr[0..|arr|-N]. After
-          // transform, unary minus on a numeric literal is folded to a
-          // negative `num` IR node, so check for that here.
-          const negVal = (a: typeof e.args[0]): number | null =>
-            a.kind === "num" && a.value < 0 ? -a.value : null;
+          // JS negative index: arr.slice(0, -N) → arr[0..|arr|-N]. Transform
+          // folds unary minus on a numeric literal into a negative `num` node,
+          // but leaves a negated bigint structural — `exactIntegerLiteral`
+          // recognizes both.
+          const negVal = (a: typeof e.args[0]): string | null => {
+            const v = exactIntegerLiteral(a);
+            return v !== null && v < 0n ? (-v).toString(10) : null;
+          };
           const loN = negVal(e.args[0]);
           const loEx = loN !== null ? `|${obj}|-${loN}` : args[0];
           if (args.length === 1) return `${obj}[${loEx}..]`;
@@ -451,6 +456,7 @@ function emitExpr(e: Expr): string {
       if (op === "!" && e.expr.kind !== "var" && e.expr.kind !== "bool")
         return `!(${emitExpr(e.expr)})`;
       if (e.op === "-" && e.expr.kind === "num") return `(-(${e.expr.value}))`;
+      if (e.op === "-" && e.expr.kind === "bigint") return `(-(${e.expr.value}))`;
       if (e.op === "-") return `(-(${emitExpr(e.expr)}))`;
       return `${op}(${emitExpr(e.expr)})`;
     }
@@ -466,27 +472,23 @@ function emitExpr(e: Expr): string {
       // Bitwise operators on int: translate to arithmetic
       // x >> n → x / 2^n (right shift)
       // x << n → x * 2^n (left shift)
-      if (e.op === ">>") {
-        if (e.right.kind === "num") {
-          return `(${emitExpr(e.left)} / ${Math.pow(2, e.right.value)})`;
+      if (e.op === ">>" || e.op === "<<") {
+        const shift = exactIntegerLiteral(e.right);
+        // Cap the fold: a huge literal shift would inline an absurd numeral.
+        if (shift !== null && shift >= 0n && shift <= 1024n) {
+          const factor = (1n << shift).toString(10);
+          return `(${emitExpr(e.left)} ${e.op === ">>" ? "/" : "*"} ${factor})`;
         }
         needPreamble("Pow2");
-        return `(${emitExpr(e.left)} / Pow2(${emitExpr(e.right)}))`;
-      }
-      if (e.op === "<<") {
-        if (e.right.kind === "num") {
-          return `(${emitExpr(e.left)} * ${Math.pow(2, e.right.value)})`;
-        }
-        needPreamble("Pow2");
-        return `(${emitExpr(e.left)} * Pow2(${emitExpr(e.right)}))`;
+        return `(${emitExpr(e.left)} ${e.op === ">>" ? "/" : "*"} Pow2(${emitExpr(e.right)}))`;
       }
       // x & mask → x % (mask + 1) for literal masks of form 2^n - 1, else BitAnd
       if (e.op === "&") {
-        if (e.right.kind === "num") {
-          const mask = e.right.value;
-          const modulus = mask + 1;
-          if ((modulus & (modulus - 1)) === 0) {
-            return `(${emitExpr(e.left)} % ${modulus})`;
+        const mask = exactIntegerLiteral(e.right);
+        if (mask !== null && mask >= 0n) {
+          const modulus = mask + 1n;
+          if ((modulus & (modulus - 1n)) === 0n) {
+            return `(${emitExpr(e.left)} % ${modulus.toString(10)})`;
           }
         }
         needPreamble("BitAnd");

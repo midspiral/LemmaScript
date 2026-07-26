@@ -31,6 +31,12 @@ prove_correct makeHighItem by
 prove_correct midpoint by
   unfold Pure.midpoint; loom_solve
 
+prove_correct exactBigIntLiteral by
+  unfold Pure.exactBigIntLiteral; loom_solve
+
+prove_correct exactNegativeBigIntLiteral by
+  unfold Pure.exactNegativeBigIntLiteral; loom_solve
+
 prove_correct wrapOne by
   unfold Pure.wrapOne; loom_solve
 

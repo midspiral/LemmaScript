@@ -4,6 +4,7 @@
  */
 
 import type { RawExpr } from "./rawir.js";
+import { normalizeBigIntLiteral } from "./rawir.js";
 
 export type Expr = RawExpr;
 
@@ -11,6 +12,7 @@ export type Expr = RawExpr;
 
 type Token =
   | { type: "num"; value: number }
+  | { type: "bigint"; value: string }
   | { type: "str"; value: string }
   | { type: "ident"; value: string }
   | { type: "op"; value: string }
@@ -18,6 +20,13 @@ type Token =
   | { type: "result"; value: undefined };
 
 const MULTI_OPS = ["<==>", "==>", "===", "!==", "==", "!=", ">=", "<=", "&&", "||"];
+
+/** Hex / binary / octal / decimal integer, with optional numeric separators and
+ *  an optional `n` (BigInt) suffix in capture group 1. Deliberately integer-only:
+ *  a trailing `.` is left for the tokenizer to emit as punctuation, exactly as
+ *  the previous digit-scanning loop did. */
+const INTEGER_LITERAL =
+  /^(?:(?:0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*)|(?:0[bB][01](?:_?[01])*)|(?:0[oO][0-7](?:_?[0-7])*)|(?:[0-9](?:_?[0-9])*))(n)?/;
 
 function tokenize(input: string): Token[] {
   const tokens: Token[] = [];
@@ -55,19 +64,14 @@ function tokenize(input: string): Token[] {
     }
 
     if (/[0-9]/.test(input[i])) {
-      let value: number;
-      if (input[i] === "0" && i + 1 < input.length && input[i + 1] === "x") {
-        i += 2;
-        let hex = "";
-        while (i < input.length && /[0-9a-fA-F]/.test(input[i])) hex += input[i++];
-        value = parseInt(hex, 16);
-      } else {
-        let dec = "";
-        while (i < input.length && /[0-9]/.test(input[i])) dec += input[i++];
-        value = parseInt(dec, 10);
-      }
-      if (i < input.length && input[i] === "n") i++;
-      tokens.push({ type: "num", value });
+      const match = input.slice(i).match(INTEGER_LITERAL);
+      if (!match) throw new Error(`Invalid numeric literal at ${i} in: ${input}`);
+      const text = match[0];
+      i += text.length;
+      // The `n` suffix is meaningful, not noise: a BigInt keeps its exact value
+      // as a decimal string instead of being rounded into a double.
+      if (match[1] === "n") tokens.push({ type: "bigint", value: normalizeBigIntLiteral(text) });
+      else tokens.push({ type: "num", value: Number(text.replace(/_/g, "")) });
       continue;
     }
 
@@ -242,6 +246,7 @@ class Parser {
     if (!t) throw new Error("Unexpected end of expression");
     if (t.type === "result") { this.advance(); return { kind: "result" }; }
     if (t.type === "num") { this.advance(); return { kind: "num", value: t.value }; }
+    if (t.type === "bigint") { this.advance(); return { kind: "bigint", value: t.value }; }
     if (t.type === "str") { this.advance(); return { kind: "str", value: t.value }; }
     if (t.type === "ident") {
       if (t.value === "true") { this.advance(); return { kind: "bool", value: true }; }

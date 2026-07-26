@@ -173,6 +173,28 @@ lemma midpoint_ensures(lo: int, hi: int)
 {
 }
 
+function exactBigIntLiteral(): int
+{
+  9007199254740993
+}
+
+lemma exactBigIntLiteral_ensures()
+  ensures (exactBigIntLiteral() == 9007199254740993)
+  ensures (exactBigIntLiteral() != 9007199254740992)
+{
+}
+
+function exactNegativeBigIntLiteral(): int
+{
+  (-(9007199254740993))
+}
+
+lemma exactNegativeBigIntLiteral_ensures()
+  ensures (exactNegativeBigIntLiteral() == (-(9007199254740993)))
+  ensures (exactNegativeBigIntLiteral() != (-(9007199254740992)))
+{
+}
+
 function wrapOne(x: int): seq<int>
 {
   [x]

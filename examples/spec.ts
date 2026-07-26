@@ -96,6 +96,24 @@ function midpoint(lo: number, hi: number): number {
   return Math.floor((lo + hi) / 2);
 }
 
+// §6.1.1: BigInt literals stay exact past Number.MAX_SAFE_INTEGER. The two
+// postconditions straddle 2^53, where a double can't tell 9007199254740993
+// from 9007199254740992 — so this only verifies if the literal never rounds
+// through Number, in the body *or* in the annotation.
+function exactBigIntLiteral(): bigint {
+  //@ ensures \result === 9007199254740993n
+  //@ ensures \result !== 9007199254740992n
+  return 0x20000000000001n;
+}
+
+// §6.1.1: same, through unary minus — a negative literal must not be folded
+// by negating a JS number.
+function exactNegativeBigIntLiteral(): bigint {
+  //@ ensures \result === -9007199254740993n
+  //@ ensures \result !== -9007199254740992n
+  return -9007199254740993n;
+}
+
 // §4.2: array literal
 function wrapOne(x: number): number[] {
   //@ ensures \result.length === 1

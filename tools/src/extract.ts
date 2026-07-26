@@ -9,6 +9,7 @@ import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, T
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
+import { normalizeBigIntLiteral } from "./rawir.js";
 import { setUserNames, freshName } from "./names.js";
 
 // ── Expression extraction ────────────────────────────────────
@@ -343,10 +344,11 @@ function extractExpr(node: Expression): RawExpr {
     return { kind: "num", value: Number(node.getLiteralValue()) };
   }
 
-  // BigInt literal (e.g. 32n, 0xffffn) — integer, with bigint division semantics
+  // BigInt literal (e.g. 32n, 0xffffn) — exact integer, with bigint division
+  // semantics. Kept as a decimal string: `getLiteralValue()`/`Number()` would
+  // round anything past 2^53 (`9007199254740993n` → `9007199254740992`).
   if (Node.isBigIntLiteral(node)) {
-    const text = node.getText().replace(/n$/, '');
-    return { kind: "num", value: Number(text), big: true };
+    return { kind: "bigint", value: normalizeBigIntLiteral(node.getText()) };
   }
 
   // Template literal: `foo${x}bar` → "foo" + x + "bar"
@@ -1097,7 +1099,7 @@ function renameRawExpr(e: RawExpr, from: string, to: string): RawExpr {
   const r = (x: RawExpr) => renameRawExpr(x, from, to);
   switch (e.kind) {
     case "var": return e.name === from ? { kind: "var", name: to } : e;
-    case "num": case "str": case "bool": case "result": case "havoc": case "emptyCollection": return e;
+    case "num": case "bigint": case "str": case "bool": case "result": case "havoc": case "emptyCollection": return e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
     case "call": return { ...e, fn: r(e.fn), args: e.args.map(r) };

@@ -710,8 +710,12 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "num":
       if (!Number.isInteger(e.value)) return { kind: "num", value: e.value, ty: { kind: "real" } };
-      if (e.big) return { kind: "num", value: e.value, ty: { kind: "int", big: true } };
       return { kind: "num", value: e.value, ty: e.value >= 0 ? { kind: "nat" } : { kind: "int" } };
+
+    // Always `int` (never `nat`, even when non-negative), carrying `big` so the
+    // surrounding arithmetic picks bigint division semantics — see `isBigInt`.
+    case "bigint":
+      return { kind: "bigint", value: e.value, ty: { kind: "int", big: true } };
 
     case "str":
       return { kind: "str", value: e.value, ty: { kind: "string" } };
