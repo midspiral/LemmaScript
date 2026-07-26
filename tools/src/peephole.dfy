@@ -1297,6 +1297,7 @@ lemma {:vcs_split_on_every_assert} Rule4Aw(e: Expr, b: Backend)
   assert applyExprRules(r, b).None?;
   assert normE(r, b);
   assert applyExprRules(e, b).Some?;
+  assert chargeE(e) == 2;
   NormKidsAwZeroE(e, b);
   assert awE(e, b) == 2;
 }
@@ -1315,6 +1316,9 @@ lemma {:vcs_split_on_every_assert} Rule5Aw(e: Expr, b: Backend)
   assert normE(r, b);
   NormAwZeroE(r, b);
   assert applyExprRules(e, b).Some?;
+  // Before NormKidsAwZeroE: its awKidsE decomposition in context makes the
+  // head-charge ctor test cost 30x (9.5s batch, times out on CI's runner).
+  assert chargeE(e) == 2;
   NormKidsAwZeroE(e, b);
   assert awE(e, b) == 2;
 }
@@ -1335,6 +1339,7 @@ lemma {:vcs_split_on_every_assert} Rule2Aw(e: Expr, b: Backend)
   assert applyExprRules(r, b).None?;
   assert normE(r, b);
   assert applyExprRules(e, b).Some?;
+  assert chargeE(e) == 2;
   NormKidsAwZeroE(e, b);
   assert awE(e, b) == 2;
 }
@@ -1355,6 +1360,7 @@ lemma {:vcs_split_on_every_assert} Rule3Aw(e: Expr, b: Backend)
   assert applyExprRules(r, b).None?;
   assert normE(r, b);
   assert applyExprRules(e, b).Some?;
+  assert chargeE(e) == 2;
   NormKidsAwZeroE(e, b);
   assert awE(e, b) == 2;
 }
