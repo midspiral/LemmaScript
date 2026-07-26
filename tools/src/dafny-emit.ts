@@ -530,8 +530,15 @@ function emitExpr(e: Expr): string {
       if (e.fn === "MinOfSeq") { needPreamble("MathMin"); needPreamble("MinOfSeq"); }
       if (e.fn === "Perm") needPreamble("Perm");
       if (e.fn === "SetFromSeq") needPreamble("SetFromSeq");
-      if (e.ctorOf && _ambiguousCtors.has(e.fn))
-        return `${e.ctorOf}.${escapeName(e.fn)}(${args.join(", ")})`;
+      // A constructor application must spell the name the same way the
+      // datatype declaration does — `dafnyCtorName`, not `escapeName`, since
+      // tags come from source strings ("spec-pure") that escapeName leaves alone.
+      if (e.ctorOf) {
+        const ctor = dafnyCtorName(e.fn);
+        return _ambiguousCtors.has(e.fn)
+          ? `${e.ctorOf}.${ctor}(${args.join(", ")})`
+          : `${ctor}(${args.join(", ")})`;
+      }
       return `${escapeName(e.fn)}(${args.join(", ")})`;
     }
 
