@@ -851,25 +851,47 @@ charge of **1**, not 2, precisely so that a retyped receiver, which always
 costs at least 2, can never make the charge appear in the
 weight-equality case.
 
-*Status (2026-07-25): 245 verified / 3 errors + 1 timeout, from
-167/24+1. Every walker and every rule is verified except the three sites
-below. Remaining, each documented in place:*
+**Type preservation, and why it needs no extra charge.** `ruleConditionalInMap`
+is the one rule that **retypes** (`Option<V>` → `V`), so the guards that
+read a type — its own else-branch test, and the optChain drivers' receiver
+test — are not walk-stable by shape alone. The closing observation is that
+a retype can only come from a rule firing at the **root**: the recursive
+rebuild preserves the type, so the charge that paid for the retype sits at
+the root and the children are therefore weightless. Hence
 
-1. *`ruleConditionalInMap` is the only rule that **retypes**
-   (`Option<V>` → `V`), so its firability guard, which reads the branches'
-   types, is not walk-stable; the optChain drivers read the receiver's type
-   for the same reason. Isolated in `InMapChargeMonotone` and in
-   `recurseExpr`'s optChain arm, left as visible verification errors rather
-   than papered over with an `{:axiom}`. Closing it wants a
-   type-preservation ensures on the walkers.*
-2. *`ruleEarlyReturnOptChainCompare`'s consumed site in `walkStmts`.
+```dafny
+ensures res.expr.ty == e.ty
+     || (AWE(e, ctx.decls) >= 2
+      && (AWE(e, ctx.decls) == 2 ==> SE(res.expr) < SE(e)))
+```
+
+with the same clause for an `index` node's receiver. At total weight 2 the
+children are unchanged in size, so `SE(recurse(e)) <= SE(e)`, and in-map's
+own shrink then dominates. The `==>` rules also retype (to bool) but can
+never hit the `== 2` case: `FImplOptional` forces `PC >= 1` and
+`FImplArrayIsArray` forces `AC >= 1`, so their charge is at least 3. Note
+what this did *not* need: charging the two discriminant list rules to
+restore `AWE == 0 ==> unchanged`. That was the obvious route and it is a
+trap — `FDiscChain` is tail-independent, so it charges a block-final `if`,
+and a walked discriminant `if` legitimately survives inside a `someMatch`
+arm (`ruleIfAndOptional` installs its inner `if` without going back through
+`walkStmts`), which would break weightless-output. The size ensures is
+enough.
+
+*Status (2026-07-25): 247 verified / 1 error + 1 timeout, from
+167/24+1. Every walker and every rule is verified. Two sites remain, both
+documented in place:*
+
+1. *`ruleEarlyReturnOptChainCompare`'s consumed site in `walkStmts`.
    `a?.x !== b?.y` leaves the second chain in the rewritten inner guard, so
    the inner `if` can arm the same rule again, and the head charge's
    `AWSs(then_)` term is then paid once outside but four times inside. No
-   constant coefficient closes it — the charge would have to shrink with
-   the number of chains left in the guard. The `ruleEarlyReturnConsume`
-   half of the same site is proved (`ConsumeSiteShrinks`).*
-3. *`ruleEarlyReturnOrChain`'s pre-existing timeout.*
+   constant coefficient closes it — the charge has to shrink with the number
+   of chains left in the guard, e.g. `(C1 + C2*AWSs(then_)) * OC(cond)` with
+   `OC` counting optional-headed chains and `C2 >= 4`. The
+   `ruleEarlyReturnConsume` half of the same site is proved
+   (`ConsumeSiteShrinks`).*
+2. *`ruleEarlyReturnOrChain`'s pre-existing timeout.*
 
 Iterate with `dafny verify --filter-symbol=<name>` — seconds per symbol
 against ~25 minutes for the file, and the only practical way to work a
