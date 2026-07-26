@@ -878,32 +878,30 @@ arm (`ruleIfAndOptional` installs its inner `if` without going back through
 `walkStmts`), which would break weightless-output. The size ensures is
 enough.
 
-**The consumed sites, and the one charge shape still missing.** Both
-remaining failures are the same defect, and it is a charge-design defect,
-not proof effort. `ruleEarlyReturnOrChain` and
-`ruleEarlyReturnOptChainCompare` each re-walk a construction that holds an
-**un-walked** copy of the terminating branch under a **residual guard** —
-and that guard can carry charges of its own. The or-chain rule with two or
-more residual leaves is fine, because the guard is then a `||`, which no
-if-position or early-return driver reads (`OrChainInnerShrinks` proves
-exactly that case). With a single residual leaf, the guard *is* that leaf:
-an `&&` chain, or a demoted duplicate detector, either of which pays
-`AWSs(then_)` again — and the head charge is a flat detector count. Same
-for `a?.x !== b?.y`, where the second chain survives into the rewritten
-inner guard and re-arms the same rule. Raising a constant does not help:
-the inner charge has the same coefficient, so it cancels. The head charge
-has to **scale with the redexes left in the guard**, i.e.
+**The consumed sites: a multiplicative charge.** Both re-walk a
+construction holding an **un-walked** copy of the terminating branch under
+a **residual guard** that carries charges of its own, so the inner node's
+head charge re-bills what the outer one already paid. A constant charge
+cannot fix that — the inner charge has the same coefficient and cancels.
+The measure was simply *additive* where a duplicating rewrite needs a
+*multiplicative* one:
 
-```
-DET(cond) * (A + B*AWSs(then_) + C*PCs(flattenOr(cond)) + D*ACs(flattenOr(cond)))
+```dafny
+function SiteCharge(cond: TExpr, branchWeight: nat): nat
+{ SE(cond) * (12 + 4 * branchWeight) }
 ```
 
-with new leafwise `PCs`/`ACs` sums, plus residual bounds on them
-(`noneDetectorResidualBounds` currently bounds `SE` and `AWE` only). The
-`ruleEarlyReturnConsume` half of the consumed site needs none of this and
-is proved (`ConsumeSiteShrinks`).
+Scaling by the guard's size does not cancel, because the rewrite strictly
+shrinks the guard: `ruleEarlyReturnOptChainCompare` trades the `optChain`
+node for its application, so `SE(innerGuard) + 1 <= SE(cond)`. That closes
+the site. Two details make it go through: a `!==` guard is not an `&&`, so
+its `PC` and `AC` are each at most 1 (which is what bounds the inner
+`if`'s own charge); and the product needs `MulMonotone` spelled out, since
+Z3 will not do nonlinear arithmetic on its own. Keep `SiteCharge` out of
+the `HC`/`AWSs` recursion by passing the branch weight in — calling
+`AWSs` from inside it puts it in the cycle without a `decreases`.
 
-*Status (2026-07-26): the module verifies — 301 obligations, 0 errors, no
+*Status (2026-07-26): the module verifies — 444 obligations, 0 errors, no
 timeouts — and is in `LemmaScript-files.txt` as*
 
 ```
@@ -911,22 +909,22 @@ tools/src/narrow.ts 300 --boogie /proverOpt:O:smt.qi.eager_threshold=30
 ```
 
 *A per-symbol limit above 60s means normal CI gen-checks it and
-`check.sh dafny-slow` verifies it in full; `ruleEarlyReturnOrChain` is the
-one symbol needing more than 120s. The full self-run is green: typedir 17,
-ir 7, peephole 551, condition-facts 22, narrow 301.*
+`check.sh dafny-slow` verifies it in full. The whole self-run is green:
+typedir 17, ir 7, peephole 551, condition-facts 22, narrow 444.*
 
-***This is green modulo three assumptions, and they are the whole
-remaining proof.*** *Each is an ordinary lemma whose body is
-`assume {:axiom} false;` — grep for `assume` to find them, and note they
-are the only assumptions here that are not facts about an imported
-function. Two are the charge-design defect above:
-`OrChainSingleResidualShrinks` and `OptChainCompareSiteShrinks`. The third,
-`WalkedHeadDeclines`, is not a design gap — it is true and was going
-through inside `walkStmts`' monolithic VC before the site lemmas were
-introduced; it just does not converge standalone (44 of its sub-VCs
-discharge; the `ruleEarlyReturnConsume` and `FOrChain` cases are the
-holdouts). Until all three are discharged, do not read this module's P1
-claim as established.*
+***One assumption remains***, and it is the whole of what is left:
+`OrChainSingleResidualShrinks`, an ordinary lemma whose body is
+`assume {:axiom} false;` — grep for `assume`. The or-chain rule with two or
+more residual leaves builds a `||` guard, which no if-position driver
+reads, and that case *is* proved (`OrChainInnerShrinks`). With exactly one
+residual leaf the guard **is** that leaf, so it can be an `&&` chain, and
+then `WS(innerIf)` bills `PC`/`AC` of it. `SiteCharge` does not transfer:
+there the rewrite provably shrinks the guard, whereas a residual can be the
+same size as the disjunct it replaces, and its `PC`/`AC` are bounded by
+nothing in the original — `PC` of a `||` is 0 by definition, so the cond
+carries no budget for them. Closing it wants leafwise `PCs`/`ACs` sums over
+`flattenOr(cond)` as measure components, with residual bounds on them added
+to `noneDetectorResidualBounds` (which bounds `SE` and `AWE` only).
 
 *Splitting the or-chain method was worth doing for its own sake: the
 timeout had been masking three genuine unproven obligations — two loop
@@ -934,7 +932,12 @@ invariants and a missing `FOrChain` witness. Their fix also simplified the
 rule, since the `firstDet` ghost bookkeeping turned out to be redundant
 given the detector-count invariant, and it surfaced one more honest fact
 about the imported detectors: `noneDetector`'s scrutinee always has a
-binder hint, so the rule's keyless-detector branch is dead.*
+binder hint, so the rule's keyless-detector branch is dead. A fourth
+obligation, `WalkedHeadDeclines` (a walked head arms no list rule), needed
+one missing clause — `walkStmt` exposed `isTerminating` for an `if`'s
+**then** branch but not its **else**, and the early-return rule reads
+whichever branch the check negates — and then had to be proved one rule at
+a time; all three together do not converge.*
 
 Iterate with `dafny verify --filter-symbol=<name>` — seconds per symbol
 against ~25 minutes for the file, and the only practical way to work a

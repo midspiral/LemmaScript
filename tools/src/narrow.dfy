@@ -554,11 +554,11 @@ lemma ConsumeSiteShrinks(s: TStmt, rest: seq<TStmt>, out: TStmt, decls: seq<Type
   assert AWS(out, decls) <= AWSs(rest, decls) + 2 * AWSs(nb, decls);
 }
 
-// ── TEMPORARY: the open obligations, assumed ────────────────
-// The three lemmas below have `assume {:axiom} false;` for a body — the
-// only assumptions in this file that are not facts about an imported
-// function. They assume part of the theorem, so the module's verification
-// is green modulo exactly these. Grep for `assume` to find them. Both are the same
+// ── TEMPORARY: the one open obligation, assumed ─────────────
+// The lemma below has `assume {:axiom} false;` for a body — the only
+// assumption in this file that is not a fact about an imported function.
+// It assumes part of the theorem, so the module's verification is green
+// modulo exactly this. Grep for `assume` to find it. Both are the same
 // charge-design defect: each rule re-walks a construction holding an
 // un-walked copy of the terminating branch under a residual guard that
 // carries charges of its own, while the head charge is a flat count.
@@ -570,10 +570,19 @@ lemma ConsumeSiteShrinks(s: TStmt, rest: seq<TStmt>, out: TStmt, decls: seq<Type
 // `noneDetectorResidualBounds` (it bounds SE and AWE only today).
 // Until then, DO NOT read this module's P1 claim as discharged.
 
-// Or-chain with exactly one residual leaf: the guard is that leaf, which
-// can be an `&&` chain or a demoted duplicate detector, and either pays
-// `AWSs(then_)` a second time. (Two or more leaves make the guard a `||`,
-// which no driver reads — that case is proved, in `OrChainInnerShrinks`.)
+// Or-chain with exactly one residual leaf. Two or more leaves make the
+// guard a `||`, which no if-position driver reads — that case is proved,
+// in `OrChainInnerShrinks`. With one leaf the guard IS that leaf, so it
+// can be an `&&` chain, and then `WS(innerIf)` charges `PC`/`AC` of it.
+// The multiplicative treatment that closed the sibling site
+// (`SiteCharge`, scaling by the guard's size) does not transfer: there,
+// the rewrite provably shrinks the guard; here the residual can be the
+// same size as the disjunct it replaces, and the residual's `PC`/`AC` are
+// bounded by nothing in the original `||` cond — `PC` of a `||` is 0 by
+// definition, so the cond carries no budget for them. Closing this wants
+// leafwise `PCs`/`ACs` sums over `flattenOr(cond)` as measure components,
+// with residual bounds on them added to `noneDetectorResidualBounds`
+// (which bounds `SE` and `AWE` only).
 lemma OrChainSingleResidualShrinks(s: TStmt, rest: seq<TStmt>, oc: TExpr, residualLeaves: seq<TExpr>, decls: seq<TypeDeclInfo>)
   requires s.if_? && |rest| >= 1 && s.else_ == [] && |s.then_| > 0 && isTerminating(s.then_)
   requires FOrChain(s, rest, decls)
@@ -592,12 +601,67 @@ lemma OrChainSingleResidualShrinks(s: TStmt, rest: seq<TStmt>, oc: TExpr, residu
 // the rewritten inner guard, so the inner `if` re-arms this same rule.
 // (The `ruleEarlyReturnConsume` half of the site is proved, in
 // `ConsumeSiteShrinks`.)
-lemma OptChainCompareSiteShrinks(s: TStmt, rest: seq<TStmt>, out: TStmt, ctx: CondCtx)
+lemma MulMonotone(a: nat, b: nat, m: nat)
+  requires a <= b
+  ensures a * m <= b * m
+{
+}
+
+lemma {:vcs_split_on_every_assert} OptChainCompareSiteShrinks(s: TStmt, rest: seq<TStmt>, out: TStmt, ctx: CondCtx)
   requires ruleEarlyReturnOptChainCompare(s, rest, ctx).Some?
         && out == ruleEarlyReturnOptChainCompare(s, rest, ctx).value
   ensures AWS(out, ctx.decls) < HC(s, rest, ctx.decls) + AWS(s, ctx.decls) + AWSs(rest, ctx.decls)
 {
-  assume {:axiom} false;
+  var decls := ctx.decls;
+  var c := s.cond;
+  var ocOnLeft := c.left.optChain?;
+  var oc := if ocOnLeft then c.left else c.right;
+  var lit := if ocOnLeft then c.right else c.left;
+  var innerTy := oc.obj.ty.inner;
+  var binder := freshName(binderHintFor(oc.obj).value);
+  var bv := TExpr.var_(binder, innerTy);
+  var unwrapped := restoreDiscriminantFlag(applyChain(bv, oc.chain), decls);
+  var ig := TExpr.binop("!==", unwrapped, lit, Ty.bool_);
+  var innerIf := TStmt.if_(ig, s.then_, []);
+  var A := AWSs(s.then_, decls);
+  assert out == TStmt.someMatch(oc.obj, binder, innerTy, [innerIf] + rest, s.then_);
+
+  // the rewritten guard is strictly smaller than the one it replaces, and
+  // weighs no more: it trades the chain node for its application
+  applyChainBounds(bv, oc.chain);
+  restoreDiscriminantFlagBounds(applyChain(bv, oc.chain), decls);
+  assert c == TExpr.binop(c.op, c.left, c.right, c.ty);
+  assert oc == TExpr.optChain(oc.obj, oc.chain, oc.ty);
+  assert SE(bv) == 1 && SE(oc.obj) >= 1;
+  assert SE(ig) + 1 <= SE(c);
+  assert AWE(oc, decls) == WE(oc, decls) + AWE(oc.obj, decls) + AWSteps(oc.chain, decls);
+  assert WE(oc, decls) >= 2;
+  assert AWE(bv, decls) == WE(bv, decls) == 0;
+  assert AWE(ig, decls) == WE(ig, decls) + AWE(unwrapped, decls) + AWE(lit, decls);
+  assert WE(ig, decls) == 0;
+  assert AWE(unwrapped, decls) <= AWSteps(oc.chain, decls) + 2;
+  assert AWE(c, decls) == WE(c, decls) + AWE(oc, decls) + AWE(lit, decls);
+  assert AWE(ig, decls) <= AWE(c, decls);
+
+  // a `!==` guard is not an `&&`, so its atom counts are at most one each
+  assert PC(ig) <= 1 && AC(ig, decls) <= 1;
+  leadingIsArrayDeclsOnly(ig, CondCtx(decls, 0), CondCtx(decls, 0));
+  assert WS(innerIf, decls) <= 3 + A;
+  assert !FOrChain(innerIf, rest, decls);
+  assert HC(innerIf, rest, decls)
+      <= 3 + A + SE(ig) * (12 + 4 * A);
+  assert AWS(innerIf, decls) == WS(innerIf, decls) + AWE(ig, decls) + A + AWSs([], decls);
+  assert ([innerIf] + rest)[1..] == rest;
+  assert AWSs([innerIf] + rest, decls)
+      == HC(innerIf, rest, decls) + AWS(innerIf, decls) + AWSs(rest, decls);
+  assert AWS(out, decls) == AWSs([innerIf] + rest, decls) + A;
+
+  assert s == TStmt.if_(c, s.then_, s.else_) && s.else_ == [];
+  assert AWS(s, decls) == WS(s, decls) + AWE(c, decls) + A;
+  var M := 12 + 4 * A;
+  assert HC(s, rest, decls) >= SE(c) * M;
+  MulMonotone(SE(ig) + 1, SE(c), M);
+  assert (SE(ig) + 1) * M == SE(ig) * M + M;
 }
 
 // The or-chain rule's re-walk target: the residual guard plus the block's
@@ -667,6 +731,84 @@ lemma ConsumedSiteShrinks(stmts: seq<TStmt>, out: TStmt, ctx: CondCtx)
 // `walkStmts`' monolithic VC before the site lemmas were introduced; it
 // just does not converge on its own. 44 of its sub-VCs discharge; the
 // `ruleEarlyReturnConsume` and `FOrChain` cases are the holdouts.)
+// A walked head arms no list rule. Each of the three reads the head's cond
+// through an inert shape (a presence check, a `!==` over an optional chain,
+// or a detector leaf), so the walk returned it unchanged — and all three
+// were already tried on the original and declined. One lemma per rule:
+// proving the three together does not converge.
+lemma WalkedHeadNoConsume(s: TStmt, rest: seq<TStmt>, w: TStmt, after: seq<TStmt>, ctx: CondCtx)
+  requires ruleEarlyReturnConsume(s, rest).None?
+  requires ruleEarlyReturnOptChainCompare(s, rest, ctx).None?
+  requires !FOrChain(s, rest, ctx.decls)
+  requires |after| > 0 ==> |rest| > 0
+  requires w.if_? ==> (s.if_? && Tame(w.cond, s.cond, ctx.decls)
+        && (w.cond.binop? ==> (!(w.cond.left.optChain? && w.cond.left.obj.ty.optional?)
+                           && !(w.cond.right.optChain? && w.cond.right.obj.ty.optional?)))
+        && (|w.then_| == 0 <==> |s.then_| == 0)
+        && (|w.else_| == 0 <==> |s.else_| == 0)
+        && (isTerminating(w.then_) ==> isTerminating(s.then_))
+        && (isTerminating(w.else_) ==> isTerminating(s.else_)))
+  ensures ruleEarlyReturnConsume(w, after).None?
+{
+  if w.if_? && |after| > 0 && presentFact(w.cond).Some? {
+    assert Inert(w.cond);
+    assert w.cond == s.cond;
+  }
+}
+
+lemma WalkedHeadNoOptChainCompare(s: TStmt, rest: seq<TStmt>, w: TStmt, after: seq<TStmt>, ctx: CondCtx)
+  requires ruleEarlyReturnConsume(s, rest).None?
+  requires ruleEarlyReturnOptChainCompare(s, rest, ctx).None?
+  requires !FOrChain(s, rest, ctx.decls)
+  requires |after| > 0 ==> |rest| > 0
+  requires w.if_? ==> (s.if_? && Tame(w.cond, s.cond, ctx.decls)
+        && (w.cond.binop? ==> (!(w.cond.left.optChain? && w.cond.left.obj.ty.optional?)
+                           && !(w.cond.right.optChain? && w.cond.right.obj.ty.optional?)))
+        && (|w.then_| == 0 <==> |s.then_| == 0)
+        && (|w.else_| == 0 <==> |s.else_| == 0)
+        && (isTerminating(w.then_) ==> isTerminating(s.then_))
+        && (isTerminating(w.else_) ==> isTerminating(s.else_)))
+  ensures ruleEarlyReturnOptChainCompare(w, after, CondCtx(ctx.decls, 0)).None?
+{
+}
+
+lemma {:vcs_split_on_every_assert} WalkedHeadNoOrChain(s: TStmt, rest: seq<TStmt>, w: TStmt, after: seq<TStmt>, ctx: CondCtx)
+  requires ruleEarlyReturnConsume(s, rest).None?
+  requires ruleEarlyReturnOptChainCompare(s, rest, ctx).None?
+  requires !FOrChain(s, rest, ctx.decls)
+  requires |after| > 0 ==> |rest| > 0
+  requires w.if_? ==> (s.if_? && Tame(w.cond, s.cond, ctx.decls)
+        && (w.cond.binop? ==> (!(w.cond.left.optChain? && w.cond.left.obj.ty.optional?)
+                           && !(w.cond.right.optChain? && w.cond.right.obj.ty.optional?)))
+        && (|w.then_| == 0 <==> |s.then_| == 0)
+        && (|w.else_| == 0 <==> |s.else_| == 0)
+        && (isTerminating(w.then_) ==> isTerminating(s.then_))
+        && (isTerminating(w.else_) ==> isTerminating(s.else_)))
+  ensures !FOrChain(w, after, ctx.decls)
+{
+  if FOrChain(w, after, ctx.decls) {
+    // shape, conjunct by conjunct
+    assert |rest| > 0;
+    assert s.if_? && |s.then_| > 0 && isTerminating(s.then_);
+    assert |s.else_| == 0 && s.else_ == [];
+    assert s.cond.binop? && s.cond.op == "||";
+    flattenOrSize(s.cond.left);
+    flattenOrSize(s.cond.right);
+    assert flattenOr(s.cond) == flattenOr(s.cond.left) + flattenOr(s.cond.right);
+    assert |flattenOr(s.cond)| >= 2;
+    // and the detector, via the counts
+    var ls := flattenOr(w.cond);
+    var k :| 0 <= k < |ls| && noneDetector(ls[k], CondCtx(ctx.decls, 0)).Some?;
+    DETsPositive(ls, k, ctx.decls);
+    flattenOrSize(w.cond);
+    assert DET(w.cond, ctx.decls) >= 1;
+    assert DET(s.cond, ctx.decls) >= 1;
+    flattenOrSize(s.cond);
+    DETsWitness(flattenOr(s.cond), ctx.decls);
+    assert FOrChain(s, rest, ctx.decls);
+  }
+}
+
 lemma WalkedHeadDeclines(s: TStmt, rest: seq<TStmt>, w: TStmt, after: seq<TStmt>, ctx: CondCtx)
   requires ruleEarlyReturnConsume(s, rest).None?
   requires ruleEarlyReturnOptChainCompare(s, rest, ctx).None?
@@ -677,12 +819,15 @@ lemma WalkedHeadDeclines(s: TStmt, rest: seq<TStmt>, w: TStmt, after: seq<TStmt>
                            && !(w.cond.right.optChain? && w.cond.right.obj.ty.optional?)))
         && (|w.then_| == 0 <==> |s.then_| == 0)
         && (|w.else_| == 0 <==> |s.else_| == 0)
-        && (isTerminating(w.then_) ==> isTerminating(s.then_)))
+        && (isTerminating(w.then_) ==> isTerminating(s.then_))
+        && (isTerminating(w.else_) ==> isTerminating(s.else_)))
   ensures ruleEarlyReturnConsume(w, after).None?
   ensures ruleEarlyReturnOptChainCompare(w, after, CondCtx(ctx.decls, 0)).None?
   ensures !FOrChain(w, after, ctx.decls)
 {
-  assume {:axiom} false;
+  WalkedHeadNoConsume(s, rest, w, after, ctx);
+  WalkedHeadNoOptChainCompare(s, rest, w, after, ctx);
+  WalkedHeadNoOrChain(s, rest, w, after, ctx);
 }
 
 lemma WalkedHeadInert(s: TStmt, rest: seq<TStmt>, w: TStmt, after: seq<TStmt>, ctx: CondCtx)
@@ -695,7 +840,8 @@ lemma WalkedHeadInert(s: TStmt, rest: seq<TStmt>, w: TStmt, after: seq<TStmt>, c
                            && !(w.cond.right.optChain? && w.cond.right.obj.ty.optional?)))
         && (|w.then_| == 0 <==> |s.then_| == 0)
         && (|w.else_| == 0 <==> |s.else_| == 0)
-        && (isTerminating(w.then_) ==> isTerminating(s.then_)))
+        && (isTerminating(w.then_) ==> isTerminating(s.then_))
+        && (isTerminating(w.else_) ==> isTerminating(s.else_)))
   ensures HC(w, after, ctx.decls) == 0
 {
   WalkedHeadDeclines(s, rest, w, after, ctx);
@@ -940,6 +1086,16 @@ function FOrChain(head: TStmt, tail: seq<TStmt>, decls: seq<TypeDeclInfo>): bool
   (exists i :: 0 <= i < |leaves| && noneDetector(leaves[i], CondCtx(decls, 0)).Some?)
 }
 
+// The bound-optional early return leaves the *other* optional chain in the
+// guard it builds, so the inner `if` can arm the same rule again — and a
+// constant charge just cancels against that inner charge. Scaling by the
+// guard's size does not cancel, because the rewrite trades the chain node
+// for its application and so strictly shrinks the guard.
+function SiteCharge(cond: TExpr, branchWeight: nat): nat
+{
+  SE(cond) * (12 + 4 * branchWeight)
+}
+
 // Position-aware head charge: the list rules fire on (head, tail), so their
 // charge lives per suffix. Duplication-safe: rule outputs copy whole
 // sublists, so a copied statement keeps its intra-copy tail and with it
@@ -952,7 +1108,8 @@ function HC(head: TStmt, tail: seq<TStmt>, decls: seq<TypeDeclInfo>): nat
      (if presentFact(head.cond).Some? && presentFact(head.cond).value.negated
       then AWSs(head.then_, decls) else AWSs(head.else_, decls))
    else 0) +
-  (if ruleEarlyReturnOptChainCompare(head, tail, CondCtx(decls, 0)).Some? then 4 + AWSs(head.then_, decls) else 0) +
+  (if ruleEarlyReturnOptChainCompare(head, tail, CondCtx(decls, 0)).Some?
+   then SiteCharge(head.cond, AWSs(head.then_, decls)) else 0) +
   (if FOrChain(head, tail, decls) then DET(head.cond, decls) else 0)
 }
 
@@ -2535,7 +2692,8 @@ method walkStmt(s: TStmt, ctx: CondCtx) returns (res: StmtOut)
        && !(res.stmt.cond.right.optChain? && res.stmt.cond.right.obj.ty.optional?)))
     && (|res.stmt.then_| == 0 <==> |s.then_| == 0)
     && (|res.stmt.else_| == 0 <==> |s.else_| == 0)
-    && (isTerminating(res.stmt.then_) ==> isTerminating(s.then_)))
+    && (isTerminating(res.stmt.then_) ==> isTerminating(s.then_))
+    && (isTerminating(res.stmt.else_) ==> isTerminating(s.else_)))
   decreases AWS(s, ctx.decls), SS(s), 2
 {
   var i_t52 := recurseStmt(s, ctx);
@@ -2709,7 +2867,8 @@ method recurseStmt(s: TStmt, ctx: CondCtx) returns (res: StmtOut)
        && !(res.stmt.cond.right.optChain? && res.stmt.cond.right.obj.ty.optional?)))
     && (|res.stmt.then_| == 0 <==> |s.then_| == 0)
     && (|res.stmt.else_| == 0 <==> |s.else_| == 0)
-    && (isTerminating(res.stmt.then_) ==> isTerminating(s.then_)))
+    && (isTerminating(res.stmt.then_) ==> isTerminating(s.then_))
+    && (isTerminating(res.stmt.else_) ==> isTerminating(s.else_)))
   decreases AWS(s, ctx.decls), SS(s), 0
 {
   match s {
