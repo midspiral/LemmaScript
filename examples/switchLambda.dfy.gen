@@ -8,7 +8,7 @@ datatype SysMsg = SysMsg(role: string, code: int)
 
 function priorities(msgs: seq<Msg>): seq<int>
 {
-  Std.Collections.Seq.Map((m: Msg) => (match m { case user(i_m_text) => 1 case system(i_m_code) => 2 }), msgs)
+  seq(|msgs|, i_map requires 0 <= i_map < |msgs| => var m := msgs[i_map]; (match m { case user(i_m_text) => 1 case system(i_m_code) => 2 }))
 }
 
 lemma priorities_ensures(msgs: seq<Msg>)

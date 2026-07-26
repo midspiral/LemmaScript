@@ -92,6 +92,7 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 |--------|------|---------|
 | `SeqIndexOf` | `arr.indexOf(x)` | First-index search (`-1` if absent) |
 | `SeqFindIndex` | `arr.findIndex(f)` | Predicate first-index search |
+| `SeqFind` | `arr.find(f)` | Predicate first-match search |
 | `SeqFindLast` | `arr.findLast(f)` | Predicate last-match search |
 | `SeqFilterSome` | filterMap pattern (§3.7) | Drop `None`s and unwrap to `seq<T>` |
 | `SeqFlatten` | `arr.flat()` | Flatten one level |

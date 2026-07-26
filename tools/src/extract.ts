@@ -21,6 +21,14 @@ let _havocKey: string | null = null;
  *  different `.ts` source file. Emitted in Dafny as `function {:axiom} <flat>`.
  *  Cleared at the start of every `extractModule`. */
 const _externs = new Map<string, import("./rawir.js").RawExtern>();
+/** Signature types of *kept* externs, for the imported-type resolver: a type
+ *  reachable ONLY through an imported function's signature (e.g. an extern
+ *  returning PresentFact that no local signature mentions) must still be
+ *  resolved into a full decl, or it synthesizes opaque. Filled only after the
+ *  extern survives the `_externs` dedup — a cross-file signature superseded by a
+ *  same-file `//@ extern` contributes nothing to the output, so resolving its
+ *  types would emit decls that no emitted declaration mentions. */
+const _externSigTypes: { type: Type; node: Node }[] = [];
 let _currentSourceFile: SourceFile | null = null;
 /** True only while extracting a function body. Module-level constants that
  *  reference cross-file callees (e.g., `BusEvent.define(...)` inside a
@@ -40,9 +48,13 @@ function registerExternIfCrossFile(
   callee: import("ts-morph").PropertyAccessExpression | import("ts-morph").Identifier,
   sourceFile: SourceFile,
 ): void {
-  const ext = detectCrossFileExtern(callee, sourceFile);
+  const sigTypes: { type: Type; node: Node }[] = [];
+  const ext = detectCrossFileExtern(callee, sourceFile, sigTypes);
   if (!ext || _externs.has(ext.qualified)) return;
   _externs.set(ext.qualified, ext);
+  // Only now that the extern is kept do its signature types become resolver
+  // seeds — see `_externSigTypes`.
+  _externSigTypes.push(...sigTypes);
   // Recurse: scan the source decl's body for nested cross-file calls so any
   // symbol referenced by the copied spec is itself declared in the output.
   let symbol = callee.getSymbol();
@@ -67,6 +79,7 @@ function registerExternIfCrossFile(
 function detectCrossFileExtern(
   callee: import("ts-morph").PropertyAccessExpression | import("ts-morph").Identifier,
   sourceFile: SourceFile,
+  sigTypesOut: { type: Type; node: Node }[],
 ): import("./rawir.js").RawExtern | null {
   let symbol = callee.getSymbol();
   if (!symbol) return null;
@@ -96,13 +109,31 @@ function detectCrossFileExtern(
   // kept): a bare `TMsg`, not `import("/abs/path/transcript").TMsg` — the
   // importing module declares the datatype locally, so the axiom must use the
   // local name.
+  // NoTruncation: a wide expansion (e.g. an alias for a large string-literal
+  // union, not importable at the call site) must print whole — a truncated
+  // union is unparseable and synthesizes an opaque decl named by its own text.
   const externTypeText = (t: Type) =>
-    t.getText(callee, ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope);
+    t.getText(callee, ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope | ts.TypeFormatFlags.NoTruncation);
   const params = sig.getParameters().map(p => ({
     name: p.getName(),
     tsType: externTypeText(p.getTypeAtLocation(callee)),
   }));
   const returnType = externTypeText(sig.getReturnType());
+  for (const p of sig.getParameters()) {
+    sigTypesOut.push({ type: p.getTypeAtLocation(callee), node: callee });
+  }
+  sigTypesOut.push({ type: sig.getReturnType(), node: callee });
+  // Also seed from the source declaration's syntactic type nodes: symbol-based
+  // types can drop the alias symbol (the printed signature then names an alias
+  // like `TypeDecls` that would otherwise synthesize opaque), while a type
+  // node's type keeps it.
+  const srcDecl = externalDecl as { getParameters?: () => { getTypeNode?: () => Node | undefined }[]; getReturnTypeNode?: () => Node | undefined };
+  for (const sp of srcDecl.getParameters?.() ?? []) {
+    const tn = sp.getTypeNode?.();
+    if (tn) sigTypesOut.push({ type: tn.getType(), node: tn });
+  }
+  const rtn = srcDecl.getReturnTypeNode?.();
+  if (rtn) sigTypesOut.push({ type: rtn.getType(), node: rtn });
   let qualified: string;
   if (Node.isPropertyAccessExpression(callee)) {
     qualified = `${callee.getExpression().getText()}.${callee.getName()}`;
@@ -470,10 +501,9 @@ function extractExpr(node: Expression): RawExpr {
       const typeNode = p.getTypeNode();
       return { name: p.getName(), tsType: typeNode ? typeNode.getText() : undefined };
     });
-    // Capture an explicit return annotation (`(x): Out => …`) so resolve can type
-    // return-position record literals to their named type instead of a tuple.
-    const retNode = node.getReturnTypeNode();
-    const returnTsType = retNode ? typeToString(node.getReturnType()) : undefined;
+    // Return type from the checker — inferred when unannotated — so resolve can
+    // type return-position record literals and give the lambda a real fn type.
+    const returnTsType = typeToString(node.getReturnType());
     const body = node.getBody();
     if (Node.isExpression(body)) {
       return { kind: "lambda", params, body: extractExpr(body), returnTsType };
@@ -707,8 +737,12 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
             if (prop.getName() === discriminant) continue;
             let tsType = typeToString(prop.getTypeAtLocation(decl));
             const propDecl = prop.getDeclarations()[0];
-            if (propDecl && (propDecl as any).hasQuestionToken?.() && !tsType.includes(" | undefined")) {
-              tsType = `${tsType} | undefined`;
+            tsType = declaredTypeTextIfBetter(propDecl, tsType);
+            if (propDecl && (propDecl as any).hasQuestionToken?.()) {
+              // Normalize checker output that puts `undefined` first, then
+              // ensure exactly one trailing `| undefined`.
+              if (tsType.startsWith("undefined | ")) tsType = `${tsType.slice("undefined | ".length)} | undefined`;
+              else if (!tsType.includes(" | undefined")) tsType = `${tsType} | undefined`;
             }
             fields.push({ name: prop.getName(), tsType });
           }
@@ -796,12 +830,16 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
 
     const propType = prop.getTypeAtLocation(locationNode);
     let tsType = typeToString(propType);
+    const propDecl = prop.getDeclarations()[0];
+    tsType = declaredTypeTextIfBetter(propDecl, tsType);
     // Optional property: `foo?: T` reports as `T` (ts-morph strips the
     // `| undefined` from a question-token type). Add it back so the field
     // resolves to `Optional<T>`.
-    const propDecl = prop.getDeclarations()[0];
-    if (propDecl && (propDecl as any).hasQuestionToken?.() && !tsType.includes(" | undefined")) {
-      tsType = `${tsType} | undefined`;
+    if (propDecl && (propDecl as any).hasQuestionToken?.()) {
+      // Normalize checker output that puts `undefined` first, then ensure
+      // exactly one trailing `| undefined`.
+      if (tsType.startsWith("undefined | ")) tsType = `${tsType.slice("undefined | ".length)} | undefined`;
+      else if (!tsType.includes(" | undefined")) tsType = `${tsType} | undefined`;
     }
 
     // Inline anonymous object types: ts-morph names them __type.
@@ -847,6 +885,21 @@ function findDiscriminant(members: Type[]): string | null {
     if (allHave) return name;
   }
   return null;
+}
+
+/** Recover a field's *declared* type text when the semantic printer degraded
+ *  to ts-morph's anonymous `__type` — a self-referential alias reached
+ *  through a `| null` union expands structurally and loses its name. The
+ *  syntactic node text preserves the alias spelling (`TExpr | null`). Only
+ *  plain reference text is used: inline object literals (containing `{`)
+ *  keep the `__type` marker so record synthesis can handle them. */
+function declaredTypeTextIfBetter(propDecl: Node | undefined, tsType: string): string {
+  if (!tsType.includes("__type") || !propDecl) return tsType;
+  const tn = (propDecl as { getTypeNode?: () => Node | undefined }).getTypeNode?.();
+  if (!tn) return tsType;
+  const text = tn.getText();
+  if (text.includes("__type") || text.includes("{")) return tsType;
+  return text;
 }
 
 function typeToString(type: Type): string {
@@ -1860,6 +1913,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // `extractExpr` during call extraction (only symbols *actually used* end up
   // here), deduped by qualified name.
   _externs.clear();
+  _externSigTypes.length = 0;
 
   // Share the module's ts-morph Project with parseTsType (scratch source file
   // for type-string parsing). Done before declare-type parsing so any
@@ -2307,10 +2361,12 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // Resolve imported types: extract types referenced in function signatures but not in this file
   const knownTypes = new Set(typeDecls.map(d => d.name));
   const builtins = new Set(["Map", "Set", "Array", "String", "Number", "Boolean", "Promise", "Date", "RegExp", "Error"]);
+  const visitedTypes = new Set<unknown>();
   function resolveType(t: Type, locationNode: Node) {
-    // Unwrap arrays and generics to find user-defined types
-    if (t.isArray()) { resolveType(t.getArrayElementTypeOrThrow(), locationNode); return; }
-    // Resolve type aliases (e.g. string unions imported from other files)
+    // Resolve type aliases (e.g. string unions imported from other files).
+    // BEFORE the visited guard: the same interned compilerType can arrive both
+    // with and without its alias symbol (getTypeAtLocation drops it), and an
+    // aliasless first visit must not suppress the alias extraction.
     const alias = t.getAliasSymbol();
     if (alias) {
       const aliasName = alias.getName();
@@ -2333,6 +2389,14 @@ export function extractModule(sourceFile: SourceFile): RawModule {
         }
       }
     }
+    // Recursion guard: recursive unions (Expr → variant → body: Expr) are
+    // reachable now that anonymous variant fields are walked below. Keyed on
+    // the compiler's interned Type object — alias names are not enough,
+    // because getTypeAtLocation can drop the alias symbol.
+    if (visitedTypes.has(t.compilerType)) return;
+    visitedTypes.add(t.compilerType);
+    // Unwrap arrays and generics to find user-defined types
+    if (t.isArray()) { resolveType(t.getArrayElementTypeOrThrow(), locationNode); return; }
     if (t.isUnion()) { for (const u of t.getUnionTypes()) resolveType(u, locationNode); return; }
     for (const arg of t.getTypeArguments()) resolveType(arg, locationNode);
     const sym = t.getSymbol() ?? t.getAliasSymbol();
@@ -2346,6 +2410,14 @@ export function extractModule(sourceFile: SourceFile): RawModule {
         for (const prop of t.getProperties()) {
           resolveType(prop.getTypeAtLocation(locationNode), locationNode);
         }
+      }
+    } else if (t.isObject() && (!name || name.startsWith("__")) && t.getCallSignatures().length === 0) {
+      // Anonymous object type — typically a variant of an imported
+      // discriminated union. There is no decl to extract, but its fields can
+      // reference named types (`arms: MatchArm[]`) that downstream passes
+      // need declared, so walk them.
+      for (const prop of t.getProperties()) {
+        resolveType(prop.getTypeAtLocation(locationNode), locationNode);
       }
     }
   }
@@ -2362,6 +2434,8 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       resolveType(p.getType(), p);
     }
   }
+  // Extern signature types: see _externSigTypes.
+  for (const r of _externSigTypes) resolveType(r.type, r.node);
   // Resolve anonymous object return types into synthetic named types
   for (let i = 0; i < fnsToExtract.length; i++) {
     const f = fnsToExtract[i];

@@ -136,6 +136,8 @@ lean_lib Examples where
     `«postTags.types», `«postTags.def»,
     `«nameClash.types», `«nameClash.def»,
     `«tuples.types», `«tuples.def», `«tuples.proof»,
-    `«forContinue.types», `«forContinue.def», `«forContinue.proof»
+    `«forContinue.types», `«forContinue.def», `«forContinue.proof»,
+    `«arrayFind.types», `«arrayFind.def»,
+    `«ctorName.types», `«ctorName.def»
   ]
   extraDepTargets := #[``downloadDependencies]

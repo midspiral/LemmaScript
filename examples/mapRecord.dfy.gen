@@ -6,7 +6,7 @@ datatype Out = Out(label_: string, doubled: int)
 
 function relabel(items: seq<In>): seq<Out>
 {
-  Std.Collections.Seq.Map((it: In) => Out(it.tag, (it.n * 2)), items)
+  seq(|items|, i_map requires 0 <= i_map < |items| => var it := items[i_map]; Out(it.tag, (it.n * 2)))
 }
 
 lemma relabel_ensures(items: seq<In>)

@@ -200,7 +200,7 @@ function append(arr: seq<int>, x: int): seq<int>
 
 function doubleAll(arr: seq<int>): seq<int>
 {
-  Std.Collections.Seq.Map((x: int) => (x * 2), arr)
+  seq(|arr|, i_map requires 0 <= i_map < |arr| => var x := arr[i_map]; (x * 2))
 }
 
 lemma doubleAll_ensures(arr: seq<int>)
@@ -235,7 +235,7 @@ lemma negate_ensures(x: int)
 
 function negateAll(arr: seq<int>): seq<int>
 {
-  Std.Collections.Seq.Map((x: int) => negate(x), arr)
+  seq(|arr|, i_map requires 0 <= i_map < |arr| => var x := arr[i_map]; negate(x))
 }
 
 lemma negateAll_ensures(arr: seq<int>)
