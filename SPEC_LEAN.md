@@ -1,6 +1,6 @@
 # LemmaScript — Lean Backend Specification
 
-**Version:** 0.5.18
+**Version:** 0.5.19
 **Date:** July 2026
 
 This document covers what is unique to the Lean backend. See [SPEC.md](SPEC.md) for the shared annotation language, translation rules, type mapping, and pipeline.
