@@ -1256,7 +1256,9 @@ lsc check [--backend=lean|dafny] <file.ts>    — gen + verify
 lsc regen --backend=dafny <file.ts>           — regenerate with three-way merge (Dafny only)
 lsc extract <file.ts>                          — print Raw IR JSON (debugging)
 lsc info <file.ts>                             — write a JSON summary of verified functions (backend-neutral)
+lsc info --typed <file.ts>                     — print the machine-readable Typed IR contract (stdout)
 lsc claimcheck [<file.ts>]                     — check //@ contract prose vs //@ ensures (forwards to lemmascript-claimcheck)
+lsc version                                    — print the lemmascript package version
 ```
 
 Default backend is Dafny. `extract` and `info` are backend-neutral and always run, regardless of any `//@ backend` directive. With no `<file.ts>`, `gen`, `gen-check`, and `check` batch over the files listed in `LemmaScript-files.txt`.
@@ -1284,6 +1286,28 @@ Three-way merge when generated code changes. See [SPEC_DAFNY.md](SPEC_DAFNY.md).
 ### 7.4 `info`
 
 Extract-only (no resolve/transform/emit). Writes `foo.ts.json` next to the source, mapping each top-level function and class method (`ClassName.method`) to its signature and original `//@ requires` / `//@ ensures` / `//@ decreases` clause text. Backend-neutral.
+
+### 7.5 `info --typed`
+
+The machine-readable contract for satellite tools (e.g. differential/property
+testers): runs the front half of the pipeline (extract → resolve → narrow →
+autohavoc) and prints one JSON document to stdout — no file is written.
+Versioned by a top-level `schema` field (currently `1`) and stamped with the
+`lemmascript` package version for satellite version handshakes.
+
+Per module: resolved `typeDecls` (with field order and pre-computed types),
+`externs`, `constants`, and per function/class-method: parameter and return
+types as structured type trees, `requires`/`ensures` as resolved typed spec
+ASTs, `decreases`, `//@ contract` prose, `exported`, purity/`autohavoc` flags,
+and `bodyKinds` — a census of statement/expression kinds appearing in the body
+(with `assume` reported distinctly from `assert`), so consumers can classify
+functions (havoc/assume usage) without receiving bodies.
+
+The `dafny` section carries `emittedNames`, the source-name → emitted-Dafny-name
+map from an in-memory Dafny emission (so consumers never re-derive mangling
+rules); if that emission fails, it degrades to `{ "error": … }` without failing
+the command. Backend-neutral otherwise; the file's `//@ backend` directive is
+reported as `backendDirective`.
 
 ---
 
