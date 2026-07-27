@@ -17,13 +17,28 @@ import { autoHavocModule } from "./autohavoc.js";
 import { transformModuleLean, transformModuleDafny } from "./transform.js";
 import { peepholeModule } from "./peephole.js";
 import { emitLeanFile, resetLeanModule } from "./lean-emit.js";
-import { emitDafnyFile } from "./dafny-emit.js";
+import { emitDafnyFile, emittedNameMap } from "./dafny-emit.js";
 import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-commands.js";
 import { leanGen, leanCheck } from "./lean-commands.js";
-import { runInfo } from "./info-command.js";
+import { runInfo, runTypedInfo, type TypedInfoDafny } from "./info-command.js";
+
+/** Version of the lemmascript package — the root package.json sits two levels
+ *  above this module from both tools/src/ (tsx) and tools/dist/ (installed). */
+function lscVersion(): string {
+  const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+  return pkg.version as string;
+}
 
 function main() {
   const args = process.argv.slice(2);
+
+  // `lsc version` — print the package version. Machine consumers (satellites
+  // like lemmascript-claimcheck/-crosscheck) use this for their version
+  // handshake; keep the output to the bare semver string.
+  if (args[0] === "version") {
+    console.log(lscVersion());
+    return;
+  }
 
   // `lsc claimcheck <file.ts> …` forwards verbatim to the lemmascript-claimcheck
   // CLI (a dependency; its cli reads the rewritten process.argv). With no
@@ -114,6 +129,15 @@ function main() {
     args.splice(noVerifyIdx, 1);
   }
 
+  // --typed (info only): print the machine-readable Typed IR contract to
+  // stdout instead of writing the human-oriented foo.ts.json.
+  let typedInfo = false;
+  const typedIdx = args.indexOf("--typed");
+  if (typedIdx >= 0) {
+    typedInfo = true;
+    args.splice(typedIdx, 1);
+  }
+
   // Anything flag-shaped left over is a typo or a space-separated form
   // (`--backend lean`): reject it rather than let it become a positional arg
   // or be silently ignored (which would e.g. verify with the wrong backend).
@@ -126,15 +150,21 @@ function main() {
   const [cmd, filePath] = args;
   if (!cmd) {
     console.error("Usage: lsc <gen|check|regen|extract|info> [--backend=lean|dafny] <file.ts>");
+    console.error("       lsc info --typed <file.ts>   (machine-readable Typed IR contract to stdout)");
     console.error("       lsc <gen|gen-check|check> [--backend=…] [--slow]   (no file: batch over LemmaScript-files.txt)");
     console.error("       lsc claimcheck [<file.ts>] [flags…]   (forwards to lemmascript-claimcheck)");
+    console.error("       lsc version");
+    process.exit(1);
+  }
+  if (typedInfo && cmd !== "info") {
+    console.error(`--typed is only valid with the info command (got: ${cmd})`);
     process.exit(1);
   }
   if (!filePath) {
     runBatch(cmd, backend, slow);
     return;
   }
-  runFile(cmd, filePath, backend, timeLimit, extraFlags, noVerify);
+  runFile(cmd, filePath, backend, timeLimit, extraFlags, noVerify, typedInfo);
 }
 
 // LemmaScript-files.txt, parsed: `filepath [timeout_in_seconds] [extra dafny
@@ -173,7 +203,7 @@ function runBatch(cmd: string, backend: "lean" | "dafny", slow: boolean) {
   }
 }
 
-function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeLimit: number | undefined, extraFlags: string | undefined, noVerify = false) {
+function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeLimit: number | undefined, extraFlags: string | undefined, noVerify = false, typedInfo = false) {
   const absPath = path.resolve(filePath);
   if (!existsSync(absPath)) {
     console.error(`File not found: ${absPath}`);
@@ -227,7 +257,7 @@ function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeL
     return;
   }
 
-  if (cmd === "info") {
+  if (cmd === "info" && !typedInfo) {
     const outPath = path.join(path.dirname(absPath), `${path.basename(filePath, ".ts")}.ts.json`);
     runInfo(raw, outPath);
     return;
@@ -240,6 +270,26 @@ function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeL
   // values so verification rests only on the declared contracts (a sound
   // over-approximation). No-op unless a function opts in.
   const typed = autoHavocModule(narrowModule(resolved));
+
+  if (cmd === "info") {
+    // --typed: the satellite contract. Run an in-memory Dafny emission purely
+    // to harvest the emitted-name map; the file is backend-neutral otherwise,
+    // so a failure here (e.g. Lean-only constructs) degrades to an error note
+    // rather than failing the command.
+    let dafnyInfo: TypedInfoDafny;
+    try {
+      let { typesFile, defFile } = transformModuleDafny(typed);
+      if (typesFile) typesFile = peepholeModule(typesFile, "dafny");
+      defFile = peepholeModule(defFile, "dafny");
+      const merged = { ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] };
+      emitDafnyFile(merged, path.basename(filePath), { safeSlice });
+      dafnyInfo = { emittedNames: Object.fromEntries(emittedNameMap()) };
+    } catch (err) {
+      dafnyInfo = { error: err instanceof Error ? err.message : String(err) };
+    }
+    runTypedInfo(raw, typed, lscVersion(), backendDirective ? backendDirective[1] : null, dafnyInfo);
+    return;
+  }
 
   const dir = path.dirname(absPath);
   const base = path.basename(filePath, ".ts");

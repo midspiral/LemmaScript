@@ -43,7 +43,7 @@ Type names: `Expr`, `Stmt`, `Module`, `MatchArm`, `StmtMatchArm`, and `Decl` = `
 
 ## Phases
 
-**Extract** (`extract.ts`): ts-morph → Raw IR. Walks the TS AST, produces structured expression nodes. Only string outputs are `//@ ` annotation text. Two backend-neutral CLI commands stop here. `lsc extract foo.ts` dumps the Raw IR as JSON — external tools can consume it instead of re-parsing TS, e.g. [lemmascript-claimcheck](https://github.com/midspiral/lemmascript-claimcheck) reads each function's `//@ contract`, `requires`, and `ensures` to check the prose against the spec. `lsc info foo.ts` writes `foo.ts.json`, a per-function spec summary (`{ name: { sig, requires, ensures, decreases } }`, class methods keyed `Class.method`) — see `info-command.ts`.
+**Extract** (`extract.ts`): ts-morph → Raw IR. Walks the TS AST, produces structured expression nodes. Only string outputs are `//@ ` annotation text. Two backend-neutral CLI commands stop here. `lsc extract foo.ts` dumps the Raw IR as JSON — external tools can consume it instead of re-parsing TS, e.g. [lemmascript-claimcheck](https://github.com/midspiral/lemmascript-claimcheck) reads each function's `//@ contract`, `requires`, and `ensures` to check the prose against the spec. `lsc info foo.ts` writes `foo.ts.json`, a per-function spec summary (`{ name: { sig, requires, ensures, decreases } }`, class methods keyed `Class.method`) — see `info-command.ts`. `lsc info --typed foo.ts` goes further — through resolve/narrow/autohavoc — and prints the machine-readable Typed IR contract (typed signatures, spec ASTs, flags, body-kind census, emitted-Dafny-name map) to stdout for satellites like [lemmascript-crosscheck](https://github.com/midspiral/lemmascript-crosscheck); see SPEC.md §7.5.
 
 **Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedPaths`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: simple vars and pure access paths (`a.b.c`, any depth) narrow. `&&` chains accumulate narrowings (each premise in scope for later ones); `==>` propagates premise narrowings into the conclusion. **Type narrowing only** — no structural rewriting.
 
@@ -274,5 +274,5 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 | `dafny-emit.ts` | Emit | IR → Dafny text |
 | `lean-commands.ts` | CLI | Lean gen/check commands |
 | `dafny-commands.ts` | CLI | Dafny gen/gen-check/regen/check commands |
-| `info-command.ts` | CLI | `lsc info` — per-function spec summary JSON |
+| `info-command.ts` | CLI | `lsc info` — per-function spec summary JSON; `--typed` — Typed IR contract for satellites |
 | `lsc.ts` | CLI | Wires the pipeline, dispatches to backend |

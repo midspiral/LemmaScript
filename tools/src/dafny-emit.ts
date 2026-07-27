@@ -129,6 +129,14 @@ function resetDafnyNameCache(): void {
   }
 }
 
+/** Source-name → emitted-Dafny-name pairs from the most recent emitDafnyFile
+ *  call (identity-mapped names included). Consumed by `lsc info --typed` so
+ *  satellites (e.g. lemmascript-crosscheck) can address emitted declarations
+ *  by their mangled names (`_Box` → `i_Box'`) without re-deriving the rules. */
+export function emittedNameMap(): Map<string, string> {
+  return new Map([..._generatedDafnyNames, ..._userDafnyNames]);
+}
+
 function escapeName(name: string): string {
   // \result is carried through the IR as var "\\result"; render it as the
   // current method's out-parameter name (chosen locally by methodHeader).
