@@ -1328,5 +1328,6 @@ Each phase (and the three intermediate representations — Raw IR, Typed IR, IR)
 The following TS features are not yet handled by the toolchain:
 
 - `await` / true async — a `Promise<T>`-returning function with an `await` in its body is unmodellable. An `async` function with **no** `await` is supported: its `Promise<T>` return type is unwrapped to `T` (the wrapper is just calling convention), so the body verifies normally.
+- **IEEE 754 semantics.** `number` is modeled as a mathematical integer (or, where annotated, an exact `real` — §6.1.3), never as a double, so double-specific behavior is outside the model and *not* covered by a proof: there is no 53-bit precision bound (`2**53 + 1 !== 2**53` is provable in the model, false at runtime), Dafny's `real` is exact rather than rounding (`0.1 + 0.2 == 0.3` verifies), `NaN`/`Infinity`/`-0` have no representation (a possibly-zero divisor is a proof obligation, not `Infinity`), and bitwise operators on `number` get the unbounded lowering of §6.1.1 with no int32 wrap. The pieces that *are* JS-faithful are called out where they occur: real `/` (§6.1.3), `JSRem` for `%`, `JSTruncDiv` for `bigint /`, `JSFloorDiv` for `Math.floor(a / b)`. `**`, `>>>`, and `Math.round`/`trunc`/`sqrt`/`pow` have no lowering at all.
 - Error reporting (mapping prover errors to TS source locations)
 - VS Code extension
