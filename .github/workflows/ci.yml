@@ -73,6 +73,37 @@ jobs:
       - name: Build
         run: lake build
 
+  # Self-run (DESIGN_LS_IN_LS.md §8): compile and verify the modules listed
+  # in LemmaScript-files.txt with this checkout's toolchain.
+  self-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install tools dependencies
+        working-directory: tools
+        run: npm ci
+
+      - uses: ./.github/actions/setup-dafny
+
+      - name: Self-run
+        run: ./tools/check.sh dafny
+
+      - name: Check self-run artifacts are up to date
+        run: |
+          git diff --exit-code -- 'tools/src/*.dfy.gen' 'tools/src/*.dfy'
+          untracked=$(git ls-files --others --exclude-standard -- 'tools/src/*.dfy.gen')
+          if [ -n "$untracked" ]; then
+            echo "ERROR: Untracked self-run .dfy.gen files:"
+            echo "$untracked"
+            exit 1
+          fi
+
   # Dafny verification of the examples, sharded across runners. The `tools` job
   # enforces drift + additions-only (regen --no-verify); this job runs the actual
   # `dafny verify` in parallel. Files are split by index (i % N == shard), so no

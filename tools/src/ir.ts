@@ -5,6 +5,11 @@
  * The emit phase pretty-prints them to backend syntax (Lean or Dafny).
  */
 
+// Self-application (DESIGN_LS_IN_LS.md §8): this module is inside the
+// LemmaScript subset and is compiled by lsc itself (LemmaScript-files.txt).
+// Dafny-only until the Lean emitter learns mutual blocks (§9 step 1).
+//@ backend dafny
+
 import type { Ty } from "./typedir.js";
 
 // ── Expressions ──────────────────────────────────────────────
@@ -51,9 +56,10 @@ export type MatchPattern =
 export const pWild = (): MatchPattern => ({ kind: "wild" });
 export const pCtor = (c: string, ...binders: string[]): MatchPattern => ({ kind: "ctor", ctor: c, binders });
 
-// Named payload records for the shapes repeated across IR nodes. Purely
-// structural — identical to the object-literal types they replace, so
-// construction sites are unaffected.
+// Named payload records. Naming these (rather than inlining object-literal
+// types) keeps the module inside the LemmaScript subset: inline anonymous
+// record types have no backend model. Purely structural — construction
+// sites are unaffected.
 export interface Param { name: string; type: Ty }
 export interface RecordField { name: string; value: Expr }
 export interface MapEntry { key: Expr; value: Expr }
@@ -222,7 +228,11 @@ export interface Module {
  *  literal into arithmetic stays exact: JS bitwise operators truncate to 32 bits
  *  and `Math.pow(2, n)` is a double, both of which lie past 2^53. A `num`
  *  outside the safe-integer range has already lost precision, so it is not a
- *  usable answer — hence null. */
+ *  usable answer — hence null.
+ *
+ *  Outside LS's verification model (`Number.isSafeInteger`), so it is an
+ *  extern: signature axiomatized, body skipped. */
+//@ extern
 export function exactIntegerLiteral(e: Expr): bigint | null {
   if (e.kind === "bigint") return BigInt(e.value);
   if (e.kind === "num") return Number.isSafeInteger(e.value) ? BigInt(e.value) : null;

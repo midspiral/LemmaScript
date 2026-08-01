@@ -278,7 +278,7 @@ function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
   }
   // Positive discriminant check (`x.kind === "bool"`): record the variant so
   // field reads on the path resolve against that variant's field types.
-  const vf = variantFact(cond, { decls: ctx.typeDecls, oc: { n: 0 } });
+  const vf = variantFact(cond, { decls: ctx.typeDecls, ocN: 0 });
   if (vf) {
     const path = asTExprAccessPath(vf.scrutinee);
     if (path) {

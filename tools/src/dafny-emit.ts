@@ -292,15 +292,15 @@ function emitExpr(e: Expr): string {
         if (e.method === "map") {
           // Always a seq comprehension: Seq.Map would hide the element access
           // behind a closure, defeating Dafny's termination checker for
-          // recursive rebuild walkers. A literal lambda argument is
+          // recursive rebuild walkers (§8.6 E2). A literal lambda argument is
           // beta-reduced through a `var` binding — an applied closure defeats
           // the checker too; any other argument is applied to the element
           // directly. A non-variable receiver is bound once up front: the
           // comprehension mentions it three times, and splicing would make
           // any closure literal inside it (e.g. a Filter predicate) three
           // distinct closures, unprovably equal through an opaque callee.
-          // Name freshness is a local IR-level check until a backend name
-          // allocator exists.
+          // Name freshness is a local IR-level check until the §6.3 backend
+          // name allocator exists.
           const lam = e.args[0];
           const fresh = (base: string, taken: (n: string) => boolean): string => {
             let name = base;

@@ -46,7 +46,9 @@ export function userNames(): readonly string[] {
 
 /** A toolchain-internal name: `base` verbatim, primed on collision against
  *  user-written names anywhere in the module. The common form — deterministic
- *  per module. */
+ *  per module, so the self-run can axiomatize it as a pure function (a default
+ *  parameter would synthesize a two-argument axiom no portable caller can
+ *  satisfy). */
 export function freshName(base: string): string {
   return freshNameWhere(base, isUserName);
 }
