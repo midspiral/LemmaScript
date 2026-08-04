@@ -1884,6 +1884,11 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
         return "void";  // Promise<void>
       }
       const node = fn.getReturnTypeNode();
+      // A type predicate (`x is T` / `asserts x is T`) is a `boolean` at
+      // runtime; the narrowing it performs is a TS-only refinement with no
+      // counterpart in the model. Without this, `getText()` yields "x is T"
+      // and the type mapper reads the subject name as an opaque type.
+      if (node && node.getKind() === SyntaxKind.TypePredicate) return "boolean";
       if (node && Node.isUnionTypeNode(node)) return _eraseGenerics(_tsTypeFromUnionNode(node));
       if (node) return _eraseGenerics(node.getText());
       const inferred = fn.getReturnType();

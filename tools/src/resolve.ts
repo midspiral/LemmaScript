@@ -428,6 +428,7 @@ function inferQuantVarType(varName: string, body: RawExpr, ctx: Ctx): Ty | null 
 function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Math") return "pure";
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Array" && fn.field === "isArray") return "pure";
+  if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "String" && fn.field === "fromCharCode") return "pure";
   if (fn.kind === "var" && (ctx.inSpec || ctx.inLambda) && ctx.pureFns.has(fn.name)) return "spec-pure";
   // Bare-name `//@ extern` declarations are emitted as `function {:axiom}` —
   // pure from the verifier's perspective. Classify them as pure so callers
@@ -561,6 +562,11 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
   // a discriminator predicate when `x` has type of a synthesized array-union.
   if (fn.obj.kind === "var" && fn.obj.name === "Array" && fn.field === "isArray") {
     return { kind: "bool" };
+  }
+  // `String.fromCharCode(n)` is the inverse of `s.charCodeAt(i)`: an int code
+  // point in, a one-character string out.
+  if (fn.obj.kind === "var" && fn.obj.name === "String" && fn.field === "fromCharCode") {
+    return { kind: "string" };
   }
   // Math.* numeric builtins: abs/min/max preserve the operand's numeric type
   // (real if any operand is real); floor/ceil/round/trunc return an integer.

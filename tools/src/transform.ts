@@ -797,6 +797,12 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           }
         }
       }
+      // String.fromCharCode(n) → preamble function (inverse of charCodeAt,
+      // which lowers to `(s[i] as int)`).
+      if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "String" &&
+          e.fn.field === "fromCharCode" && e.args.length === 1) {
+        return { kind: "app", fn: "StringFromCharCode", args: [lowerExpr(e.args[0], binds)] };
+      }
       // Math.abs/min/max → preamble functions
       if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math") {
         if (e.fn.field === "abs" && e.args.length === 1)

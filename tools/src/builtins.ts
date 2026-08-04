@@ -112,6 +112,7 @@ export const BUILTINS = {
   "string.trimStart": { ret: STRING, pure: true },
   "string.toLowerCase": { ret: STRING, pure: true },
   "string.toUpperCase": { ret: STRING, pure: true },
+  "string.repeat": { ret: STRING, pure: true },
   "string.slice": { ret: STRING, pure: true },
   "string.substring": { ret: STRING, pure: true },
   "string.split": { pure: true,
