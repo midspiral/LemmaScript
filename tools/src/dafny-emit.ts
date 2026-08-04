@@ -412,6 +412,7 @@ function emitExpr(e: Expr): string {
         if (e.method === "includes") { needPreamble("StringIndexOf"); return `(StringIndexOf(${obj}, ${args[0]}) >= 0)`; }
         if (e.method === "startsWith") return `(|${obj}| >= |${args[0]}| && ${obj}[..|${args[0]}|] == ${args[0]})`;
         if (e.method === "charCodeAt") return `(${obj}[${args[0]}] as int)`;
+        if (e.method === "repeat") { needPreamble("StringRepeat"); return `StringRepeat(${obj}, ${args[0]})`; }
       }
       // Map methods
       if (ty === "map") {
@@ -531,6 +532,7 @@ function emitExpr(e: Expr): string {
       if (e.fn === "JSStringLt") needPreamble("JSStringLt");
       if (e.fn === "CeilReal") needPreamble("CeilReal");
       if (e.fn === "FloorReal") needPreamble("FloorReal");
+      if (e.fn === "StringFromCharCode") needPreamble("StringFromCharCode");
       if (e.fn === "NatToString") needPreamble("NatToString");
       if (e.fn === "IntToString") { needPreamble("NatToString"); needPreamble("IntToString"); }
       if (e.fn === "MathAbs") needPreamble("MathAbs");
@@ -1227,6 +1229,29 @@ const STRING_TO_UPPER = `function StringToUpper(s: string): string
     [upper] + StringToUpper(s[1..])
 }`;
 
+// `String.fromCharCode(n)` — the inverse of `s.charCodeAt(i)`'s `(s[i] as int)`.
+// Dafny's `char` is a Unicode scalar value, so the argument must miss the
+// surrogate range; that is the `requires`, discharged at each call site. The two
+// `ensures` give callers the round-trip law without unfolding the body.
+const STRING_FROM_CHAR_CODE = `function StringFromCharCode(n: int): string
+  requires 0 <= n < 0xD800 || 0xE000 <= n < 0x110000
+  ensures |StringFromCharCode(n)| == 1
+  ensures (StringFromCharCode(n)[0] as int) == n
+{
+  [n as char]
+}`;
+
+// `s.repeat(n)` — n copies of s, concatenated. The per-index ensures is stated
+// for the single-character receiver (the common case: padding with one digit).
+const STRING_REPEAT = `function StringRepeat(s: string, n: int): string
+  requires n >= 0
+  ensures |StringRepeat(s, n)| == |s| * n
+  ensures |s| == 1 ==> forall i :: 0 <= i < n ==> StringRepeat(s, n)[i] == s[0]
+  decreases n
+{
+  if n == 0 then "" else s + StringRepeat(s, n - 1)
+}`;
+
 const MATH_MIN = `function MathMin(a: int, b: int): int { if a <= b then a else b }`;
 const MATH_MAX = `function MathMax(a: int, b: int): int { if a >= b then a else b }`;
 
@@ -1353,6 +1378,8 @@ const PREAMBLE_CODE: [string, string][] = [
   ["StringTrim", STRING_TRIM],
   ["StringToLower", STRING_TO_LOWER],
   ["StringToUpper", STRING_TO_UPPER],
+  ["StringFromCharCode", STRING_FROM_CHAR_CODE],
+  ["StringRepeat", STRING_REPEAT],
   ["NatToString", NAT_TO_STRING],
   ["IntToString", INT_TO_STRING],
   ["MathAbs", MATH_ABS],

@@ -1884,6 +1884,11 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
         return "void";  // Promise<void>
       }
       const node = fn.getReturnTypeNode();
+      // A type predicate (`x is T` / `asserts x is T`) is a `boolean` at
+      // runtime; the narrowing it performs is a TS-only refinement with no
+      // counterpart in the model. Without this, `getText()` yields "x is T"
+      // and the type mapper reads the subject name as an opaque type.
+      if (node && node.getKind() === SyntaxKind.TypePredicate) return "boolean";
       if (node && Node.isUnionTypeNode(node)) return _eraseGenerics(_tsTypeFromUnionNode(node));
       if (node) return _eraseGenerics(node.getText());
       const inferred = fn.getReturnType();
@@ -2334,6 +2339,26 @@ export function extractModule(sourceFile: SourceFile): RawModule {
         }
       }
     }
+    // A constant's initializer can reference other constants
+    // (`const ZERO_NINE = ZERO + nthDigit(-1)`). Close over those initializers
+    // before filtering — mirroring the transitive type filter below — or a
+    // constant reachable only from another constant is dropped and the backend
+    // sees an undefined name.
+    // Snapshot first: what the closure adds are VALUE references, and a value
+    // and a type can share a name (`const Action = Schema.Literals(…)` next to
+    // `type Action = Schema.Schema.Type<typeof Action>`). Keeping the constant
+    // alive must not also drag in the unrelated type alias, so the type filter
+    // below runs off the pre-closure set.
+    const typeReferencedNames = new Set(referencedNames);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const c of constants) {
+        if (!referencedNames.has(c.name)) continue;
+        const before = referencedNames.size;
+        collectNamesExpr(c.value);
+        if (referencedNames.size !== before) grew = true;
+      }
+    }
     constants.splice(0, constants.length, ...constants.filter(c => referencedNames.has(c.name)));
     // Filter types to only those referenced by verified functions (transitive)
     const neededTypes = new Set<string>();
@@ -2348,7 +2373,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
         for (const f of v.fields)
           for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) markType(m[1]);
     }
-    for (const name of referencedNames) markType(name);
+    for (const name of typeReferencedNames) markType(name);
     // Signature types also mark their base after stripping array/optional
     // WRAPPERS (`Out[]`/`Msg | undefined` → `Out`/`Msg`), so a function returning
     // a local `Out[]` keeps `Out`. Wrappers only — never dig into generic args

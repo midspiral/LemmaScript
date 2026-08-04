@@ -53,6 +53,41 @@ method arrNot (xs : Array Int) return (res : Int)
   do
     return Pure.arrNot xs
 
+method andMixed (i : Int) (carry : Int) return (res : Int)
+  ensures i ≥ 0 → carry ≠ 0 → res = 1
+  ensures i < 0 ∨ carry = 0 → res = 0
+  do
+    return Pure.andMixed i carry
+
+method orMixed (s : String) (n : Int) return (res : Int)
+  ensures s.length > 0 ∨ n ≠ 0 → res = 1
+  ensures s.length = 0 → n = 0 → res = 0
+  do
+    return Pure.orMixed s n
+
+method andOrNested (a : Int) (b : String) (c : Array Int) return (res : Int)
+  ensures a ≠ 0 ∨ b.length > 0 → res = 1
+  ensures a = 0 → b.length = 0 → res = 0
+  do
+    return Pure.andOrNested a b c
+
+method carryScan (digits : Array Int) return (res : Int)
+  require digits.size > 0
+  ensures res ≥ -1
+  ensures res < digits.size
+  do
+    let mut i : Int := digits.size - 1
+    let mut carry : Int := 1
+    while i ≥ 0 && carry ≠ 0
+      invariant i ≥ -1
+      invariant i < digits.size
+      decreasing (i + 1).toNat
+    do
+      if digits[i.toNat]! = 0 then
+        carry := 0
+      i := i - 1
+    return i
+
 method optNumCond (o : Option Int) return (res : Int)
   ensures (match o with | .some _ => false | .none => true) → res = 0
   ensures (match o with | .some _value => _value == 0 | .none => false) → res = 0

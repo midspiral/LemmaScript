@@ -112,6 +112,48 @@ lemma arrNot_ensures(xs: seq<int>)
 {
 }
 
+function andMixed(i: int, carry: int): int
+{
+  if ((i >= 0) && (carry != 0)) then
+    1
+  else
+    0
+}
+
+lemma andMixed_ensures(i: int, carry: int)
+  ensures ((i >= 0) ==> (carry != 0) ==> (andMixed(i, carry) == 1))
+  ensures (((i < 0) || (carry == 0)) ==> (andMixed(i, carry) == 0))
+{
+}
+
+function orMixed(s: string, n: int): int
+{
+  if ((|s| > 0) || (n != 0)) then
+    1
+  else
+    0
+}
+
+lemma orMixed_ensures(s: string, n: int)
+  ensures (((|s| > 0) || (n != 0)) ==> (orMixed(s, n) == 1))
+  ensures ((|s| == 0) ==> (n == 0) ==> (orMixed(s, n) == 0))
+{
+}
+
+function andOrNested(a: int, b: string, c: seq<int>): int
+{
+  if (((a != 0) || (|b| > 0)) && true) then
+    1
+  else
+    0
+}
+
+lemma andOrNested_ensures(a: int, b: string, c: seq<int>)
+  ensures (((a != 0) || (|b| > 0)) ==> (andOrNested(a, b, c) == 1))
+  ensures ((a == 0) ==> (|b| == 0) ==> (andOrNested(a, b, c) == 0))
+{
+}
+
 function optNumCond(o: Option<int>): int
 {
   match o {
@@ -186,4 +228,24 @@ lemma optPresent_ensures(o: Option<int>)
   ensures (match o { case Some(i_o_val) => (optPresent(o) == 1) case None => true })
   ensures ((match o { case Some(i_) => false case None => true }) ==> (optPresent(o) == 0))
 {
+}
+
+method carryScan(digits: seq<int>) returns (res: int)
+  requires (|digits| > 0)
+  ensures (res >= -1)
+  ensures (res < |digits|)
+{
+  var i := (|digits| - 1);
+  var carry := 1;
+  while ((i >= 0) && (carry != 0))
+    invariant (i >= -1)
+    invariant (i < |digits|)
+    decreases (i + 1)
+  {
+    if (digits[i] == 0) {
+      carry := 0;
+    }
+    i := (i - 1);
+  }
+  return i;
 }
