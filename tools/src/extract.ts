@@ -2339,6 +2339,20 @@ export function extractModule(sourceFile: SourceFile): RawModule {
         }
       }
     }
+    // A constant's initializer can reference other constants
+    // (`const ZERO_NINE = ZERO + nthDigit(-1)`). Close over those initializers
+    // before filtering — mirroring the transitive type filter below — or a
+    // constant reachable only from another constant is dropped and the backend
+    // sees an undefined name.
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const c of constants) {
+        if (!referencedNames.has(c.name)) continue;
+        const before = referencedNames.size;
+        collectNamesExpr(c.value);
+        if (referencedNames.size !== before) grew = true;
+      }
+    }
     constants.splice(0, constants.length, ...constants.filter(c => referencedNames.has(c.name)));
     // Filter types to only those referenced by verified functions (transitive)
     const neededTypes = new Set<string>();
