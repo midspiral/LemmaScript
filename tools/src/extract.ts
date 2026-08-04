@@ -350,7 +350,11 @@ function extractExpr(node: Expression): RawExpr {
       : Node.isIdentifier(fnExpr) ? fnExpr.getText()
       : null;
     if (name === _havocKey) {
-      return { kind: "havoc", tsType: typeToString(node.getType()) };
+      // Prefer the contextual type: the abstracted value stands in where the
+      // surrounding code expects it, and a subclass (`new SdkError` into an
+      // `Error` field) has no subtyping relation once both are opaque.
+      const ty = node.getContextualType() ?? node.getType();
+      return { kind: "havoc", tsType: typeToString(ty) };
     }
   }
 
