@@ -2344,6 +2344,12 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     // before filtering — mirroring the transitive type filter below — or a
     // constant reachable only from another constant is dropped and the backend
     // sees an undefined name.
+    // Snapshot first: what the closure adds are VALUE references, and a value
+    // and a type can share a name (`const Action = Schema.Literals(…)` next to
+    // `type Action = Schema.Schema.Type<typeof Action>`). Keeping the constant
+    // alive must not also drag in the unrelated type alias, so the type filter
+    // below runs off the pre-closure set.
+    const typeReferencedNames = new Set(referencedNames);
     for (let grew = true; grew; ) {
       grew = false;
       for (const c of constants) {
@@ -2367,7 +2373,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
         for (const f of v.fields)
           for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) markType(m[1]);
     }
-    for (const name of referencedNames) markType(name);
+    for (const name of typeReferencedNames) markType(name);
     // Signature types also mark their base after stripping array/optional
     // WRAPPERS (`Out[]`/`Msg | undefined` → `Out`/`Msg`), so a function returning
     // a local `Out[]` keeps `Out`. Wrappers only — never dig into generic args
