@@ -53,6 +53,24 @@ def arrNot (xs : Array Int) : Int :=
   else
     0
 
+def andMixed (i : Int) (carry : Int) : Int :=
+  if i ≥ 0 ∧ carry ≠ 0 then
+    1
+  else
+    0
+
+def orMixed (s : String) (n : Int) : Int :=
+  if s.length > 0 ∨ n ≠ 0 then
+    1
+  else
+    0
+
+def andOrNested (a : Int) (b : String) (c : Array Int) : Int :=
+  if (a ≠ 0 ∨ b.length > 0) ∧ true then
+    1
+  else
+    0
+
 def optNumCond (o : Option Int) : Int :=
   match o with
   | .some _o_val =>
