@@ -365,19 +365,32 @@ function flattenLambdaBody(stmts: Stmt[]): Expr | null {
  */
 
 /** JS truthiness coercion for `if`/`while`/`?:` conditions.
- *  Dafny requires bool; coerce number→`≠0`, string→non-empty, array→`true`
+ *  Dafny requires bool; coerce number→`!== 0`, string→non-empty, array→`true`
  *  (every array, even `[]`, is truthy in JS).
- *  Optional conds are handled separately by narrow.ts (rewritten to someMatch). */
-function coerceCondToBool(cond: Expr, ty: Ty): Expr {
-  if (ty.kind === "bool") return cond;
-  if (ty.kind === "int" || ty.kind === "nat")
-    return { kind: "binop", op: "≠", left: cond, right: { kind: "num", value: 0 } };
-  if (ty.kind === "string")
-    return { kind: "binop", op: ">", left: { kind: "field", obj: cond, field: "length" }, right: { kind: "num", value: 0 } };
+ *
+ *  Rewrites the typed tree, before lowering, and distributes over `&&`/`||`:
+ *  each operand of a logical connective is itself in condition position, and the
+ *  operands need not share a type — `i >= 0 && carry`, with `carry` an int, is a
+ *  bool conjoined with a number. A conjunction takes its type from its right
+ *  operand (resolve), so coercing the whole expression by its type would emit
+ *  `((i >= 0) && carry) != 0`, which is not well-typed.
+ *
+ *  Optional conds never arrive here — narrow.ts rewrites them to someMatch. */
+function asCondition(e: TExpr): TExpr {
+  const bool: Ty = { kind: "bool" };
+  if (e.ty.kind === "bool") return e;
+  if (e.kind === "binop" && (e.op === "&&" || e.op === "||"))
+    return { ...e, left: asCondition(e.left), right: asCondition(e.right), ty: bool };
+  if (e.ty.kind === "int" || e.ty.kind === "nat")
+    return { kind: "binop", op: "!==", left: e, right: { kind: "num", value: 0, ty: e.ty }, ty: bool };
+  if (e.ty.kind === "string")
+    return { kind: "binop", op: ">",
+      left: { kind: "field", obj: e, field: "length", ty: { kind: "nat" } },
+      right: { kind: "num", value: 0, ty: { kind: "nat" } }, ty: bool };
   // Arrays, objects, maps, sets, tuples are always truthy in JS (even `[]`/`{}`).
-  if (["array", "user", "map", "set", "tuple"].includes(ty.kind))
-    return { kind: "bool", value: true };
-  return cond;
+  if (["array", "user", "map", "set", "tuple"].includes(e.ty.kind))
+    return { kind: "bool", value: true, ty: bool };
+  return e;
 }
 
 /** Wrap an expression in Some/None for optional-typed conditionals.
@@ -1030,7 +1043,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // JS truthiness coercion (string/array/int → ... > 0).  Matches SPEC §3.1
       // negation forms (`!s` → `s == ""`).  Optional conds are already
       // rewritten to someMatch by narrow.ts.
-      const cond = coerceCondToBool(lowerExpr(e.cond, binds), e.cond.ty);
+      const cond = lowerExpr(asCondition(e.cond), binds);
       let thenExpr = lowerExpr(e.then, binds);
       let elseExpr = lowerExpr(e.else, binds);
       if (e.ty.kind === "optional") {
@@ -1737,14 +1750,14 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
 
     case "if": {
       // Lift from condition only (Lean rule: don't lift from branches).
-      const { binds, expr: cond } = liftMethodCalls(s.cond);
-      return [...binds, { kind: "if", cond: coerceCondToBool(cond, s.cond.ty), then: transformStmts(s.then, typeDecls), else: transformStmts(s.else, typeDecls) }];
+      const { binds, expr: cond } = liftMethodCalls(asCondition(s.cond));
+      return [...binds, { kind: "if", cond, then: transformStmts(s.then, typeDecls), else: transformStmts(s.else, typeDecls) }];
     }
 
     case "while":
       return [{
         kind: "while",
-        cond: coerceCondToBool(transformExpr(s.cond), s.cond.ty),
+        cond: transformExpr(asCondition(s.cond)),
         invariants: s.invariants.map(transformExpr),
         decreasing: s.decreases ? transformExpr(s.decreases) : null,
         doneWith: s.doneWith ? transformExpr(s.doneWith) : null,
@@ -2089,7 +2102,7 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
         const elseStmts = s.else.length > 0 ? [...s.else, ...rest] : rest;
         const elseExpr = transformPureBody(elseStmts, typeDecls);
         if (!elseExpr) return null;
-        return { kind: "if", cond: coerceCondToBool(transformExpr(s.cond), s.cond.ty), then: thenExpr, else: elseExpr };
+        return { kind: "if", cond: transformExpr(asCondition(s.cond)), then: thenExpr, else: elseExpr };
       }
       case "switch": return transformPureSwitch(s, typeDecls);
       case "someMatch": {
