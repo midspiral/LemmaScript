@@ -101,7 +101,7 @@ function carryScan(digits: number[]): number {
   let carry = 1;
   while (i >= 0 && carry) {
     //@ invariant i >= -1 && i < digits.length
-    //@ decreases i + 1
+    //@ decreases (i + 1).toNat
     if (digits[i] === 0) {
       carry = 0;
     }

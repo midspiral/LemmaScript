@@ -81,7 +81,7 @@ method carryScan (digits : Array Int) return (res : Int)
     while i ≥ 0 && carry ≠ 0
       invariant i ≥ -1
       invariant i < digits.size
-      decreasing i + 1
+      decreasing (i + 1).toNat
     do
       if digits[i.toNat]! = 0 then
         carry := 0
