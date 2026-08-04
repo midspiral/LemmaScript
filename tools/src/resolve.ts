@@ -1491,12 +1491,22 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
 
 // ── Pure / return-in-loop detection ──────────────────────────
 
-/** Syntactic purity: no while, no for-of, no mutable let. */
+/** Whether a raw statement or expression tree contains a havoc anywhere. */
+function containsHavoc(v: unknown): boolean {
+  if (Array.isArray(v)) return v.some(containsHavoc);
+  if (v === null || typeof v !== "object") return false;
+  if ((v as { kind?: string }).kind === "havoc") return true;
+  return Object.values(v).some(containsHavoc);
+}
+
+/** Syntactic purity: no while, no for-of, no mutable let, no havoc. */
 function isSyntacticallyPure(stmts: RawStmt[]): boolean {
   for (const s of stmts) {
+    // Havoc lowers to Dafny's `*`, which is only valid in a method.
+    if (containsHavoc(s)) return false;
     switch (s.kind) {
       case "while": case "forof": return false;
-      case "let": if (s.mutable || s.init.kind === "havoc") return false; break;
+      case "let": if (s.mutable) return false; break;
       case "if": if (!isSyntacticallyPure(s.then) || !isSyntacticallyPure(s.else)) return false; break;
       case "switch": if (!s.cases.every(c => isSyntacticallyPure(c.body)) || !isSyntacticallyPure(s.defaultBody)) return false; break;
     }

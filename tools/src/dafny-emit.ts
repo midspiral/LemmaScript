@@ -84,6 +84,22 @@ const DAFNY_KEYWORDS = new Set([
 // *same* name, so escapeName routes it here.
 let _resultName = "res";
 
+// User-type names appearing as the type of a havoc anywhere in the module —
+// populated per file by emitDafnyFile, read by the opaque-type case.
+const _havocedTypeNames = new Set<string>();
+
+/** Collect the user-type names of every havoc in a decl tree. */
+function collectHavocedTypeNames(v: unknown, out: Set<string>): void {
+  if (Array.isArray(v)) {
+    for (const x of v) collectHavocedTypeNames(x, out);
+    return;
+  }
+  if (v === null || typeof v !== "object") return;
+  const n = v as { kind?: string; type?: Ty };
+  if (n.kind === "havoc" && n.type?.kind === "user") out.add(n.type.name);
+  for (const x of Object.values(v)) collectHavocedTypeNames(x, out);
+}
+
 // ── Dafny name allocation ──────────────────────────────────
 //
 // freshName (names.ts) freshens in the *raw TS* namespace — but that is not the
@@ -812,7 +828,10 @@ function emitDecl(d: Decl): string {
     case "opaque-type": {
       // Abstract type — no definition. `(==)` so it can sit inside datatypes
       // that derive structural equality. Never constructed or destructured.
-      return `type ${escapeName(d.name)}(==)`;
+      // `0` (auto-init) only when a havoc of this type needs a witness to
+      // satisfy definite assignment — `var x: T := *` requires it.
+      const autoInit = _havocedTypeNames.has(d.name) ? ", 0" : "";
+      return `type ${escapeName(d.name)}(==${autoInit})`;
     }
 
     case "def": {
@@ -1497,6 +1516,8 @@ export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSl
   resetDafnyNameCache();
   buildRecordCtorMap(file.decls);
   _neededPreambles.clear();
+  _havocedTypeNames.clear();
+  collectHavocedTypeNames(file.decls, _havocedTypeNames);
 
   // Track successfully emitted pure defs — method wrappers are only
   // skipped when the corresponding pure def was actually emitted.
