@@ -17,6 +17,21 @@ import { setUserNames, freshName } from "./names.js";
 /** When set, calls whose function/method name matches this key are replaced with havoc. */
 let _havocKey: string | null = null;
 
+/** A leading `//@ havoc`, `//@ havoc : Type`, or `//@ havoc <key>` directive. */
+function havocDirective(s: Node): { type: string | null; key: string | null } | null {
+  const m = s.getLeadingCommentRanges()
+    .map(r => r.getText().trim().match(/^\/\/@ havoc(?:\s*:\s*(.+)|(?:\s+(\S+)))?$/))
+    .find(m => m !== null);
+  return m ? { type: m[1]?.trim() ?? null, key: m[2] ?? null } : null;
+}
+
+/** Run `fn` with `key` as the subexpression havoc key, restoring the outer one. */
+function withHavocKey<T>(key: string | null, fn: () => T): T {
+  const saved = _havocKey;
+  if (key) _havocKey = key;
+  try { return fn(); } finally { _havocKey = saved; }
+}
+
 /** Auto-detected cross-file calls. Populated by `extractExpr` whenever it sees
  *  a call `Obj.method(...)` or `foo(...)` whose ts-morph symbol resolves to a
  *  different `.ts` source file. Emitted in Dafny as `function {:axiom} <flat>`.
@@ -328,8 +343,8 @@ function _eraseGenerics(tsType: string): string {
 }
 
 function extractExpr(node: Expression): RawExpr {
-  // Havoc key matching: replace matching calls with havoc expression
-  if (_havocKey && Node.isCallExpression(node)) {
+  // Havoc key matching: replace matching calls or new expressions with havoc expression
+  if (_havocKey && (Node.isCallExpression(node) || Node.isNewExpression(node))) {
     const fnExpr = node.getExpression();
     const name = Node.isPropertyAccessExpression(fnExpr) ? fnExpr.getName()
       : Node.isIdentifier(fnExpr) ? fnExpr.getText()
@@ -1241,12 +1256,10 @@ function extractStmts(stmts: Node[]): RawStmt[] {
     }
 
     if (Node.isVariableStatement(s)) {
-      const havocMatch = s.getLeadingCommentRanges()
-        .map(r => r.getText().trim().match(/^\/\/@ havoc(?:\s*:\s*(.+)|(?:\s+(\S+)))?$/))
-        .find(m => m !== null);
-      const havocType = havocMatch?.[1]?.trim() ?? null;  // //@ havoc : Type
-      const havocKey = havocMatch?.[2] ?? null;            // //@ havoc key
-      const isHavoc = !!havocMatch;
+      const havoc = havocDirective(s);
+      const havocType = havoc?.type ?? null;   // //@ havoc : Type
+      const havocKey = havoc?.key ?? null;     // //@ havoc key
+      const isHavoc = !!havoc;
       for (const d of s.getDeclarations()) {
         // Havoc on destructuring: emit each named binding as a separate havoced variable
         const nameNode = d.getNameNode();
@@ -1677,7 +1690,12 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       // functions this would emit the wrong shape, but lsc has no current
       // examples of explicit bare return in void functions; revisit if one
       // appears.
-      result.push({ kind: "return", value: expr ? extractExpr(expr) : { kind: "var", name: "undefined" }, line });
+      // `//@ havoc <key>` on a return abstracts the matching calls or new
+      // expressions inside the returned expression — there is no variable to
+      // hang a whole-value havoc on, so only the key form applies here.
+      const value = withHavocKey(havocDirective(s)?.key ?? null, () =>
+        expr ? extractExpr(expr) : { kind: "var" as const, name: "undefined" });
+      result.push({ kind: "return", value, line });
       continue;
     }
 
@@ -1696,14 +1714,12 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       // //@ havoc before `x = e` — discard the RHS, assign a nondeterministic
       // value of x's type. Only applies to plain `=` with an identifier LHS;
       // compound assigns, `arr[i] = v`, and `x++` fall through to desugaring.
-      const havocMatch = s.getLeadingCommentRanges()
-        .map(r => r.getText().trim().match(/^\/\/@ havoc(?:\s*:\s*(.+))?$/))
-        .find(m => m !== null);
-      if (havocMatch && Node.isBinaryExpression(expr)
+      const havoc = havocDirective(s);
+      if (havoc && !havoc.key && Node.isBinaryExpression(expr)
           && expr.getOperatorToken().getText() === "="
           && Node.isIdentifier(expr.getLeft())) {
         const target = expr.getLeft().getText();
-        const tsType = havocMatch[1]?.trim() ?? _eraseGenerics(typeToString(expr.getLeft().getType()));
+        const tsType = havoc.type ?? _eraseGenerics(typeToString(expr.getLeft().getType()));
         result.push({ kind: "assign", target, value: { kind: "havoc", tsType }, line });
         continue;
       }
