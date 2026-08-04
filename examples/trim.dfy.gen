@@ -34,6 +34,14 @@ function StringTrim(s: string): string
   StringTrimRight(StringTrimLeft(s))
 }
 
+function StringFromCharCode(n: int): string
+  requires 0 <= n < 0xD800 || 0xE000 <= n < 0x110000
+  ensures |StringFromCharCode(n)| == 1
+  ensures (StringFromCharCode(n)[0] as int) == n
+{
+  [n as char]
+}
+
 function trimmed(s: string): string
 {
   StringTrim(s)
@@ -54,4 +62,31 @@ lemma trimAsciiWs_ensures()
 {
 }
 
-// LemmaScript: skipped runtimeSanityCheck
+method runtimeSanityCheck() returns (res: bool)
+{
+  var strip := [9, 10, 11, 12, 13, 32, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279];
+  var keep := [133, 8203, 8288, 65];
+  var i_cp_idx := 0;
+  while i_cp_idx < |strip|
+    invariant (i_cp_idx <= |strip|)
+  {
+    var cp := strip[i_cp_idx];
+    var ch := StringFromCharCode(cp);
+    if (StringTrim(((ch + "x") + ch)) != "x") {
+      return false;
+    }
+    i_cp_idx := i_cp_idx + 1;
+  }
+  var i_cp_idx2 := 0;
+  while i_cp_idx2 < |keep|
+    invariant (i_cp_idx2 <= |keep|)
+  {
+    var cp := keep[i_cp_idx2];
+    var ch := StringFromCharCode(cp);
+    if (StringTrim(((ch + "x") + ch)) == "x") {
+      return false;
+    }
+    i_cp_idx2 := i_cp_idx2 + 1;
+  }
+  return true;
+}
