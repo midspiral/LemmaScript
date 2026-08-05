@@ -350,3 +350,31 @@ method ternarySpecOpt (o : Option Inner) (fallback : Int) return (res : Int)
   ensures res = (match o with | .some _o_val => _o_val.val | .none => fallback)
   do
     return Pure.ternarySpecOpt o fallback
+
+method projectedCodePure (error : RpcErrorView) return (res : Int)
+  ensures res = error.code
+  do
+    return Pure.projectedCodePure error
+
+method dispatchProjectedPure (outcome : ProjectedOutcome) return (res : Int)
+  ensures (match outcome with | .«rpc-error» _outcome_code _outcome_message _outcome_data => res = _outcome_code | _ => true)
+  do
+    return Pure.dispatchProjectedPure outcome
+
+method projectedCode (error : RpcErrorView) return (res : Int)
+  ensures res = error.code
+  do
+    let mut code : Int := error.code
+    return code
+
+method dispatchProjected (outcome : ProjectedOutcome) return (res : Int)
+  ensures (match outcome with | .«rpc-error» _outcome_code _outcome_message _outcome_data => res = _outcome_code | _ => true)
+  do
+    if (match outcome with | .«rpc-error» .. => true | _ => false) then
+      let _outcome_code := (match outcome with | .«rpc-error» _v _ _ => _v | _ => (default : Int))
+      let _outcome_message := (match outcome with | .«rpc-error» _ _v _ => _v | _ => (default : String))
+      let _outcome_data := (match outcome with | .«rpc-error» _ _ _v => _v | _ => (default : Option String))
+      let _t5 ← projectedCode { code := _outcome_code, message := _outcome_message, data := _outcome_data }
+      return _t5
+    else
+      return 0

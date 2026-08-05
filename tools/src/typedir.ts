@@ -90,7 +90,10 @@ export type TExpr =
   | { kind: "binop"; op: string; left: TExpr; right: TExpr; ty: Ty }
   | { kind: "unop"; op: string; expr: TExpr; ty: Ty }
   | { kind: "call"; fn: TExpr; args: TExpr[]; ty: Ty; callKind: CallKind;
-      builtinId?: BuiltinId }
+      builtinId?: BuiltinId;
+      /** Resolved parameter types for a named callee. Kept so nominal
+       *  backends can realize TypeScript structural argument conversions. */
+      paramTys?: Ty[] }
   | { kind: "index"; obj: TExpr; idx: TExpr; ty: Ty }
   | { kind: "field"; obj: TExpr; field: string; ty: Ty;
       isDiscriminant?: boolean;             // true if this is a discriminant field access

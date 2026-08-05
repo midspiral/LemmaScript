@@ -884,6 +884,34 @@ match pkt {
 
 **Field binding:** Property accesses on the matched variable (`pkt.seq`, `pkt.len`) become bound variables from the match pattern. Unused fields get `_`.
 
+**Structural helper arguments from a narrowed arm:** TypeScript may pass the
+matched arm value to a helper that exposes only an untagged structural view:
+
+```typescript
+interface RpcErrorView { code: number; message: string; data?: unknown }
+type Outcome =
+  | { kind: "rpc-error"; code: number; message: string; data?: unknown }
+  | { kind: "done" };
+
+function classify(error: RpcErrorView): number { return error.code; }
+
+function route(outcome: Outcome): number {
+  switch (outcome.kind) {
+    case "rpc-error": return classify(outcome);
+    case "done": return 0;
+  }
+}
+```
+
+Dafny and Lean records are nominal, so the `rpc-error` arm lowers the call by
+constructing `RpcErrorView` from that arm's match-bound `code`, `message`, and
+`data` fields. The rule is deliberately narrower than general TypeScript
+structural subtyping: the argument must be the arm's scrutinee variable, the
+callee must have resolved parameter types, the target must be a named record,
+and every target field must exist in the arm with the same resolved type. Extra
+arm fields (notably the discriminant) are ignored. The rule applies to pure and
+method bodies; arbitrary structural assignments and casts are not synthesized.
+
 **Switch fall-through:** a non-empty `case` must end in `break`/`return`/`throw` — C-style fall-through into the next case's body is rejected. Empty `case A: case B: body` stacking (leading labels sharing the next body) is supported.
 
 **Enum-like types** (string literal unions, no data fields) stay as `if` with constructor equality. Only discriminated unions with data fields trigger the if-chain → match transformation.
@@ -1157,6 +1185,11 @@ datatype EffectState = EffectState(res: bool, done: bool, rec: bool)
 ```
 
 **Field access** passes through directly: `state.res` → `state.res` (both backends).
+
+**Structural assignability:** Backend record types remain nominal; LemmaScript
+does not implement general TypeScript structural subtyping. The supported
+exception is the type-directed projection of a narrowed discriminated-union arm
+into a named record parameter described in §4.4.
 
 **Object literals:**
 

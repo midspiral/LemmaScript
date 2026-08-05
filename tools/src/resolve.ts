@@ -822,7 +822,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         if (ext) {
           const args = e.args.map(a => resolveExpr(a, ctx));
           const fn: TExpr = { kind: "var", name: ext.flat, ty: { kind: "unknown" } };
-          return { kind: "call", fn, args, ty: ext.returnTy, callKind: "pure" };
+          return { kind: "call", fn, args, ty: ext.returnTy, callKind: "pure", paramTys: ext.params };
         }
       }
       const fn = resolveExpr(e.fn, ctx);
@@ -872,7 +872,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       }
       const builtinId = fn.kind === "field" ? recognizeBuiltin(fn.obj.ty, fn.field) : null;
       return { kind: "call", fn, args, ty, callKind: classifyCall(e.fn, ctx),
-        ...(builtinId ? { builtinId } : {}) };
+        ...(builtinId ? { builtinId } : {}),
+        ...(paramTypes ? { paramTys: paramTypes } : {}) };
     }
 
     case "index": {

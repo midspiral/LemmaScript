@@ -457,7 +457,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
           const idx = owner.fields.findIndex(f => f.name === e.field);
           const pats = owner.fields.map((_, i) => (i === idx ? "_v" : "_")).join(" ");
           const fty = tyToLean(owner.fields[idx].type);
-          return `(match ${emitExpr(e.obj)} with | .${escapeName(owner.name)} ${pats} => _v | _ => (default : ${fty}))`;
+          return `(match ${emitExpr(e.obj)} with | .${leanCtorName(owner.name)} ${pats} => _v | _ => (default : ${fty}))`;
         }
       }
       const obj = emitExpr(e.obj);
