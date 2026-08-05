@@ -1338,7 +1338,15 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // one optional level when consulting returnTy.
       const initCtx = (declTy.kind === "user" || declTy.kind === "array" || declTy.kind === "optional")
         ? { ...ctx, returnTy: declTy } : ctx;
-      const init = coerceToTargetTy(resolveExpr(s.init, initCtx), declTy, ctx.typeDecls);
+      let init = coerceStr(resolveExpr(s.init, initCtx), declTy);
+      // Under noUncheckedIndexedAccess, TS gives `const e = arr[i]` type T | undefined
+      // while the index expression itself resolves to T. Leave that mismatch intact:
+      // narrow.ts's ruleOptionalIndexBinding adds the runtime bounds guard and the
+      // corresponding Some/None branches. Wrapping here would turn it into an
+      // unconditional Some(arr[i]) and prevent that JS-semantics rewrite from firing.
+      const deferOptionalIndex = declTy.kind === "optional" && init.kind === "index" &&
+        init.obj.ty.kind === "array" && init.ty.kind !== "optional";
+      if (!deferOptionalIndex) init = coerceToTargetTy(init, declTy, ctx.typeDecls);
       let ty: Ty;
       if (isUnmodeledTy(declTy, ctx.typeDecls) && !isUnmodeledTy(init.ty, ctx.typeDecls)) {
         // ts-morph's declared type is opaque to us (an expanded union it made
