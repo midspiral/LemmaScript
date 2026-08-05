@@ -239,9 +239,9 @@ function kindHelperDecl(decl: TypeDeclInfo): Decl {
  *  arm body would still be captured, so prime on any module-wide collision.
  *  Deterministic, so the pattern binder and its body substitutions agree. */
 function matchBinder(fieldName: string, prefix?: string): string {
-  const safePrefix = prefix
-    ?.replace(/[^A-Za-z0-9_]/g, "_")
-    .replace(/^_+|_+$/g, "");
+  const safePrefix = prefix === "\\result"
+    ? "result"
+    : prefix?.replace(/[^A-Za-z0-9_]/g, "_");
   return freshName(safePrefix ? `_${safePrefix}_${fieldName}` : `_${fieldName}`);
 }
 
