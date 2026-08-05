@@ -503,3 +503,54 @@ function ternarySpecOpt(o: Inner | undefined, fallback: number): number {
   if (o !== undefined) return o.val;
   return fallback;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Structural helper boundary from a narrowed union arm
+// ═══════════════════════════════════════════════════════════════
+
+// TypeScript permits the rpc-error arm value (which also carries `kind`) to be
+// passed to a helper that only exposes this structural view. Dafny and Lean use
+// nominal records, so switch lowering must project the matched payload fields
+// into RpcErrorView rather than pass the enclosing union value directly.
+interface RpcErrorView {
+  code: number;
+  message: string;
+  data?: string;
+}
+
+type ProjectedOutcome =
+  | { kind: "rpc-error"; code: number; message: string; data?: string }
+  | { kind: "done" };
+
+function projectedCodePure(error: RpcErrorView): number {
+  //@ ensures \result === error.code
+  return error.code;
+}
+
+function dispatchProjectedPure(outcome: ProjectedOutcome): number {
+  //@ ensures outcome.kind === "rpc-error" ==> \result === outcome.code
+  switch (outcome.kind) {
+    case "rpc-error":
+      return projectedCodePure(outcome);
+    case "done":
+      return 0;
+  }
+}
+
+function projectedCode(error: RpcErrorView): number {
+  //@ ensures \result === error.code
+  // Keep this helper imperative so the regression exercises method-call
+  // lowering, the path used by brownfield helpers containing proof seams.
+  let code = error.code;
+  return code;
+}
+
+function dispatchProjected(outcome: ProjectedOutcome): number {
+  //@ ensures outcome.kind === "rpc-error" ==> \result === outcome.code
+  switch (outcome.kind) {
+    case "rpc-error":
+      return projectedCode(outcome);
+    case "done":
+      return 0;
+  }
+}

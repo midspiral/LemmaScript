@@ -1378,6 +1378,11 @@ function matchToIfChains(stmts: Stmt[]): Stmt[] {
 
     const scrutExpr: Expr = s.scrutinee;
     const defaultArm = arms.find(a => a.pattern.kind === "wild");
+    const declaredCtors = decl.kind === "discriminated-union"
+      ? decl.variants?.map(v => v.name)
+      : decl.kind === "string-union" ? decl.values : undefined;
+    const coveredCtors = new Set(ctorArms.map(a => patternCtor(a.pattern)).filter((c): c is string => !!c));
+    const exhaustiveWithoutDefault = !defaultArm && !!declaredCtors && declaredCtors.every(c => coveredCtors.has(c));
     let elseBranch: Stmt[] = defaultArm ? defaultArm.body : [];
     for (let k = ctorArms.length - 1; k >= 0; k--) {
       const armBody = ctorArms[k].body;
@@ -1404,6 +1409,13 @@ function matchToIfChains(stmts: Stmt[]): Stmt[] {
           value: { kind: "field", obj: scrutExpr, field: f.name, fromUnion: decl.name, ctor },
         });
       });
+      // An exhaustive source match has no fallthrough. Use its final arm as
+      // the unconditional else branch; emitting `else pure ()` would force a
+      // Unit result even when every arm returns the method's result type.
+      if (exhaustiveWithoutDefault && k === ctorArms.length - 1) {
+        elseBranch = [...lets, ...armBody];
+        continue;
+      }
       elseBranch = [{ kind: "if", cond, then: [...lets, ...armBody], else: elseBranch }];
     }
     return elseBranch;
@@ -1999,13 +2011,69 @@ function replaceFieldsInTStmts(
 }
 
 /** Replace all variant fields of obj → match binder vars in typed IR.
- *  Thin wrapper around replaceFieldsInTStmts for discriminant match/switch. */
+ *  Before replacing field reads, realize TypeScript's structural argument
+ *  conversion for calls such as `helper(outcome)` inside a narrowed union arm.
+ *  The source value is still the enclosing union in typed IR, while Dafny and
+ *  Lean expect the helper's nominal record. Rebuild that record solely from
+ *  the fields bound by this arm's match pattern. */
 function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { name: string; tsType: string; type?: Ty }[]): TStmt[] {
-  return replaceFieldsInTStmts(stmts, varName, fields.map(f => ({
+  const projected = projectStructuralCallArgsInTStmts(stmts, varName, fields);
+  return replaceFieldsInTStmts(projected, varName, fields.map(f => ({
     fieldName: f.name,
     newName: matchBinder(f.name, varName),
     fallbackTy: f.type ?? parseTsType(f.tsType),
   })));
+}
+
+/** Project a narrowed union scrutinee into a named structural record expected
+ *  by a same-module/extern call. Resolution stamps named calls with paramTys;
+ *  this pass fires only when every target record field has an identically typed
+ *  match-bound source field. That deliberately avoids inventing a broad cast:
+ *  it is the nominal-backend witness for the structural call TS already accepts. */
+function projectStructuralCallArgsInTStmts(
+  stmts: TStmt[], varName: string,
+  fields: { name: string; tsType: string; type?: Ty }[],
+): TStmt[] {
+  const sourceFields = fields.map(f => ({
+    ...f,
+    resolvedTy: f.type ?? parseTsType(f.tsType),
+  }));
+
+  return stmts.map(s => mapTStmt(s, e => {
+    if (e.kind !== "call" || !e.paramTys) return null;
+    const paramTys = e.paramTys;
+    let changed = false;
+    const args = e.args.map((arg, i) => {
+      if (arg.kind !== "var" || arg.name !== varName || i >= paramTys.length) return arg;
+      const targetTy = paramTys[i];
+      const targetDecl = declOfTy(_typeDecls, targetTy);
+      if (targetTy.kind !== "user" || targetDecl?.kind !== "record" || !targetDecl.fields) return arg;
+
+      const matched: { targetField: typeof targetDecl.fields[number]; sourceField: typeof sourceFields[number] }[] = [];
+      for (const targetField of targetDecl.fields) {
+        const sourceField = sourceFields.find(f => f.name === targetField.name);
+        const targetFieldTy = targetField.type ?? parseTsType(targetField.tsType);
+        if (!sourceField || !tyEqual(sourceField.resolvedTy, targetFieldTy)) return arg;
+        matched.push({ targetField, sourceField });
+      }
+
+      changed = true;
+      return {
+        kind: "record" as const,
+        spread: null,
+        fields: matched.map(m => ({
+          name: m.targetField.name,
+          value: {
+            kind: "var" as const,
+            name: matchBinder(m.sourceField.name, varName),
+            ty: m.sourceField.resolvedTy,
+          },
+        })),
+        ty: targetTy,
+      };
+    });
+    return changed ? { ...e, args } : null;
+  }));
 }
 
 /** Replace obj.field → replacement var in typed IR expressions (before lowering).
@@ -2152,7 +2220,8 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
   const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
   const arms = buildMatchArms(cases, varName, typeName, typeDecls,
     (body, vn, fields, ctorName) => {
-      let result = transformPureBody(body, typeDecls);
+      const projected = vn ? projectStructuralCallArgsInTStmts(body, vn, fields) : body;
+      let result = transformPureBody(projected, typeDecls);
       if (!result) return null;
       if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields, ctorName, tyBaseName(typeName));
       return result;
@@ -2176,7 +2245,8 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
   const isSynthArrayUnion = decl?.discriminant === "__isArray__";
   const arms = buildMatchArms(cases, chain.varName, chain.typeName, typeDecls,
     (body, vn, fields, ctorName) => {
-      let result = transformPureBody(body, typeDecls);
+      const projected = vn ? projectStructuralCallArgsInTStmts(body, vn, fields) : body;
+      let result = transformPureBody(projected, typeDecls);
       if (!result) return null;
       if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields, ctorName, tyBaseName(chain.typeName));
       if (isSynthArrayUnion && fields.length === 1 && vn) {
@@ -2193,7 +2263,8 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
     const remaining = remainingVariant(chain.typeName, chain.cases, typeDecls);
     if (remaining) {
       // Exactly one variant left — destructure for variant-specific field access.
-      let body = transformPureBody(chain.fallthrough, typeDecls);
+      const projected = projectStructuralCallArgsInTStmts(chain.fallthrough, chain.varName, remaining.fields);
+      let body = transformPureBody(projected, typeDecls);
       if (!body) return null;
       if (remaining.fields.length > 0) body = replaceFieldAccess(body, chain.varName, remaining.fields, remaining.name, tyBaseName(chain.typeName));
       if (isSynthArrayUnion && remaining.fields.length === 1) {

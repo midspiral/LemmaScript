@@ -52,6 +52,17 @@ inductive Shape where
   | square (side : Int) : Shape
 deriving Repr, Inhabited
 
+structure RpcErrorView where
+  code : Int
+  message : String
+  data : Option String
+deriving Repr, Inhabited, DecidableEq
+
+inductive ProjectedOutcome where
+  | «rpc-error» (code : Int) (message : String) (data : Option String) : ProjectedOutcome
+  | done : ProjectedOutcome
+deriving Repr, Inhabited
+
 namespace Pure
 
 def evalPartial (e : Expr) : Int :=
@@ -279,5 +290,15 @@ def ternarySpecOpt (o : Option Inner) (fallback : Int) : Int :=
     _o_val.val
   | .none =>
     fallback
+
+def projectedCodePure (error : RpcErrorView) : Int :=
+  error.code
+
+def dispatchProjectedPure (outcome : ProjectedOutcome) : Int :=
+  match outcome with
+  | .«rpc-error» _outcome_code _outcome_message _outcome_data =>
+    projectedCodePure { code := _outcome_code, message := _outcome_message, data := _outcome_data }
+  | .done =>
+    0
 
 end Pure

@@ -60,6 +60,10 @@ datatype Outer = Outer(inner: Option<Inner>)
 
 datatype Shape = circle(radius: int) | square(side: int)
 
+datatype RpcErrorView = RpcErrorView(code: int, message: string, data: Option<string>)
+
+datatype ProjectedOutcome = rpc_error(code: int, message: string, data: Option<string>) | done
+
 function evalPartial(e: Expr): int
 {
   match e {
@@ -583,6 +587,31 @@ lemma ternarySpecOpt_ensures(o: Option<Inner>, fallback: int)
 {
 }
 
+function projectedCodePure(error: RpcErrorView): int
+{
+  error.code
+}
+
+lemma projectedCodePure_ensures(error: RpcErrorView)
+  ensures (projectedCodePure(error) == error.code)
+{
+}
+
+function dispatchProjectedPure(outcome: ProjectedOutcome): int
+{
+  match outcome {
+    case rpc_error(i_outcome_code, i_outcome_message, i_outcome_data) =>
+      projectedCodePure(RpcErrorView(i_outcome_code, i_outcome_message, i_outcome_data))
+    case done =>
+      0
+  }
+}
+
+lemma dispatchProjectedPure_ensures(outcome: ProjectedOutcome)
+  ensures (outcome.rpc_error? ==> (dispatchProjectedPure(outcome) == outcome.code))
+{
+}
+
 method countAbove(arr: seq<int>, threshold: int) returns (res: int)
   ensures (res <= |arr|)
 {
@@ -699,4 +728,23 @@ method whileInvariantInMap(m: map<string, int>, k: string, reps: nat) returns (r
     i := (i + 1);
   }
   return total;
+}
+
+method projectedCode(error: RpcErrorView) returns (res: int)
+  ensures (res == error.code)
+{
+  var code := error.code;
+  return code;
+}
+
+method dispatchProjected(outcome: ProjectedOutcome) returns (res: int)
+  ensures (match outcome { case rpc_error(i_outcome_code, i_outcome_message, i_outcome_data) => (res == i_outcome_code) case _ => true })
+{
+  match outcome {
+    case rpc_error(i_outcome_code, i_outcome_message, i_outcome_data) =>
+      var i_t5 := projectedCode(RpcErrorView(i_outcome_code, i_outcome_message, i_outcome_data));
+      return i_t5;
+    case done =>
+      return 0;
+  }
 }
