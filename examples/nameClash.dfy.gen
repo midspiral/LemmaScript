@@ -7,6 +7,10 @@ function JSRem(a: int, b: int): int
   if a < 0 then -r else r
 }
 
+datatype ClashVerdict = ok | error(error: string)
+
+datatype HyphenVerdict = ok | rpc_error(code: int)
+
 datatype i_Box' = i_Box'(x: int)
 
 function delKey(d: map<string, int>, k: string): map<string, int>
@@ -92,6 +96,27 @@ function someEscCollision(i_x': int, i_x: int): bool
 
 lemma someEscCollision_ensures(i_x': int, i_x: int)
   ensures (someEscCollision(i_x', i_x) ==> (i_x' > 0))
+{
+}
+
+function constructorVsLocal(error: string): ClashVerdict
+{
+  ClashVerdict.error(error)
+}
+
+lemma constructorVsLocal_ensures(error: string)
+  ensures constructorVsLocal(error).error?
+  ensures (constructorVsLocal(error).error? ==> (constructorVsLocal(error).error == error))
+{
+}
+
+function isRpcError(verdict: HyphenVerdict): bool
+{
+  verdict.rpc_error?
+}
+
+lemma isRpcError_ensures(verdict: HyphenVerdict)
+  ensures (isRpcError(verdict) ==> verdict.rpc_error?)
 {
 }
 
