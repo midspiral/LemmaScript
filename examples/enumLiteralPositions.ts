@@ -1,28 +1,10 @@
 /**
- * Contextual lowering of string-literal-union members.
+ * Regression coverage for contextual lowering of string-literal unions.
  *
- * A bare `"ru"` becomes its datatype constructor (`Lang.ru`) when the position
- * it sits in has a known target type — that is what makes `x === "ru"` a
- * discriminant test rather than a string compare. Three shapes have to carry
- * that type further than the literal's immediate parent:
- *
- *   - A ternary's branches sit in the same target position as the ternary
- *     itself, so `return c ? "ru" : "en"` must lower like `return "ru"` /
- *     `return "en"` do. A `??` default is transparent the same way. Coercing
- *     the branches against *each other* only settles the mixed shape
- *     (`c ? lang : "en"`), where one side already carries the datatype.
- *   - An optional target (`Color | null`, `Color | undefined`) contributes the
- *     `Some(...)` wrap, so the literal has to be lowered against the payload
- *     type underneath the wrap rather than against the optional.
- *   - `const c = pick(n)` with no annotation: TS reports the widened
- *     `string | undefined`, and the string-union rescue has to see through the
- *     optional to recover `Color | undefined` — otherwise the narrowed payload
- *     is a bare string and `c === "red"` degrades to a string compare, taking
- *     the caller down with the callee.
- *
- * All three are value-side only: the `if`-statement spelling and the `ensures`
- * on the very same function already lowered correctly, so two spellings of one
- * function disagreed. See `coerceStr` (tools/src/resolve.ts).
+ * A literal such as `"ru"` must become `Lang.ru` whenever its contextual type
+ * is `Lang`. That context must reach ternary and `??` branches, pass through
+ * `Option<T>`, and survive inference of `T | undefined`; otherwise Dafny sees
+ * a raw string where a datatype constructor is required.
  */
 
 //@ backend dafny
