@@ -3,6 +3,16 @@
 -/
 import LemmaScript
 
+inductive ClashVerdict where
+  | ok : ClashVerdict
+  | error (error : String) : ClashVerdict
+deriving Repr, Inhabited
+
+inductive HyphenVerdict where
+  | ok : HyphenVerdict
+  | «rpc-error» (code : Int) : HyphenVerdict
+deriving Repr, Inhabited
+
 structure _Box where
   x : Int
 deriving Repr, Inhabited, DecidableEq
@@ -35,6 +45,12 @@ def callee (x : Int) : Int :=
 
 def someEscCollision (_x : Int) (i_x : Int) : Bool :=
   (single _x).any (fun _x => _x > 0)
+
+def constructorVsLocal (error : String) : ClashVerdict :=
+  ClashVerdict.error error
+
+def isRpcError (verdict : HyphenVerdict) : Bool :=
+  (match verdict with | .«rpc-error» .. => true | _ => false)
 
 def _foo (x : Int) : Int :=
   x

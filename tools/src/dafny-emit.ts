@@ -162,6 +162,13 @@ function escapeName(name: string): string {
   return escapeGeneratedName(name);
 }
 
+function isEmittedUserName(name: string): boolean {
+  for (const emitted of _userDafnyNames.values()) {
+    if (emitted === name) return true;
+  }
+  return false;
+}
+
 /** Allocate a toolchain-generated name (an ANF temp, a comprehension binder, a
  *  companion `_ensures` lemma). Escapes to a base, then freshens in the Dafny
  *  namespace so it can't collapse onto an escaped user name. Bypasses the user
@@ -490,7 +497,7 @@ function emitExpr(e: Expr): string {
       // Discriminant check: x == .Ctor → x.Ctor?
       const op = mapOp(e.op);
       if ((op === "==" || op === "!=") && e.right.kind === "constructor") {
-        const ctorName = escapeName(e.right.name.replace(/^\./, ""));
+        const ctorName = dafnyCtorName(e.right.name.replace(/^\./, ""));
         const pred = `${emitExpr(e.left)}.${ctorName}?`;
         return op === "!=" ? `(!${pred})` : pred;
       }
@@ -563,7 +570,12 @@ function emitExpr(e: Expr): string {
       // tags come from source strings ("spec-pure") that escapeName leaves alone.
       if (e.ctorOf) {
         const ctor = dafnyCtorName(e.fn);
-        return _ambiguousCtors.has(e.fn)
+        // A source local may have the same name as a discriminated-union
+        // variant (`const error = ...; return { kind: "error", error }`).
+        // The bare `error(error)` is then parsed as a call through the local.
+        // Qualify whenever the emitted constructor spelling is already claimed
+        // in the user namespace, as well as when two datatypes share it.
+        return _ambiguousCtors.has(e.fn) || isEmittedUserName(ctor)
           ? `${e.ctorOf}.${ctor}(${args.join(", ")})`
           : `${ctor}(${args.join(", ")})`;
       }

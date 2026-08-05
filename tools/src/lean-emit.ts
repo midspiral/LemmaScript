@@ -374,7 +374,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         const ctor = rhs.type ? _unionCtors.get(rhs.type)?.find(c => c.name === rhs.name) : undefined;
         if (ctor && ctor.fields.length > 0) {
           const [yes, no] = e.op === "=" ? ["true", "false"] : ["false", "true"];
-          return `(match ${emitExpr(e.left)} with | .${escapeName(rhs.name)} .. => ${yes} | _ => ${no})`;
+          return `(match ${emitExpr(e.left)} with | .${leanCtorName(rhs.name)} .. => ${yes} | _ => ${no})`;
         }
       }
       // `k in m` (map/set membership) → `m.contains k` in Lean. Dafny has

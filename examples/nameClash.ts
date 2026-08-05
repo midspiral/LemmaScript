@@ -117,6 +117,35 @@ export function resAssignOnly(x: number): number {
   return x;
 }
 
+// A discriminated-union constructor and a local may legitimately share a name.
+// Dafny must qualify the constructor (`ClashVerdict.error(error)`), rather than
+// interpreting the bare `error(error)` as a call through the string local.
+// The payload implication also makes the raw `\result` scrutinee exercise match-
+// binder sanitization instead of generating an identifier containing `\`.
+type ClashVerdict =
+  | { kind: "ok" }
+  | { kind: "error"; error: string };
+
+export function constructorVsLocal(error: string): ClashVerdict {
+  //@ verify
+  //@ ensures \result.kind === "error"
+  //@ ensures \result.kind === "error" ==> \result.error === error
+  return { kind: "error", error };
+}
+
+// String discriminants are constructor names in Dafny. Punctuation in a tag
+// must be sanitized in predicates as well as declarations (`rpc_error?`, not
+// the subtraction expression `rpc-error?`).
+type HyphenVerdict =
+  | { kind: "ok" }
+  | { kind: "rpc-error"; code: number };
+
+export function isRpcError(verdict: HyphenVerdict): boolean {
+  //@ verify
+  //@ ensures \result ==> verdict.kind === "rpc-error"
+  return verdict.kind === "rpc-error";
+}
+
 // Declaration-derived names escape too: the `_`-prefixed head mangles to `i_foo'`
 // (dodging the user `i_foo`), and its companion `_ensures` lemma — a generated
 // name — must mangle as well (`_foo_ensures` starts with `_`, which Dafny

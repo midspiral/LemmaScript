@@ -82,6 +82,17 @@ method resAssignOnly (x : Int) return (res' : Int)
     res := 1
     return x
 
+method constructorVsLocal (error : String) return (res : ClashVerdict)
+  ensures (match res with | .error .. => true | _ => false)
+  ensures (match res with | .error _result_error => _result_error = error | _ => true)
+  do
+    return Pure.constructorVsLocal error
+
+method isRpcError (verdict : HyphenVerdict) return (res : Bool)
+  ensures res → (match verdict with | .«rpc-error» .. => true | _ => false)
+  do
+    return Pure.isRpcError verdict
+
 method _foo (x : Int) return (res : Int)
   ensures res = x
   do
