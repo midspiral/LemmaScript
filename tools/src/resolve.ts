@@ -113,9 +113,33 @@ function resolveTsType(tsType: string, overrides: Map<string, string>, varName?:
   return parseTsType(tsType);
 }
 
-/** If expr is a string literal and targetTy is a user type, coerce the literal's type. */
+/** Infer a conditional's result type after its branches have been resolved or
+ *  contextually coerced. A void branch is the source-level null/undefined arm. */
+function conditionalResultTy(thenTy: Ty, elseTy: Ty): Ty {
+  let ty = thenTy.kind !== "unknown" ? thenTy : elseTy;
+  if (thenTy.kind === "void" && elseTy.kind !== "void" && elseTy.kind !== "unknown") {
+    ty = { kind: "optional", inner: elseTy };
+  } else if (elseTy.kind === "void" && thenTy.kind !== "void" && thenTy.kind !== "unknown") {
+    ty = { kind: "optional", inner: thenTy };
+  } else if (thenTy.kind === "optional" && elseTy.kind !== "optional" && elseTy.kind !== "unknown") {
+    ty = thenTy;
+  } else if (elseTy.kind === "optional" && thenTy.kind !== "optional" && thenTy.kind !== "unknown") {
+    ty = elseTy;
+  }
+  return ty;
+}
+
+/** Contextually type string literals as constructors. Ternary branches inherit
+ *  the ternary's target, and an optional target contributes its payload type —
+ *  the caller adds the Some wrapper only after the payload has been coerced. */
 function coerceStr(expr: TExpr, targetTy: Ty): TExpr {
-  if (expr.kind === "str" && targetTy.kind === "user") return { ...expr, ty: targetTy };
+  const payloadTy = targetTy.kind === "optional" ? targetTy.inner : targetTy;
+  if (expr.kind === "str" && payloadTy.kind === "user") return { ...expr, ty: payloadTy };
+  if (expr.kind === "conditional") {
+    const then_ = coerceStr(expr.then, payloadTy);
+    const else_ = coerceStr(expr.else, payloadTy);
+    return { ...expr, then: then_, else: else_, ty: conditionalResultTy(then_.ty, else_.ty) };
+  }
   return expr;
 }
 
@@ -144,6 +168,7 @@ function findSynthArrayUnion(name: string, typeDecls: TypeDeclInfo[]): TypeDeclI
  *  Returns `value` unchanged if no coercion applies (types already match,
  *  source is unknown, or no rule matches). */
 function coerceToTargetTy(value: TExpr, targetTy: Ty, typeDecls: TypeDeclInfo[]): TExpr {
+  value = coerceStr(value, targetTy);
   if (value.ty.kind === "unknown" || value.ty.kind === "void") return value;
   if (targetTy.kind === "optional" && value.ty.kind !== "optional") {
     return wrapSome(value, targetTy);
@@ -379,6 +404,17 @@ function isStringUnionTy(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
   return declOfTy(typeDecls, ty)?.kind === "string-union";
 }
 
+/** Whether ts-morph widened a string-union initializer to the declared string
+ *  shape. Inferred optional locals need the same rescue as bare locals:
+ *  `Option<string>` from TS must not erase an `Option<Color>` initializer. */
+function isWidenedStringUnionTy(declTy: Ty, initTy: Ty, typeDecls: TypeDeclInfo[]): boolean {
+  if (declTy.kind === "string" && isStringUnionTy(initTy, typeDecls)) return true;
+  if (declTy.kind === "optional" && initTy.kind === "optional") {
+    return isWidenedStringUnionTy(declTy.inner, initTy.inner, typeDecls);
+  }
+  return false;
+}
+
 /** Infer quantifier variable type from usage in body.
  *  If the variable is used as a map/set key (e.g. map.has(k), map.get(k)),
  *  return the collection's key type. Otherwise return null (default to int). */
@@ -534,17 +570,13 @@ function isDefinedCheckRawLambda(raw: RawExpr): boolean {
   return (isParam(body.left) && isUndef(body.right)) || (isParam(body.right) && isUndef(body.left));
 }
 
-/** Coerce call arguments: string literals → user types, non-optional → Some, pad missing optional args. */
+/** Coerce call arguments to their declared parameter slots and pad missing optional args. */
 function coerceCallArgs(args: TExpr[], fn: TExpr, ctx: Ctx): TExpr[] {
   if (fn.kind !== "var" || !ctx.fnParams.has(fn.name)) return args;
   const paramTys = ctx.fnParams.get(fn.name)!;
   args = args.map((a, i) => {
     if (i >= paramTys.length) return a;
-    a = coerceStr(a, paramTys[i]);
-    if (a.ty.kind !== "optional" && paramTys[i].kind === "optional") {
-      return wrapSome(a, paramTys[i]);
-    }
-    return a;
+    return coerceToTargetTy(a, paramTys[i], ctx.typeDecls);
   });
   // Pad missing optional args with None
   for (let i = args.length; i < paramTys.length; i++) {
@@ -838,7 +870,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       const paramTypes = fn.kind === "var" && ctx.fnParams.has(fn.name) ? ctx.fnParams.get(fn.name)! : null;
       let args = coerceCallArgs(rawArgs.map((a, i) => {
         let aCtx = argCtx;
-        if (paramTypes && i < paramTypes.length && paramTypes[i].kind === "user") {
+        if (paramTypes && i < paramTypes.length &&
+            (paramTypes[i].kind === "user" || paramTypes[i].kind === "array" || paramTypes[i].kind === "optional")) {
           aCtx = { ...aCtx, returnTy: paramTypes[i] };
         }
         return resolveExpr(a, aCtx);
@@ -955,7 +988,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       const inner: Ty = left.ty.kind === "optional" ? left.ty.inner : left.ty;
       // The default shares the result type, so coerce a string literal to a
       // string-union enum (e.g. `availableLevels[0] ?? "off"`).
-      const right = coerceStr(resolveExpr(e.right, ctx), inner);
+      const right = coerceToTargetTy(resolveExpr(e.right, ctx), inner, ctx.typeDecls);
       // `??` is only total when its default is: with a nullable right operand
       // (rule-chain style `ruleA(e) ?? ruleB(e) ?? null`), the result stays
       // optional — otherwise the enclosing chain level loses its optionality
@@ -1067,7 +1100,6 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         let value = resolveExpr(f.value, valueCtx);
         if (fieldDecl) {
           const declTy = fieldDecl.type!;
-          value = coerceStr(value, declTy);
           // Empty {} for map-typed fields → empty map (arrayLiteral with map type → emptyMap in transform)
           if (value.kind === "record" && value.fields.length === 0 && !value.spread && declTy.kind === "map") {
             value = { kind: "arrayLiteral", elems: [], ty: declTy };
@@ -1112,7 +1144,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         const elems = e.elems.map((el, i) => {
           const slot = slots[i];
           const r = resolveExpr(el, slot ? { ...ctx, returnTy: slot } : ctx);
-          return slot ? coerceStr(r, slot) : r;
+          return slot ? coerceToTargetTy(r, slot, ctx.typeDecls) : r;
         });
         return { kind: "arrayLiteral", elems, ty: { kind: "tuple", elems: elems.map(x => x.ty) } };
       }
@@ -1129,7 +1161,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         const r = resolveExpr(el, elemCtx);
         // Coerce a bare string-literal element to a string-union enum (e.g.
         // `["off", …]: ModelThinkingLevel[]`), like return/arg positions.
-        return expectedElem ? coerceStr(r, expectedElem) : r;
+        return expectedElem ? coerceToTargetTy(r, expectedElem, ctx.typeDecls) : r;
       });
       const elemTy: Ty = elems.length > 0 ? elems[0].ty : { kind: "unknown" };
       // No expected collection type: infer array vs tuple from the elements —
@@ -1202,18 +1234,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let else_ = resolveExpr(e.else, elseCtx);
       then_ = coerceStr(then_, else_.ty);
       else_ = coerceStr(else_, then_.ty);
-      let ty = then_.ty.kind !== "unknown" ? then_.ty : else_.ty;
-      if (then_.ty.kind === "void" && else_.ty.kind !== "void" && else_.ty.kind !== "unknown") {
-        ty = { kind: "optional", inner: else_.ty };
-      } else if (else_.ty.kind === "void" && then_.ty.kind !== "void" && then_.ty.kind !== "unknown") {
-        ty = { kind: "optional", inner: then_.ty };
-      } else if (then_.ty.kind === "optional" && else_.ty.kind !== "optional" && else_.ty.kind !== "unknown") {
-        // Asymmetric optional: one branch returns Option<T>, the other returns T.
-        // Widen to Option<T> so callers/return-coercion see the wider type.
-        ty = then_.ty;
-      } else if (else_.ty.kind === "optional" && then_.ty.kind !== "optional" && then_.ty.kind !== "unknown") {
-        ty = else_.ty;
-      }
+      const ty = conditionalResultTy(then_.ty, else_.ty);
       return { kind: "conditional", cond, then: then_, else: else_, ty };
     }
 
@@ -1317,7 +1338,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // one optional level when consulting returnTy.
       const initCtx = (declTy.kind === "user" || declTy.kind === "array" || declTy.kind === "optional")
         ? { ...ctx, returnTy: declTy } : ctx;
-      const init = coerceStr(resolveExpr(s.init, initCtx), declTy);
+      const init = coerceToTargetTy(resolveExpr(s.init, initCtx), declTy, ctx.typeDecls);
       let ty: Ty;
       if (isUnmodeledTy(declTy, ctx.typeDecls) && !isUnmodeledTy(init.ty, ctx.typeDecls)) {
         // ts-morph's declared type is opaque to us (an expanded union it made
@@ -1327,7 +1348,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         ty = declTy.kind === "optional" && init.ty.kind !== "optional"
           ? { kind: "optional", inner: init.ty }
           : init.ty;
-      } else if (declTy.kind === "string" && isStringUnionTy(init.ty, ctx.typeDecls) && !ctx.overrides.has(s.name)) {
+      } else if (isWidenedStringUnionTy(declTy, init.ty, ctx.typeDecls) && !ctx.overrides.has(s.name)) {
         // ts-morph widened a string-union to `string`; keep the initializer's
         // datatype so `local === "lit"` lowers to a discriminant test.
         ty = init.ty;
@@ -1352,23 +1373,12 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // to their named datatypes.
       const valueCtx = (targetTy.kind === "user" || targetTy.kind === "array" || targetTy.kind === "optional")
         ? { ...ctx, returnTy: targetTy } : ctx;
-      let value = coerceStr(resolveExpr(s.value, valueCtx), targetTy);
-      // Auto-wrap non-optional value in Some when target is optional
-      const isUndef = value.kind === "var" && value.name === "undefined";
-      if (targetTy.kind === "optional" && value.ty.kind !== "optional" && value.ty.kind !== "unknown" && !isUndef) {
-        value = wrapSome(value, targetTy);
-      }
+      const value = coerceToTargetTy(resolveExpr(s.value, valueCtx), targetTy, ctx.typeDecls);
       return [{ kind: "assign", target: s.target, value }, ctx.env];
     }
 
     case "return": {
-      let value = coerceStr(resolveExpr(s.value, ctx), ctx.returnTy);
-      // Wrap non-optional return value in Some when function returns optional
-      // Skip if already optional, void, or undefined (which maps to None)
-      const isUndef = value.kind === "var" && value.name === "undefined";
-      if (ctx.returnTy.kind === "optional" && value.ty.kind !== "optional" && !isUndef) {
-        value = wrapSome(value, ctx.returnTy);
-      }
+      const value = coerceToTargetTy(resolveExpr(s.value, ctx), ctx.returnTy, ctx.typeDecls);
       return [{ kind: "return", value }, ctx.env];
     }
 
@@ -1787,7 +1797,8 @@ export function resolveModule(raw: RawModule): TModule {
     // record literals on map-typed constants (e.g. `Record<string, number>`)
     // get their `ty` set to `map<...>` rather than `user("...")`.
     const valueCtx: Ctx = { ...emptyCtx, returnTy: ty };
-    return { name: c.name, ty, value: resolveExpr(c.value, valueCtx) };
+    const value = coerceToTargetTy(resolveExpr(c.value, valueCtx), ty, raw.typeDecls);
+    return { name: c.name, ty, value };
   });
   const moduleConstants = new Map<string, Ty>(constants.map(c => [c.name, c.ty]));
 
