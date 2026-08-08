@@ -7,8 +7,8 @@
 // emitting invalid Dafny (`array: readonly T[]`, `|array|` on a non-seq).
 
 export function firstOrZero(xs: readonly number[]): number {
-  //@ ensures implies(xs.length > 0, $result === xs[0])
-  //@ ensures implies(xs.length === 0, $result === 0)
+  //@ ensures xs.length > 0 ==> $result === xs[0]
+  //@ ensures xs.length === 0 ==> $result === 0
   return xs.length > 0 ? xs[0] : 0;
 }
 

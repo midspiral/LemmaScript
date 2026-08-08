@@ -422,7 +422,7 @@ function inferQuantVarType(varName: string, body: RawExpr, ctx: Ctx): Ty | null 
   // Spec membership uses a binary node (`x in collection`), unlike the
   // executable `.has(x)` / `.includes(x)` calls handled below. Infer the
   // quantified variable from the RHS collection so documented forms such as
-  // `forall(x => implies(x in $result, ...))` does not silently fall back to `int`.
+  // `forall(x => x in $result ==> ...)` does not silently fall back to `int`.
   if (body.kind === "binop" && body.op === "in" &&
       body.left.kind === "var" && body.left.name === varName) {
     const collectionTy = resolveExpr(body.right, ctx).ty;

@@ -24,18 +24,18 @@ export interface Config {
 // Partial override: each default survives iff `over` omits that key — the
 // property the old "keep only the last spread" lowering silently broke.
 //@ verify
-//@ ensures implies(over.retries === undefined, $result.retries === base.retries)
-//@ ensures implies(over.retries !== undefined, $result.retries === over.retries)
-//@ ensures implies(over.timeout === undefined, $result.timeout === base.timeout)
-//@ ensures implies(over.timeout !== undefined, $result.timeout === over.timeout)
+//@ ensures over.retries === undefined ==> $result.retries === base.retries
+//@ ensures over.retries !== undefined ==> $result.retries === over.retries
+//@ ensures over.timeout === undefined ==> $result.timeout === base.timeout
+//@ ensures over.timeout !== undefined ==> $result.timeout === over.timeout
 export function withDefaults(base: Config, over: Config): Config {
 	return { ...base, ...over };
 }
 
 // Optional override operand: `undefined` spreads nothing, so the base shows through.
 //@ verify
-//@ ensures implies(over === undefined, $result === base)
-//@ ensures implies(over !== undefined, $result === over)
+//@ ensures over === undefined ==> $result === base
+//@ ensures over !== undefined ==> $result === over
 export function applyOverride(base: Budgets, over?: Budgets): Budgets {
 	return { ...base, ...over };
 }

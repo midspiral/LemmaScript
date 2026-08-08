@@ -10,44 +10,44 @@
 
 // ── boolean: identity ───────────────────────────────────────
 function boolCond(b: boolean): number {
-  //@ ensures implies(b, $result === 1)
-  //@ ensures implies(!b, $result === 0)
+  //@ ensures b ==> $result === 1
+  //@ ensures !b ==> $result === 0
   if (b) return 1;
   return 0;
 }
 
 // ── number: falsy iff 0 — negatives are truthy ──────────────
 function numCond(n: number): number {
-  //@ ensures implies(n !== 0, $result === 1)
-  //@ ensures implies(n === 0, $result === 0)
+  //@ ensures n !== 0 ==> $result === 1
+  //@ ensures n === 0 ==> $result === 0
   if (n) return 1;
   return 0;
 }
 
 function numNot(n: number): number {
-  //@ ensures implies(n === 0, $result === 1)
-  //@ ensures implies(n !== 0, $result === 0)
+  //@ ensures n === 0 ==> $result === 1
+  //@ ensures n !== 0 ==> $result === 0
   if (!n) return 1;
   return 0;
 }
 
 function numTernary(n: number): number {
-  //@ ensures implies(n !== 0, $result === 1)
-  //@ ensures implies(n === 0, $result === 0)
+  //@ ensures n !== 0 ==> $result === 1
+  //@ ensures n === 0 ==> $result === 0
   return n ? 1 : 0;
 }
 
 // ── string: falsy iff empty ─────────────────────────────────
 function strCond(s: string): number {
-  //@ ensures implies(s.length > 0, $result === 1)
-  //@ ensures implies(s.length === 0, $result === 0)
+  //@ ensures s.length > 0 ==> $result === 1
+  //@ ensures s.length === 0 ==> $result === 0
   if (s) return 1;
   return 0;
 }
 
 function strNot(s: string): number {
-  //@ ensures implies(s.length === 0, $result === 1)
-  //@ ensures implies(s.length > 0, $result === 0)
+  //@ ensures s.length === 0 ==> $result === 1
+  //@ ensures s.length > 0 ==> $result === 0
   if (!s) return 1;
   return 0;
 }
@@ -70,15 +70,15 @@ function arrNot(xs: number[]): number {
 // with a number. JS puts each side in condition position separately, so this
 // means `i >= 0 && carry !== 0`, NOT `(i >= 0 && carry) !== 0`.
 function andMixed(i: number, carry: number): number {
-  //@ ensures implies(i >= 0 && carry !== 0, $result === 1)
-  //@ ensures implies(i < 0 || carry === 0, $result === 0)
+  //@ ensures i >= 0 && carry !== 0 ==> $result === 1
+  //@ ensures i < 0 || carry === 0 ==> $result === 0
   if (i >= 0 && carry) return 1;
   return 0;
 }
 
 function orMixed(s: string, n: number): number {
-  //@ ensures implies(s.length > 0 || n !== 0, $result === 1)
-  //@ ensures implies(s.length === 0 && n === 0, $result === 0)
+  //@ ensures s.length > 0 || n !== 0 ==> $result === 1
+  //@ ensures s.length === 0 && n === 0 ==> $result === 0
   if (s || n) return 1;
   return 0;
 }
@@ -86,8 +86,8 @@ function orMixed(s: string, n: number): number {
 // Coercion distributes through nested connectives; `c` is an array, so always
 // truthy, and the whole condition reduces to the disjunction on the left.
 function andOrNested(a: number, b: string, c: number[]): number {
-  //@ ensures implies(a !== 0 || b.length > 0, $result === 1)
-  //@ ensures implies(a === 0 && b.length === 0, $result === 0)
+  //@ ensures a !== 0 || b.length > 0 ==> $result === 1
+  //@ ensures a === 0 && b.length === 0 ==> $result === 0
   if ((a || b) && c) return 1;
   return 0;
 }
@@ -112,34 +112,34 @@ function carryScan(digits: number[]): number {
 
 // ── optional number: falsy iff absent OR 0 ──────────────────
 function optNumCond(o: number | undefined): number {
-  //@ ensures implies(o === undefined, $result === 0)
-  //@ ensures implies(o === 0, $result === 0)
-  //@ ensures implies(o !== undefined && o !== 0, $result === 1)
+  //@ ensures o === undefined ==> $result === 0
+  //@ ensures o === 0 ==> $result === 0
+  //@ ensures o !== undefined && o !== 0 ==> $result === 1
   if (o) return 1;
   return 0;
 }
 
 function optNumNot(o: number | undefined): number {
-  //@ ensures implies(o === undefined, $result === 1)
-  //@ ensures implies(o === 0, $result === 1)
-  //@ ensures implies(o !== undefined && o !== 0, $result === 0)
+  //@ ensures o === undefined ==> $result === 1
+  //@ ensures o === 0 ==> $result === 1
+  //@ ensures o !== undefined && o !== 0 ==> $result === 0
   if (!o) return 1;
   return 0;
 }
 
 // ── optional string: falsy iff absent OR empty ──────────────
 function optStrCond(o: string | undefined): number {
-  //@ ensures implies(o === undefined, $result === 0)
-  //@ ensures implies(o === "", $result === 0)
-  //@ ensures implies(o !== undefined && o !== "", $result === 1)
+  //@ ensures o === undefined ==> $result === 0
+  //@ ensures o === "" ==> $result === 0
+  //@ ensures o !== undefined && o !== "" ==> $result === 1
   if (o) return 1;
   return 0;
 }
 
 // ── explicit presence is NOT truthiness: Some(0) is present ──
 function optPresent(o: number | undefined): number {
-  //@ ensures implies(o !== undefined, $result === 1)
-  //@ ensures implies(o === undefined, $result === 0)
+  //@ ensures o !== undefined ==> $result === 1
+  //@ ensures o === undefined ==> $result === 0
   if (o !== undefined) return 1;
   return 0;
 }

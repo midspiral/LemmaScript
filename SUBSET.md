@@ -134,7 +134,7 @@ The `//@ ` comments are where you say what to prove. The common ones:
 - `//@ invariant P` / `//@ decreases D` — on loops.
 - `//@ verify` — opt this function in (once any function in a file is marked, only marked functions are verified).
 
-Spec clauses use valid TypeScript expression syntax, including arrow quantifiers (`forall(k => P)`, `exists((k: nat) => P)`), implication (`implies(P, Q)`), and the same operators and method calls as code. The full language — including ghost state, `//@ havoc`, `//@ extern`, and selective verification — is [SPEC.md §2](SPEC.md#2-the---annotation-language).
+The spec expressions support arrow-scoped quantifiers (`forall(k => P)`, `exists(k => P)`), implication (`==>`), and the same operators and method calls as code. The full language — including ghost state, `//@ havoc`, `//@ extern`, and selective verification — is [SPEC.md §2](SPEC.md#2-the---annotation-language).
 
 ## Where to go next
 

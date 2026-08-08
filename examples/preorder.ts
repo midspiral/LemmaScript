@@ -59,7 +59,7 @@ export function traverseBasic(root: Tree): Tree[] {
   let result: Tree[] = [];
   let stack: Tree[] = [root];
   while (stack.length > 0) {
-    //@ invariant forall((s: Tree) => implies(s in stack, s.kind === "Node"))
+    //@ invariant forall((s: Tree) => s in stack ==> s.kind === "Node")
     const current = stack[stack.length - 1];
     stack = [...stack.slice(0, stack.length - 1), ...childStack(current)];
     result = [...result, current];

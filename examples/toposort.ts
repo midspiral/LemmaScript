@@ -19,11 +19,11 @@ export function topologicalSort(
 
   // Phase 1: initialize maps
   for (const id of nodeIds) {
-    //@ invariant forall(k => implies(0 <= k && k < _id_idx, inDegree.has(nodeIds[k])))
-    //@ invariant forall(k => implies(inDegree.has(k), inDegree.get(k) === 0))
-    //@ invariant forall(k => implies(adjacency.has(k), adjacency.get(k) === []))
+    //@ invariant forall(k => 0 <= k && k < _id_idx ==> inDegree.has(nodeIds[k]))
+    //@ invariant forall(k => inDegree.has(k) ==> inDegree.get(k) === 0)
+    //@ invariant forall(k => adjacency.has(k) ==> adjacency.get(k) === [])
     //@ invariant nodeIdSet.size <= _id_idx
-    //@ invariant forall((k: nat) => implies(k < _id_idx, nodeIdSet.has(nodeIds[k])))
+    //@ invariant forall((k: nat) => k < _id_idx ==> nodeIdSet.has(nodeIds[k]))
     inDegree.set(id, 0);
     adjacency.set(id, []);
     //@ ghost nodeIdSet = nodeIdSet.add(id)
@@ -31,16 +31,16 @@ export function topologicalSort(
 
   // Phase 2: build adjacency and in-degree from deps
   for (const id of nodeIds) {
-    //@ invariant forall(k => implies(0 <= k && k < nodeIds.length, inDegree.has(nodeIds[k])))
-    //@ invariant forall(k => implies(adjacency.has(k), forall(v => implies(adjacency.get(k).includes(v), nodeIdSet.has(v)))))
-    //@ invariant forall(k => implies(inDegree.has(k), inDegree.get(k) >= 0))
-    //@ invariant forall((k: nat) => implies(k < nodeIds.length, nodeIdSet.has(nodeIds[k])))
+    //@ invariant forall(k => 0 <= k && k < nodeIds.length ==> inDegree.has(nodeIds[k]))
+    //@ invariant forall(k => adjacency.has(k) ==> forall(v => adjacency.get(k).includes(v) ==> nodeIdSet.has(v)))
+    //@ invariant forall(k => inDegree.has(k) ==> inDegree.get(k) >= 0)
+    //@ invariant forall((k: nat) => k < nodeIds.length ==> nodeIdSet.has(nodeIds[k]))
     const nodeDeps = deps.get(id);
     if (nodeDeps !== undefined) {
       inDegree.set(id, nodeDeps.size);
       for (const dep of nodeDeps) {
         //@ invariant nodeIdSet.has(id)
-        //@ invariant forall(k => implies(adjacency.has(k), forall(v => implies(adjacency.get(k).includes(v), nodeIdSet.has(v)))))
+        //@ invariant forall(k => adjacency.has(k) ==> forall(v => adjacency.get(k).includes(v) ==> nodeIdSet.has(v)))
         const adj = adjacency.get(dep);
         if (adj !== undefined) {
           adjacency.set(dep, [...adj, id]);
@@ -58,9 +58,9 @@ export function topologicalSort(
     //@ invariant enqueued.size <= _id_idx3
     //@ invariant enqueued.size <= queue.length
     //@ invariant queue.length <= enqueued.size
-    //@ invariant forall(k => implies(enqueued.has(k), exists(j => 0 <= j && j < _id_idx3 && nodeIds[j] === k)))
-    //@ invariant forall(k => implies(enqueued.has(k), inDegree.has(k) && inDegree.get(k) === 0))
-    //@ invariant forall(k => implies(enqueued.has(k), nodeIdSet.has(k)))
+    //@ invariant forall(k => enqueued.has(k) ==> exists(j => 0 <= j && j < _id_idx3 && nodeIds[j] === k))
+    //@ invariant forall(k => enqueued.has(k) ==> inDegree.has(k) && inDegree.get(k) === 0)
+    //@ invariant forall(k => enqueued.has(k) ==> nodeIdSet.has(k))
     if (inDegree.get(id) === 0) {
       //@ assert !enqueued.has(id)
       queue = [...queue, id];
@@ -80,10 +80,10 @@ export function topologicalSort(
     //@ invariant enqueued.size <= nodeIds.length
     //@ invariant enqueued.size <= queue.length
     //@ invariant queue.length <= enqueued.size
-    //@ invariant forall(k => implies(enqueued.has(k), inDegree.has(k) && inDegree.get(k) <= 0))
-    //@ invariant forall(k => implies(enqueued.has(k), nodeIdSet.has(k)))
+    //@ invariant forall(k => enqueued.has(k) ==> inDegree.has(k) && inDegree.get(k) <= 0)
+    //@ invariant forall(k => enqueued.has(k) ==> nodeIdSet.has(k))
     //@ invariant nodeIdSet.size <= nodeIds.length
-    //@ invariant forall(k => implies(adjacency.has(k), forall(v => implies(adjacency.get(k).includes(v), nodeIdSet.has(v)))))
+    //@ invariant forall(k => adjacency.has(k) ==> forall(v => adjacency.get(k).includes(v) ==> nodeIdSet.has(v)))
     //@ decreases nodeIds.length - sorted.length
     const id = queue[qHead];
     sorted = [...sorted, id];
@@ -97,11 +97,11 @@ export function topologicalSort(
         //@ invariant enqueued.size <= nodeIds.length
         //@ invariant enqueued.size <= queue.length
         //@ invariant queue.length <= enqueued.size
-        //@ invariant forall(k => implies(enqueued.has(k), inDegree.has(k) && inDegree.get(k) <= 0))
-        //@ invariant forall(k => implies(enqueued.has(k), nodeIdSet.has(k)))
+        //@ invariant forall(k => enqueued.has(k) ==> inDegree.has(k) && inDegree.get(k) <= 0)
+        //@ invariant forall(k => enqueued.has(k) ==> nodeIdSet.has(k))
         //@ invariant nodeIdSet.size <= nodeIds.length
-        //@ invariant forall(k => implies(adjacency.has(k), forall(v => implies(adjacency.get(k).includes(v), nodeIdSet.has(v)))))
-        //@ invariant forall(v => implies(neighbors.includes(v), nodeIdSet.has(v)))
+        //@ invariant forall(k => adjacency.has(k) ==> forall(v => adjacency.get(k).includes(v) ==> nodeIdSet.has(v)))
+        //@ invariant forall(v => neighbors.includes(v) ==> nodeIdSet.has(v))
         //@ assert nodeIdSet.has(neighbor)
         const deg = inDegree.get(neighbor);
         if (deg !== undefined) {

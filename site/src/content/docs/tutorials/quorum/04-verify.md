@@ -117,7 +117,7 @@ Here's a concrete example of the agent iterating. After several rounds, verifica
 The issue: `heatmapBatchOrderInvariant` has an ensures clause that accesses `heatmap(a)[s]`:
 
 ```typescript
-//@ ensures forall(s => implies(0 <= s && s < a.numSlots, heatmap(a)[s] === heatmap(b)[s]))
+//@ ensures forall(s => 0 <= s && s < a.numSlots ==> heatmap(a)[s] === heatmap(b)[s])
 ```
 
 Dafny needs to know that `s` is a valid index into `heatmap(a)`. That requires knowing `heatmap(a).length === a.numSlots`. The `heatmap` function proves this about itself, but because LemmaScript emits ensures as separate lemmas, that fact isn't automatically available here.
@@ -127,7 +127,7 @@ The fix: add the length fact directly to the annotations:
 ```typescript
 //@ ensures heatmap(a).length === a.numSlots
 //@ ensures heatmap(b).length === b.numSlots
-//@ ensures forall(s => implies(0 <= s && s < a.numSlots, heatmap(a)[s] === heatmap(b)[s]))
+//@ ensures forall(s => 0 <= s && s < a.numSlots ==> heatmap(a)[s] === heatmap(b)[s])
 ```
 
 The agent then regenerates the Dafny (`regen`) and updates the proof file.

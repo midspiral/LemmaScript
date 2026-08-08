@@ -36,15 +36,15 @@ export function allPairsImpl(nums: number[]): Set<Pair> {
   let i = 0;
   while (i < nums.length) {
     //@ invariant 0 <= i && i <= nums.length
-    //@ invariant forall((p: Pair) => implies(p in result, p.i < i && p.j < nums.length && p.i < p.j))
-    //@ invariant forall((x: nat) => forall((y: nat) => implies(x < i && y < nums.length && x < y, { i: x, j: y } in result)))
+    //@ invariant forall((p: Pair) => p in result ==> p.i < i && p.j < nums.length && p.i < p.j)
+    //@ invariant forall((x: nat) => forall((y: nat) => x < i && y < nums.length && x < y ==> { i: x, j: y } in result))
     //@ decreases nums.length - i
     let j = i + 1;
     while (j < nums.length) {
       //@ invariant i + 1 <= j && j <= nums.length
-      //@ invariant forall((p: Pair) => implies(p in result, p.i < i && p.j < nums.length && p.i < p.j || p.i === i && p.i < p.j && p.j < j))
-      //@ invariant forall((x: nat) => forall((y: nat) => implies(x < i && y < nums.length && x < y, { i: x, j: y } in result)))
-      //@ invariant forall((y: nat) => implies(i < y && y < j, { i: i, j: y } in result))
+      //@ invariant forall((p: Pair) => p in result ==> p.i < i && p.j < nums.length && p.i < p.j || p.i === i && p.i < p.j && p.j < j)
+      //@ invariant forall((x: nat) => forall((y: nat) => x < i && y < nums.length && x < y ==> { i: x, j: y } in result))
+      //@ invariant forall((y: nat) => i < y && y < j ==> { i: i, j: y } in result)
       //@ decreases nums.length - j
       result.add({ i: i, j: j });
       j = j + 1;
@@ -62,15 +62,15 @@ export function goodPairsImpl(nums: number[]): Set<Pair> {
   let i = 0;
   while (i < nums.length) {
     //@ invariant 0 <= i && i <= nums.length
-    //@ invariant forall((p: Pair) => implies(p in result, p.i < i && p.j < nums.length && p.i < p.j && nums[p.j] - nums[p.i] === p.j - p.i))
-    //@ invariant forall((x: nat) => forall((y: nat) => implies(x < i && y < nums.length && x < y && nums[y] - nums[x] === y - x, { i: x, j: y } in result)))
+    //@ invariant forall((p: Pair) => p in result ==> p.i < i && p.j < nums.length && p.i < p.j && nums[p.j] - nums[p.i] === p.j - p.i)
+    //@ invariant forall((x: nat) => forall((y: nat) => x < i && y < nums.length && x < y && nums[y] - nums[x] === y - x ==> { i: x, j: y } in result))
     //@ decreases nums.length - i
     let j = i + 1;
     while (j < nums.length) {
       //@ invariant i + 1 <= j && j <= nums.length
-      //@ invariant forall((p: Pair) => implies(p in result, p.i < i && p.j < nums.length && p.i < p.j && nums[p.j] - nums[p.i] === p.j - p.i || p.i === i && p.i < p.j && p.j < j && nums[p.j] - nums[p.i] === p.j - p.i))
-      //@ invariant forall((x: nat) => forall((y: nat) => implies(x < i && y < nums.length && x < y && nums[y] - nums[x] === y - x, { i: x, j: y } in result)))
-      //@ invariant forall((y: nat) => implies(i < y && y < j && nums[y] - nums[i] === y - i, { i: i, j: y } in result))
+      //@ invariant forall((p: Pair) => p in result ==> p.i < i && p.j < nums.length && p.i < p.j && nums[p.j] - nums[p.i] === p.j - p.i || p.i === i && p.i < p.j && p.j < j && nums[p.j] - nums[p.i] === p.j - p.i)
+      //@ invariant forall((x: nat) => forall((y: nat) => x < i && y < nums.length && x < y && nums[y] - nums[x] === y - x ==> { i: x, j: y } in result))
+      //@ invariant forall((y: nat) => i < y && y < j && nums[y] - nums[i] === y - i ==> { i: i, j: y } in result)
       //@ decreases nums.length - j
       if (nums[j] - nums[i] === j - i) {
         result.add({ i: i, j: j });
@@ -90,15 +90,15 @@ export function badPairsImpl(nums: number[]): Set<Pair> {
   let i = 0;
   while (i < nums.length) {
     //@ invariant 0 <= i && i <= nums.length
-    //@ invariant forall((p: Pair) => implies(p in result, p.i < i && p.j < nums.length && p.i < p.j && nums[p.j] - nums[p.i] !== p.j - p.i))
-    //@ invariant forall((x: nat) => forall((y: nat) => implies(x < i && y < nums.length && x < y && nums[y] - nums[x] !== y - x, { i: x, j: y } in result)))
+    //@ invariant forall((p: Pair) => p in result ==> p.i < i && p.j < nums.length && p.i < p.j && nums[p.j] - nums[p.i] !== p.j - p.i)
+    //@ invariant forall((x: nat) => forall((y: nat) => x < i && y < nums.length && x < y && nums[y] - nums[x] !== y - x ==> { i: x, j: y } in result))
     //@ decreases nums.length - i
     let j = i + 1;
     while (j < nums.length) {
       //@ invariant i + 1 <= j && j <= nums.length
-      //@ invariant forall((p: Pair) => implies(p in result, p.i < i && p.j < nums.length && p.i < p.j && nums[p.j] - nums[p.i] !== p.j - p.i || p.i === i && p.i < p.j && p.j < j && nums[p.j] - nums[p.i] !== p.j - p.i))
-      //@ invariant forall((x: nat) => forall((y: nat) => implies(x < i && y < nums.length && x < y && nums[y] - nums[x] !== y - x, { i: x, j: y } in result)))
-      //@ invariant forall((y: nat) => implies(i < y && y < j && nums[y] - nums[i] !== y - i, { i: i, j: y } in result))
+      //@ invariant forall((p: Pair) => p in result ==> p.i < i && p.j < nums.length && p.i < p.j && nums[p.j] - nums[p.i] !== p.j - p.i || p.i === i && p.i < p.j && p.j < j && nums[p.j] - nums[p.i] !== p.j - p.i)
+      //@ invariant forall((x: nat) => forall((y: nat) => x < i && y < nums.length && x < y && nums[y] - nums[x] !== y - x ==> { i: x, j: y } in result))
+      //@ invariant forall((y: nat) => i < y && y < j && nums[y] - nums[i] !== y - i ==> { i: i, j: y } in result)
       //@ decreases nums.length - j
       if (nums[j] - nums[i] !== j - i) {
         result.add({ i: i, j: j });

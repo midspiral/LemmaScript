@@ -30,7 +30,7 @@ interface QuoteElements {
 
 // A record-typed callback keeps one parameter while destructuring its fields.
 //@ ensures $result.length <= comparisonElements.Elements.length
-//@ ensures forall(e => implies(e in $result, e.QuoteId === quoteId && !e.ConditionallyHidden))
+//@ ensures forall(e => e in $result ==> e.QuoteId === quoteId && !e.ConditionallyHidden)
 export function visibleElementsForQuote(comparisonElements: QuoteElements, quoteId: string): QuoteElement[] {
   return comparisonElements.Elements.filter(
     ({ QuoteId, ConditionallyHidden }) => QuoteId === quoteId && !ConditionallyHidden

@@ -15,8 +15,8 @@ Above a function, `//@ ` annotations state what it needs and what it promises:
 //@ contract Never lets the charge exceed the available balance.
 //@ requires balance >= 0
 //@ requires amount >= 0
-//@ ensures implies(amount <= balance, $result === balance - amount)
-//@ ensures implies(amount > balance, $result === 0)
+//@ ensures amount <= balance ==> $result === balance - amount
+//@ ensures amount > balance ==> $result === 0
 function charge(balance: number, amount: number): number { /* … */ }
 ```
 

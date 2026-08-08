@@ -68,7 +68,7 @@ export function flipDoc(lang: Lang): Doc {
 /** `??` default — the nullish handler coerces a bare literal, and a ternary too. */
 export function orDefault(lang: Lang | undefined, toRu: boolean): Lang {
   //@ verify
-  //@ ensures implies(lang !== undefined, $result === lang)
+  //@ ensures lang !== undefined ==> $result === lang
   return lang ?? (toRu ? "ru" : "en");
 }
 
@@ -77,8 +77,8 @@ export function orDefault(lang: Lang | undefined, toRu: boolean): Lang {
 /** `T | undefined` return: the literal lowers against the payload, then wraps. */
 export function pick(n: number): Color | undefined {
   //@ verify
-  //@ ensures implies(n === 1, $result === "red")
-  //@ ensures implies(n !== 1 && n !== 2, $result === undefined)
+  //@ ensures n === 1 ==> $result === "red"
+  //@ ensures n !== 1 && n !== 2 ==> $result === undefined
   if (n === 1) return "red";
   if (n === 2) return "blue";
   return undefined;
@@ -87,7 +87,7 @@ export function pick(n: number): Color | undefined {
 /** `T | null` behaves identically — both parse as `optional<T>`. */
 export function pickNull(n: number): Color | null {
   //@ verify
-  //@ ensures implies(n === 1, $result === "red")
+  //@ ensures n === 1 ==> $result === "red"
   if (n === 1) return "red";
   return null;
 }
@@ -95,7 +95,7 @@ export function pickNull(n: number): Color | null {
 /** Optional-typed `const`, initialized by a ternary — both gaps at once. */
 export function pickLet(n: number): Color | undefined {
   //@ verify
-  //@ ensures implies(n === 1, $result === "red")
+  //@ ensures n === 1 ==> $result === "red"
   const c: Color | undefined = n === 1 ? "red" : undefined;
   return c;
 }
@@ -103,7 +103,7 @@ export function pickLet(n: number): Color | undefined {
 /** A caller composing over the optional — the shape that blocks transitively. */
 export function nameOf(n: number): string {
   //@ verify
-  //@ ensures implies(n === 1, $result === "red")
+  //@ ensures n === 1 ==> $result === "red"
   const c = pick(n);
   if (c === undefined) return "none";
   return c === "red" ? "red" : "blue";

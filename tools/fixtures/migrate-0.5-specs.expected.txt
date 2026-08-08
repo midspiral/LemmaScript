@@ -4,23 +4,23 @@ interface Pair {
 }
 
 /**
- * Upgrade `//@ ensures $result >= 0` and `//@ requires forall(k => implies(k in xs, xs[k] >= 0))`.
+ * Upgrade `//@ ensures $result >= 0` and `//@ requires forall(k => k in xs ==> xs[k] >= 0)`.
  */
 
 export function score(x: number): number {
   //@ type $result real
-  //@ ensures $result >= 0.6  // fractional thresholds survive migration
+  //@ ensures $result >= 0.6 // fractional thresholds survive migration
   return x;
 }
 
 export function contains(xs: number[], x: number, pairs: Set<Pair>): boolean {
-  //@ requires forall(k => implies(0 <= k && k < xs.length, xs[k] >= 0))
-  //@ ensures iff($result, exists((k: nat) => k < xs.length && xs[k] === x))
-  //@ ensures implies($result === true, implies(x === 0, xs.length > 0))
+  //@ requires forall(k => 0 <= k && k < xs.length ==> xs[k] >= 0)
+  //@ ensures $result <==> exists((k: nat) => k < xs.length && xs[k] === x)
+  //@ ensures $result === true ==> x === 0 ==> xs.length > 0
   let seen = new Set<number>();
   while (false) {
-    //@ invariant forall((v: int) => implies(v in seen, exists((j: nat) => j < xs.length && xs[j] === v)))
-    //@ invariant forall((p: Pair) => implies(p in pairs, { i: p.i, j: p.j } in pairs))
+    //@ invariant forall((v: int) => v in seen ==> exists((j: nat) => j < xs.length && xs[j] === v))
+    //@ invariant forall((p: Pair) => p in pairs ==> { i: p.i, j: p.j } in pairs)
   }
   return false;
 }

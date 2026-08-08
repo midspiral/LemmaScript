@@ -64,15 +64,15 @@ The headline promise: the heatmap is the count, and the recommendation is the ar
 
 ```typescript
 //@ ensures $result.length === e.numSlots
-//@ ensures forall(s => implies(0 <= s && s < e.numSlots, $result[s] === countFree(e.participants, s)))
+//@ ensures forall(s => 0 <= s && s < e.numSlots ==> $result[s] === countFree(e.participants, s))
 function heatmap(e: Event): number[]
 
-//@ ensures forall(s => implies(0 <= s && s < h.length, h[s] <= $result))
-//@ ensures implies(h.length > 0, exists(s => 0 <= s && s < h.length && h[s] === $result))
+//@ ensures forall(s => 0 <= s && s < h.length ==> h[s] <= $result)
+//@ ensures h.length > 0 ==> exists(s => 0 <= s && s < h.length && h[s] === $result)
 function maxCount(h: number[]): number
 
 //@ ensures $result.length === e.numSlots
-//@ ensures forall(s => implies(0 <= s && s < e.numSlots, $result[s] === (heatmap(e)[s] === maxCount(heatmap(e)) && maxCount(heatmap(e)) > 0)))
+//@ ensures forall(s => 0 <= s && s < e.numSlots ==> $result[s] === (heatmap(e)[s] === maxCount(heatmap(e)) && maxCount(heatmap(e)) > 0))
 function isBest(e: Event): boolean[]
 ```
 
@@ -100,7 +100,7 @@ Relational properties use the pure-carrier technique: the TypeScript body is `re
 
 ```typescript
 //@ requires wellFormed(e) && p.avail.length === e.numSlots
-//@ ensures forall(s => implies(0 <= s && s < e.numSlots, heatmap(addParticipant(e, p))[s] >= heatmap(e)[s]))
+//@ ensures forall(s => 0 <= s && s < e.numSlots ==> heatmap(addParticipant(e, p))[s] >= heatmap(e)[s])
 function heatmapMonotoneUnderJoin(e: Event, p: Participant): boolean { return true; }
 ```
 

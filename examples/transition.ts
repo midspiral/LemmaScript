@@ -6,7 +6,7 @@ type State = "idle" | "connecting" | "connected" | "closing"
 type Event = "connect" | "ack" | "close" | "timeout"
 
 function transition(state: State, event: Event): State {
-  //@ ensures implies(event === "timeout", $result === "idle")
+  //@ ensures event === "timeout" ==> $result === "idle"
 
   if (state === "idle" && event === "connect") return "connecting";
   if (state === "connecting" && event === "ack") return "connected";
@@ -23,7 +23,7 @@ function runSession(events: Event[]): State {
   let i = 0;
   while (i < events.length) {
     //@ invariant i <= events.length
-    //@ invariant implies(i > 0 && events[i - 1] === "timeout", state === "idle")
+    //@ invariant i > 0 && events[i - 1] === "timeout" ==> state === "idle"
     //@ decreases events.length - i
     state = transition(state, events[i]);
     i = i + 1;

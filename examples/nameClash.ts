@@ -12,7 +12,7 @@
 export function delKey(d: Record<string, number>, k: string): Record<string, number> {
   //@ verify
   //@ ensures !$result.has(k)
-  //@ ensures forall(j => implies(j !== k && d.has(j), $result.has(j) && $result.get(j) === d.get(j)))
+  //@ ensures forall(j => j !== k && d.has(j) ==> $result.has(j) && $result.get(j) === d.get(j))
   const { [k]: _drop, ...rest } = d;
   return rest;
 }
@@ -28,8 +28,8 @@ export function single(n: number): number[] {
 
 export function anyOdd(n: number): boolean {
   //@ verify
-  //@ ensures implies($result, n % 2 === 1)
-  //@ ensures implies(n % 2 === 1, $result)
+  //@ ensures $result ==> n % 2 === 1
+  //@ ensures n % 2 === 1 ==> $result
   return single(n).some(n => n % 2 === 1);
 }
 
@@ -102,7 +102,7 @@ export function tempClash(_t0: number, i_t0: number): number {
 // `i_x''` — else the receiver reads the bound var and the body is constant-true.
 export function someEscCollision(_x: number, i_x: number): boolean {
   //@ verify
-  //@ ensures implies($result, _x > 0)
+  //@ ensures $result ==> _x > 0
   return single(_x).some(_x => _x > 0);
 }
 
@@ -120,8 +120,8 @@ export function resAssignOnly(x: number): number {
 // A discriminated-union constructor and a local may legitimately share a name.
 // Dafny must qualify the constructor (`ClashVerdict.error(error)`), rather than
 // interpreting the bare `error(error)` as a call through the string local.
-// The payload implication also makes the source `$result` scrutinee exercise
-// internal result-binder sanitization.
+// The payload implication also makes the `$result` scrutinee exercise match-
+// binder sanitization instead of leaking its internal name into an identifier.
 type ClashVerdict =
   | { kind: "ok" }
   | { kind: "error"; error: string };
@@ -129,7 +129,7 @@ type ClashVerdict =
 export function constructorVsLocal(error: string): ClashVerdict {
   //@ verify
   //@ ensures $result.kind === "error"
-  //@ ensures implies($result.kind === "error", $result.error === error)
+  //@ ensures $result.kind === "error" ==> $result.error === error
   return { kind: "error", error };
 }
 
@@ -142,7 +142,7 @@ type HyphenVerdict =
 
 export function isRpcError(verdict: HyphenVerdict): boolean {
   //@ verify
-  //@ ensures implies($result, verdict.kind === "rpc-error")
+  //@ ensures $result ==> verdict.kind === "rpc-error"
   return verdict.kind === "rpc-error";
 }
 

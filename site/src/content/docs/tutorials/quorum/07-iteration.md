@@ -96,8 +96,8 @@ Tell your agent:
 export function participationRate(e: Event, s: number): number {
   //@ verify
   //@ requires e.numSlots >= 0 && 0 <= s && s < e.numSlots
-  //@ ensures implies(e.participants.length === 0, $result === 0)
-  //@ ensures implies(e.participants.length > 0, $result === (countFree(e.participants, s) * 100) / e.participants.length)
+  //@ ensures e.participants.length === 0 ==> $result === 0
+  //@ ensures e.participants.length > 0 ==> $result === (countFree(e.participants, s) * 100) / e.participants.length
   if (e.participants.length === 0) return 0
   return (countFree(e.participants, s) * 100) / e.participants.length
 }

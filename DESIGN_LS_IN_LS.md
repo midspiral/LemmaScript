@@ -482,7 +482,7 @@ P- and T-level accurately.
 | `narrow.ts` | 738 | P1 after §4 | Was 1114; §4 moved condition semantics to `condition-facts.ts`. |
 | `transform.ts` | 2388 | P1 by stages | Needs ctx work; port stage-by-stage (§7 trigger). |
 | `resolve.ts` | 1702 | Mostly | Push `parseTsType` to extraction; core is pure Raw→Typed. |
-| `specparser.ts` | 208 | Trusted frontend | Thin TypeScript-AST adapter plus recognition of spec intrinsics; stays with extraction. |
+| `specparser.ts` | 338 | Trusted frontend | TypeScript-AST adapter plus a small logical-operator spine; stays with extraction. |
 | `types.ts` | 212 | Split | `TypeDeclInfo` is portable data; `parseTsType` imports ts-morph and stays with extraction (§5.1). |
 | `dafny-emit.ts`/`lean-emit.ts` | 2292 | Partial | Untouched by §3; precedence logic is spec-worthy; regexes become string helpers. |
 | `extract.ts` | 2687 | Trusted frontend | Wraps ts-morph; stays unverified; `RawModule` is the trusted input. |

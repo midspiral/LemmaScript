@@ -31,6 +31,8 @@ expect_absent tools/fixtures/unsupported-dafny-emission.dfy
 expect_absent tools/fixtures/unsupported-extraction.types.lean
 expect_absent tools/fixtures/unsupported-extraction.def.lean
 
+npx tsx tools/test-specparser.ts
+
 migration_tmp="$(mktemp -d)"
 trap 'rm -rf "$migration_tmp"' EXIT
 cp tools/fixtures/migrate-0.5-specs.input.txt "$migration_tmp/case.ts"

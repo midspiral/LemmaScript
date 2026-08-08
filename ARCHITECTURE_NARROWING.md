@@ -42,8 +42,7 @@ unwrapped type. Following TS semantics, resolve only narrows simple shapes:
   unwrapped type. The field resolver computes the path of each access and
   looks it up. `&&` chains accumulate narrowings so each premise is in
   scope for later ones, matching TS narrowing through `&&`. The same
-  applies through `implies(...)` in spec contexts (represented as Raw IR
-  `==>`; the premise narrows the conclusion).
+  applies through `==>` in spec contexts (premise narrows conclusion).
 
 Complex expressions (call results, index ops) are **not** narrowed —
 matching TS, which requires the user to bind first:
@@ -200,7 +199,7 @@ this for variant-specific field access in the fallthrough).
 - **`typeof x === "string"`** for `string | number` unions. Our subset
   uses tagged unions, so this is rare.
 - **`instanceof`** — irrelevant in our subset (no class hierarchies).
-- **Compound discriminants** (`implies(x.kind === "a" || x.kind === "b", use(x.shared))`).
+- **Compound discriminants** (`x.kind === "a" || x.kind === "b" ==> use(x.shared)`).
   TS narrows to the variants that share the field; we don't.
 - **Complex-expression narrowing.** `if (m.get(k) !== undefined) use(m.get(k))` is rejected (TS-faithful). Users must bind first.
 - **Re-widening on mutation.** TS conservatively widens a narrowed access

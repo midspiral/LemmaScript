@@ -22,7 +22,7 @@ interface Post {
 export function hasTagFrom(tags: string[], tag: string, from: number): boolean {
   //@ verify
   //@ requires 0 <= from && from <= tags.length
-  //@ ensures implies($result === true, exists((k: nat) => k < tags.length && tags[k] === tag))
+  //@ ensures $result === true ==> exists((k: nat) => k < tags.length && tags[k] === tag)
   return tags.includes(tag, from);
 }
 
@@ -36,6 +36,6 @@ export function visibility(post: Post): string {
 /** Untagged posts have no tags. */
 export function hasTag(post: Post, tag: string): boolean {
   //@ verify
-  //@ ensures implies(post.tags === undefined, $result === false)
+  //@ ensures post.tags === undefined ==> $result === false
   return post.tags?.includes(tag) ?? false;
 }

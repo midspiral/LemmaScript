@@ -25,8 +25,8 @@ export interface Config {
 
 // §5.4: if-chain on discriminant → match (partial dispatch, natural default)
 function evalPartial(e: Expr): number {
-  //@ ensures implies(e.kind === "lit", $result === e.val)
-  //@ ensures implies(e.kind === "add", $result === e.a + e.b)
+  //@ ensures e.kind === "lit" ==> $result === e.val
+  //@ ensures e.kind === "add" ==> $result === e.a + e.b
   if (e.kind === "lit") return e.val;
   if (e.kind === "add") return e.a + e.b;
   return 0;
@@ -34,9 +34,9 @@ function evalPartial(e: Expr): number {
 
 // §5.4: switch on discriminant → match (exhaustive, no default needed)
 function evalSwitch(e: Expr): number {
-  //@ ensures implies(e.kind === "lit", $result === e.val)
-  //@ ensures implies(e.kind === "add", $result === e.a + e.b)
-  //@ ensures implies(e.kind === "neg", $result === 0 - e.inner)
+  //@ ensures e.kind === "lit" ==> $result === e.val
+  //@ ensures e.kind === "add" ==> $result === e.a + e.b
+  //@ ensures e.kind === "neg" ==> $result === 0 - e.inner
   switch (e.kind) {
     case "lit": return e.val;
     case "add": return e.a + e.b;
@@ -46,8 +46,8 @@ function evalSwitch(e: Expr): number {
 
 // §8.2: enum-like equality → constructor comparison
 function isHighPriority(p: Priority): boolean {
-  //@ ensures implies(p === "high", $result === true)
-  //@ ensures implies(p !== "high", $result === false)
+  //@ ensures p === "high" ==> $result === true
+  //@ ensures p !== "high" ==> $result === false
   if (p === "high") return true;
   return false;
 }
@@ -224,20 +224,20 @@ function countAbove(arr: number[], threshold: number): number {
   return count;
 }
 
-// §4.4: implication flattening (implies(A && B, C) → A → B → C)
+// §4.4: implication flattening (A && B ==> C → A → B → C)
 // §4.5: conjunction splitting (ensures A && B → two clauses)
 // §5.2: done_with, break
 function search(arr: number[], target: number): number {
   //@ type i nat
   //@ ensures $result >= -1 && $result < arr.length
-  //@ ensures implies($result >= 0, arr[$result] === target)
-  //@ ensures implies(arr.length > 0 && $result === -1, forall((k: nat) => implies(k < arr.length, arr[k] !== target)))
+  //@ ensures $result >= 0 ==> arr[$result] === target
+  //@ ensures arr.length > 0 && $result === -1 ==> forall((k: nat) => k < arr.length ==> arr[k] !== target)
   let result = -1;
   let i = 0;
   while (i < arr.length) {
     //@ invariant i <= arr.length
     //@ invariant result === -1 || (result >= 0 && result < arr.length && arr[result] === target)
-    //@ invariant forall((k: nat) => implies(k < i, arr[k] !== target))
+    //@ invariant forall((k: nat) => k < i ==> arr[k] !== target)
     //@ decreases arr.length - i
     //@ done_with result !== -1 || i >= arr.length
     if (arr[i] === target) {
@@ -265,11 +265,11 @@ function sumSearchResults(arr: number[], a: number, b: number): number {
 // ═══════════════════════════════════════════════════════════════
 
 function forOfContains(arr: number[], target: number): boolean {
-  //@ ensures implies($result === true, exists((k: nat) => k < arr.length && arr[k] === target))
+  //@ ensures $result === true ==> exists((k: nat) => k < arr.length && arr[k] === target)
   let found = false;
   for (const x of arr) {
-    //@ invariant implies(found === false, forall((k: nat) => implies(k < _x_idx, arr[k] !== target)))
-    //@ invariant implies(found === true, exists((k: nat) => k < arr.length && arr[k] === target))
+    //@ invariant found === false ==> forall((k: nat) => k < _x_idx ==> arr[k] !== target)
+    //@ invariant found === true ==> exists((k: nat) => k < arr.length && arr[k] === target)
     //@ done_with found === true || !(_x_idx < arr.length)
     if (x === target) {
       found = true;
@@ -310,8 +310,8 @@ interface Tree { middle: Middle | undefined }
 // `t.middle.leaf !== undefined` narrows both paths in the then-branch,
 // so `t.middle.leaf.value` typechecks as `number`. Lowers to nested matches.
 function deepAccess(t: Tree): number {
-  //@ ensures implies(t.middle !== undefined && t.middle.leaf !== undefined, $result === t.middle.leaf.value)
-  //@ ensures implies(t.middle === undefined, $result === 0)
+  //@ ensures t.middle !== undefined && t.middle.leaf !== undefined ==> $result === t.middle.leaf.value
+  //@ ensures t.middle === undefined ==> $result === 0
   if (t.middle !== undefined && t.middle.leaf !== undefined) {
     return t.middle.leaf.value;
   }
@@ -327,30 +327,30 @@ interface Outer { inner: Inner | undefined }
 
 // `?.field`: simple property access — single short-circuit
 function ocField(o: Outer | undefined): Inner | undefined {
-  //@ ensures implies(o === undefined, $result === undefined)
-  //@ ensures implies(o !== undefined, $result === o.inner)
+  //@ ensures o === undefined ==> $result === undefined
+  //@ ensures o !== undefined ==> $result === o.inner
   return o?.inner;
 }
 
 // `?.field.field`: ?. then non-? continuation — short-circuit only at first ?
 function ocChain(o: Outer | undefined): number | undefined {
-  //@ ensures implies(o === undefined, $result === undefined)
-  //@ ensures implies(o !== undefined && o.inner === undefined, $result === undefined)
-  //@ ensures implies(o !== undefined && o.inner !== undefined, $result === o.inner.val)
+  //@ ensures o === undefined ==> $result === undefined
+  //@ ensures o !== undefined && o.inner === undefined ==> $result === undefined
+  //@ ensures o !== undefined && o.inner !== undefined ==> $result === o.inner.val
   return o?.inner?.val;
 }
 
 // `?.foo()`: method call after ?. — peephole collapses set.has to `in`
 function ocMethodCall(s: Set<string> | undefined, k: string): boolean | undefined {
-  //@ ensures implies(s === undefined, $result === undefined)
-  //@ ensures implies(s !== undefined, $result === s.has(k))
+  //@ ensures s === undefined ==> $result === undefined
+  //@ ensures s !== undefined ==> $result === s.has(k)
   return s?.has(k);
 }
 
 // `?.[k]`: index access via ?.[ ] — Record indexes return Option<value>
 function ocIndex(m: Record<string, string> | undefined, k: string): string | undefined {
-  //@ ensures implies(m === undefined, $result === undefined)
-  //@ ensures implies(m !== undefined, $result === m[k])
+  //@ ensures m === undefined ==> $result === undefined
+  //@ ensures m !== undefined ==> $result === m[k]
   return m?.[k];
 }
 
@@ -360,15 +360,15 @@ function ocIndex(m: Record<string, string> | undefined, k: string): string | und
 
 // Optional var with default
 function nullishVar(o: Inner | undefined, fallback: number): number {
-  //@ ensures implies(o === undefined, $result === fallback)
-  //@ ensures implies(o !== undefined, $result === o.val)
+  //@ ensures o === undefined ==> $result === fallback
+  //@ ensures o !== undefined ==> $result === o.val
   return o?.val ?? fallback;
 }
 
 // Map.get + ?? — peephole collapses to `if k in m then m[k] else fallback`
 function nullishMapGet(m: Map<string, number>, k: string, fallback: number): number {
-  //@ ensures implies(!(k in m), $result === fallback)
-  //@ ensures implies(k in m, $result === m.get(k))
+  //@ ensures !(k in m) ==> $result === fallback
+  //@ ensures k in m ==> $result === m.get(k)
   return m.get(k) ?? fallback;
 }
 
@@ -376,8 +376,8 @@ function nullishMapGet(m: Map<string, number>, k: string, fallback: number): num
 // someMatch over m[k]; the peephole then collapses to
 // `if k in m then m[k] else default`, same as the `??` form above.
 function inCheckRecordGet(m: Record<string, number>, k: string, fallback: number): number {
-  //@ ensures implies(!(k in m), $result === fallback)
-  //@ ensures implies(k in m, $result === m[k])
+  //@ ensures !(k in m) ==> $result === fallback
+  //@ ensures k in m ==> $result === m[k]
   return k in m ? m[k] : fallback;
 }
 
@@ -390,24 +390,24 @@ function requiresInMap(m: Record<string, number>, k: string): number {
 
 // `if (k in m) { ... m[k] ... }` — positive check narrows the then-branch.
 function ifInMapBlock(m: Record<string, number>, k: string, fallback: number): number {
-  //@ ensures implies(k in m, $result === m[k])
-  //@ ensures implies(!(k in m), $result === fallback)
+  //@ ensures k in m ==> $result === m[k]
+  //@ ensures !(k in m) ==> $result === fallback
   if (k in m) return m[k];
   return fallback;
 }
 
 // `if (!(k in m)) return ...; rest` — early-return narrows the rest.
 function ifNotInMapEarlyReturn(m: Record<string, number>, k: string, fallback: number): number {
-  //@ ensures implies(!(k in m), $result === fallback)
-  //@ ensures implies(k in m, $result === m[k])
+  //@ ensures !(k in m) ==> $result === fallback
+  //@ ensures k in m ==> $result === m[k]
   if (!(k in m)) return fallback;
   return m[k];
 }
 
 // `//@ assert k in m` — atom from assert narrows subsequent accesses in the block.
 function assertInMap(m: Record<string, number>, k: string, fallback: number): number {
-  //@ ensures implies(k in m, $result === m[k])
-  //@ ensures implies(!(k in m), $result === fallback)
+  //@ ensures k in m ==> $result === m[k]
+  //@ ensures !(k in m) ==> $result === fallback
   if (!(k in m)) return fallback;
   //@ assert k in m
   return m[k];
@@ -438,24 +438,24 @@ function whileInvariantInMap(m: Record<string, number>, k: string, reps: number)
 
 // Var early-return: !o narrows o to Inner after the if
 function negVar(o: Inner | undefined, fallback: number): number {
-  //@ ensures implies(o === undefined, $result === fallback)
-  //@ ensures implies(o !== undefined, $result === o.val)
+  //@ ensures o === undefined ==> $result === fallback
+  //@ ensures o !== undefined ==> $result === o.val
   if (!o) return fallback;
   return o.val;
 }
 
 // Field-chain early-return: !o.inner narrows o.inner to Inner after the if
 function negField(o: Outer, fallback: number): number {
-  //@ ensures implies(o.inner === undefined, $result === fallback)
-  //@ ensures implies(o.inner !== undefined, $result === o.inner.val)
+  //@ ensures o.inner === undefined ==> $result === fallback
+  //@ ensures o.inner !== undefined ==> $result === o.inner.val
   if (!o.inner) return fallback;
   return o.inner.val;
 }
 
 // Bare optional truthiness: `if (o)` is the same as `if (o !== undefined)`.
 function truthyVar(o: Inner | undefined, fallback: number): number {
-  //@ ensures implies(o !== undefined, $result === o.val)
-  //@ ensures implies(o === undefined, $result === fallback)
+  //@ ensures o !== undefined ==> $result === o.val
+  //@ ensures o === undefined ==> $result === fallback
   if (o) return o.val;
   return fallback;
 }
@@ -464,9 +464,9 @@ function truthyVar(o: Inner | undefined, fallback: number): number {
 // Tests that ruleConditionalAndOptional walks its inner conditional so
 // nested optional checks become nested someMatches.
 function nestedAndTernary(o: Outer | undefined, fallback: number): number {
-  //@ ensures implies(o === undefined, $result === fallback)
-  //@ ensures implies(o !== undefined && o.inner === undefined, $result === fallback)
-  //@ ensures implies(o !== undefined && o.inner !== undefined, $result === o.inner.val)
+  //@ ensures o === undefined ==> $result === fallback
+  //@ ensures o !== undefined && o.inner === undefined ==> $result === fallback
+  //@ ensures o !== undefined && o.inner !== undefined ==> $result === o.inner.val
   return o !== undefined && o.inner !== undefined ? o.inner.val : fallback;
 }
 
@@ -480,8 +480,8 @@ type Shape =
 
 // `'radius' in s` narrows s to the variant containing 'radius' (circle).
 function area(s: Shape): number {
-  //@ ensures implies(s.kind === "circle", $result === s.radius * s.radius)
-  //@ ensures implies(s.kind === "square", $result === s.side * s.side)
+  //@ ensures s.kind === "circle" ==> $result === s.radius * (s.radius)
+  //@ ensures s.kind === "square" ==> $result === s.side * (s.side)
   if ('radius' in s) return s.radius * s.radius;
   return s.side * s.side;
 }
@@ -489,8 +489,8 @@ function area(s: Shape): number {
 // Negative discriminant + early return: `s.kind !== "circle"` narrows s to
 // circle in the rest of the block.
 function describeIfCircle(s: Shape, fallback: number): number {
-  //@ ensures implies(s.kind === "circle", $result === s.radius * s.radius)
-  //@ ensures implies(s.kind === "square", $result === fallback)
+  //@ ensures s.kind === "circle" ==> $result === s.radius * (s.radius)
+  //@ ensures s.kind === "square" ==> $result === fallback
   if (s.kind !== 'circle') return fallback;
   return s.radius * s.radius;
 }
@@ -528,7 +528,7 @@ function projectedCodePure(error: RpcErrorView): number {
 }
 
 function dispatchProjectedPure(outcome: ProjectedOutcome): number {
-  //@ ensures implies(outcome.kind === "rpc-error", $result === outcome.code)
+  //@ ensures outcome.kind === "rpc-error" ==> $result === outcome.code
   switch (outcome.kind) {
     case "rpc-error":
       return projectedCodePure(outcome);
@@ -546,7 +546,7 @@ function projectedCode(error: RpcErrorView): number {
 }
 
 function dispatchProjected(outcome: ProjectedOutcome): number {
-  //@ ensures implies(outcome.kind === "rpc-error", $result === outcome.code)
+  //@ ensures outcome.kind === "rpc-error" ==> $result === outcome.code
   switch (outcome.kind) {
     case "rpc-error":
       return projectedCode(outcome);

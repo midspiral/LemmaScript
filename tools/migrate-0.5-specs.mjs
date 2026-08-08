@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * Migrate LemmaScript 0.5 annotation expressions to the valid-TypeScript
- * syntax introduced for 0.6.
+ * Migrate LemmaScript 0.5 annotation expressions to the TypeScript-based
+ * hybrid syntax introduced for 0.6.
  *
  * This is deliberately a standalone, versioned codemod. It does not add 0.5
  * compatibility to the production parser.
@@ -19,7 +19,7 @@ const EXPRESSION_DIRECTIVES = new Set([
 ]);
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".md", ".mdx"]);
 const LEGACY_QUANTIFIER = /\b(forall|exists)\s*\(\s*([A-Za-z_]\w*)\s*(?::\s*([A-Za-z_]\w*))?\s*,/g;
-const LEGACY_SYNTAX = /\\result|<==>|==>|\b(?:forall|exists)\s*\(\s*[A-Za-z_]\w*\s*(?::\s*[A-Za-z_]\w*)?\s*,/;
+const LEGACY_SYNTAX = /\\result|\b(?:forall|exists)\s*\(\s*[A-Za-z_]\w*\s*(?::\s*[A-Za-z_]\w*)?\s*,/;
 
 function usage() {
   console.log(`Usage: node tools/migrate-0.5-specs.mjs [--check] [path ...]
@@ -109,22 +109,24 @@ function quantifierMetadata(source) {
 }
 
 const PRECEDENCE = {
-  "||": 2,
-  "&&": 3,
-  "===": 4,
-  "!==": 4,
-  "==": 4,
-  "!=": 4,
-  ">": 5,
-  "<": 5,
-  ">=": 5,
-  "<=": 5,
-  in: 5,
-  "+": 6,
-  "-": 6,
-  "*": 7,
-  "/": 7,
-  "%": 7,
+  "<==>": 1,
+  "==>": 2,
+  "||": 4,
+  "&&": 5,
+  "===": 6,
+  "!==": 6,
+  "==": 6,
+  "!=": 6,
+  ">": 7,
+  "<": 7,
+  ">=": 7,
+  "<=": 7,
+  in: 7,
+  "+": 8,
+  "-": 8,
+  "*": 9,
+  "/": 9,
+  "%": 9,
 };
 
 function printExpr(expr, metadata, parentPrecedence = 0) {
@@ -152,15 +154,11 @@ function printExpr(expr, metadata, parentPrecedence = 0) {
       text = String(expr.value);
       break;
     case "binop": {
-      if (expr.op === "==>" || expr.op === "<==>") {
-        const name = expr.op === "==>" ? "implies" : "iff";
-        text = `${name}(${printExpr(expr.left, metadata)}, ${printExpr(expr.right, metadata)})`;
-        break;
-      }
       const op = expr.op === "==" ? "===" : expr.op === "!=" ? "!==" : expr.op;
       ownPrecedence = PRECEDENCE[op];
       if (ownPrecedence === undefined) throw new Error(`Cannot migrate operator '${op}'`);
-      text = `${printExpr(expr.left, metadata, ownPrecedence)} ${op} ${printExpr(expr.right, metadata, ownPrecedence + 1)}`;
+      const rightAssociative = op === "==>" || op === "<==>";
+      text = `${printExpr(expr.left, metadata, rightAssociative ? ownPrecedence + 1 : ownPrecedence)} ${op} ${printExpr(expr.right, metadata, rightAssociative ? ownPrecedence : ownPrecedence + 1)}`;
       break;
     }
     case "unop":
@@ -180,7 +178,7 @@ function printExpr(expr, metadata, parentPrecedence = 0) {
       text = `${printExpr(expr.fn, metadata, ownPrecedence)}(${expr.args.map(arg => printExpr(arg, metadata)).join(", ")})`;
       break;
     case "conditional":
-      ownPrecedence = 1;
+      ownPrecedence = 3;
       text = `${printExpr(expr.cond, metadata, ownPrecedence + 1)} ? ${printExpr(expr.then, metadata, ownPrecedence)} : ${printExpr(expr.else, metadata, ownPrecedence)}`;
       break;
     case "arrayLiteral":
@@ -244,9 +242,11 @@ function migrateExpressionAndComment(source) {
   } catch (wholeError) {
     const commentAt = trailingCommentIndex(source);
     if (commentAt < 0) throw wholeError;
-    const expression = source.slice(0, commentAt).trimEnd();
+    const beforeComment = source.slice(0, commentAt);
+    const expression = beforeComment.trimEnd();
+    const spacing = beforeComment.slice(expression.length);
     const comment = source.slice(commentAt);
-    return `${migrateExpression(expression)}  ${comment}`;
+    return `${migrateExpression(expression)}${spacing}${comment}`;
   }
 }
 
