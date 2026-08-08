@@ -1508,15 +1508,17 @@ function qualifyCtor(name: string, type?: string): string {
   return mapped;
 }
 
-/** Translate a Lean match pattern to Dafny syntax.
+/** Translate a backend-neutral match pattern to Dafny syntax.
  *  ".ctorName field1 field2" → "ctorName(field1, field2)"
  *  ".ctorName" → "ctorName"
+ *  literal value → quoted Dafny string
  *  "_" → "_"
  */
 const CTOR_MAP: Record<string, string> = { "some": "Some", "none": "None" };
 
 function translatePattern(p: MatchPattern): string {
   if (p.kind === "wild") return "_";
+  if (p.kind === "literal") return emitExpr({ kind: "str", value: p.value });
   const ctorName = (Object.hasOwn(CTOR_MAP, p.ctor) ? CTOR_MAP[p.ctor] : undefined) ?? dafnyCtorName(p.ctor);
   if (p.binders.length === 0) return ctorName;
   return `${ctorName}(${p.binders.map(escapeName).join(", ")})`;

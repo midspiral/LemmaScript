@@ -201,9 +201,11 @@ function leanCtorName(name: string): string {
   return /^[A-Za-z_][A-Za-z0-9_'!?]*$/.test(name) ? name : `«${name}»`;
 }
 
-/** Render a match pattern to Lean syntax: `_`, `.none`, `.some x`, `.syn seq`. */
+/** Render a match pattern to Lean syntax: `_`, a quoted literal, or `.ctor args`. */
 function renderLeanPattern(p: MatchPattern): string {
-  return p.kind === "wild" ? "_" : "." + [leanCtorName(p.ctor), ...p.binders].join(" ");
+  if (p.kind === "wild") return "_";
+  if (p.kind === "literal") return emitExpr({ kind: "str", value: p.value });
+  return "." + [leanCtorName(p.ctor), ...p.binders].join(" ");
 }
 
 // A Bool-valued atom that does NOT coerce to Prop: an inlined union discriminator

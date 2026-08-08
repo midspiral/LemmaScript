@@ -138,6 +138,7 @@ lean_lib Examples where
     `«tuples.types», `«tuples.def», `«tuples.proof»,
     `«forContinue.types», `«forContinue.def», `«forContinue.proof»,
     `«arrayFind.types», `«arrayFind.def»,
-    `«ctorName.types», `«ctorName.def»
+    `«ctorName.types», `«ctorName.def»,
+    `«switchEnumField.types», `«switchEnumField.def», `«switchEnumField.proof»
   ]
   extraDepTargets := #[``downloadDependencies]

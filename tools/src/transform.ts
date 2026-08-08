@@ -8,7 +8,7 @@
 import type { TExpr, TStmt, TFunction, TModule, Ty } from "./typedir.js";
 import { tyEqual } from "./typedir.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, StmtMatchArm, ConstDecl, MatchPattern } from "./ir.js";
-import { anyExprInStmts, pWild, pCtor, patternBinders, patternBinds, patternCtor } from "./ir.js";
+import { anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
@@ -1371,7 +1371,11 @@ function matchToIfChains(stmts: Stmt[]): Stmt[] {
     if (s.kind !== "match") return [s];
 
     const arms = s.arms.map(a => ({ ...a, body: matchToIfChains(a.body) }));
-    const ctorArms = arms.filter(a => a.pattern.kind !== "wild");
+    // Literal-value matches are not user-inductive matches and need no
+    // discriminator rewrite. In particular, don't let a later ctor arm make us
+    // accidentally drop an earlier literal arm from a malformed mixed match.
+    if (arms.some(a => a.pattern.kind === "literal")) return [{ ...s, arms }];
+    const ctorArms = arms.filter(a => a.pattern.kind === "ctor");
     const firstCtor = ctorArms[0] ? patternCtor(ctorArms[0].pattern) : undefined;
     const decl = firstCtor ? declWithVariant(_typeDecls, firstCtor) : undefined;
     if (!decl) return [{ ...s, arms }]; // not a user union (e.g. Option) — leave as match
@@ -1840,18 +1844,41 @@ function mapStmtExprs(s: Stmt, r: (e: Expr) => Expr): Stmt {
  *  Returns null if any body transformation returns null (pure path abort). */
 function buildMatchArms<T>(
   cases: { name: string; body: TStmt[] }[],
-  varName: string | undefined, typeName: string | undefined, typeDecls: TypeDeclInfo[],
+  varName: string | undefined, typeName: string, typeDecls: TypeDeclInfo[],
   transformBody: (body: TStmt[], varName: string | undefined, fields: { name: string; tsType: string }[], ctorName?: string) => T | null
 ): { pattern: MatchPattern; body: T }[] | null {
-  const decl = typeName ? declOf(typeDecls, typeName) : undefined;
+  const decl = declOf(typeDecls, typeName);
+  if (!decl || (decl.kind !== "string-union" && decl.kind !== "discriminated-union")) {
+    throw new Error(`match type ${typeName} is not a declared union`);
+  }
   const arms: { pattern: MatchPattern; body: T }[] = [];
   for (const c of cases) {
     const variant = decl?.variants?.find(v => v.name === c.name);
+    const declared = decl.kind === "string-union"
+      ? decl.values?.includes(c.name)
+      : !!variant;
+    if (!declared) throw new Error(`case ${JSON.stringify(c.name)} is not a variant of ${typeName}`);
     const fields = variant?.fields ?? [];
     const pattern = buildMatchPattern(c.name, fields, varName);
     const body = transformBody(c.body, varName, fields, c.name);
     if (body === null) return null;
     arms.push({ pattern, body });
+  }
+  return arms;
+}
+
+/** Build value-pattern arms for a switch on a plain string. Case labels have
+ *  already been validated and decoded by extraction; unlike datatype cases,
+ *  these are literal values and introduce no constructor-field binders. */
+function buildLiteralMatchArms<T>(
+  cases: { name: string; body: TStmt[] }[],
+  transformBody: (body: TStmt[]) => T | null,
+): { pattern: MatchPattern; body: T }[] | null {
+  const arms: { pattern: MatchPattern; body: T }[] = [];
+  for (const c of cases) {
+    const body = transformBody(c.body);
+    if (body === null) return null;
+    arms.push({ pattern: pLiteral(c.name), body });
   }
   return arms;
 }
@@ -1944,19 +1971,28 @@ function remainingVariant(typeName: string, cases: { variant: string }[], typeDe
 /** `switch(obj.field)` is stripped at extraction to scrutinee `obj` + discriminant
  *  `field`, assuming `obj` is a discriminated union with `field` as its
  *  discriminant. When that's NOT so — e.g. `obj` is a plain record with an
- *  enum-typed `field` — the switch is really on the enum VALUE. This returns the
- *  enum scrutinee `obj.field` (+ the field's enum type) to match directly; null
+ *  enum- or string-typed `field` — the switch is really on the field VALUE. This
+ *  returns the scrutinee `obj.field` (+ its resolved type) to match directly; null
  *  for a genuine discriminant switch or `switch(localVar)`, which callers handle
  *  their usual way. Shared by emitSwitchStmt and transformPureSwitch. */
-function enumFieldSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): { scrutinee: Expr; enumTyName: string | undefined } | null {
+function enumFieldSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): { scrutinee: Expr; fieldTy: Ty | undefined } | null {
   if (!s.discriminant) return null;
   const objDecl = declOfTy(typeDecls, s.expr.ty);
   if (objDecl?.kind === "discriminated-union" && objDecl.discriminant === s.discriminant) return null;
   const fieldTy = objDecl?.kind === "record" ? objDecl.fields?.find(f => f.name === s.discriminant)?.type : undefined;
   return {
     scrutinee: { kind: "field", obj: transformExpr(s.expr), field: s.discriminant },
-    enumTyName: fieldTy?.kind === "user" ? fieldTy.name : undefined,
+    fieldTy,
   };
+}
+
+/** Declared datatype matched by a switch, excluding records/aliases/opaque
+ *  types. A plain `string` intentionally has no declaration and uses literal
+ *  patterns instead. */
+function switchCtorDecl(typeDecls: TypeDeclInfo[], ty: Ty | undefined): TypeDeclInfo | undefined {
+  if (!ty) return undefined;
+  const decl = declOfTy(typeDecls, ty);
+  return decl?.kind === "string-union" || decl?.kind === "discriminated-union" ? decl : undefined;
 }
 
 /** Stamp variant ctor info onto datatype updates of the match scrutinee in
@@ -1978,10 +2014,19 @@ function stampScrutineeUpdates(body: Stmt[], varName: string, ctorName: string, 
 function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Stmt {
   const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
   const ef = enumFieldSwitch(s, typeDecls);
+  const matchTy = ef ? ef.fieldTy : s.expr.ty;
+  const literalCases = matchTy?.kind === "string";
+  const ctorDecl = switchCtorDecl(typeDecls, matchTy);
+  if (!literalCases && !ctorDecl) {
+    const typeName = !matchTy ? "unknown" : matchTy.kind === "user" ? matchTy.name : matchTy.kind;
+    throw new Error(`switch scrutinee must be string-typed or a declared union, got ${typeName}`);
+  }
   const baseName = s.expr.ty.kind === "user" ? tyBaseName(s.expr.ty.name) : undefined;
-  const arms = ef
-    ? buildMatchArms(cases, undefined, ef.enumTyName, typeDecls, (body) => transformStmts(body, typeDecls))!
-    : buildMatchArms(cases, s.expr.kind === "var" ? s.expr.name : "?", s.expr.ty.kind === "user" ? s.expr.ty.name : undefined, typeDecls,
+  const arms = literalCases
+    ? buildLiteralMatchArms(cases, (body) => transformStmts(body, typeDecls))!
+    : ef
+      ? buildMatchArms(cases, undefined, ctorDecl!.name, typeDecls, (body) => transformStmts(body, typeDecls))!
+      : buildMatchArms(cases, s.expr.kind === "var" ? s.expr.name : "?", ctorDecl!.name, typeDecls,
         (body, vn, fields, ctorName) => {
           let out = transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls);
           if (ctorName && vn && baseName) out = stampScrutineeUpdates(out, vn, ctorName, baseName);
@@ -2205,7 +2250,12 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
   const ef = enumFieldSwitch(s, typeDecls);
   if (ef) {
     const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
-    const arms = buildMatchArms(cases, undefined, ef.enumTyName, typeDecls, (body) => transformPureBody(body, typeDecls));
+    const literalCases = ef.fieldTy?.kind === "string";
+    const ctorDecl = switchCtorDecl(typeDecls, ef.fieldTy);
+    if (!literalCases && !ctorDecl) return null;
+    const arms = literalCases
+      ? buildLiteralMatchArms(cases, (body) => transformPureBody(body, typeDecls))
+      : buildMatchArms(cases, undefined, ctorDecl!.name, typeDecls, (body) => transformPureBody(body, typeDecls));
     if (!arms) return null;
     if (s.defaultBody.length > 0) {
       const body = transformPureBody(s.defaultBody, typeDecls);
@@ -2214,8 +2264,9 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
     }
     return { kind: "match", scrutinee: ef.scrutinee, arms };
   }
-  const typeName = s.expr.ty.kind === "user" ? s.expr.ty.name : "";
-  if (!declOf(typeDecls, typeName)) return null;
+  const ctorDecl = switchCtorDecl(typeDecls, s.expr.ty);
+  if (!ctorDecl) return null;
+  const typeName = ctorDecl.name;
   const varName = s.expr.kind === "var" ? s.expr.name : undefined;
   const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
   const arms = buildMatchArms(cases, varName, typeName, typeDecls,
