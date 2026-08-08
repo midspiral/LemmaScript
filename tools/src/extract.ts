@@ -2137,7 +2137,10 @@ export function extractModule(sourceFile: SourceFile): RawModule {
                 value: extractExpr(init as Expression),
               });
             } catch (e) {
-              console.error(`WARNING: skipping const '${decl.getName()}': ${(e as Error).message}`);
+              const reason = e instanceof Error ? e.message : String(e);
+              throw new Error(
+                `Failed to extract const '${decl.getName()}' at ${sourceFile.getBaseName()}:${decl.getStartLineNumber()}: ${reason}`,
+              );
             }
           }
         }

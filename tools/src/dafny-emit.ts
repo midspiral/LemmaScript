@@ -1538,10 +1538,8 @@ export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSl
   const emittedPureDefs = new Set<string>();
 
   // Emit a decl, rolling back any preamble requirements it registered if it
-  // throws. A skipped decl must contribute neither text nor preambles — else a
-  // side-effecting `needPreamble` from a half-emitted decl leaves an unused
-  // preamble (e.g. `type Unknown` from a skipped const whose head is
-  // `unknown`-typed but whose value expr is unsupported).
+  // throws, so callers that catch an emission error never observe partial
+  // emitter state.
   const emitDeclTx = (d: Decl): string => {
     const saved = new Set(_neededPreambles);
     try {
@@ -1555,12 +1553,11 @@ export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSl
 
   // Emit declarations
   const declLines: string[] = [];
-  const skipped: string[] = [];
   for (const decl of file.decls) {
     if (decl.kind === "method" && emittedPureDefs.has(decl.name)) continue;
     if (decl.kind === "namespace") {
-      // Emit each inner decl individually — if one fails, the rest survive
-      // and failed defs fall back to their method wrappers
+      // Emit each inner declaration separately so failures name the exact
+      // pure declaration that could not be translated.
       for (const inner of decl.decls) {
         try {
           declLines.push("");
@@ -1568,10 +1565,9 @@ export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSl
           if (inner.kind === "def") emittedPureDefs.add(inner.name);
         } catch (e) {
           const name = "name" in inner ? inner.name : "unknown";
-          const msg = (e as Error).message;
-          console.error(`WARNING: skipping pure '${name}': ${msg}`);
-          declLines.push(`\n// LemmaScript: skipped pure ${name}`);
-          skipped.push(name);
+          const reason = e instanceof Error ? e.message : String(e);
+          const source = tsFileName ? ` in ${tsFileName}` : "";
+          throw new Error(`Dafny emission failed for '${name}'${source}: ${reason}`);
         }
       }
       continue;
@@ -1582,14 +1578,10 @@ export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSl
       if (decl.kind === "def-by-method") emittedPureDefs.add(decl.name);
     } catch (e) {
       const name = "name" in decl ? decl.name : "unknown";
-      const msg = (e as Error).message;
-      console.error(`WARNING: skipping '${name}': ${msg}`);
-      declLines.push(`// LemmaScript: skipped ${name}`);
-      skipped.push(name);
+      const reason = e instanceof Error ? e.message : String(e);
+      const source = tsFileName ? ` in ${tsFileName}` : "";
+      throw new Error(`Dafny emission failed for '${name}'${source}: ${reason}`);
     }
-  }
-  if (skipped.length > 0) {
-    console.error(`WARNING: ${skipped.length} declaration(s) skipped: ${skipped.join(", ")}`);
   }
 
   // Build output with needed preambles

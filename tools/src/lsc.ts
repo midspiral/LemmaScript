@@ -347,4 +347,9 @@ function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeL
   process.exit(1);
 }
 
-main();
+try {
+  main();
+} catch (e) {
+  console.error(`ERROR: ${e instanceof Error ? e.message : String(e)}`);
+  process.exitCode = 1;
+}

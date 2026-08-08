@@ -53,7 +53,8 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 
 At top level, `//@ skip` may precede a function, class, or `const` declaration;
 the declaration is omitted entirely. Use `//@ extern` instead when verified
-callers still need its signature and contract.
+callers still need its signature and contract. Extraction or emission failure
+for a selected declaration is fatal; `lsc` does not implicitly skip it.
 
 The expression language is a subset of TypeScript with verification extensions.
 
