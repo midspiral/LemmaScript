@@ -18,6 +18,7 @@ function threeHalves(): real
 
 lemma threeHalves_ensures()
   ensures ((threeHalves() * (2 as real)) == (3 as real))
+  ensures (threeHalves() == 1.5)
 {
 }
 

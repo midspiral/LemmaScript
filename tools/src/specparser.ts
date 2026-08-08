@@ -21,12 +21,13 @@ type Token =
 
 const MULTI_OPS = ["<==>", "==>", "===", "!==", "==", "!=", ">=", "<=", "&&", "||"];
 
-/** Hex / binary / octal / decimal integer, with optional numeric separators and
- *  an optional `n` (BigInt) suffix in capture group 1. Deliberately integer-only:
- *  a trailing `.` is left for the tokenizer to emit as punctuation, exactly as
- *  the previous digit-scanning loop did. */
-const INTEGER_LITERAL =
-  /^(?:(?:0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*)|(?:0[bB][01](?:_?[01])*)|(?:0[oO][0-7](?:_?[0-7])*)|(?:[0-9](?:_?[0-9])*))(n)?/;
+/** Numeric literals accepted in specs. BigInts are recognized first so their
+ *  exact value never passes through Number; ordinary numbers additionally
+ *  allow TypeScript's fractional and exponent forms. */
+const BIGINT_LITERAL =
+  /^(?:(?:0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*)|(?:0[bB][01](?:_?[01])*)|(?:0[oO][0-7](?:_?[0-7])*)|(?:[0-9](?:_?[0-9])*))n/;
+const NUMBER_LITERAL =
+  /^(?:(?:0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*)|(?:0[bB][01](?:_?[01])*)|(?:0[oO][0-7](?:_?[0-7])*)|(?:(?:[0-9](?:_?[0-9])*)(?:\.(?:[0-9](?:_?[0-9])*)?)?|\.(?:[0-9](?:_?[0-9])*))(?:[eE][+-]?(?:[0-9](?:_?[0-9])*))?)/;
 
 function tokenize(input: string): Token[] {
   const tokens: Token[] = [];
@@ -63,14 +64,16 @@ function tokenize(input: string): Token[] {
       continue;
     }
 
-    if (/[0-9]/.test(input[i])) {
-      const match = input.slice(i).match(INTEGER_LITERAL);
+    if (/[0-9]/.test(input[i]) || (input[i] === "." && /[0-9]/.test(input[i + 1]))) {
+      const rest = input.slice(i);
+      const bigintMatch = rest.match(BIGINT_LITERAL);
+      const match = bigintMatch ?? rest.match(NUMBER_LITERAL);
       if (!match) throw new Error(`Invalid numeric literal at ${i} in: ${input}`);
       const text = match[0];
       i += text.length;
       // The `n` suffix is meaningful, not noise: a BigInt keeps its exact value
       // as a decimal string instead of being rounded into a double.
-      if (match[1] === "n") tokens.push({ type: "bigint", value: normalizeBigIntLiteral(text) });
+      if (bigintMatch) tokens.push({ type: "bigint", value: normalizeBigIntLiteral(text) });
       else tokens.push({ type: "num", value: Number(text.replace(/_/g, "")) });
       continue;
     }
