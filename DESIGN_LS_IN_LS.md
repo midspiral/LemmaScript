@@ -482,7 +482,7 @@ P- and T-level accurately.
 | `narrow.ts` | 738 | P1 after §4 | Was 1114; §4 moved condition semantics to `condition-facts.ts`. |
 | `transform.ts` | 2388 | P1 by stages | Needs ctx work; port stage-by-stage (§7 trigger). |
 | `resolve.ts` | 1702 | Mostly | Push `parseTsType` to extraction; core is pure Raw→Typed. |
-| `specparser.ts` | 330 | P1 | Recursive-descent parser; classic verification fodder. |
+| `specparser.ts` | 279 | Trusted frontend | TypeScript parser plus a small LemmaScript-extension adapter; stays outside the verified core. |
 | `types.ts` | 212 | Split | `TypeDeclInfo` is portable data; `parseTsType` imports ts-morph and stays with extraction (§5.1). |
 | `dafny-emit.ts`/`lean-emit.ts` | 2292 | Partial | Untouched by §3; precedence logic is spec-worthy; regexes become string helpers. |
 | `extract.ts` | 2479 | Trusted frontend | Wraps ts-morph; stays unverified; `RawModule` is the trusted input. |
@@ -625,7 +625,7 @@ with no annotation is not started.*
    IR walkers; P1 contracts (freshness, keywords); CI self-run targets.
 9. **`peephole`, then `narrow`** in-subset with completeness + freshness
    contracts.
-10. **Portable `resolve` core, `specparser`, emitter cores** — transform
+10. **Portable `resolve` core and emitter cores** — transform
     ports stage-by-stage here, which is when §7's split naturally happens.
 11. **First T1 experiment:** execute one generated verified pass.
 

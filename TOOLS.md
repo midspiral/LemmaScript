@@ -69,7 +69,7 @@ When a call resolves to a pure function declared in a *different* `.ts` file, ex
 
 ## Spec Expression Parser
 
-The specparser (`specparser.ts`) parses `//@ ` annotation expressions into `RawExpr` nodes. Called by the resolve pass, not by extract or transform.
+The specparser (`specparser.ts`) parses `//@ ` annotation expressions into `RawExpr` nodes. It masks LemmaScript-only forms (`\result`, typed quantifiers, `==>`, `<==>`) with same-width TypeScript syntax, delegates ordinary expression parsing and precedence to TypeScript, then restores the extension nodes while converting the AST. It is called by the resolve pass, not by extract or transform.
 
 ## Adding a New Feature
 
@@ -94,7 +94,7 @@ interface Env { name: string; ty: Ty; parent: Env | null }
 - **Data-carrying variant equality**: `//@ requires m.tag === "b"` where `b` carries data throws an error. Use `switch` to destructure instead.
 - **Impure builtin in a narrowing ternary guard**: `opt !== undefined && x?.someHof(...) ? a : b` leaves `opt` un-unwrapped, and the backend rejects the output. Narrow's ternary rule declines on calls transform would hoist out of the arm (where the arm's binder is out of scope), and nothing else unwraps. Affects HOFs and mutators; registry-`pure` builtins are fine (`examples/pureGuard.ts`).
 - **For-of desugaring leaks index variable**: `_x_idx` is visible in `//@ invariant` and `//@ done_with` annotations.
-- **Spec annotations are strings**: `//@ ` expressions are parsed by the specparser, not extracted from ts-morph. They don't benefit from the structured raw IR.
+- **Spec annotations enter as strings**: comments are not TypeScript expression nodes, so the resolve pass reparses them. The specparser delegates ordinary syntax to TypeScript after masking LemmaScript-only forms, then produces the same structured Raw IR as body extraction.
 
 ## Lean Backend
 
