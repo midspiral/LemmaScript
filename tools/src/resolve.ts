@@ -419,6 +419,16 @@ function isWidenedStringUnionTy(declTy: Ty, initTy: Ty, typeDecls: TypeDeclInfo[
  *  If the variable is used as a map/set key (e.g. map.has(k), map.get(k)),
  *  return the collection's key type. Otherwise return null (default to int). */
 function inferQuantVarType(varName: string, body: RawExpr, ctx: Ctx): Ty | null {
+  // Spec membership uses a binary node (`x in collection`), unlike the
+  // executable `.has(x)` / `.includes(x)` calls handled below. Infer the
+  // quantified variable from the RHS collection so documented forms such as
+  // `forall(x, x in \result ==> ...)` do not silently fall back to `int`.
+  if (body.kind === "binop" && body.op === "in" &&
+      body.left.kind === "var" && body.left.name === varName) {
+    const collectionTy = resolveExpr(body.right, ctx).ty;
+    if (collectionTy.kind === "map") return collectionTy.key;
+    if (collectionTy.kind === "set" || collectionTy.kind === "array") return collectionTy.elem;
+  }
   // Look for membership/lookup builtins (map.has(k), map.get(k),
   // array.includes(k) — registry `argIsKey`) where k is our variable
   if (body.kind === "call" && body.fn.kind === "field" &&

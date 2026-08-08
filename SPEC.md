@@ -78,7 +78,7 @@ TYPE     := IDENT                             // 'nat', 'int', 'string', user ty
 
 **`\result`** refers to the function's return value (following Frama-C/ACSL convention). It is only valid in `ensures` annotations. The `\` prefix distinguishes it from any TS variable named `result`.
 
-**`forall(k, P)`** accepts an optional explicit type annotation, which may be **any** type — `forall(k: nat, …)`, `forall(s: string, …)`, `forall(x: MyType, …)`. When `k` is unannotated, its type is inferred: if `k` is used as a collection key or element (e.g., `map.has(k)`, `set.has(k)`, `arr.includes(k)`) → the collection's key/element type; otherwise `Int`/`int`. Same for `exists`.
+**`forall(k, P)`** accepts an optional explicit type annotation, which may be **any** type — `forall(k: nat, …)`, `forall(s: string, …)`, `forall(x: MyType, …)`. When `k` is unannotated, its type is inferred: if `k` is used as a collection key or element (e.g., `k in arr`, `map.has(k)`, `set.has(k)`, `arr.includes(k)`) → the collection's key/element type; otherwise `Int`/`int`. Same for `exists`.
 
 **`perm(a, b)`** is a spec-only predicate holding iff arrays `a` and `b` are reorderings of each other (equal as multisets); both must be arrays of the same equality-supporting element type. It has no runtime counterpart, so it is rejected outside `//@` annotations. It lowers to Dafny's `multiset(a) == multiset(b)` (a transparent `Perm<T(==)>` predicate, so companion `.dfy` proofs can reason with `multiset` directly). **Dafny backend only** (`//@ backend dafny`). Canonical use: lifting a count's concatenation-homomorphism to permutation invariance. See [`examples/perm.ts`](examples/perm.ts).
 
@@ -620,6 +620,8 @@ arr.some((x) => x < 0)   // → Lean: arr.any (fun x => x < 0)
 
 Lambda bodies can be expressions (`(x) => x + 1`) or statement blocks (`(x) => { ... }`). A block body is flattened to a single expression when its control flow allows — `if`/`let`/`return` shapes and a `switch` (lowered to a `match`-expression); bodies that can't reduce (loops, bare side effects) stay as statements, which the Dafny backend rejects (its lambdas are expression-only). A record literal returned from a callback is typed by the callback's return annotation, so `(x): Out => ({ ... })` constructs `Out(...)`, not an anonymous tuple.
 
+Flat object destructuring in a lambda parameter is supported, including aliases (`({ id, hidden: isHidden }) => ...`). It remains one callback parameter and lowers to immutable field bindings inside the lambda. Array patterns, nested object patterns, defaults, and rest properties are rejected during extraction with an explicit unsupported-pattern error.
+
 **filterMap.** `xs.map(x => ... | undefined).filter((x): x is T => x !== undefined)` drops the `undefined`s *and* unwraps to `seq<T>` — lowered to the proven `SeqFilterSome` preamble (a plain `Map(.value, Filter(.Some?, ...))` wouldn't verify, since `.value` is partial).
 
 **`.map` (Dafny).** Lowered to a `seq` comprehension with the element access inlined (`var x := arr[i]; e`), not `Seq.Map`. `Seq.Map` hides the element behind a closure, so a recursive rebuild walker (`Node(kids.map(walk))`) fails Dafny's termination check — the obligation gets quantified over the lambda's parameter instead of anchored at `kids[i]`. Applying a lambda inside the comprehension fails the same way, hence the inlining.
@@ -745,7 +747,7 @@ The unwrapped value is bound once via a `var` (or `let` expression in pure conte
 
 When the bound variable IS used after the match, the `let` is preserved and the `Option` value remains; only the inline match-on-`get` form is simplified.
 
-**Quantifier type inference:** When a quantifier variable is used as a collection key or element (e.g., `forall(k, map.has(k) ==> ...)`, `forall(v, arr.includes(v) ==> ...)`), the variable type is inferred from the collection's key/element type instead of defaulting to `Int`.
+**Quantifier type inference:** When a quantifier variable is used as a collection key or element (e.g., `forall(v, v in arr ==> ...)`, `forall(k, map.has(k) ==> ...)`, `forall(v, arr.includes(v) ==> ...)`), the variable type is inferred from the collection's key/element type instead of defaulting to `Int`.
 
 **Set iteration:** `for (const x of s)` where `s` is a `Set<T>` converts the set to an array first (Lean: `.toArray`, Dafny: `SetToSeq` helper), then iterates with a standard indexed loop.
 

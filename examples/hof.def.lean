@@ -23,3 +23,9 @@ method allPositive (arr : Array Int) return (res : Bool)
 method hasNegative (arr : Array Int) return (res : Bool)
   do
     return Pure.hasNegative arr
+
+method visibleElementsForQuote (comparisonElements : QuoteElements) (quoteId : String) return (res : Array QuoteElement)
+  ensures res.size ≤ (comparisonElements.Elements).size
+  ensures ∀ e : QuoteElement, res.contains e → e.QuoteId = quoteId ∧ (match e.ConditionallyHidden with | .some _value => ¬(_value) | .none => true)
+  do
+    return Pure.visibleElementsForQuote comparisonElements quoteId
