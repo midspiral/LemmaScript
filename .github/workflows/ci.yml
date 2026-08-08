@@ -31,6 +31,9 @@ jobs:
       - name: Typecheck examples
         run: npm run typecheck:examples
 
+      - name: Reject implicit declaration skips
+        run: ./tools/test-fixtures.sh
+
       - name: Regenerate Lean from TypeScript
         run: ./regen-lean.sh
 
