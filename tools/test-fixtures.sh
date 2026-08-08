@@ -30,3 +30,15 @@ expect_absent tools/fixtures/unsupported-dafny-emission.dfy.gen
 expect_absent tools/fixtures/unsupported-dafny-emission.dfy
 expect_absent tools/fixtures/unsupported-extraction.types.lean
 expect_absent tools/fixtures/unsupported-extraction.def.lean
+
+migration_tmp="$(mktemp -d)"
+trap 'rm -rf "$migration_tmp"' EXIT
+cp tools/fixtures/migrate-0.5-specs.input.txt "$migration_tmp/case.ts"
+
+expect_failure \
+  "migration check missed 0.5 spec syntax" \
+  node tools/migrate-0.5-specs.mjs --check "$migration_tmp/case.ts"
+
+node tools/migrate-0.5-specs.mjs "$migration_tmp/case.ts"
+diff -u tools/fixtures/migrate-0.5-specs.expected.txt "$migration_tmp/case.ts"
+node tools/migrate-0.5-specs.mjs --check "$migration_tmp/case.ts"

@@ -71,6 +71,18 @@ When a call resolves to a pure function declared in a *different* `.ts` file, ex
 
 The specparser (`specparser.ts`) asks the TypeScript parser for an expression AST, then converts the supported nodes directly to `RawExpr`. It recognizes four valid-TS intrinsic calls — `forall(k => P)`, `exists(k => P)`, `implies(P, Q)`, and `iff(P, Q)` — plus the reserved `$result` identifier. It has no tokenizer or expression grammar of its own. It is called by resolve, not extract or transform.
 
+### Migrating 0.5 specifications
+
+The standalone `tools/migrate-0.5-specs.mjs` codemod rewrites the pre-0.6 annotation syntax through the frozen 0.5 parser, preserving the parsed expression rather than applying textual substitutions. From a case-study repository beside LemmaScript:
+
+```sh
+node ../LemmaScript/tools/migrate-0.5-specs.mjs --check .  # preview; exits non-zero when changes are needed
+node ../LemmaScript/tools/migrate-0.5-specs.mjs .          # rewrite tracked TypeScript and Markdown
+../LemmaScript/tools/check.sh dafny                         # or lean
+```
+
+Review and commit the source diff normally. Any annotation the codemod cannot translate is left unchanged, reported with its file and line, and causes a non-zero exit. The production parser has no 0.5 compatibility path.
+
 ## Adding a New Feature
 
 1. **Extract**: add the TS construct to Raw IR.
