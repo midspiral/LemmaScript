@@ -15,3 +15,10 @@ export function member(arr: number[], x: number): boolean {
   const s = new Set(arr);
   return s.has(x);
 }
+
+// A primitive quantifier type is a TypeScript keyword, not an expression
+// identifier; the spec parser must preserve it while delegating to TS.
+export function stringMember(arr: string[], x: string): boolean {
+  //@ ensures \result <==> exists(value: string, value in arr && value === x)
+  return arr.includes(x);
+}

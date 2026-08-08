@@ -59,14 +59,21 @@ function maskExtensions(source: string): string {
     else if (source.startsWith("\\result", token.pos)) overwrite(chars, token.pos, "$result");
 
     // The existing grammar permits exactly one identifier for both binder and
-    // type. Replacing only this colon lets TS parse it as a three-argument call.
+    // type. Mask those tokens into a valid three-argument TypeScript call.
+    const binder = tokens[i + 2];
+    const varType = tokens[i + 4];
     if ((token.text === "forall" || token.text === "exists") &&
         tokens[i + 1]?.kind === ts.SyntaxKind.OpenParenToken &&
-        tokens[i + 2]?.kind === ts.SyntaxKind.Identifier &&
+        binder && /^[a-zA-Z_][a-zA-Z_0-9]*$/.test(binder.text) &&
         tokens[i + 3]?.kind === ts.SyntaxKind.ColonToken &&
-        tokens[i + 4]?.kind === ts.SyntaxKind.Identifier &&
+        varType && /^[a-zA-Z_][a-zA-Z_0-9]*$/.test(varType.text) &&
         tokens[i + 5]?.kind === ts.SyntaxKind.CommaToken) {
       overwrite(chars, tokens[i + 3].pos, ",");
+      // Primitive type names such as `string` and `boolean` are TS keywords,
+      // not expressions. Give the temporary binder and type same-width safe
+      // identifiers; the converter recovers their original source text.
+      overwrite(chars, binder.pos, "_".repeat(binder.text.length));
+      overwrite(chars, varType.pos, "_".repeat(varType.text.length));
     }
   }
   return chars.join("");
@@ -127,7 +134,7 @@ function nodeSource(node: ts.Node, ctx: ConvertCtx): string {
 }
 
 function convertChild(node: ts.Expression, ctx: ConvertCtx): RawExpr {
-  return parseExpr(nodeSource(node, ctx));
+  return parseExprInner(nodeSource(node, ctx));
 }
 
 function convertExpr(node: ts.Expression, ctx: ConvertCtx): RawExpr {
@@ -172,8 +179,8 @@ function convertExpr(node: ts.Expression, ctx: ConvertCtx): RawExpr {
       }
       return {
         kind,
-        var: node.arguments[0].text,
-        varType: varTypeNode?.text ?? "int",
+        var: nodeSource(node.arguments[0], ctx),
+        varType: varTypeNode ? nodeSource(varTypeNode, ctx) : "int",
         body: convertChild(node.arguments[typed ? 2 : 1], ctx),
       };
     }
@@ -264,16 +271,25 @@ function parseOrdinary(source: string): RawExpr {
   return convertExpr(initializer.expression, { source, sourceFile });
 }
 
-export function parseExpr(input: string): RawExpr {
+function parseExprInner(input: string): RawExpr {
   const source = input.trim();
   const split = findExtensionSplit(source);
   if (split) {
     return {
       kind: "binop",
       op: split.op,
-      left: parseExpr(source.slice(0, split.pos)),
-      right: parseExpr(source.slice(split.pos + split.op.length)),
+      left: parseExprInner(source.slice(0, split.pos)),
+      right: parseExprInner(source.slice(split.pos + split.op.length)),
     };
   }
   return parseOrdinary(source);
+}
+
+export function parseExpr(input: string): RawExpr {
+  try {
+    return parseExprInner(input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message}\n  in spec: ${input.trim()}`);
+  }
 }

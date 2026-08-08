@@ -18,3 +18,13 @@ lemma member_ensures(arr: seq<int>, x: int)
   ensures (member(arr, x) <==> exists i: nat :: ((i < |arr|) && (arr[i] == x)))
 {
 }
+
+function stringMember(arr: seq<string>, x: string): bool
+{
+  (x in arr)
+}
+
+lemma stringMember_ensures(arr: seq<string>, x: string)
+  ensures (stringMember(arr, x) <==> exists value :: ((value in arr) && (value == x)))
+{
+}

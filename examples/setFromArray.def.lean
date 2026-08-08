@@ -15,3 +15,8 @@ method member (arr : Array Int) (x : Int) return (res : Bool)
   ensures res ↔ (∃ i : Nat, i < arr.size ∧ arr[i]! = x)
   do
     return Pure.member arr x
+
+method stringMember (arr : Array String) (x : String) return (res : Bool)
+  ensures res ↔ (∃ value : String, arr.contains value ∧ value = x)
+  do
+    return Pure.stringMember arr x

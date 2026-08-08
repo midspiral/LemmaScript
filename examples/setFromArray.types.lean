@@ -13,4 +13,7 @@ def member (arr : Array Int) (x : Int) : Bool :=
   let s := Std.HashSet.ofList arr.toList
   s.contains x
 
+def stringMember (arr : Array String) (x : String) : Bool :=
+  arr.contains x
+
 end Pure
