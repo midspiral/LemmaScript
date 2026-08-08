@@ -69,7 +69,7 @@ When a call resolves to a pure function declared in a *different* `.ts` file, ex
 
 ## Spec Expression Parser
 
-The specparser (`specparser.ts`) uses TypeScript's scanner and parser for literals and expression structure, then converts the supported AST nodes to `RawExpr`. The only non-TypeScript tokens are right-associative `==>` and `<==>`: they are masked before parsing and a small operator-spine pass restores their precedence below `?:` and `||`. Quantifiers use valid arrow syntax (`forall(k => P)`, `exists(k => P)`), and `$result` is the reserved return-value identifier. It is called by resolve, not extract or transform.
+The specparser (`specparser.ts`) uses TypeScript's scanner and parser for literals and expression structure, then converts the supported AST nodes to `RawExpr`. The only non-TypeScript tokens are right-associative `==>` and `<==>`: they are masked before parsing and a small operator-spine pass restores their precedence below `?:` and `||`. Quantifiers use valid arrow syntax (`forall(k => P)`, `exists(k => P)`), and `$result` is the reserved return-value identifier. It is called by resolve, not extract or transform. [`SPECPARSER.md`](SPECPARSER.md) documents the hybrid boundary, precedence reconstruction, and maintenance invariants.
 
 ### Migrating 0.5 specifications
 
