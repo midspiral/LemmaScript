@@ -12,10 +12,6 @@
  * *integer* division (`3 / 2 == 1`), so a program could prove postconditions
  * that are false at runtime. The functions below must verify only under
  * real-division semantics.
- *
- * NOTE: postconditions are stated multiplicatively (`\result * b === a`) rather
- * than with a real literal like `1.5`, because the spec lexer does not yet
- * tokenize decimal literals — a separate, related gap.
  */
 
 //@ backend dafny
@@ -25,6 +21,7 @@
 export function threeHalves(): number {
   //@ type \result real
   //@ ensures \result * 2 === 3
+  //@ ensures \result === 1.5
   return 3 / 2;
 }
 
