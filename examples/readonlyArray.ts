@@ -7,13 +7,13 @@
 // emitting invalid Dafny (`array: readonly T[]`, `|array|` on a non-seq).
 
 export function firstOrZero(xs: readonly number[]): number {
-  //@ ensures xs.length > 0 ==> \result === xs[0]
-  //@ ensures xs.length === 0 ==> \result === 0
+  //@ ensures implies(xs.length > 0, $result === xs[0])
+  //@ ensures implies(xs.length === 0, $result === 0)
   return xs.length > 0 ? xs[0] : 0;
 }
 
 export function lengthOf<T>(xs: ReadonlyArray<T>): number {
-  //@ ensures \result === xs.length
+  //@ ensures $result === xs.length
   //@ type T
   return xs.length;
 }

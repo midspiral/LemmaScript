@@ -11,8 +11,8 @@
 // and the frame postcondition below is falsified.
 export function delKey(d: Record<string, number>, k: string): Record<string, number> {
   //@ verify
-  //@ ensures !\result.has(k)
-  //@ ensures forall(j, j !== k && d.has(j) ==> \result.has(j) && \result.get(j) === d.get(j))
+  //@ ensures !$result.has(k)
+  //@ ensures forall(j => implies(j !== k && d.has(j), $result.has(j) && $result.get(j) === d.get(j)))
   const { [k]: _drop, ...rest } = d;
   return rest;
 }
@@ -22,14 +22,14 @@ export function delKey(d: Record<string, number>, k: string): Record<string, num
 // must force the binder to `n'`, or the body is constant-true.
 export function single(n: number): number[] {
   //@ verify
-  //@ ensures \result.length === 1 && \result[0] === n
+  //@ ensures $result.length === 1 && $result[0] === n
   return [n];
 }
 
 export function anyOdd(n: number): boolean {
   //@ verify
-  //@ ensures \result ==> n % 2 === 1
-  //@ ensures n % 2 === 1 ==> \result
+  //@ ensures implies($result, n % 2 === 1)
+  //@ ensures implies(n % 2 === 1, $result)
   return single(n).some(n => n % 2 === 1);
 }
 
@@ -38,7 +38,7 @@ export function anyOdd(n: number): boolean {
 // names merge and the function returns 1 for every input.
 export function underscoreVsMangled(i_x: number): number {
   //@ verify
-  //@ ensures \result === i_x
+  //@ ensures $result === i_x
   const _x = 1;
   return i_x;
 }
@@ -47,7 +47,7 @@ export function underscoreVsMangled(i_x: number): number {
 // Dafny, which the local already owns (Lean guillemets it instead).
 export function keywordVsMangled(match: number): number {
   //@ verify
-  //@ ensures \result === match
+  //@ ensures $result === match
   const match_ = 2;
   return match;
 }
@@ -57,7 +57,7 @@ export function keywordVsMangled(match: number): number {
 // ensures would read `res = res + 0`, self-referentially true.
 export function passThrough(res: number): number {
   //@ verify
-  //@ ensures \result === res + 0
+  //@ ensures $result === res + 0
   return res;
 }
 
@@ -66,7 +66,7 @@ export function passThrough(res: number): number {
 export function sumTo(x: number): number {
   //@ verify
   //@ requires x >= 0
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   let res = 0;
   let i = 0;
   while (i < x) {
@@ -85,13 +85,13 @@ export function sumTo(x: number): number {
 // Escaped in the raw namespace alone, temp and param both collapse to `i_t0'`.
 export function callee(x: number): number {
   //@ verify
-  //@ ensures \result === x + 1
+  //@ ensures $result === x + 1
   return x + 1;
 }
 
 export function tempClash(_t0: number, i_t0: number): number {
   //@ verify
-  //@ ensures \result === (_t0 + 1) + (i_t0 + 1)
+  //@ ensures $result === _t0 + 1 + (i_t0 + 1)
   let z = 0;
   z = callee(_t0) + callee(i_t0);
   return z;
@@ -102,7 +102,7 @@ export function tempClash(_t0: number, i_t0: number): number {
 // `i_x''` — else the receiver reads the bound var and the body is constant-true.
 export function someEscCollision(_x: number, i_x: number): boolean {
   //@ verify
-  //@ ensures \result ==> _x > 0
+  //@ ensures implies($result, _x > 0)
   return single(_x).some(_x => _x > 0);
 }
 
@@ -111,7 +111,7 @@ export function someEscCollision(_x: number, i_x: number): boolean {
 // scan has to count bindings and assignment targets, not just references.
 export function resAssignOnly(x: number): number {
   //@ verify
-  //@ ensures \result === x
+  //@ ensures $result === x
   let res = 0;
   res = 1;
   return x;
@@ -120,16 +120,16 @@ export function resAssignOnly(x: number): number {
 // A discriminated-union constructor and a local may legitimately share a name.
 // Dafny must qualify the constructor (`ClashVerdict.error(error)`), rather than
 // interpreting the bare `error(error)` as a call through the string local.
-// The payload implication also makes the raw `\result` scrutinee exercise match-
-// binder sanitization instead of generating an identifier containing `\`.
+// The payload implication also makes the source `$result` scrutinee exercise
+// internal result-binder sanitization.
 type ClashVerdict =
   | { kind: "ok" }
   | { kind: "error"; error: string };
 
 export function constructorVsLocal(error: string): ClashVerdict {
   //@ verify
-  //@ ensures \result.kind === "error"
-  //@ ensures \result.kind === "error" ==> \result.error === error
+  //@ ensures $result.kind === "error"
+  //@ ensures implies($result.kind === "error", $result.error === error)
   return { kind: "error", error };
 }
 
@@ -142,7 +142,7 @@ type HyphenVerdict =
 
 export function isRpcError(verdict: HyphenVerdict): boolean {
   //@ verify
-  //@ ensures \result ==> verdict.kind === "rpc-error"
+  //@ ensures implies($result, verdict.kind === "rpc-error")
   return verdict.kind === "rpc-error";
 }
 
@@ -152,13 +152,13 @@ export function isRpcError(verdict: HyphenVerdict): boolean {
 // forbids), freshened away from any user name rather than aliased to one.
 export function _foo(x: number): number {
   //@ verify
-  //@ ensures \result === x
+  //@ ensures $result === x
   return x;
 }
 
 export function i_foo(x: number): number {
   //@ verify
-  //@ ensures \result === x
+  //@ ensures $result === x
   return x;
 }
 
@@ -169,6 +169,6 @@ export interface i_Box { y: number }
 
 export function useBox(b: _Box): number {
   //@ verify
-  //@ ensures \result === b.x
+  //@ ensures $result === b.x
   return b.x;
 }

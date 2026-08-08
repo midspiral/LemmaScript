@@ -20,16 +20,16 @@ function leftPad(str: string, len: number, ch: string): string {
   //@ type len nat
   //@ type i nat
   //@ requires ch.length === 1
-  //@ ensures str.length >= len ==> \result === str
-  //@ ensures str.length < len ==> \result.length === len
+  //@ ensures implies(str.length >= len, $result === str)
+  //@ ensures implies(str.length < len, $result.length === len)
   let result = str;
   len = len - str.length;
   let i = 0;
   while (i < len) {
     //@ invariant result.length === str.length + i
     //@ invariant i >= 0
-    //@ invariant len > 0 ==> i <= len
-    //@ invariant len <= 0 ==> result === str
+    //@ invariant implies(len > 0, i <= len)
+    //@ invariant implies(len <= 0, result === str)
     //@ decreases len - i
     result = ch + result;
     i = i + 1;

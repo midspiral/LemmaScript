@@ -9,7 +9,7 @@ export function countMatches(
   validKeys: Set<string>
 ): number {
   //@ verify
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   let count = 0;
   for (const item of items) {
     //@ invariant count >= 0
@@ -27,7 +27,7 @@ export function countMatchesKey(
   validKeys: Set<string>
 ): number {
   //@ verify
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   let count = 0;
   for (const item of items) {
     //@ invariant count >= 0

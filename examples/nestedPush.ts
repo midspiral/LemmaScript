@@ -6,8 +6,8 @@
 interface Bag { items: number[] }
 
 export function pushItem(items: number[], v: number): number[] {
-  //@ ensures \result.length === items.length + 1
-  //@ ensures \result[items.length] === v
+  //@ ensures $result.length === items.length + 1
+  //@ ensures $result[items.length] === v
   const b: Bag = { items };
   b.items.push(v);
   return b.items;

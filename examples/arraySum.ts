@@ -4,7 +4,7 @@
  */
 
 export function arraySum(arr: number[]): number {
-  //@ ensures \result === sumTo(arr, arr.length)
+  //@ ensures $result === sumTo(arr, arr.length)
   //@ type i nat
 
   let sum = 0;

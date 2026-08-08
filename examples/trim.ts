@@ -14,7 +14,7 @@
  */
 
 export function trimmed(s: string): string {
-  //@ ensures \result.length <= s.length
+  //@ ensures $result.length <= s.length
   return s.trim();
 }
 
@@ -22,7 +22,7 @@ export function trimmed(s: string): string {
 // newline — neither of which the previous space-only StringTrim model removed,
 // so this postcondition is the regression test for the discrepancy.
 export function trimAsciiWs(): string {
-  //@ ensures \result === 'x'
+  //@ ensures $result === "x"
   return '\tx\n'.trim();
 }
 

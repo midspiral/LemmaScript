@@ -15,7 +15,7 @@ interface Out { n: number }
 
 export function pick(items: In[]): Out[] {
   //@ verify
-  //@ ensures \result.length <= items.length
+  //@ ensures $result.length <= items.length
   return items
     .map((it): Out | undefined => {
       if (it.keep) return { n: it.n };

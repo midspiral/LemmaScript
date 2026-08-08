@@ -6,13 +6,13 @@
 export function orZero(x: bigint): bigint {
   //@ verify
   //@ requires x >= 0
-  //@ ensures \result === x
+  //@ ensures $result === x
   return x | 0n
 }
 
 export function zeroOr(x: bigint): bigint {
   //@ verify
   //@ requires x >= 0
-  //@ ensures \result === x
+  //@ ensures $result === x
   return 0n | x
 }

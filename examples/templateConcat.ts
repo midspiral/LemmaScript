@@ -9,6 +9,6 @@ export function noSep(a: number, b: number): string {
 }
 
 export function bracketed(a: number, b: number): number {
-  //@ ensures \result >= 4
+  //@ ensures $result >= 4
   return `[${a}][${b}]`.length;
 }

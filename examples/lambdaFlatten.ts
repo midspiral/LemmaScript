@@ -21,7 +21,7 @@ interface Part {
 
 export function keepParts(parts: Part[], valid: Set<string>): Part[] {
   //@ verify
-  //@ ensures \result.length <= parts.length
+  //@ ensures $result.length <= parts.length
   return parts.filter(p => {
     if (p.type !== 'tool-call') return true;
     const tc = p;

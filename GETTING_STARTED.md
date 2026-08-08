@@ -31,7 +31,7 @@ In a brownfield codebase, pick small, pure functions first — string helpers, p
 // src/utils/cookie.ts
 export function isValidCookieName(name: string): boolean {
   //@ verify
-  //@ ensures \result === true ==> name.length > 0
+  //@ ensures implies($result === true, name.length > 0)
   if (!name || name.length === 0) return false;
   // ...
 }

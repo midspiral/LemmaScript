@@ -22,20 +22,20 @@ interface Post {
 export function hasTagFrom(tags: string[], tag: string, from: number): boolean {
   //@ verify
   //@ requires 0 <= from && from <= tags.length
-  //@ ensures \result === true ==> exists(k: nat, k < tags.length && tags[k] === tag)
+  //@ ensures implies($result === true, exists((k: nat) => k < tags.length && tags[k] === tag))
   return tags.includes(tag, from);
 }
 
 /** Draft-tagged posts render as drafts; anything else is live. */
 export function visibility(post: Post): string {
   //@ verify
-  //@ ensures \result === "draft" || \result === "live"
+  //@ ensures $result === "draft" || $result === "live"
   return post.tags !== undefined && post.tags.includes("draft") ? "draft" : "live";
 }
 
 /** Untagged posts have no tags. */
 export function hasTag(post: Post, tag: string): boolean {
   //@ verify
-  //@ ensures post.tags === undefined ==> \result === false
+  //@ ensures implies(post.tags === undefined, $result === false)
   return post.tags?.includes(tag) ?? false;
 }

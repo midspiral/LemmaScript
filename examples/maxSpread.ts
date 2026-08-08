@@ -6,21 +6,21 @@
 export function highScore(scores: number[]): number {
   //@ verify
   //@ requires scores.length > 0
-  //@ ensures forall(i: nat, i < scores.length ==> scores[i] <= \result)
+  //@ ensures forall((i: nat) => implies(i < scores.length, scores[i] <= $result))
   return Math.max(...scores);
 }
 
 export function highScoreOrZero(scores: number[]): number {
   //@ verify
-  //@ ensures \result >= 0
-  //@ ensures forall(i: nat, i < scores.length ==> scores[i] <= \result)
+  //@ ensures $result >= 0
+  //@ ensures forall((i: nat) => implies(i < scores.length, scores[i] <= $result))
   return Math.max(...scores, 0);
 }
 
 export function lowScore(scores: number[]): number {
   //@ verify
   //@ requires scores.length > 0
-  //@ ensures forall(i: nat, i < scores.length ==> \result <= scores[i])
+  //@ ensures forall((i: nat) => implies(i < scores.length, $result <= scores[i]))
   return Math.min(...scores);
 }
 
@@ -30,16 +30,16 @@ export function maxOfPrefixedAndSuffixed(
   suffix: number,
 ): number {
   //@ verify
-  //@ ensures \result >= prefix
-  //@ ensures \result >= suffix
-  //@ ensures forall(i: nat, i < scores.length ==> scores[i] <= \result)
+  //@ ensures $result >= prefix
+  //@ ensures $result >= suffix
+  //@ ensures forall((i: nat) => implies(i < scores.length, scores[i] <= $result))
   return Math.max(prefix, ...scores, suffix);
 }
 
 export function maxOfTwoArrays(a: number[], b: number[]): number {
   //@ verify
   //@ requires a.length + b.length > 0
-  //@ ensures forall(i: nat, i < a.length ==> a[i] <= \result)
-  //@ ensures forall(i: nat, i < b.length ==> b[i] <= \result)
+  //@ ensures forall((i: nat) => implies(i < a.length, a[i] <= $result))
+  //@ ensures forall((i: nat) => implies(i < b.length, b[i] <= $result))
   return Math.max(...a, ...b);
 }

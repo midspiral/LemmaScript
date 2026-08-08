@@ -55,7 +55,7 @@ export type RawExpr =
   | { kind: "emptyCollection"; collectionType: "Map" | "Set"; tsType: string; initElems?: RawExpr[] }  // new Map<K,V>() / new Set<T>()
   | { kind: "nonNull"; expr: RawExpr }   // expr! (non-null assertion)
   // Spec-only (from //@ annotations, produced by specparser):
-  | { kind: "result" }                                    // \result
+  | { kind: "result" }                                    // source $result
   | { kind: "forall"; var: string; varType: string; body: RawExpr }
   | { kind: "exists"; var: string; varType: string; body: RawExpr }
   // Havoc — nondeterministic value (from //@ havoc annotation):

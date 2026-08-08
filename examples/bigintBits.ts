@@ -7,14 +7,14 @@
 export function shiftWide(x: bigint): bigint {
   //@ verify
   //@ requires x >= 0
-  //@ ensures \result >= x
+  //@ ensures $result >= x
   return x << 70n
 }
 
 export function low64(x: bigint): bigint {
   //@ verify
   //@ requires x >= 0
-  //@ ensures \result < 18446744073709551616n
-  //@ ensures \result >= 0
+  //@ ensures $result < 18446744073709551616n
+  //@ ensures $result >= 0
   return x & 0xffffffffffffffffn
 }

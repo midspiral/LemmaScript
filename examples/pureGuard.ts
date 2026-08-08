@@ -21,6 +21,6 @@ interface Post {
 
 export function suffixed(post: Post, suffix: string | undefined): string {
   //@ verify
-  //@ ensures \result === "yes" || \result === "no"
+  //@ ensures $result === "yes" || $result === "no"
   return suffix !== undefined && (post.title?.endsWith(suffix) ?? false) ? "yes" : "no";
 }

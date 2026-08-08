@@ -8,7 +8,7 @@
  * The non-obvious bit lives in pass 1's two-sided invariant:
  *
  *   2 * occOf(arr, cand, i) <= i + cnt                          // cand
- *   forall y, y !== cand ==> 2 * occOf(arr, y, i) <= i - cnt    // others
+ *   forall((y: int) => implies(y !== cand, 2 * occOf(arr, y, i) <= i - cnt))
  *
  * Together they say: no value other than cand can be a strict majority of
  * arr[0..i]. At i === arr.length this collapses to: any strict majority
@@ -23,9 +23,9 @@ function occOf(arr: number[], x: number, n: number): number {
 }
 
 export function majority(arr: number[]): number {
-  //@ requires forall(k: nat, k < arr.length ==> arr[k] >= 0)
-  //@ ensures \result === -1 || (\result >= 0 && 2 * occOf(arr, \result, arr.length) > arr.length)
-  //@ ensures (exists(x: nat, 2 * occOf(arr, x, arr.length) > arr.length)) ==> \result !== -1
+  //@ requires forall((k: nat) => implies(k < arr.length, arr[k] >= 0))
+  //@ ensures $result === -1 || $result >= 0 && 2 * occOf(arr, $result, arr.length) > arr.length
+  //@ ensures implies(exists((x: nat) => 2 * occOf(arr, x, arr.length) > arr.length), $result !== -1)
   //@ type i nat
   //@ type j nat
 
@@ -38,7 +38,7 @@ export function majority(arr: number[]): number {
     //@ invariant cnt >= 0
     //@ invariant cand >= 0
     //@ invariant 2 * occOf(arr, cand, i) <= i + cnt
-    //@ invariant forall(y: int, y !== cand ==> 2 * occOf(arr, y, i) <= i - cnt)
+    //@ invariant forall((y: int) => implies(y !== cand, 2 * occOf(arr, y, i) <= i - cnt))
     //@ decreases arr.length - i
     if (cnt === 0) {
       cand = arr[i];

@@ -59,7 +59,7 @@ export function binderHintFor(e: TExpr): string | null {
   let cur = e;
   while (cur.kind === "field") { fields.unshift(cur.field); cur = cur.obj; }
   if (cur.kind !== "var") return null;
-  // \result is stored as the IR var name "\\result"; sanitize for a valid identifier.
+  // Source `$result` is stored as the IR var name "\\result"; sanitize for a valid identifier.
   const root = cur.name === "\\result" ? "result" : cur.name;
   return fields.length === 0 ? `_${root}_val` : `_${root}_${fields.join("_")}_val`;
 }

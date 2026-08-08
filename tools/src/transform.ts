@@ -1082,7 +1082,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         // path with the binder pre-lowering.
         const replaced = replacePathInTExpr(e.someBody, path, e.binder, e.binderTy);
         someBody = lowerExpr(replaced, binds);
-        // Bare-var shortcut, but route \result through lowerExpr so the
+        // Bare-var shortcut, but route source `$result` through lowerExpr so the
         // lemma-side replaceVar pass can substitute it with the function call.
         scrutinee = path.fields.length === 0 && path.rootVar !== "\\result"
           ? varE(path.rootVar)
@@ -1331,7 +1331,7 @@ function eliminateReturnInLoops(stmts: Stmt[], retTy: Ty, resultInvariants: Expr
       const init: Expr = next && next.kind === "return" ? next.value : defaultExprForTy(retTy);
       out.push({ kind: "let", name: retVar, type: retTy, mutable: true, value: init });
       // The result variable carries the postcondition (the function's `ensures`
-      // with `\result` → `_loopRet`) as a loop invariant: it holds initially (the
+      // with source `$result` → `_loopRet`) as a loop invariant: it holds initially (the
       // fallthrough seed) and after each `_loopRet := e; break`, so the
       // postcondition is re-established from the invariant when the loop exits.
       // Where Dafny discharged the postcondition at each `return` site, the
@@ -2472,7 +2472,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
     if (!fn.isPure) continue;
     const body = transformPureBody(fn.body, mod.typeDecls);
     if (body) {
-      // For pure-function lemmas, replace \result with the function call.
+      // For pure-function lemmas, replace source `$result` with the function call.
       const fnCall: Expr = { kind: "app", fn: fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) };
       const ensures = fn.ensures.map(e => replaceVar(transformExpr(e), "\\result", fnCall));
       pureDefs.push({
@@ -2511,7 +2511,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
 
   // Externs: emit as top-of-file `function {:axiom}` (Dafny) declarations.
   // Any `requires`/`ensures` from the source declaration come along so callers
-  // see the same spec the source itself verified. Substitute `\result` with the
+  // see the same spec the source itself verified. Substitute source `$result` with the
   // function call (same pattern as for in-file pure-function ensures).
   const externDecls: Decl[] = (mod.externs ?? []).map(ext => {
     const fnCall: Expr = { kind: "app", fn: ext.flat, args: ext.params.map(p => ({ kind: "var" as const, name: p.name })) };

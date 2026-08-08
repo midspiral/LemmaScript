@@ -1,338 +1,208 @@
 /**
- * Spec expression parser.
- * Parses //@ annotation expressions into RawExpr AST nodes.
+ * Parse a supported TypeScript expression from a `//@` annotation and convert
+ * it to Raw IR. Quantifiers and logical connectives are ordinary, valid-TS
+ * calls whose argument shapes are recognized here.
  */
 
+import { ts } from "ts-morph";
 import type { RawExpr } from "./rawir.js";
 import { normalizeBigIntLiteral } from "./rawir.js";
 
 export type Expr = RawExpr;
 
-// ── Tokenizer ────────────────────────────────────────────────
+const BINARY_OPERATORS = new Set([
+  "+", "-", "*", "/", "%",
+  ">", "<", ">=", "<=",
+  "===", "!==", "==", "!=",
+  "&&", "||", "in",
+]);
 
-type Token =
-  | { type: "num"; value: number }
-  | { type: "bigint"; value: string }
-  | { type: "str"; value: string }
-  | { type: "ident"; value: string }
-  | { type: "op"; value: string }
-  | { type: "punc"; value: string }
-  | { type: "result"; value: undefined };
-
-const MULTI_OPS = ["<==>", "==>", "===", "!==", "==", "!=", ">=", "<=", "&&", "||"];
-
-/** Numeric literals accepted in specs. BigInts are recognized first so their
- *  exact value never passes through Number; ordinary numbers additionally
- *  allow TypeScript's fractional and exponent forms. */
-const BIGINT_LITERAL =
-  /^(?:(?:0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*)|(?:0[bB][01](?:_?[01])*)|(?:0[oO][0-7](?:_?[0-7])*)|(?:[0-9](?:_?[0-9])*))n/;
-const NUMBER_LITERAL =
-  /^(?:(?:0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*)|(?:0[bB][01](?:_?[01])*)|(?:0[oO][0-7](?:_?[0-7])*)|(?:(?:[0-9](?:_?[0-9])*)(?:\.(?:[0-9](?:_?[0-9])*)?)?|\.(?:[0-9](?:_?[0-9])*))(?:[eE][+-]?(?:[0-9](?:_?[0-9])*))?)/;
-
-function tokenize(input: string): Token[] {
-  const tokens: Token[] = [];
-  let i = 0;
-  while (i < input.length) {
-    if (/\s/.test(input[i])) { i++; continue; }
-
-    if (input[i] === "\\" && input.slice(i + 1, i + 7) === "result") {
-      tokens.push({ type: "result", value: undefined });
-      i += 7;
-      continue;
-    }
-
-    if (input[i] === '"' || input[i] === "'") {
-      const quote = input[i];
-      i++;
-      let s = "";
-      while (i < input.length && input[i] !== quote) {
-        if (input[i] === "\\") {
-          // Standard escapes, where TS source, Dafny, and Lean all agree.
-          // The emitters re-escape on output, so the round trip is faithful.
-          const esc = input[i + 1];
-          const mapped = esc === "n" ? "\n" : esc === "r" ? "\r" : esc === "t" ? "\t"
-            : esc === "0" ? "\0" : esc === "\\" || esc === '"' || esc === "'" ? esc : null;
-          if (mapped === null) throw new Error(`Unsupported string escape '\\${esc}' at ${i} in: ${input}`);
-          s += mapped;
-          i += 2;
-        } else {
-          s += input[i++];
-        }
-      }
-      if (i < input.length) i++;
-      tokens.push({ type: "str", value: s });
-      continue;
-    }
-
-    if (/[0-9]/.test(input[i]) || (input[i] === "." && /[0-9]/.test(input[i + 1]))) {
-      const rest = input.slice(i);
-      const bigintMatch = rest.match(BIGINT_LITERAL);
-      const match = bigintMatch ?? rest.match(NUMBER_LITERAL);
-      if (!match) throw new Error(`Invalid numeric literal at ${i} in: ${input}`);
-      const text = match[0];
-      i += text.length;
-      // The `n` suffix is meaningful, not noise: a BigInt keeps its exact value
-      // as a decimal string instead of being rounded into a double.
-      if (bigintMatch) tokens.push({ type: "bigint", value: normalizeBigIntLiteral(text) });
-      else tokens.push({ type: "num", value: Number(text.replace(/_/g, "")) });
-      continue;
-    }
-
-    if (/[a-zA-Z_]/.test(input[i])) {
-      let id = "";
-      while (i < input.length && /[a-zA-Z_0-9]/.test(input[i])) id += input[i++];
-      tokens.push({ type: "ident", value: id });
-      continue;
-    }
-
-    let matched = false;
-    for (const op of MULTI_OPS) {
-      if (input.slice(i, i + op.length) === op) {
-        tokens.push({ type: "op", value: op });
-        i += op.length;
-        matched = true;
-        break;
-      }
-    }
-    if (matched) continue;
-
-    const ch = input[i];
-    if ("+-*/%><!?".includes(ch)) {
-      tokens.push({ type: "op", value: ch });
-    } else if ("()[],:.{}".includes(ch)) {
-      tokens.push({ type: "punc", value: ch });
-    } else {
-      throw new Error(`Unexpected '${ch}' at ${i} in: ${input}`);
-    }
-    i++;
-  }
-  return tokens;
+function fail(input: string, message: string): never {
+  throw new Error(`Invalid spec expression: ${message}\n  in spec: ${input}`);
 }
 
-// ── Parser ───────────────────────────────────────────────────
+function textOf(node: ts.Node, sourceFile: ts.SourceFile): string {
+  return node.getText(sourceFile);
+}
 
-class Parser {
-  pos = 0;
-  constructor(private tokens: Token[]) {}
-
-  peek() { return this.tokens[this.pos]; }
-  advance() { return this.tokens[this.pos++]; }
-  expect(type: string, value?: string) {
-    const t = this.advance();
-    if (!t || t.type !== type || (value !== undefined && t.value !== value))
-      throw new Error(`Expected ${type}${value ? ` '${value}'` : ""}, got ${t ? JSON.stringify(t) : "EOF"}`);
-    return t;
+function convertQuantifier(
+  call: ts.CallExpression,
+  kind: "forall" | "exists",
+  sourceFile: ts.SourceFile,
+  input: string,
+): RawExpr {
+  if (call.typeArguments?.length || call.arguments.length !== 1) {
+    return fail(input, `${kind} expects one arrow function`);
   }
-  match(type: string, value?: string) {
-    const t = this.peek();
-    if (t && t.type === type && (value === undefined || t.value === value)) {
-      this.pos++;
-      return true;
+
+  const arrow = call.arguments[0];
+  if (!ts.isArrowFunction(arrow) || arrow.modifiers?.length || arrow.parameters.length !== 1) {
+    return fail(input, `${kind} expects one arrow parameter, for example ${kind}(k => predicate)`);
+  }
+
+  const parameter = arrow.parameters[0];
+  if (!ts.isIdentifier(parameter.name) || parameter.dotDotDotToken || parameter.questionToken || parameter.initializer) {
+    return fail(input, `${kind}'s parameter must be a single identifier`);
+  }
+  if (ts.isBlock(arrow.body)) {
+    return fail(input, `${kind}'s arrow body must be an expression`);
+  }
+
+  return {
+    kind,
+    var: parameter.name.text,
+    varType: parameter.type ? textOf(parameter.type, sourceFile) : "int",
+    body: convertExpr(arrow.body, sourceFile, input),
+  };
+}
+
+function convertCall(call: ts.CallExpression, sourceFile: ts.SourceFile, input: string): RawExpr {
+  if (call.questionDotToken) return fail(input, "optional calls are not supported in specs");
+  if (call.arguments.some(ts.isSpreadElement)) return fail(input, "spread arguments are not supported in specs");
+
+  if (ts.isIdentifier(call.expression)) {
+    const name = call.expression.text;
+    if (name === "forall" || name === "exists") {
+      return convertQuantifier(call, name, sourceFile, input);
     }
-    return false;
-  }
-
-  parse(): Expr {
-    const r = this.parseIff();
-    if (this.pos < this.tokens.length) throw new Error(`Unexpected: ${JSON.stringify(this.peek())}`);
-    return r;
-  }
-
-  // <==> binds loosest (Dafny precedence: a ==> b <==> c is (a ==> b) <==> c),
-  // right-associative like ==> — immaterial semantically, iff is associative.
-  parseIff(): Expr {
-    const left = this.parseImplies();
-    if (this.match("op", "<==>")) return { kind: "binop", op: "<==>", left, right: this.parseIff() };
-    return left;
-  }
-
-  parseImplies(): Expr {
-    const left = this.parseTernary();
-    if (this.match("op", "==>")) return { kind: "binop", op: "==>", left, right: this.parseImplies() };
-    return left;
-  }
-
-  parseTernary(): Expr {
-    const cond = this.parseOr();
-    if (this.match("op", "?")) {
-      const then_ = this.parseIff();
-      this.expect("punc", ":");
-      const else_ = this.parseIff();
-      return { kind: "conditional", cond, then: then_, else: else_ };
-    }
-    return cond;
-  }
-
-  parseOr(): Expr {
-    let left = this.parseAnd();
-    while (this.match("op", "||")) left = { kind: "binop", op: "||", left, right: this.parseAnd() };
-    return left;
-  }
-
-  parseAnd(): Expr {
-    let left = this.parseCmp();
-    while (this.match("op", "&&")) left = { kind: "binop", op: "&&", left, right: this.parseCmp() };
-    return left;
-  }
-
-  parseCmp(): Expr {
-    const left = this.parseAdd();
-    const t = this.peek();
-    // 'in' as infix membership operator (set/seq/map): x in S
-    if (t?.type === "ident" && t.value === "in") {
-      this.advance();
-      return { kind: "binop", op: "in", left, right: this.parseAdd() };
-    }
-    if (t?.type === "op" && ["===", "!==", "==", "!=", ">=", "<=", ">", "<"].includes(t.value)) {
-      this.advance();
-      // Normalize == to ===, != to !== so downstream sees one spelling
-      const op = t.value === "==" ? "===" : t.value === "!=" ? "!==" : t.value;
-      return { kind: "binop", op, left, right: this.parseAdd() };
-    }
-    return left;
-  }
-
-  parseAdd(): Expr {
-    let left = this.parseMul();
-    while (this.peek()?.type === "op" && ["+", "-"].includes(this.peek()!.value as string)) {
-      const op = this.advance().value as string;
-      left = { kind: "binop", op, left, right: this.parseMul() };
-    }
-    return left;
-  }
-
-  parseMul(): Expr {
-    let left = this.parseUnary();
-    while (this.peek()?.type === "op" && ["*", "/", "%"].includes(this.peek()!.value as string)) {
-      const op = this.advance().value as string;
-      left = { kind: "binop", op, left, right: this.parseUnary() };
-    }
-    return left;
-  }
-
-  parseUnary(): Expr {
-    if (this.match("op", "!")) return { kind: "unop", op: "!", expr: this.parseUnary() };
-    if (this.peek()?.type === "op" && this.peek()!.value === "-") {
-      const prev = this.pos > 0 ? this.tokens[this.pos - 1] : undefined;
-      if (!prev || prev.type === "op" || (prev.type === "punc" && prev.value !== ")")) {
-        this.advance();
-        return { kind: "unop", op: "-", expr: this.parseUnary() };
+    if (name === "implies" || name === "iff") {
+      if (call.typeArguments?.length || call.arguments.length !== 2) {
+        return fail(input, `${name} expects exactly two arguments`);
       }
+      return {
+        kind: "binop",
+        op: name === "implies" ? "==>" : "<==>",
+        left: convertExpr(call.arguments[0], sourceFile, input),
+        right: convertExpr(call.arguments[1], sourceFile, input),
+      };
     }
-    return this.parsePostfix();
   }
 
-  parsePostfix(): Expr {
-    let expr = this.parseAtom();
-    while (true) {
-      if (this.match("punc", ".")) {
-        expr = { kind: "field", obj: expr, field: (this.expect("ident").value as string) };
-      } else if (this.match("punc", "[")) {
-        const idx = this.parseIff();
-        this.expect("punc", "]");
-        expr = { kind: "index", obj: expr, idx };
-      } else if (this.match("punc", "(")) {
-        const args: Expr[] = [];
-        if (!this.match("punc", ")")) {
-          args.push(this.parseIff());
-          while (this.match("punc", ",")) args.push(this.parseIff());
-          this.expect("punc", ")");
-        }
-        expr = { kind: "call", fn: expr, args };
-      } else break;
-    }
-    return expr;
+  if (call.typeArguments?.length) return fail(input, "generic calls are not supported in specs");
+  return {
+    kind: "call",
+    fn: convertExpr(call.expression, sourceFile, input),
+    args: call.arguments.map(argument => convertExpr(argument, sourceFile, input)),
+  };
+}
+
+function convertExpr(node: ts.Expression, sourceFile: ts.SourceFile, input: string): RawExpr {
+  if (ts.isParenthesizedExpression(node)) return convertExpr(node.expression, sourceFile, input);
+
+  if (ts.isNumericLiteral(node)) return { kind: "num", value: Number(node.text.replace(/_/g, "")) };
+  if (ts.isBigIntLiteral(node)) return { kind: "bigint", value: normalizeBigIntLiteral(node.getText(sourceFile)) };
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return { kind: "str", value: node.text };
+  }
+  if (node.kind === ts.SyntaxKind.TrueKeyword) return { kind: "bool", value: true };
+  if (node.kind === ts.SyntaxKind.FalseKeyword) return { kind: "bool", value: false };
+  if (node.kind === ts.SyntaxKind.NullKeyword) return { kind: "var", name: "undefined" };
+  if (node.kind === ts.SyntaxKind.ThisKeyword) return { kind: "var", name: "this" };
+
+  if (ts.isIdentifier(node)) {
+    return node.text === "$result" ? { kind: "result" } : { kind: "var", name: node.text };
   }
 
-  parseAtom(): Expr {
-    const t = this.peek();
-    if (!t) throw new Error("Unexpected end of expression");
-    if (t.type === "result") { this.advance(); return { kind: "result" }; }
-    if (t.type === "num") { this.advance(); return { kind: "num", value: t.value }; }
-    if (t.type === "bigint") { this.advance(); return { kind: "bigint", value: t.value }; }
-    if (t.type === "str") { this.advance(); return { kind: "str", value: t.value }; }
-    if (t.type === "ident") {
-      if (t.value === "true") { this.advance(); return { kind: "bool", value: true }; }
-      if (t.value === "false") { this.advance(); return { kind: "bool", value: false }; }
-      // Match the body extractor (extract.ts NullLiteral): `null` and
-      // `undefined` are interchangeable in LS, both map to None.
-      if (t.value === "null") { this.advance(); return { kind: "var", name: "undefined" }; }
-      // new Set<T>() / new Map<K,V>()
-      if (t.value === "new") {
-        this.advance();
-        const name = this.expect("ident").value as string;
-        if (name !== "Set" && name !== "Map") throw new Error(`Unsupported constructor: new ${name}`);
-        // Skip <T> or <K,V> type arguments
-        let tsType = name;
-        if (this.match("op", "<")) {
-          let depth = 1;
-          let typeArgs = "";
-          while (depth > 0) {
-            const next = this.advance();
-            if (next.value === "<") depth++;
-            else if (next.value === ">") { depth--; if (depth === 0) break; }
-            typeArgs += next.value;
-          }
-          tsType = `${name}<${typeArgs}>`;
-        }
-        this.expect("punc", "(");
-        this.expect("punc", ")");
-        return { kind: "emptyCollection", collectionType: name as "Set" | "Map", tsType };
-      }
-      if (t.value === "forall" || t.value === "exists") {
-        const q = t.value as "forall" | "exists";
-        this.advance();
-        this.expect("punc", "(");
-        const v = this.expect("ident").value as string;
-        let varType: string = "int";
-        if (this.match("punc", ":")) {
-          const ty = this.expect("ident").value as string;
-          varType = ty;
-        }
-        this.expect("punc", ",");
-        const body = this.parseIff();
-        this.expect("punc", ")");
-        return { kind: q, var: v, varType, body };
-      }
-      this.advance();
-      return { kind: "var", name: t.value };
-    }
-    if (t.type === "punc" && t.value === "(") {
-      this.advance();
-      const expr = this.parseIff();
-      this.expect("punc", ")");
-      return expr;
-    }
-    if (t.type === "punc" && t.value === "[") {
-      this.advance();
-      const elems: Expr[] = [];
-      if (!this.match("punc", "]")) {
-        elems.push(this.parseIff());
-        while (this.match("punc", ",")) elems.push(this.parseIff());
-        this.expect("punc", "]");
-      }
-      return { kind: "arrayLiteral", elems };
-    }
-    if (t.type === "punc" && t.value === "{") {
-      this.advance();
-      const fields: { name: string; value: Expr }[] = [];
-      if (!this.match("punc", "}")) {
-        const name = this.expect("ident").value as string;
-        this.expect("punc", ":");
-        fields.push({ name, value: this.parseIff() });
-        while (this.match("punc", ",")) {
-          const n = this.expect("ident").value as string;
-          this.expect("punc", ":");
-          fields.push({ name: n, value: this.parseIff() });
-        }
-        this.expect("punc", "}");
-      }
-      return { kind: "record", spread: null, fields };
-    }
-    throw new Error(`Unexpected: ${JSON.stringify(t)}`);
+  if (ts.isPropertyAccessExpression(node)) {
+    if (node.questionDotToken) return fail(input, "optional property access is not supported in specs");
+    return { kind: "field", obj: convertExpr(node.expression, sourceFile, input), field: node.name.text };
   }
+
+  if (ts.isElementAccessExpression(node)) {
+    if (node.questionDotToken) return fail(input, "optional element access is not supported in specs");
+    if (!node.argumentExpression) return fail(input, "element access requires an index");
+    return {
+      kind: "index",
+      obj: convertExpr(node.expression, sourceFile, input),
+      idx: convertExpr(node.argumentExpression, sourceFile, input),
+    };
+  }
+
+  if (ts.isCallExpression(node)) return convertCall(node, sourceFile, input);
+
+  if (ts.isBinaryExpression(node)) {
+    const op = node.operatorToken.getText(sourceFile);
+    if (!BINARY_OPERATORS.has(op)) return fail(input, `operator '${op}' is not supported in specs`);
+    return {
+      kind: "binop",
+      op: op === "==" ? "===" : op === "!=" ? "!==" : op,
+      left: convertExpr(node.left, sourceFile, input),
+      right: convertExpr(node.right, sourceFile, input),
+    };
+  }
+
+  if (ts.isPrefixUnaryExpression(node)) {
+    const op = node.operator === ts.SyntaxKind.ExclamationToken ? "!"
+      : node.operator === ts.SyntaxKind.MinusToken ? "-"
+      : null;
+    if (!op) return fail(input, `unary operator in '${textOf(node, sourceFile)}' is not supported in specs`);
+    return { kind: "unop", op, expr: convertExpr(node.operand, sourceFile, input) };
+  }
+
+  if (ts.isConditionalExpression(node)) {
+    return {
+      kind: "conditional",
+      cond: convertExpr(node.condition, sourceFile, input),
+      then: convertExpr(node.whenTrue, sourceFile, input),
+      else: convertExpr(node.whenFalse, sourceFile, input),
+    };
+  }
+
+  if (ts.isArrayLiteralExpression(node)) {
+    if (node.elements.some(element => ts.isOmittedExpression(element) || ts.isSpreadElement(element))) {
+      return fail(input, "array holes and spreads are not supported in specs");
+    }
+    return { kind: "arrayLiteral", elems: node.elements.map(element => convertExpr(element, sourceFile, input)) };
+  }
+
+  if (ts.isObjectLiteralExpression(node)) {
+    const fields = node.properties.map(property => {
+      if (!ts.isPropertyAssignment(property) || !ts.isIdentifier(property.name)) {
+        return fail(input, "spec object literals require identifier property assignments");
+      }
+      return { name: property.name.text, value: convertExpr(property.initializer, sourceFile, input) };
+    });
+    return { kind: "record", spread: null, fields };
+  }
+
+  if (ts.isNewExpression(node)) {
+    if (!ts.isIdentifier(node.expression) || (node.expression.text !== "Set" && node.expression.text !== "Map")) {
+      return fail(input, `unsupported constructor '${textOf(node.expression, sourceFile)}'`);
+    }
+    if ((node.arguments?.length ?? 0) !== 0) return fail(input, `new ${node.expression.text} expects no arguments in specs`);
+    const name = node.expression.text;
+    const typeArgs = node.typeArguments?.map(type => textOf(type, sourceFile)) ?? [];
+    return {
+      kind: "emptyCollection",
+      collectionType: name,
+      tsType: typeArgs.length ? `${name}<${typeArgs.join(", ")}>` : name,
+    };
+  }
+
+  if (ts.isArrowFunction(node)) return fail(input, "arrow functions are only supported as forall/exists arguments");
+  return fail(input, `unsupported syntax '${textOf(node, sourceFile)}'`);
 }
 
 export function parseExpr(input: string): Expr {
-  return new Parser(tokenize(input)).parse();
+  const prefix = "const __spec = (";
+  const sourceFile = ts.createSourceFile(
+    "spec.ts",
+    `${prefix}${input});`,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const diagnostics = (sourceFile as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics;
+  if (diagnostics.length > 0) {
+    return fail(input, ts.flattenDiagnosticMessageText(diagnostics[0].messageText, " "));
+  }
+
+  const statement = sourceFile.statements[0];
+  if (sourceFile.statements.length !== 1 || !statement || !ts.isVariableStatement(statement)) {
+    return fail(input, "expected exactly one expression");
+  }
+  const initializer = statement.declarationList.declarations[0]?.initializer;
+  if (!initializer || !ts.isParenthesizedExpression(initializer)) return fail(input, "expression expected");
+  if (initializer.end !== sourceFile.end - 1) return fail(input, "unexpected syntax after the expression");
+  return convertExpr(initializer.expression, sourceFile, input);
 }

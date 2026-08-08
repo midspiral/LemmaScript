@@ -27,7 +27,7 @@ interface Msg {
 export function countAssistantParts(msgs: Msg[]): number {
   //@ verify
   //@ type i nat
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   let n = 0;
   for (let i = 0; i < msgs.length; i = i + 1) {
     //@ invariant i <= msgs.length

@@ -94,11 +94,11 @@ const LEAN_KEYWORDS = new Set([
 
 // The return-value identifier for the method currently being emitted. Default
 // `res`, but primed (e.g. `res'`) when a module identifier is named `res` — set
-// by the method case. `\result` in an ensures/body must use the same name.
+// by the method case. Source `$result` in an ensures/body must use the same name.
 let _resultName = "res";
 
 function escapeName(name: string): string {
-  // \result is carried through the IR as the var name "\\result"; render it
+  // Source `$result` is carried through the IR as the var name "\\result"; render it
   // as the method's return-value identifier (matches `return (res : T)`).
   if (name === "\\result") return _resultName;
   return LEAN_KEYWORDS.has(name) ? `«${name}»` : name;
@@ -821,7 +821,7 @@ function emitDecl(d: Decl): string {
       // Mirror Dafny's `function {:axiom}`: an uninterpreted total function.
       // In Lean that is an `opaque` declaration (sound — it commits to no body,
       // only to the type being inhabited). Any `requires`/`ensures` the source
-      // carried become a characterizing `axiom`; `\result` was already replaced
+      // carried become a characterizing `axiom`; source `$result` was already replaced
       // by the call expression in the transform, so ensures reference `name args`.
       const tp = d.typeParams.length > 0 ? ` {${d.typeParams.join(" ")} : Type}` : "";
       const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`).join(" ");

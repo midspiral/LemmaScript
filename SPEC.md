@@ -31,7 +31,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `safe-slice` | Top of file | Opt into JS-clamping semantics for two-arg `arr.slice(lo, hi)` (see §2.7) |
 | `verify` | Before first statement of function/method body | Mark function for verification (see §2.5) |
 | `requires` | Before first statement of function body | Precondition |
-| `ensures` | Before first statement of function body | Postcondition (`\result` refers to return value) |
+| `ensures` | Before first statement of function body | Postcondition (`$result` refers to return value) |
 | `contract` | Before first statement of function body | Natural-language description of intent — prover-ignored; surfaced by `lsc extract` for vetting against the formal `requires`/`ensures` (see §2.13) |
 | `invariant` | Before first statement of loop body | Loop invariant |
 | `decreases` | Before first statement of loop or function body | Termination metric |
@@ -49,41 +49,27 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `autohavoc` | File-level, or before a `//@ verify` function | Abstract every unmodellable expression to a nondeterministic value, so verification rests only on declared contracts (see §2.12). Dafny only. |
 | `skip` | Before a statement or top-level value declaration | Omit it from the verification model (for side-effect-only code or an intentionally unsupported declaration). |
 
-### 2.2 Spec Expression Grammar
+### 2.2 Spec Expressions
 
 At top level, `//@ skip` may precede a function, class, or `const` declaration;
 the declaration is omitted entirely. Use `//@ extern` instead when verified
 callers still need its signature and contract. Extraction or emission failure
 for a selected declaration is fatal; `lsc` does not implicitly skip it.
 
-The expression language is a subset of TypeScript with verification extensions.
+Spec clauses use valid TypeScript expression syntax. They are parsed by the TypeScript parser, then restricted to LemmaScript's pure expression subset: literals, arithmetic and boolean operators, calls, field/index access, conditionals, arrays, records, membership with `in`, and empty `Map`/`Set` constructors. Verification-only forms are valid-TS intrinsic calls:
 
-```
-expr     := iff
-iff      := implies ('<==>' iff)?        // right-associative; binds loosest
-implies  := or ('==>' implies)?          // right-associative
-or       := and ('||' and)*
-and      := compare ('&&' compare)*
-compare  := add (cmpOp add)?
-cmpOp    := '===' | '!==' | '>=' | '<=' | '>' | '<'
-add      := mul (('+' | '-') mul)*
-mul      := unary (('*' | '/' | '%') unary)*
-unary    := '!' unary | '-' unary | postfix
-postfix  := atom ('.' ident | '[' expr ']' | '(' args ')')*
-cmpOp    := ... | 'in'                        // set/seq/map membership
-atom     := NUMBER | HEX_NUMBER | IDENT | 'true' | 'false' | '\result'
-          | 'forall' '(' IDENT (':' TYPE)? ',' expr ')'
-          | 'exists' '(' IDENT (':' TYPE)? ',' expr ')'
-          | 'perm' '(' expr ',' expr ')'        // permutation predicate (spec-only; Dafny backend)
-          | '(' expr ')'
-          | '[' (expr ',')* expr? ']'
-          | '{' (IDENT ':' expr ',')* IDENT ':' expr '}'
-TYPE     := IDENT                             // 'nat', 'int', 'string', user types
+```typescript
+$result                         // return value; ensures only
+implies(p, q)                   // logical implication
+iff(p, q)                       // logical equivalence
+forall(k => predicate)          // inferred binder type
+forall((k: nat) => predicate)   // explicit binder type
+exists(k => predicate)          // inferred binder type
+exists((k: nat) => predicate)   // explicit binder type
+perm(a, b)                      // permutation; Dafny only
 ```
 
-**`\result`** refers to the function's return value (following Frama-C/ACSL convention). It is only valid in `ensures` annotations. The `\` prefix distinguishes it from any TS variable named `result`.
-
-**`forall(k, P)`** accepts an optional explicit type annotation, which may be **any** type — `forall(k: nat, …)`, `forall(s: string, …)`, `forall(x: MyType, …)`. When `k` is unannotated, its type is inferred: if `k` is used as a collection key or element (e.g., `k in arr`, `map.has(k)`, `set.has(k)`, `arr.includes(k)`) → the collection's key/element type; otherwise `Int`/`int`. Same for `exists`.
+`$result` is reserved for the function's return value and is only valid in `ensures` annotations. `forall` and `exists` require a single expression-bodied arrow, so the arrow makes the bound variable's scope explicit. Its parameter may carry any TypeScript type. Without one, LemmaScript infers a collection key/element type from uses such as `k in arr`, `map.has(k)`, `set.has(k)`, and `arr.includes(k)`; otherwise it defaults to `Int`/`int`.
 
 **`perm(a, b)`** is a spec-only predicate holding iff arrays `a` and `b` are reorderings of each other (equal as multisets); both must be arrays of the same equality-supporting element type. It has no runtime counterpart, so it is rejected outside `//@` annotations. It lowers to Dafny's `multiset(a) == multiset(b)` (a transparent `Perm<T(==)>` predicate, so companion `.dfy` proofs can reason with `multiset` directly). **Dafny backend only** (`//@ backend dafny`). Canonical use: lifting a count's concatenation-homomorphism to permutation invariance. See [`examples/perm.ts`](examples/perm.ts).
 
@@ -185,7 +171,7 @@ By default, `lsc` extracts and verifies every function in the file. In brownfiel
 ```typescript
 function isEmptyResult(result: string): boolean {
   //@ verify
-  //@ ensures result.trim() === '' ==> \result === true
+  //@ ensures implies(result.trim() === "", $result === true)
   if (!result) return true;
   const trimmed = result.trim();
   // ...
@@ -399,7 +385,7 @@ Three properties make this safe and useful:
 ```ts
 //@ contract Clamps x into the inclusive range [lo, hi]; the result never falls outside it.
 //@ requires lo <= hi
-//@ ensures \result >= lo && \result <= hi
+//@ ensures $result >= lo && $result <= hi
 export function clamp(x: number, lo: number, hi: number): number { ... }
 ```
 
@@ -423,8 +409,8 @@ The translation is largely syntactic, but also type-driven: lowerings such as tr
 | `&&` | `∧` | `&&` |
 | `\|\|` | `∨` | `\|\|` |
 | `!` | `¬` | `!` |
-| `==>` | `→` | `==>` |
-| `<==>` | `↔` | `<==>` |
+| `implies(p, q)` | `p → q` | `p ==> q` |
+| `iff(p, q)` | `p ↔ q` | `p <==> q` |
 | `+`, `-`, `*`, `/`, `%` | `+`, `-`, `*`, `/`, `%` | `+`, `-`, `*`, `/`, `%` |
 
 No normalization of operators. Both backends handle all comparison directions.
@@ -536,18 +522,18 @@ The same coercion applies to non-bool conditions in `if`/`while`/`?:` positions:
 | `for (const [k, v] of Object.entries(m))` | `.toArray` + for-in | `SetToSeq(m.Keys)` + while |
 | `for (const v of Object.values(m))` | `.toArray` + for-in | `SetToSeq(m.Keys)` + while |
 | `v !== undefined` | `if h : v.isSome then ... else ...` | `match v { case Some(...) => ... }` |
-| `\result` | `res` | `res` |
+| `$result` | `res` | `res` |
 | `"foo"` (enum context) | `.foo` | `Type.foo` |
 | `"foo"` (string context) | `"foo"` | `"foo"` |
 | `x.tag === "foo"` | `match` arm | `x.foo?` |
-| `forall(k, P)` | `∀ k : T, P'` | `forall k :: P'` |
-| `exists(k, P)` | `∃ k : T, P'` | `exists k :: P'` |
+| `forall(k => P)` | `∀ k : T, P'` | `forall k :: P'` |
+| `exists(k => P)` | `∃ k : T, P'` | `exists k :: P'` |
 
 ### 3.3 Nat-Typing Rules
 
 An expression is Nat-typed if:
 - It's a variable declared with `//@ type <v> nat`
-- It's a quantified variable with `: nat` in the quantifier
+- It's a quantified variable with an explicit arrow-parameter type, as in `forall((k: nat) => P)`
 - It's `arr.length` (i.e., `arr.size` / `|arr|`)
 - It's an arithmetic expression where both operands are Nat-typed
 - It's a non-negative numeric literal
@@ -556,14 +542,14 @@ The Nat-typing determines whether `.toNat` is needed for array indexing in Lean.
 
 ### 3.4 Implication Flattening
 
-`(A && B) ==> C` is emitted as curried implication: `A → B → C` (Lean) or `A ==> B ==> C` (Dafny).
+`implies(A && B, C)` is emitted as curried implication: `A → B → C` (Lean) or `A ==> B ==> C` (Dafny).
 
 ### 3.5 Conjunction Splitting
 
 Top-level `&&` in `requires`, `ensures`, and `invariant` annotations is split into separate clauses:
 
 ```
-//@ ensures \result >= -1 && \result < arr.length
+//@ ensures $result >= -1 && $result < arr.length
 ```
 
 generates (Lean):
@@ -697,17 +683,17 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 - Truthiness: `if (v)`, `if (!v)`, `opt ? a : b`
 - Composition: `v && rest` or `rest && v` (optional check on either side) — in an `if`/`?:` condition or as a bare statement (`v !== undefined && v.f()`, the `if`-less guard idiom)
 - Disjunctive early return: `a === undefined || b === undefined`, `!x || x.f !== v`, `x?.t !== 'm' || x.g`
-- Spec implication: `path !== undefined && rest ==> B` (premise narrows conclusion)
+- Spec implication: `implies(path !== undefined && rest, B)` (premise narrows conclusion)
 - Optional chaining: `obj?.field`, `obj?.foo()`, `obj?.[i]`, chained `obj?.a?.b?.c` and `obj?.a.b.c`
 - Nullish coalescing: `x ?? default`; array index `arr[i] ?? default` (undefined ⟺ out of bounds under `noUncheckedIndexedAccess`) → `(0 <= i && i < arr.length) ? arr[i] : default`
 
 The narrow pass (`narrow.ts`) detects these on the typed IR and rewrites them into a single `someMatch` IR node with a fresh binder. Transform lowers `someMatch` into Dafny `match` Some/None (or `if .Some? { ... .value ... }` after the peephole pass).
 
-Following TS, the equality/truthiness/`&&`/`||`/`==>` patterns fire only for pure access paths (`x`, `obj.field`, `a.b.c.d`); method-call results must be bound first (`const v = m.get(k); if (v !== undefined) ...`). The `obj?.<chain>` and `x ?? d` forms are exceptions: extract emits dedicated single-evaluation IR nodes (`optChain`, `nullish`), so any expression on the left is allowed.
+Following TS, the equality/truthiness/`&&`/`||`/`implies` patterns fire only for pure access paths (`x`, `obj.field`, `a.b.c.d`); method-call results must be bound first (`const v = m.get(k); if (v !== undefined) ...`). The `obj?.<chain>` and `x ?? d` forms are exceptions: extract emits dedicated single-evaluation IR nodes (`optChain`, `nullish`), so any expression on the left is allowed.
 
 **Discriminated-union narrowing.** `if (e.kind === "lit") use(e.val)`, `if ('field' in x) use(x.field)`, and `if (x.kind !== "v") return; rest` all lower to `match` constructs that destructure variant-specific fields. Switch on a discriminator works similarly. Detection lives in `narrow.ts` alongside optional-narrowing rules (rewrites to a `tagMatch` IR node); the lowering to backend `match` lives in `transform.ts`.
 
-**Synthesized array-union narrowing.** A plain union `U | T[]` (no shared discriminant) is synthesized at the boundary into a tagged datatype `ArrayBranch(arr: T[]) | NonArrayBranch(val: U)`. `Array.isArray(x)` narrows to the array branch (in `if` / `?:` / `==>`); when the non-array branch `U` is `string`, `typeof x === "string"` narrows to it in `?:` conditionals — the dual discriminator. Inside the matched branch, bare references to `x` use the variant's payload. The `typeof` form fires only when `U` is actually `string`; for any other `U` the runtime `"string"` test can't match that branch, so `lsc` does not narrow (and `typeof` stays unsupported).
+**Synthesized array-union narrowing.** A plain union `U | T[]` (no shared discriminant) is synthesized at the boundary into a tagged datatype `ArrayBranch(arr: T[]) | NonArrayBranch(val: U)`. `Array.isArray(x)` narrows to the array branch (in `if` / `?:` / spec `implies`); when the non-array branch `U` is `string`, `typeof x === "string"` narrows to it in `?:` conditionals — the dual discriminator. Inside the matched branch, bare references to `x` use the variant's payload. The `typeof` form fires only when `U` is actually `string`; for any other `U` the runtime `"string"` test can't match that branch, so `lsc` does not narrow (and `typeof` stays unsupported).
 
 See [TOOLS.md](TOOLS.md#narrow-rules) for the full rule list.
 
@@ -752,7 +738,7 @@ The unwrapped value is bound once via a `var` (or `let` expression in pure conte
 
 When the bound variable IS used after the match, the `let` is preserved and the `Option` value remains; only the inline match-on-`get` form is simplified.
 
-**Quantifier type inference:** When a quantifier variable is used as a collection key or element (e.g., `forall(v, v in arr ==> ...)`, `forall(k, map.has(k) ==> ...)`, `forall(v, arr.includes(v) ==> ...)`), the variable type is inferred from the collection's key/element type instead of defaulting to `Int`.
+**Quantifier type inference:** When an untyped quantifier variable is used as a collection key or element (e.g., `forall(v => implies(v in arr, ...))`, `forall(k => implies(map.has(k), ...))`, `forall(v => implies(arr.includes(v), ...))`), its type is inferred from the collection's key/element type instead of defaulting to `Int`.
 
 **Set iteration:** `for (const x of s)` where `s` is a `Set<T>` converts the set to an array first (Lean: `.toArray`, Dafny: `SetToSeq` helper), then iterates with a standard indexed loop.
 
@@ -1141,8 +1127,8 @@ type MultiAction =
 **Ensures with discriminated unions** — specs that condition on the variant use `match`:
 
 ```typescript
-//@ ensures pkt.tag === "syn" ==> \result === pkt.seq
-//@ ensures pkt.tag === "data" ==> \result === state + pkt.len
+//@ ensures implies(pkt.tag === "syn", $result === pkt.seq)
+//@ ensures implies(pkt.tag === "data", $result === state + pkt.len)
 ```
 
 → (Lean):
@@ -1234,7 +1220,7 @@ type State = "idle" | "connecting" | "connected" | "closing"
 type Event = "connect" | "ack" | "close" | "timeout"
 
 function transition(state: State, event: Event): State {
-  //@ ensures event === "timeout" ==> \result === "idle"
+  //@ ensures implies(event === "timeout", $result === "idle")
   if (state === "idle" && event === "connect") return "connecting";
   if (state === "connecting" && event === "ack") return "connected";
   if (state === "connected" && event === "close") return "closing";
@@ -1247,12 +1233,12 @@ function runSession(events: Event[]): State {
   //@ type i nat
   //@ requires events.length > 0
   //@ requires lastEvent(events) === "timeout"
-  //@ ensures \result === "idle"
+  //@ ensures $result === "idle"
   let state: State = "idle";
   let i = 0;
   while (i < events.length) {
     //@ invariant i <= events.length
-    //@ invariant i > 0 && events[i - 1] === "timeout" ==> state === "idle"
+    //@ invariant implies(i > 0 && events[i - 1] === "timeout", state === "idle")
     //@ decreases events.length - i
     state = transition(state, events[i]);
     i = i + 1;
@@ -1273,9 +1259,9 @@ type Packet =
   | { tag: "fin" }
 
 function nextSeq(state: number, pkt: Packet): number {
-  //@ ensures pkt.tag === "syn" ==> \result === pkt.seq
-  //@ ensures pkt.tag === "data" ==> \result === state + pkt.len
-  //@ ensures pkt.tag === "fin" ==> \result === state
+  //@ ensures implies(pkt.tag === "syn", $result === pkt.seq)
+  //@ ensures implies(pkt.tag === "data", $result === state + pkt.len)
+  //@ ensures implies(pkt.tag === "fin", $result === state)
   if (pkt.tag === "syn") return pkt.seq;
   if (pkt.tag === "ack") return state;
   if (pkt.tag === "data") return state + pkt.len;

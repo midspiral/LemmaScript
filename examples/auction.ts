@@ -22,7 +22,7 @@ type Bid = { key: string; amount: number };
 // Winning bid amount for `key` — the max over matching bids, floored at the reserve.
 function highestBid(bids: (Bid | undefined)[], key: string, reserve: number): number {
   //@ verify
-  //@ ensures \result >= reserve
+  //@ ensures $result >= reserve
   let best = reserve;
   for (let i = 0; i < bids.length; i++) {
     //@ invariant best >= reserve
@@ -37,7 +37,7 @@ function highestBid(bids: (Bid | undefined)[], key: string, reserve: number): nu
 // above the reserve, or -1 if none clears it.
 function winningBidder(bids: (Bid | undefined)[], key: string, reserve: number): number {
   //@ verify
-  //@ ensures \result === -1 || (0 <= \result && \result < bids.length)
+  //@ ensures $result === -1 || 0 <= $result && $result < bids.length
   let winner = -1;
   let best = reserve;
   for (let i = 0; i < bids.length; i++) {
@@ -57,7 +57,7 @@ function winningBidder(bids: (Bid | undefined)[], key: string, reserve: number):
 // reserve exactly.
 function secondPrice(bids: (Bid | undefined)[], key: string, reserve: number): number {
   //@ verify
-  //@ ensures \result >= reserve
+  //@ ensures $result >= reserve
   let best = reserve;
   let second = reserve;
   for (let i = 0; i < bids.length; i++) {
@@ -78,7 +78,7 @@ function secondPrice(bids: (Bid | undefined)[], key: string, reserve: number): n
 // Index of the first funded bid for `key` (present, positive amount), else -1.
 function firstFunded(bids: (Bid | undefined)[], key: string): number {
   //@ verify
-  //@ ensures \result === -1 || (0 <= \result && \result < bids.length)
+  //@ ensures $result === -1 || 0 <= $result && $result < bids.length
   for (let i = 0; i < bids.length; i++) {
     //@ invariant 0 <= i && i <= bids.length
     const bid = bids[i];

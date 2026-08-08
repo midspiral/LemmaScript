@@ -18,7 +18,7 @@
 export function sumThenCount(xs: number[]): number {
   //@ verify
   //@ type i nat
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   let total = 0;
   for (let i = 0; i < xs.length; i = i + 1) {
     //@ invariant i <= xs.length
@@ -43,7 +43,7 @@ export function dodgeTakenName(n: number): number {
   //@ type i nat
   //@ type i_2 nat
   //@ requires n >= 0
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   let acc = 0;
   let i_2 = n;
   for (let i = 0; i < n; i = i + 1) {

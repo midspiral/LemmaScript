@@ -12,7 +12,7 @@ interface Perm { tag: Tag; level: number }
 /** Numeric weight per permission tag. */
 export function weight(p: Perm): number {
   //@ verify
-  //@ ensures \result >= 1
+  //@ ensures $result >= 1
   switch (p.tag) {
     case "read":
       return 1;
@@ -26,7 +26,7 @@ export function weight(p: Perm): number {
 /** Plain strings use literal-valued cases, not datatype constructors. */
 export function pickPlainString(kind: string): number {
   //@ verify
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   switch (kind) {
     case "small":  return 1;
     case "medium": return 2;

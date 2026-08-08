@@ -18,13 +18,13 @@ type Box = { items: number[]; inner: Inner | undefined };
 
 function total(xs: number[]): number {
   //@ verify
-  //@ ensures \result === xs.length
+  //@ ensures $result === xs.length
   return xs.length;
 }
 
 function use(v: number): number {
   //@ verify
-  //@ ensures \result === v
+  //@ ensures $result === v
   return v;
 }
 
@@ -49,6 +49,6 @@ function fieldPath(b: Box): void {
 // A `&&` with no optional check is left untouched (still a plain conjunction).
 function plain(p: boolean, q: boolean): boolean {
   //@ verify
-  //@ ensures \result === (p && q)
+  //@ ensures $result === (p && q)
   return p && q;
 }

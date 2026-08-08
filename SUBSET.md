@@ -11,7 +11,7 @@ You write ordinary TypeScript and add `//@ ` comments that state what your code 
 export function clamp(x: number, lo: number, hi: number): number {
   //@ verify
   //@ requires lo <= hi
-  //@ ensures lo <= \result && \result <= hi
+  //@ ensures lo <= $result && $result <= hi
   if (x < lo) return lo;
   if (x > hi) return hi;
   return x;
@@ -130,11 +130,11 @@ datatype State = idle | running
 The `//@ ` comments are where you say what to prove. The common ones:
 
 - `//@ requires P` — a precondition the caller must meet.
-- `//@ ensures P` — a postcondition the function guarantees (use `\result` for the return value).
+- `//@ ensures P` — a postcondition the function guarantees (use `$result` for the return value).
 - `//@ invariant P` / `//@ decreases D` — on loops.
 - `//@ verify` — opt this function in (once any function in a file is marked, only marked functions are verified).
 
-The spec expressions support quantifiers (`forall(k, P)`, `exists(k, P)`), implication (`==>`), and the same operators and method calls as code. The full language — including ghost state, `//@ havoc`, `//@ extern`, and selective verification — is [SPEC.md §2](SPEC.md#2-the---annotation-language).
+Spec clauses use valid TypeScript expression syntax, including arrow quantifiers (`forall(k => P)`, `exists((k: nat) => P)`), implication (`implies(P, Q)`), and the same operators and method calls as code. The full language — including ghost state, `//@ havoc`, `//@ extern`, and selective verification — is [SPEC.md §2](SPEC.md#2-the---annotation-language).
 
 ## Where to go next
 

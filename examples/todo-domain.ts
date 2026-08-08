@@ -144,7 +144,7 @@ export function isLeapYear(year: number): boolean {
 
 export function daysInMonth(month: number, year: number): number {
 
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   if (month === 1) return 31
   if (month === 2) return isLeapYear(year) ? 29 : 28
   if (month === 3) return 31
@@ -195,7 +195,7 @@ export function seqContains<T>(s: T[], x: T): boolean {
 
 export function indexOf<T>(s: T[], x: T): number {
   //@ type T (==)
-  //@ ensures \result >= -1 && \result < s.length
+  //@ ensures $result >= -1 && $result < s.length
   let i = 0
   while (i < s.length) {
     //@ invariant i >= 0 && i <= s.length
@@ -207,7 +207,7 @@ export function indexOf<T>(s: T[], x: T): number {
 
 export function removeFirst<T>(s: T[], x: T): T[] {
   //@ type T (==)
-  //@ ensures \result.length <= s.length
+  //@ ensures $result.length <= s.length
   if (s.length === 0) return []
   if (s[0] === x) return s.slice(1)
   return [s[0], ...removeFirst(s.slice(1), x)]
@@ -216,7 +216,7 @@ export function removeFirst<T>(s: T[], x: T): T[] {
 export function insertAt<T>(s: T[], i: number, x: T): T[] {
 
   //@ requires i >= 0 && i <= s.length
-  //@ ensures \result.length === s.length + 1
+  //@ ensures $result.length === s.length + 1
   return [...s.slice(0, i), x, ...s.slice(i)]
 }
 
@@ -796,7 +796,7 @@ export function getTaskIncludingDeleted(m: Model, taskId: TaskId): Task | undefi
 
 export function getTasksInList(m: Model, listId: ListId): TaskId[] {
 
-  //@ ensures \result.length >= 0
+  //@ ensures $result.length >= 0
   const lane = m.tasks.get(listId)
   if (lane === undefined) return []
   // Filter to visible tasks
@@ -831,7 +831,7 @@ export function getTagName(m: Model, tagId: TagId): string | undefined {
 
 export function countPriorityTasks(m: Model): number {
 
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   let count = 0
   //@ havoc
   for (const [, task] of m.taskData) {
@@ -842,7 +842,7 @@ export function countPriorityTasks(m: Model): number {
 
 export function countLogbookTasks(m: Model): number {
 
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   let count = 0
   //@ havoc
   for (const [, task] of m.taskData) {

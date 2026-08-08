@@ -31,7 +31,7 @@ type Entry = MessageEntry | CustomMessageEntry;
 
 export function countCustom(entries: Entry[]): number {
   //@ verify
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   let n = 0;
   for (let i = 0; i < entries.length; i++) {
     //@ invariant 0 <= n

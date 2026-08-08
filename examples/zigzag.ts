@@ -18,7 +18,7 @@
 // Fold a signed integer onto a non-negative "zigzag" code.
 function encode(n: number): number {
   //@ verify
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   return n >= 0 ? 2 * n : -2 * n - 1;
 }
 
@@ -32,7 +32,7 @@ function decode(z: number): number {
 // Round-trip law, forward: decoding an encoded integer recovers it — for every n.
 function roundTrip(n: number): number {
   //@ verify
-  //@ ensures \result === n
+  //@ ensures $result === n
   return decode(encode(n));
 }
 
@@ -41,6 +41,6 @@ function roundTrip(n: number): number {
 function reverseRoundTrip(z: number): number {
   //@ verify
   //@ requires z >= 0
-  //@ ensures \result === z
+  //@ ensures $result === z
   return encode(decode(z));
 }

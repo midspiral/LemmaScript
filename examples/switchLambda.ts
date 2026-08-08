@@ -15,7 +15,7 @@ type Msg = UserMsg | SysMsg;
 /** Map each message to a numeric priority by role. */
 export function priorities(msgs: Msg[]): number[] {
   //@ verify
-  //@ ensures \result.length === msgs.length
+  //@ ensures $result.length === msgs.length
   return msgs.map((m): number => {
     switch (m.role) {
       case "user":

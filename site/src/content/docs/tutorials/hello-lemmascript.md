@@ -18,7 +18,7 @@ Create `src/hello.ts` in your project:
 export function clamp(value: number, min: number, max: number): number {
   //@ verify
   //@ requires min <= max
-  //@ ensures \result >= min && \result <= max
+  //@ ensures $result >= min && $result <= max
   if (value < min) return min;
   if (value > max) return max;
   return value;
@@ -28,7 +28,7 @@ export function clamp(value: number, min: number, max: number): number {
 Three annotations:
 - `//@ verify` — tells LemmaScript to include this function
 - `//@ requires min <= max` — a **precondition**: this function only makes sense when min ≤ max
-- `//@ ensures \result >= min && \result <= max` — a **postcondition**: the return value is always within bounds
+- `//@ ensures $result >= min && $result <= max` — a **postcondition**: the return value is always within bounds
 
 These are TypeScript comments. Your code runs exactly the same with or without them.
 
@@ -51,7 +51,7 @@ Dafny just proved that `clamp` always returns a value between `min` and `max`, f
 Change the postcondition to something wrong:
 
 ```typescript
-//@ ensures \result > min && \result <= max
+//@ ensures $result > min && $result <= max
 ```
 
 (`>=` changed to `>` — now we're claiming the result is strictly greater than min, which fails when `value === min`.)

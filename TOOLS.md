@@ -20,7 +20,7 @@ TS source (.ts)
 
 Structured AST from ts-morph. Expressions are nodes, not strings. Has declared type references (`tsType: "Packet"`) but no resolved types. Close to TS syntax.
 
-- `RawExpr`: var, num, str, bool, binop, unop, call, index, field, record, arrayLiteral, lambda, conditional, optChain (`obj?.…`), nullish (`a ?? b`), emptyCollection (`new Map`/`new Set`), nonNull (`e!`); spec-only: result (`\result`), forall, exists, havoc
+- `RawExpr`: var, num, str, bool, binop, unop, call, index, field, record, arrayLiteral, lambda, conditional, optChain (`obj?.…`), nullish (`a ?? b`), emptyCollection (`new Map`/`new Set`), nonNull (`e!`); spec-only: result (`$result`), forall, exists, havoc
 - `RawStmt`: let, assign, return, break, continue, expr, if, while, switch, forof, throw; spec-only: ghostLet, ghostAssign, assert
 - `//@ ` annotations remain as strings (parsed by specparser in the resolve pass)
 
@@ -45,9 +45,9 @@ Type names: `Expr`, `Stmt`, `Module`, `MatchArm`, `StmtMatchArm`, and `Decl` = `
 
 **Extract** (`extract.ts`): ts-morph → Raw IR. Walks the TS AST, produces structured expression nodes. Only string outputs are `//@ ` annotation text. Two backend-neutral CLI commands stop here. `lsc extract foo.ts` dumps the Raw IR as JSON — external tools can consume it instead of re-parsing TS, e.g. [lemmascript-claimcheck](https://github.com/midspiral/lemmascript-claimcheck) reads each function's `//@ contract`, `requires`, and `ensures` to check the prose against the spec. `lsc info foo.ts` writes `foo.ts.json`, a per-function spec summary (`{ name: { sig, requires, ensures, decreases } }`, class methods keyed `Class.method`) — see `info-command.ts`. `lsc info --typed foo.ts` goes further — through resolve/narrow/autohavoc — and prints the machine-readable Typed IR contract (typed signatures, spec ASTs, flags, body-kind census, emitted-Dafny-name map) to stdout for satellites like [lemmascript-crosscheck](https://github.com/midspiral/lemmascript-crosscheck); see SPEC.md §7.5.
 
-**Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedPaths`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: simple vars and pure access paths (`a.b.c`, any depth) narrow. `&&` chains accumulate narrowings (each premise in scope for later ones); `==>` propagates premise narrowings into the conclusion. **Type narrowing only** — no structural rewriting.
+**Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedPaths`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: simple vars and pure access paths (`a.b.c`, any depth) narrow. `&&` chains accumulate narrowings (each premise in scope for later ones); the Raw IR `==>` produced by source `implies(...)` propagates premise narrowings into the conclusion. **Type narrowing only** — no structural rewriting.
 
-**Narrow** (`narrow.ts`): Typed IR → Typed IR. Owns all structural narrowing — both for optional checks and for discriminated unions. Optional patterns rewrite to `someMatch`; discriminant patterns (`x.kind === "v"`, `'k' in x`, `Array.isArray(x)` for synthesized array-unions, `x.kind !== "v") return; ...`) rewrite to `tagMatch`. Also handles `==>` premise narrowing in specs, `left ?? right` (nullish coalescing), `k in m ? m[k] : default` for map-typed `m`, and `obj?.<chain>` for any combination of `?.field`, `?.foo()`, `?.[i]`, and continuations (via the `optChain` IR node). Rules fire for pure access paths (`var(x)`, `field(purePath, name)`); `optChain` and `nullish` are the sole paths for complex scrutinees. The pass owns *where* a condition sits; *what* a condition establishes lives in `condition-facts.ts` (shared with resolve). See [Narrow rules](#narrow-rules) below.
+**Narrow** (`narrow.ts`): Typed IR → Typed IR. Owns all structural narrowing — both for optional checks and for discriminated unions. Optional patterns rewrite to `someMatch`; discriminant patterns (`x.kind === "v"`, `'k' in x`, `Array.isArray(x)` for synthesized array-unions, `x.kind !== "v") return; ...`) rewrite to `tagMatch`. Also handles implication premise narrowing in specs (represented as Raw IR `==>`), `left ?? right` (nullish coalescing), `k in m ? m[k] : default` for map-typed `m`, and `obj?.<chain>` for any combination of `?.field`, `?.foo()`, `?.[i]`, and continuations (via the `optChain` IR node). Rules fire for pure access paths (`var(x)`, `field(purePath, name)`); `optChain` and `nullish` are the sole paths for complex scrutinees. The pass owns *where* a condition sits; *what* a condition establishes lives in `condition-facts.ts` (shared with resolve). See [Narrow rules](#narrow-rules) below.
 
 **Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None — substituting the binder for any pure access path scrutinee, or lowering naively when the scrutinee is complex (narrow pre-bound the someBody). No optional-narrowing logic of its own.
 
@@ -69,7 +69,7 @@ When a call resolves to a pure function declared in a *different* `.ts` file, ex
 
 ## Spec Expression Parser
 
-The specparser (`specparser.ts`) parses `//@ ` annotation expressions into `RawExpr` nodes. Called by the resolve pass, not by extract or transform.
+The specparser (`specparser.ts`) asks the TypeScript parser for an expression AST, then converts the supported nodes directly to `RawExpr`. It recognizes four valid-TS intrinsic calls — `forall(k => P)`, `exists(k => P)`, `implies(P, Q)`, and `iff(P, Q)` — plus the reserved `$result` identifier. It has no tokenizer or expression grammar of its own. It is called by resolve, not extract or transform.
 
 ## Adding a New Feature
 
@@ -94,7 +94,6 @@ interface Env { name: string; ty: Ty; parent: Env | null }
 - **Data-carrying variant equality**: `//@ requires m.tag === "b"` where `b` carries data throws an error. Use `switch` to destructure instead.
 - **Impure builtin in a narrowing ternary guard**: `opt !== undefined && x?.someHof(...) ? a : b` leaves `opt` un-unwrapped, and the backend rejects the output. Narrow's ternary rule declines on calls transform would hoist out of the arm (where the arm's binder is out of scope), and nothing else unwraps. Affects HOFs and mutators; registry-`pure` builtins are fine (`examples/pureGuard.ts`).
 - **For-of desugaring leaks index variable**: `_x_idx` is visible in `//@ invariant` and `//@ done_with` annotations.
-- **Spec annotations are strings**: `//@ ` expressions are parsed by the specparser, not extracted from ts-morph. They don't benefit from the structured raw IR.
 
 ## Lean Backend
 
@@ -181,11 +180,11 @@ For the chain and neg-early-return rules, the `Array.isArray(x)` / `!Array.isArr
 | `e !== undefined && rest ? a : b` (pure rest) | `someMatch e { Some(_e_val) => if rest then a else b, None => b }` |
 | `opt ? a : b` (truthiness; cond is optional-typed) | `someMatch opt { Some(_opt_val) => a, None => b }` |
 | `left ?? right` (nullish coalescing) | `someMatch left { Some(_v) => _v, None => right }` |
-| `path !== undefined [&& rest] ==> B` (spec implication) | `someMatch path { Some(_p_val) => (rest ==> B), None => true }` |
+| `implies(path !== undefined && rest, B)` (source spec; Raw IR `==>`) | `someMatch path { Some(_p_val) => (rest ==> B), None => true }` |
 | `optChain(obj, chain)` (from extract's `obj?.<chain>` — chain may be field/call/index steps) | `someMatch obj { Some(_oc{N}_val) => apply(chain, _oc{N}_val), None => undefined }` |
 | `k in m ? m[k] : default` (`m` map-typed; then-branch is exactly `m[k]`, `default` non-optional) | `someMatch m[k] { Some(_m_k_val) => _m_k_val, None => default }` |
 
-The `&&`-ternary rule skips when `rest` contains impure method calls (those would be lifted out of the match arm by transform, breaking binder scope) — the let-cond statement-level rule handles those. Both `&&`-ternary and `==>` rules walk their inner expression recursively so chained checks (`a !== undefined && a.b !== undefined ? ... : ...`, `... ==> ...`) become nested someMatches. The bare-statement `&&` rule (above) has no such restriction: its arm is a statement-level someMatch, which keeps a guarded call in statement position, so transform never ANF-lifts it out. It likewise walks `rest` as a statement, so chained checks nest.
+The `&&`-ternary rule skips when `rest` contains impure method calls (those would be lifted out of the match arm by transform, breaking binder scope) — the let-cond statement-level rule handles those. Both `&&`-ternary and implication rules walk their inner expression recursively so chained checks (`a !== undefined && a.b !== undefined ? ... : ...`, nested `implies(...)`) become nested someMatches. The bare-statement `&&` rule (above) has no such restriction: its arm is a statement-level someMatch, which keeps a guarded call in statement position, so transform never ANF-lifts it out. It likewise walks `rest` as a statement, so chained checks nest.
 
 The `k in m` map rule mirrors the discriminant-`in` path but is gated on `map`; the existing Dafny `Map.get` peephole then collapses the result back to `if k in m then m[k] else default`.
 
@@ -195,9 +194,9 @@ The `k in m` map rule mirrors the discriminant-`in` path but is gated on `map`; 
 |---------|-------------|
 | `Array.isArray(x) ? a : b` (or `!Array.isArray(x) ? a : b`) | `tagMatch x { ArrayBranch => a } fallthrough b` (`NonArrayBranch` when negated) |
 | `(<rest> && Array.isArray(path)) ? a : b` | `tagMatch path { ArrayBranch => (<rest>) ? a : b } fallthrough b` |
-| `Array.isArray(x) ==> B` (or `!Array.isArray(x) ==> B`) | `tagMatch x { ArrayBranch => B, _ => true }` (`NonArrayBranch` when negated) |
+| `implies(Array.isArray(x), B)` (or with a negated premise) | `tagMatch x { ArrayBranch => B, _ => true }` (`NonArrayBranch` when negated) |
 
-The `==>` form mirrors `ruleImplOptional`: the unmatched variant becomes a vacuous-`true` fallthrough, since the implication is trivially satisfied when the premise is false.
+The implication form mirrors `ruleImplOptional`: the unmatched variant becomes a vacuous-`true` fallthrough, since the implication is trivially satisfied when the premise is false.
 
 **Scrutinee handling**
 
@@ -258,7 +257,7 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 |------|-------|------|
 | `rawir.ts` | Types | Raw IR type definitions |
 | `extract.ts` | Extract | ts-morph → Raw IR |
-| `specparser.ts` | (parser) | Parses `//@ ` annotations → RawExpr |
+| `specparser.ts` | Trusted frontend | TypeScript expression AST → RawExpr; recognizes spec intrinsics |
 | `resolve.ts` | Resolve | Raw IR → Typed IR (types and type-narrowing) |
 | `typedir.ts` | Types | Typed IR type definitions (incl. `someMatch`/`tagMatch`) |
 | `narrow.ts` | Narrow | Typed IR → Typed IR (structural narrowing → `someMatch` / `tagMatch`) |

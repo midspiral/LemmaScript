@@ -60,7 +60,7 @@ function keep(p: Part): boolean {
  */
 export function dropOrphans(messages: Message[]): Message[] {
   //@ verify
-  //@ ensures \result.length <= messages.length
+  //@ ensures $result.length <= messages.length
   const filteredContents: (Part[] | null)[] = messages.map(m =>
     Array.isArray(m.content) ? [...m.content] : null
   );

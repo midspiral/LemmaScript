@@ -22,9 +22,9 @@ export function sorted(arr: number[]): boolean {
 
 export function binarySearch(arr: number[], target: number): number {
   //@ requires sorted(arr)
-  //@ ensures \result >= -1 && \result < arr.length
-  //@ ensures \result >= 0 ==> arr[\result] === target
-  //@ ensures \result === -1 ==> forall(k, 0 <= k && k < arr.length ==> arr[k] !== target)
+  //@ ensures $result >= -1 && $result < arr.length
+  //@ ensures implies($result >= 0, arr[$result] === target)
+  //@ ensures implies($result === -1, forall(k => implies(0 <= k && k < arr.length, arr[k] !== target)))
 
   let lo = 0;
   let hi = arr.length - 1;
@@ -33,8 +33,8 @@ export function binarySearch(arr: number[], target: number): number {
   while (lo <= hi) {
     //@ invariant 0 <= lo && lo <= arr.length
     //@ invariant -1 <= hi && hi < arr.length
-    //@ invariant forall(k, 0 <= k && k < lo ==> arr[k] !== target)
-    //@ invariant forall(k, hi < k && k < arr.length ==> arr[k] !== target)
+    //@ invariant forall(k => implies(0 <= k && k < lo, arr[k] !== target))
+    //@ invariant forall(k => implies(hi < k && k < arr.length, arr[k] !== target))
     //@ invariant result === -1 || (result >= 0 && result < arr.length && arr[result] === target)
     //@ done_with result !== -1 || !(lo <= hi)
     //@ decreases (hi - lo + 1).toNat

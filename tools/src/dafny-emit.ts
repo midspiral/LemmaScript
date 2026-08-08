@@ -80,7 +80,7 @@ const DAFNY_KEYWORDS = new Set([
 
 // The Dafny out-parameter name for the method currently being emitted. Default
 // `res`, but bumped (e.g. `res'`) when the method's own scope uses `res` — set
-// by methodHeader and reset per decl. `\result` in an ensures must use the
+// by methodHeader and reset per decl. Source `$result` in an ensures must use the
 // *same* name, so escapeName routes it here.
 let _resultName = "res";
 
@@ -154,7 +154,7 @@ export function emittedNameMap(): Map<string, string> {
 }
 
 function escapeName(name: string): string {
-  // \result is carried through the IR as var "\\result"; render it as the
+  // Source `$result` is carried through the IR as var "\\result"; render it as the
   // current method's out-parameter name (chosen locally by methodHeader).
   if (name === "\\result") return _resultName;
   const user = _userDafnyNames.get(name);
@@ -200,7 +200,7 @@ function methodHeader(prefix: string, params: { name: string; type: Ty }[], retu
   // `(req, res)`), body local, or callee named `res` would shadow it. Check only
   // *this method's own* signature and body — `res` is common module-wide (fields,
   // unrelated params), so a module-wide check would prime spuriously. The primed
-  // name is recorded so `\result` references resolve to it.
+  // name is recorded so source `$result` references resolve to it.
   const taken = (n: string): boolean =>
     params.some(p => escapeName(p.name) === n) ||
     (scope !== undefined && usesNameInDecl(scope.requires, scope.ensures, scope.body, n));

@@ -13,7 +13,7 @@ export function classify(s: Shape): string {
 }
 
 export function tally(s: Shape): number {
-  //@ ensures \result >= 10
+  //@ ensures $result >= 10
   let n = 0;
   if (s.kind === "circle") { n = 1; }
   if (s.kind === "square") { n = 2; }

@@ -25,8 +25,8 @@ export interface Config {
 
 // §5.4: if-chain on discriminant → match (partial dispatch, natural default)
 function evalPartial(e: Expr): number {
-  //@ ensures e.kind === "lit" ==> \result === e.val
-  //@ ensures e.kind === "add" ==> \result === e.a + e.b
+  //@ ensures implies(e.kind === "lit", $result === e.val)
+  //@ ensures implies(e.kind === "add", $result === e.a + e.b)
   if (e.kind === "lit") return e.val;
   if (e.kind === "add") return e.a + e.b;
   return 0;
@@ -34,9 +34,9 @@ function evalPartial(e: Expr): number {
 
 // §5.4: switch on discriminant → match (exhaustive, no default needed)
 function evalSwitch(e: Expr): number {
-  //@ ensures e.kind === "lit" ==> \result === e.val
-  //@ ensures e.kind === "add" ==> \result === e.a + e.b
-  //@ ensures e.kind === "neg" ==> \result === 0 - e.inner
+  //@ ensures implies(e.kind === "lit", $result === e.val)
+  //@ ensures implies(e.kind === "add", $result === e.a + e.b)
+  //@ ensures implies(e.kind === "neg", $result === 0 - e.inner)
   switch (e.kind) {
     case "lit": return e.val;
     case "add": return e.a + e.b;
@@ -46,31 +46,31 @@ function evalSwitch(e: Expr): number {
 
 // §8.2: enum-like equality → constructor comparison
 function isHighPriority(p: Priority): boolean {
-  //@ ensures p === "high" ==> \result === true
-  //@ ensures p !== "high" ==> \result === false
+  //@ ensures implies(p === "high", $result === true)
+  //@ ensures implies(p !== "high", $result === false)
   if (p === "high") return true;
   return false;
 }
 
 // §8.5: record literal construction
 function defaultConfig(): Config {
-  //@ ensures \result.threshold === 0 && \result.enabled === true
+  //@ ensures $result.threshold === 0 && $result.enabled === true
   return { threshold: 0, maxRetries: 3, enabled: true };
 }
 
 // §8.5: record spread / functional update (§4.2)
 function withThreshold(c: Config, t: number): Config {
   //@ type t nat
-  //@ ensures \result.threshold === t
-  //@ ensures \result.enabled === c.enabled
+  //@ ensures $result.threshold === t
+  //@ ensures $result.enabled === c.enabled
   return { ...c, threshold: t };
 }
 
 // Ternary / conditional expression
 function clampTernary(x: number, lo: number, hi: number): number {
   //@ requires lo <= hi
-  //@ ensures \result >= lo && \result <= hi
-  //@ ensures \result === (x < lo ? lo : x > hi ? hi : x)
+  //@ ensures $result >= lo && $result <= hi
+  //@ ensures $result === (x < lo ? lo : x > hi ? hi : x)
   return x < lo ? lo : x > hi ? hi : x;
 }
 
@@ -92,7 +92,7 @@ function makeHighItem(v: number): PriorityItem {
 // §4.2: Math.floor — integer (floor) division. Bare `/` is real division, so
 // the postcondition must floor too: `(lo + hi) / 2` alone would be the real 1.5.
 function midpoint(lo: number, hi: number): number {
-  //@ ensures \result === Math.floor((lo + hi) / 2)
+  //@ ensures $result === Math.floor((lo + hi) / 2)
   return Math.floor((lo + hi) / 2);
 }
 
@@ -101,27 +101,27 @@ function midpoint(lo: number, hi: number): number {
 // from 9007199254740992 — so this only verifies if the literal never rounds
 // through Number, in the body *or* in the annotation.
 function exactBigIntLiteral(): bigint {
-  //@ ensures \result === 9007199254740993n
-  //@ ensures \result !== 9007199254740992n
+  //@ ensures $result === 9007199254740993n
+  //@ ensures $result !== 9007199254740992n
   return 0x20000000000001n;
 }
 
 // §6.1.1: same, through unary minus — a negative literal must not be folded
 // by negating a JS number.
 function exactNegativeBigIntLiteral(): bigint {
-  //@ ensures \result === -9007199254740993n
-  //@ ensures \result !== -9007199254740992n
+  //@ ensures $result === -9007199254740993n
+  //@ ensures $result !== -9007199254740992n
   return -9007199254740993n;
 }
 
 // §4.2: array literal
 function wrapOne(x: number): number[] {
-  //@ ensures \result.length === 1
+  //@ ensures $result.length === 1
   return [x];
 }
 
 function threeElems(a: number, b: number, c: number): number[] {
-  //@ ensures \result.length === 3
+  //@ ensures $result.length === 3
   return [a, b, c];
 }
 
@@ -136,7 +136,7 @@ function append(arr: number[], x: number): number[] {
 
 // map
 function doubleAll(arr: number[]): number[] {
-  //@ ensures \result.length === arr.length
+  //@ ensures $result.length === arr.length
   return arr.map((x) => x * 2);
 }
 
@@ -157,12 +157,12 @@ function anyNegative(arr: number[]): boolean {
 
 // pure function call in HOF lambda — no monadic lifting (§4.7)
 function negate(x: number): number {
-  //@ ensures \result === 0 - x
+  //@ ensures $result === 0 - x
   return 0 - x;
 }
 
 function negateAll(arr: number[]): number[] {
-  //@ ensures \result.length === arr.length
+  //@ ensures $result.length === arr.length
   return arr.map((x) => negate(x));
 }
 
@@ -209,7 +209,7 @@ function getSlice(s: string, start: number, end: number): string {
 function countAbove(arr: number[], threshold: number): number {
   //@ type i nat
   //@ type count nat
-  //@ ensures \result <= arr.length
+  //@ ensures $result <= arr.length
   let count = 0;
   let i = 0;
   while (i < arr.length) {
@@ -224,20 +224,20 @@ function countAbove(arr: number[], threshold: number): number {
   return count;
 }
 
-// §4.4: implication flattening (A && B ==> C → A → B → C)
+// §4.4: implication flattening (implies(A && B, C) → A → B → C)
 // §4.5: conjunction splitting (ensures A && B → two clauses)
 // §5.2: done_with, break
 function search(arr: number[], target: number): number {
   //@ type i nat
-  //@ ensures \result >= -1 && \result < arr.length
-  //@ ensures \result >= 0 ==> arr[\result] === target
-  //@ ensures arr.length > 0 && \result === -1 ==> forall(k: nat, k < arr.length ==> arr[k] !== target)
+  //@ ensures $result >= -1 && $result < arr.length
+  //@ ensures implies($result >= 0, arr[$result] === target)
+  //@ ensures implies(arr.length > 0 && $result === -1, forall((k: nat) => implies(k < arr.length, arr[k] !== target)))
   let result = -1;
   let i = 0;
   while (i < arr.length) {
     //@ invariant i <= arr.length
     //@ invariant result === -1 || (result >= 0 && result < arr.length && arr[result] === target)
-    //@ invariant forall(k: nat, k < i ==> arr[k] !== target)
+    //@ invariant forall((k: nat) => implies(k < i, arr[k] !== target))
     //@ decreases arr.length - i
     //@ done_with result !== -1 || i >= arr.length
     if (arr[i] === target) {
@@ -265,11 +265,11 @@ function sumSearchResults(arr: number[], a: number, b: number): number {
 // ═══════════════════════════════════════════════════════════════
 
 function forOfContains(arr: number[], target: number): boolean {
-  //@ ensures \result === true ==> exists(k: nat, k < arr.length && arr[k] === target)
+  //@ ensures implies($result === true, exists((k: nat) => k < arr.length && arr[k] === target))
   let found = false;
   for (const x of arr) {
-    //@ invariant found === false ==> forall(k: nat, k < _x_idx ==> arr[k] !== target)
-    //@ invariant found === true ==> exists(k: nat, k < arr.length && arr[k] === target)
+    //@ invariant implies(found === false, forall((k: nat) => implies(k < _x_idx, arr[k] !== target)))
+    //@ invariant implies(found === true, exists((k: nat) => k < arr.length && arr[k] === target))
     //@ done_with found === true || !(_x_idx < arr.length)
     if (x === target) {
       found = true;
@@ -285,7 +285,7 @@ function forOfContains(arr: number[], target: number): boolean {
 
 // Method call results in record fields — needs monadic lifting in records
 function clampedItem(x: number): PriorityItem {
-  //@ ensures \result.level === "high"
+  //@ ensures $result.level === "high"
   let tmp = x;  // mutable → non-pure → full method body
   return { level: "high", value: clampTernary(tmp, 0, 100) };
 }
@@ -293,7 +293,7 @@ function clampedItem(x: number): PriorityItem {
 // Nested method call: method result passed as arg to another method call
 function clampedMidpoint(a: number, b: number): number {
   //@ requires a <= b
-  //@ ensures \result >= a && \result <= b
+  //@ ensures $result >= a && $result <= b
   let mid = midpoint(a, b);  // mutable → non-pure → full method body
   return clampTernary(mid, a, b);
 }
@@ -310,8 +310,8 @@ interface Tree { middle: Middle | undefined }
 // `t.middle.leaf !== undefined` narrows both paths in the then-branch,
 // so `t.middle.leaf.value` typechecks as `number`. Lowers to nested matches.
 function deepAccess(t: Tree): number {
-  //@ ensures t.middle !== undefined && t.middle.leaf !== undefined ==> \result === t.middle.leaf.value
-  //@ ensures t.middle === undefined ==> \result === 0
+  //@ ensures implies(t.middle !== undefined && t.middle.leaf !== undefined, $result === t.middle.leaf.value)
+  //@ ensures implies(t.middle === undefined, $result === 0)
   if (t.middle !== undefined && t.middle.leaf !== undefined) {
     return t.middle.leaf.value;
   }
@@ -327,30 +327,30 @@ interface Outer { inner: Inner | undefined }
 
 // `?.field`: simple property access — single short-circuit
 function ocField(o: Outer | undefined): Inner | undefined {
-  //@ ensures o === undefined ==> \result === undefined
-  //@ ensures o !== undefined ==> \result === o.inner
+  //@ ensures implies(o === undefined, $result === undefined)
+  //@ ensures implies(o !== undefined, $result === o.inner)
   return o?.inner;
 }
 
 // `?.field.field`: ?. then non-? continuation — short-circuit only at first ?
 function ocChain(o: Outer | undefined): number | undefined {
-  //@ ensures o === undefined ==> \result === undefined
-  //@ ensures o !== undefined && o.inner === undefined ==> \result === undefined
-  //@ ensures o !== undefined && o.inner !== undefined ==> \result === o.inner.val
+  //@ ensures implies(o === undefined, $result === undefined)
+  //@ ensures implies(o !== undefined && o.inner === undefined, $result === undefined)
+  //@ ensures implies(o !== undefined && o.inner !== undefined, $result === o.inner.val)
   return o?.inner?.val;
 }
 
 // `?.foo()`: method call after ?. — peephole collapses set.has to `in`
 function ocMethodCall(s: Set<string> | undefined, k: string): boolean | undefined {
-  //@ ensures s === undefined ==> \result === undefined
-  //@ ensures s !== undefined ==> \result === s.has(k)
+  //@ ensures implies(s === undefined, $result === undefined)
+  //@ ensures implies(s !== undefined, $result === s.has(k))
   return s?.has(k);
 }
 
 // `?.[k]`: index access via ?.[ ] — Record indexes return Option<value>
 function ocIndex(m: Record<string, string> | undefined, k: string): string | undefined {
-  //@ ensures m === undefined ==> \result === undefined
-  //@ ensures m !== undefined ==> \result === m[k]
+  //@ ensures implies(m === undefined, $result === undefined)
+  //@ ensures implies(m !== undefined, $result === m[k])
   return m?.[k];
 }
 
@@ -360,15 +360,15 @@ function ocIndex(m: Record<string, string> | undefined, k: string): string | und
 
 // Optional var with default
 function nullishVar(o: Inner | undefined, fallback: number): number {
-  //@ ensures o === undefined ==> \result === fallback
-  //@ ensures o !== undefined ==> \result === o.val
+  //@ ensures implies(o === undefined, $result === fallback)
+  //@ ensures implies(o !== undefined, $result === o.val)
   return o?.val ?? fallback;
 }
 
 // Map.get + ?? — peephole collapses to `if k in m then m[k] else fallback`
 function nullishMapGet(m: Map<string, number>, k: string, fallback: number): number {
-  //@ ensures !(k in m) ==> \result === fallback
-  //@ ensures k in m ==> \result === m.get(k)
+  //@ ensures implies(!(k in m), $result === fallback)
+  //@ ensures implies(k in m, $result === m.get(k))
   return m.get(k) ?? fallback;
 }
 
@@ -376,38 +376,38 @@ function nullishMapGet(m: Map<string, number>, k: string, fallback: number): num
 // someMatch over m[k]; the peephole then collapses to
 // `if k in m then m[k] else default`, same as the `??` form above.
 function inCheckRecordGet(m: Record<string, number>, k: string, fallback: number): number {
-  //@ ensures !(k in m) ==> \result === fallback
-  //@ ensures k in m ==> \result === m[k]
+  //@ ensures implies(!(k in m), $result === fallback)
+  //@ ensures implies(k in m, $result === m[k])
   return k in m ? m[k] : fallback;
 }
 
 // `requires k in m` — atom in scope for the whole body, `m[k]` narrowed to V directly.
 function requiresInMap(m: Record<string, number>, k: string): number {
   //@ requires k in m
-  //@ ensures \result === m[k]
+  //@ ensures $result === m[k]
   return m[k];
 }
 
 // `if (k in m) { ... m[k] ... }` — positive check narrows the then-branch.
 function ifInMapBlock(m: Record<string, number>, k: string, fallback: number): number {
-  //@ ensures k in m ==> \result === m[k]
-  //@ ensures !(k in m) ==> \result === fallback
+  //@ ensures implies(k in m, $result === m[k])
+  //@ ensures implies(!(k in m), $result === fallback)
   if (k in m) return m[k];
   return fallback;
 }
 
 // `if (!(k in m)) return ...; rest` — early-return narrows the rest.
 function ifNotInMapEarlyReturn(m: Record<string, number>, k: string, fallback: number): number {
-  //@ ensures !(k in m) ==> \result === fallback
-  //@ ensures k in m ==> \result === m[k]
+  //@ ensures implies(!(k in m), $result === fallback)
+  //@ ensures implies(k in m, $result === m[k])
   if (!(k in m)) return fallback;
   return m[k];
 }
 
 // `//@ assert k in m` — atom from assert narrows subsequent accesses in the block.
 function assertInMap(m: Record<string, number>, k: string, fallback: number): number {
-  //@ ensures k in m ==> \result === m[k]
-  //@ ensures !(k in m) ==> \result === fallback
+  //@ ensures implies(k in m, $result === m[k])
+  //@ ensures implies(!(k in m), $result === fallback)
   if (!(k in m)) return fallback;
   //@ assert k in m
   return m[k];
@@ -418,7 +418,7 @@ function whileInvariantInMap(m: Record<string, number>, k: string, reps: number)
   //@ type reps nat
   //@ type i nat
   //@ requires k in m
-  //@ ensures \result === m[k] * reps
+  //@ ensures $result === m[k] * reps
   let total = 0;
   let i = 0;
   while (i < reps) {
@@ -438,24 +438,24 @@ function whileInvariantInMap(m: Record<string, number>, k: string, reps: number)
 
 // Var early-return: !o narrows o to Inner after the if
 function negVar(o: Inner | undefined, fallback: number): number {
-  //@ ensures o === undefined ==> \result === fallback
-  //@ ensures o !== undefined ==> \result === o.val
+  //@ ensures implies(o === undefined, $result === fallback)
+  //@ ensures implies(o !== undefined, $result === o.val)
   if (!o) return fallback;
   return o.val;
 }
 
 // Field-chain early-return: !o.inner narrows o.inner to Inner after the if
 function negField(o: Outer, fallback: number): number {
-  //@ ensures o.inner === undefined ==> \result === fallback
-  //@ ensures o.inner !== undefined ==> \result === o.inner.val
+  //@ ensures implies(o.inner === undefined, $result === fallback)
+  //@ ensures implies(o.inner !== undefined, $result === o.inner.val)
   if (!o.inner) return fallback;
   return o.inner.val;
 }
 
 // Bare optional truthiness: `if (o)` is the same as `if (o !== undefined)`.
 function truthyVar(o: Inner | undefined, fallback: number): number {
-  //@ ensures o !== undefined ==> \result === o.val
-  //@ ensures o === undefined ==> \result === fallback
+  //@ ensures implies(o !== undefined, $result === o.val)
+  //@ ensures implies(o === undefined, $result === fallback)
   if (o) return o.val;
   return fallback;
 }
@@ -464,9 +464,9 @@ function truthyVar(o: Inner | undefined, fallback: number): number {
 // Tests that ruleConditionalAndOptional walks its inner conditional so
 // nested optional checks become nested someMatches.
 function nestedAndTernary(o: Outer | undefined, fallback: number): number {
-  //@ ensures o === undefined ==> \result === fallback
-  //@ ensures o !== undefined && o.inner === undefined ==> \result === fallback
-  //@ ensures o !== undefined && o.inner !== undefined ==> \result === o.inner.val
+  //@ ensures implies(o === undefined, $result === fallback)
+  //@ ensures implies(o !== undefined && o.inner === undefined, $result === fallback)
+  //@ ensures implies(o !== undefined && o.inner !== undefined, $result === o.inner.val)
   return o !== undefined && o.inner !== undefined ? o.inner.val : fallback;
 }
 
@@ -480,8 +480,8 @@ type Shape =
 
 // `'radius' in s` narrows s to the variant containing 'radius' (circle).
 function area(s: Shape): number {
-  //@ ensures s.kind === 'circle' ==> \result === s.radius * s.radius
-  //@ ensures s.kind === 'square' ==> \result === s.side * s.side
+  //@ ensures implies(s.kind === "circle", $result === s.radius * s.radius)
+  //@ ensures implies(s.kind === "square", $result === s.side * s.side)
   if ('radius' in s) return s.radius * s.radius;
   return s.side * s.side;
 }
@@ -489,8 +489,8 @@ function area(s: Shape): number {
 // Negative discriminant + early return: `s.kind !== "circle"` narrows s to
 // circle in the rest of the block.
 function describeIfCircle(s: Shape, fallback: number): number {
-  //@ ensures s.kind === 'circle' ==> \result === s.radius * s.radius
-  //@ ensures s.kind === 'square' ==> \result === fallback
+  //@ ensures implies(s.kind === "circle", $result === s.radius * s.radius)
+  //@ ensures implies(s.kind === "square", $result === fallback)
   if (s.kind !== 'circle') return fallback;
   return s.radius * s.radius;
 }
@@ -499,7 +499,7 @@ function describeIfCircle(s: Shape, fallback: number): number {
 // itself: the `o !== undefined` check must narrow `o` to `Inner` inside the
 // `then` branch so that `o.val` is well-typed.
 function ternarySpecOpt(o: Inner | undefined, fallback: number): number {
-  //@ ensures \result === (o !== undefined ? o.val : fallback)
+  //@ ensures $result === (o !== undefined ? o.val : fallback)
   if (o !== undefined) return o.val;
   return fallback;
 }
@@ -523,12 +523,12 @@ type ProjectedOutcome =
   | { kind: "done" };
 
 function projectedCodePure(error: RpcErrorView): number {
-  //@ ensures \result === error.code
+  //@ ensures $result === error.code
   return error.code;
 }
 
 function dispatchProjectedPure(outcome: ProjectedOutcome): number {
-  //@ ensures outcome.kind === "rpc-error" ==> \result === outcome.code
+  //@ ensures implies(outcome.kind === "rpc-error", $result === outcome.code)
   switch (outcome.kind) {
     case "rpc-error":
       return projectedCodePure(outcome);
@@ -538,7 +538,7 @@ function dispatchProjectedPure(outcome: ProjectedOutcome): number {
 }
 
 function projectedCode(error: RpcErrorView): number {
-  //@ ensures \result === error.code
+  //@ ensures $result === error.code
   // Keep this helper imperative so the regression exercises method-call
   // lowering, the path used by brownfield helpers containing proof seams.
   let code = error.code;
@@ -546,7 +546,7 @@ function projectedCode(error: RpcErrorView): number {
 }
 
 function dispatchProjected(outcome: ProjectedOutcome): number {
-  //@ ensures outcome.kind === "rpc-error" ==> \result === outcome.code
+  //@ ensures implies(outcome.kind === "rpc-error", $result === outcome.code)
   switch (outcome.kind) {
     case "rpc-error":
       return projectedCode(outcome);

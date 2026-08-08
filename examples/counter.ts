@@ -24,13 +24,13 @@ export class Counter {
 
   getCount(): number {
     //@ verify
-    //@ ensures \result === this.count
+    //@ ensures $result === this.count
     return this.count;
   }
 
   isAtMax(): boolean {
     //@ verify
-    //@ ensures \result === (this.count >= this.max)
+    //@ ensures $result === this.count >= this.max
     return this.count >= this.max;
   }
 }

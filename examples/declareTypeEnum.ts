@@ -32,6 +32,6 @@ export function roleTag(m: Msg): string {
 
 export function isToolResult(m: Msg): boolean {
   //@ verify
-  //@ ensures \result === (m.role === "toolResult")
+  //@ ensures $result === (m.role === "toolResult")
   return m.role === "toolResult";
 }

@@ -19,9 +19,9 @@
 // Bare `/` on two integer literals is real division: 3 / 2 is 1.5, not 1.
 // If the result were integer division (1), `1 * 2 === 3` would be false.
 export function threeHalves(): number {
-  //@ type \result real
-  //@ ensures \result * 2 === 3
-  //@ ensures \result === 1.5
+  //@ type $result real
+  //@ ensures $result * 2 === 3
+  //@ ensures $result === 1.5
   return 3 / 2;
 }
 
@@ -29,15 +29,15 @@ export function threeHalves(): number {
 // integer. `(a / b) * b === a` holds for real division and fails for integer
 // division (e.g. a=3, b=2: real gives 3, integer division gives 2).
 export function divide(a: number, b: number): number {
-  //@ type \result real
+  //@ type $result real
   //@ requires b !== 0
-  //@ ensures \result * b === a
+  //@ ensures $result * b === a
   return a / b;
 }
 
 // Integer (floor) division is opt-in via Math.floor → JSFloorDiv, which floors
 // toward -infinity to match JS: 7/2 -> 3, but -7/2 -> -4 (truncation gives -3).
 export function floorDivision(): boolean {
-  //@ ensures \result === true
+  //@ ensures $result === true
   return Math.floor(7 / 2) === 3 && Math.floor(-7 / 2) === -4;
 }

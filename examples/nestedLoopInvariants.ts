@@ -18,7 +18,7 @@ export function nestedSum(n: number): number {
   //@ type i nat
   //@ type j nat
   //@ requires n >= 0
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   let acc = 0;
   for (let i = 0; i < n; i = i + 1) {
     //@ invariant 0 <= i && i <= n

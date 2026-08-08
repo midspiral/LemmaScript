@@ -18,7 +18,7 @@
 
 // Number of `true` flags in the list — a head-recursive fold into (ℤ, +).
 function countOn(xs: boolean[]): number {
-  //@ ensures 0 <= \result && \result <= xs.length
+  //@ ensures 0 <= $result && $result <= xs.length
   //@ decreases xs.length
   if (xs.length === 0) return 0;
   return (xs[0] ? 1 : 0) + countOn(xs.slice(1));

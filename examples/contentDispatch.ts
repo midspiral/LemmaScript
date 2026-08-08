@@ -4,7 +4,8 @@
  * LemmaScript synthesizes a tagged datatype at the boundary, narrowing on
  * `Array.isArray(x)` lowers to a tag-predicate (`x.ArrayBranch?` in Dafny),
  * and bare references inside the array branch use the variant's payload
- * binder. Spec implications `Array.isArray(x) ==> B` and `!Array.isArray(x) ==> B`
+ * binder. Spec implications `implies(Array.isArray(x), B)` and
+ * `implies(!Array.isArray(x), B)`
  * narrow x inside the conclusion.
  *
  * Mirrors the brownfield shape from mastra-ai/mastra
@@ -23,8 +24,8 @@ interface Part {
  */
 function partsOrEmpty(content: string | Part[]): Part[] {
   //@ verify
-  //@ ensures Array.isArray(content) ==> \result.length === content.length
-  //@ ensures !Array.isArray(content) ==> \result.length === 0
+  //@ ensures implies(Array.isArray(content), $result.length === content.length)
+  //@ ensures implies(!Array.isArray(content), $result.length === 0)
   if (Array.isArray(content)) {
     return content;
   }

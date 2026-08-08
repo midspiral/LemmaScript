@@ -19,7 +19,7 @@ export function step<S, A>(s: S, a: A): S {
 export function applyTwice<S, A>(s: S, a: A): S {
   //@ verify
   //@ type S (==)
-  //@ ensures \result === step(step(s, a), a)
+  //@ ensures $result === step(step(s, a), a)
   const s1 = step(s, a);
   return step(s1, a);
 }

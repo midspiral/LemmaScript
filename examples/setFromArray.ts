@@ -11,7 +11,7 @@ export function dedupSize(arr: number[]): number {
 }
 
 export function member(arr: number[], x: number): boolean {
-  //@ ensures \result <==> exists(i: nat, i < arr.length && arr[i] === x)
+  //@ ensures iff($result, exists((i: nat) => i < arr.length && arr[i] === x))
   const s = new Set(arr);
   return s.has(x);
 }

@@ -12,7 +12,7 @@
 export function countOdds(xs: number[]): number {
   //@ verify
   //@ type i nat
-  //@ ensures \result <= xs.length
+  //@ ensures $result <= xs.length
   let n = 0;
   for (let i = 0; i < xs.length; i = i + 1) {
     //@ invariant i <= xs.length
@@ -31,7 +31,7 @@ export function countOdds(xs: number[]): number {
 export function copyNonzero(xs: number[]): number[] {
   //@ verify
   //@ type i nat
-  //@ ensures \result.length <= xs.length
+  //@ ensures $result.length <= xs.length
   const out: number[] = [];
   for (let i = 0; i < xs.length; i = i + 1) {
     //@ invariant i <= xs.length
@@ -54,7 +54,7 @@ export function copyNonzero(xs: number[]): number[] {
 export function countPositivesNonNested(grid: number[][]): number {
   //@ verify
   //@ type i nat
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   let total = 0;
   for (let i = 0; i < grid.length; i = i + 1) {
     //@ invariant i <= grid.length
@@ -108,7 +108,7 @@ interface Item { kind: Kind }
 export function countKeep(items: Item[]): number {
   //@ verify
   //@ type i nat
-  //@ ensures 0 <= \result && \result <= items.length
+  //@ ensures 0 <= $result && $result <= items.length
   let count = 0;
   for (let i = 0; i < items.length; i = i + 1) {
     //@ invariant 0 <= i && i <= items.length

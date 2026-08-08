@@ -14,7 +14,7 @@ type CallKind =
 
 export function depthOf(k: CallKind): number {
   //@ verify
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   switch (k.kind) {
     case "spec-pure":
       return k.depth >= 0 ? k.depth : 0;

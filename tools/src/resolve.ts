@@ -422,7 +422,7 @@ function inferQuantVarType(varName: string, body: RawExpr, ctx: Ctx): Ty | null 
   // Spec membership uses a binary node (`x in collection`), unlike the
   // executable `.has(x)` / `.includes(x)` calls handled below. Infer the
   // quantified variable from the RHS collection so documented forms such as
-  // `forall(x, x in \result ==> ...)` do not silently fall back to `int`.
+  // `forall(x => implies(x in $result, ...))` does not silently fall back to `int`.
   if (body.kind === "binop" && body.op === "in" &&
       body.left.kind === "var" && body.left.name === varName) {
     const collectionTy = resolveExpr(body.right, ctx).ty;
@@ -1128,10 +1128,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       return resolveRecordMerge(e.base, e.override, ctx);
 
     case "result":
-      // \result desugars to a regular var so all the variable-narrowing
+      // Source `$result` desugars to an internal regular var so all the variable-narrowing
       // machinery (env lookup, optional checks, path matching) just works.
       // The env in ensuresCtx is pre-seeded with "\result" → returnTy.
-      if (!ctx.allowResult) throw new Error("\\result is only valid in ensures");
+      if (!ctx.allowResult) throw new Error("$result is only valid in ensures");
       return { kind: "var", name: "\\result", ty: lookup(ctx.env, "\\result") ?? ctx.returnTy };
 
     case "forall": {
@@ -1679,7 +1679,7 @@ function resolveFunction(
 
   const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
   const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: expandAlias(resolveTsType(p.tsType, overrides, p.name), typeDecls) }));
-  const returnTy = expandAlias(resolveTsType(fn.returnType, overrides, "\\result"), typeDecls);
+  const returnTy = expandAlias(resolveTsType(fn.returnType, overrides, "$result"), typeDecls);
 
   let env: Env | null = null;
   // Module-level constants are in scope for every function body. Added before
@@ -1766,7 +1766,7 @@ export function resolveModule(raw: RawModule): TModule {
   for (const fn of raw.functions) {
     const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
     fnParams.set(fn.name, fn.params.map(p => expandAlias(resolveTsType(p.tsType, overrides, p.name), raw.typeDecls)));
-    fnReturns.set(fn.name, expandAlias(resolveTsType(fn.returnType, overrides, "\\result"), raw.typeDecls));
+    fnReturns.set(fn.name, expandAlias(resolveTsType(fn.returnType, overrides, "$result"), raw.typeDecls));
   }
   // Externs: resolve param/return types once. For bare-name externs (no dot),
   // also register in fnReturns so ordinary `foo(args)` calls get the right
@@ -1783,7 +1783,7 @@ export function resolveModule(raw: RawModule): TModule {
     if (!ext.qualified.includes(".")) fnReturns.set(ext.qualified, returnTy);
   }
   // Second pass: resolve the lifted `requires`/`ensures` strings in each
-  // extern's own param scope. `\result` is in scope under `ensures`.
+  // extern's own param scope. Source `$result` is in scope under `ensures`.
   const tExterns = (raw.externs ?? []).map(ext => {
     const sig = externs.get(ext.qualified)!;
     let env: Env | null = null;

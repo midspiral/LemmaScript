@@ -6,9 +6,9 @@ function swap(arr: number[], i: number, j: number): number[] {
   //@ type j nat
   //@ requires i < arr.length
   //@ requires j < arr.length
-  //@ ensures \result.length === arr.length
-  //@ ensures \result[i] === arr[j]
-  //@ ensures \result[j] === arr[i]
+  //@ ensures $result.length === arr.length
+  //@ ensures $result[i] === arr[j]
+  //@ ensures $result[j] === arr[i]
   let result = arr;
   const tmp = result[i];
   result[i] = result[j];

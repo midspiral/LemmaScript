@@ -38,6 +38,6 @@ type RawMsg = TextMsg | DataMsg;
 
 export function countMsgs(msgs: RawMsg[]): number {
   //@ verify
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   return msgs.length;
 }

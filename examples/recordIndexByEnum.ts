@@ -15,7 +15,7 @@ interface Budgets {
 
 // Named key → match. Result is one of the indexed fields.
 //@ verify
-//@ ensures \result === b.low || \result === b.medium || \result === b.high
+//@ ensures $result === b.low || $result === b.medium || $result === b.high
 export function budgetFor(b: Budgets, level: Level): number {
 	return b[level];
 }
@@ -27,7 +27,7 @@ interface OptBudgets {
 
 // Inline key + optional fields → equality chain; the access keeps the `Option` type.
 //@ verify
-//@ ensures \result === b.low || \result === b.high
+//@ ensures $result === b.low || $result === b.high
 export function maybeBudget(b: OptBudgets, level: "low" | "high"): number | undefined {
 	return b[level];
 }
@@ -35,7 +35,7 @@ export function maybeBudget(b: OptBudgets, level: "low" | "high"): number | unde
 // Inline key that is a subset of the record's fields — the chain covers just the
 // key's members (a stray `high` branch would be unsound, so it isn't emitted).
 //@ verify
-//@ ensures \result === b.low || \result === b.medium
+//@ ensures $result === b.low || $result === b.medium
 export function lowOrMid(b: Budgets, level: "low" | "medium"): number {
 	return b[level];
 }

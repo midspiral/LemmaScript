@@ -19,7 +19,7 @@ interface Item { tag: Tag }
 
 export function collect(items: Item[]): number[] {
   //@ verify
-  //@ ensures \result.length <= items.length
+  //@ ensures $result.length <= items.length
   const out: number[] = [];
   let i = 0;
   while (i < items.length) {
@@ -47,7 +47,7 @@ export function collect(items: Item[]): number[] {
 // "number" token falls into the "string" handling.
 export function score(tag: Tag): number {
   //@ verify
-  //@ ensures \result >= 0
+  //@ ensures $result >= 0
   let r = 0;
   switch (tag) {
     case "a":

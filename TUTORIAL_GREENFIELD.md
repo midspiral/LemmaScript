@@ -27,7 +27,7 @@ export type Op = /* the mutations, as a discriminated union of data */
 export function apply(s: State, op: Op): State {
   //@ verify
   //@ requires inv(s)
-  //@ ensures inv(\result)            // every transition preserves the invariant
+  //@ ensures inv($result)            // every transition preserves the invariant
   ...
 }
 

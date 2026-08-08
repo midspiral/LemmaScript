@@ -15,13 +15,13 @@ Above a function, `//@ ` annotations state what it needs and what it promises:
 //@ contract Never lets the charge exceed the available balance.
 //@ requires balance >= 0
 //@ requires amount >= 0
-//@ ensures amount <= balance ==> \result === balance - amount
-//@ ensures amount > balance ==> \result === 0
+//@ ensures implies(amount <= balance, $result === balance - amount)
+//@ ensures implies(amount > balance, $result === 0)
 function charge(balance: number, amount: number): number { /* … */ }
 ```
 
 - `requires` — what callers must guarantee coming in
-- `ensures` — what the function guarantees going out (`\result` is the return value)
+- `ensures` — what the function guarantees going out (`$result` is the return value)
 - `contract` — the same promise in plain English, for the human reviewer
 
 These are the three you'll see most. The full annotation list is in

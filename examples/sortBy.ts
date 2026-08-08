@@ -14,8 +14,8 @@ interface Rec {
 }
 
 export function sortByKey(input: Rec[]): Rec[] {
-  //@ ensures \result.length === input.length
-  //@ ensures forall(i: nat, i + 1 < \result.length ==> \result[i].k <= \result[i + 1].k)
+  //@ ensures $result.length === input.length
+  //@ ensures forall((i: nat) => implies(i + 1 < $result.length, $result[i].k <= $result[i + 1].k))
   const xs = input.slice();
   xs.sort((a, b) => a.k - b.k);
   return xs;

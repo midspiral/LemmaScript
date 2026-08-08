@@ -26,9 +26,9 @@ implementation can't survive:
 //@ contract Splits total across weights so every unit is accounted for.
 //@ requires total >= 0
 //@ requires weights.length >= 1
-//@ requires forall(k, 0 <= k && k < weights.length ==> weights[k] >= 0)
+//@ requires forall(k => implies(0 <= k && k < weights.length, weights[k] >= 0))
 //@ requires sum(weights) >= 1
-//@ ensures sum(\result) === total     // must sum to the whole
+//@ ensures sum($result) === total     // must sum to the whole
 function allocate(total: number, weights: number[]): number[] {
   // the floor-and-forget version fails this ensures;
   // the fix hands the leftover back out — and passes

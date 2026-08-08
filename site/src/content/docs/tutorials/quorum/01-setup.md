@@ -64,7 +64,7 @@ quorum/
 cat > hello.ts << 'EOF'
 export function add(a: number, b: number): number {
   //@ verify
-  //@ ensures \result === a + b
+  //@ ensures $result === a + b
   return a + b;
 }
 EOF

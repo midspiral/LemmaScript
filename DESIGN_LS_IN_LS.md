@@ -471,7 +471,7 @@ P- and T-level accurately.
 | Module | LOC | Target | Notes |
 |---|---|---|---|
 | `ir.ts` | 308 | Prime P0/P1 | Pure datatypes + query walkers; structural recursion sweet spot. |
-| `rawir.ts` | 227 | Prime P0/P1 | Pure datatypes; the extract/specparser output surface. |
+| `rawir.ts` | 244 | Prime P0/P1 | Pure datatypes; the extract/specparser output surface. |
 | `typedir.ts` | 203 | Prime P0/P1 | Structural `tyEqual` (an improvement anyway). |
 | `typedecls.ts` | 71 | Prime P0/P1 | Total lookups over a declaration list; no state. |
 | `names.ts` | 56 | Prime P1 | Tiny, real spec content (freshness, keywords). |
@@ -482,10 +482,10 @@ P- and T-level accurately.
 | `narrow.ts` | 738 | P1 after §4 | Was 1114; §4 moved condition semantics to `condition-facts.ts`. |
 | `transform.ts` | 2388 | P1 by stages | Needs ctx work; port stage-by-stage (§7 trigger). |
 | `resolve.ts` | 1702 | Mostly | Push `parseTsType` to extraction; core is pure Raw→Typed. |
-| `specparser.ts` | 330 | P1 | Recursive-descent parser; classic verification fodder. |
+| `specparser.ts` | 208 | Trusted frontend | Thin TypeScript-AST adapter plus recognition of spec intrinsics; stays with extraction. |
 | `types.ts` | 212 | Split | `TypeDeclInfo` is portable data; `parseTsType` imports ts-morph and stays with extraction (§5.1). |
 | `dafny-emit.ts`/`lean-emit.ts` | 2292 | Partial | Untouched by §3; precedence logic is spec-worthy; regexes become string helpers. |
-| `extract.ts` | 2479 | Trusted frontend | Wraps ts-morph; stays unverified; `RawModule` is the trusted input. |
+| `extract.ts` | 2687 | Trusted frontend | Wraps ts-morph; stays unverified; `RawModule` is the trusted input. |
 | `lsc.ts`, commands | ~500 | Unverified driver | CLI, fs, process. |
 
 Net: roughly 6.8k of 12.9k lines are pure IR-to-IR passes, all portable in
@@ -512,8 +512,7 @@ regression gauntlet that grows with itself.
    of the pass.
 6. **Match exhaustiveness** — every emitted `tagMatch` covers all variants
    or has a fallthrough, checked against its `TypeDeclInfo`.
-7. **Parser sanity** — `specparser` consumes the whole input or errors.
-8. **Typing boundary** — successful `resolve` leaves no `unknown` where
+7. **Typing boundary** — successful `resolve` leaves no `unknown` where
    later passes require a concrete type.
 
 Notably absent: "the generated code means the same as the TS" — that is
@@ -625,7 +624,7 @@ with no annotation is not started.*
    IR walkers; P1 contracts (freshness, keywords); CI self-run targets.
 9. **`peephole`, then `narrow`** in-subset with completeness + freshness
    contracts.
-10. **Portable `resolve` core, `specparser`, emitter cores** — transform
+10. **Portable `resolve` core and emitter cores** — transform
     ports stage-by-stage here, which is when §7's split naturally happens.
 11. **First T1 experiment:** execute one generated verified pass.
 
