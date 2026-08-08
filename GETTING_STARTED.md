@@ -39,6 +39,11 @@ export function isValidCookieName(name: string): boolean {
 
 As soon as any function in the file has `//@ verify`, `lsc` switches to opt-in mode for that file and skips everything not marked. Types and module-level `const`s are always extracted.
 
+Since 0.6, a selected declaration that cannot be extracted or emitted is an
+error rather than an implicit skip. Use `//@ skip` to omit an unsupported
+declaration intentionally, or `//@ extern` when verified callers need its
+signature and contract.
+
 For richer specs, see [SPEC.md §2](SPEC.md#2-the---annotation-language).
 
 ## The edit loop

@@ -1,7 +1,7 @@
 # DESIGN_NPM — Packaging LemmaScript for npm
 
-**Status:** v2, implemented and live — umbrella + `lsc claimcheck` shipped (claimcheck 0.6.0, lemmascript-claimcheck 0.2.0, lemmascript 0.5.10/0.5.11); skills repo restructured with machine-owned `reference/`; release-sync workflow validated end to end at v0.5.11, publish-from-CI added alongside it (§3 — first release through it pending, after the npmjs.com trusted-publisher config). Open questions below. (v1 vendored source + skills into the tarball; revised after discussion.)
-**Date:** July 2026
+**Status:** v2, implemented and live — the umbrella and `lsc claimcheck` have shipped; the skills repo has a machine-owned `reference/`; and release-sync plus npm trusted publishing run end to end from release tags. Open questions remain below. (v1 vendored source and skills into the tarball; revised after discussion.)
+**Date:** August 2026
 
 ## Requirements
 
@@ -89,7 +89,7 @@ Implemented as two sibling workflows on the same tag trigger:
 The release loop, in full:
 
 ```sh
-npm version patch      # the only versioning decision
+npm version patch      # the only versioning decision: patch, minor, or major
 git push --follow-tags # the only publishing action — the tag is the release
 ```
 

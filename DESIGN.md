@@ -1,7 +1,7 @@
 # LemmaScript — Design Rationale
 
-**Version:** 0.5.x
-**Date:** July 2026
+**Version:** 0.6.x
+**Date:** August 2026
 
 > For implementation details, see [SPEC.md](SPEC.md), [SPEC_LEAN.md](SPEC_LEAN.md), [SPEC_DAFNY.md](SPEC_DAFNY.md).
 > For internal toolchain architecture, see [TOOLS.md](TOOLS.md).
@@ -237,5 +237,4 @@ The LLM can help with proof tactics and ghost definitions. It cannot help with m
 | **RSC** | Prior art for TS verification. LemmaScript uses explicit annotations on a restricted fragment with full proving power, rather than refinement type inference. |
 | **runtime guard** | The enforcement layer between verified and unverified TypeScript. |
 | **lean-lsp-mcp** | The bridge between LLMs and Lean's proof engine. |
-
 

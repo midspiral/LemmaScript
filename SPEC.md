@@ -71,7 +71,7 @@ mul      := unary (('*' | '/' | '%') unary)*
 unary    := '!' unary | '-' unary | postfix
 postfix  := atom ('.' ident | '[' expr ']' | '(' args ')')*
 cmpOp    := ... | 'in'                        // set/seq/map membership
-atom     := NUMBER | HEX_NUMBER | IDENT | 'true' | 'false' | '\result'
+atom     := NUMBER | BIGINT | STRING | IDENT | 'true' | 'false' | '\result'
           | 'forall' '(' IDENT (':' TYPE)? ',' expr ')'
           | 'exists' '(' IDENT (':' TYPE)? ',' expr ')'
           | 'perm' '(' expr ',' expr ')'        // permutation predicate (spec-only; Dafny backend)
@@ -80,6 +80,11 @@ atom     := NUMBER | HEX_NUMBER | IDENT | 'true' | 'false' | '\result'
           | '{' (IDENT ':' expr ',')* IDENT ':' expr '}'
 TYPE     := IDENT                             // 'nat', 'int', 'string', user types
 ```
+
+`NUMBER` includes decimal integers and fractions (`12`, `0.6`, `.5`, `1.`),
+exponent notation (`1.2e-3`), hexadecimal, binary, and octal integers, and
+numeric separators. Non-integral numeric literals resolve as `real`. `BIGINT`
+is described in §6.1.1.
 
 **`\result`** refers to the function's return value (following Frama-C/ACSL convention). It is only valid in `ensures` annotations. The `\` prefix distinguishes it from any TS variable named `result`.
 
