@@ -9,7 +9,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { parseLegacyExpr } from "./migrations/specparser-0.5.mjs";
@@ -54,7 +54,11 @@ function gitOutput(args) {
 
 function filesForTarget(target) {
   const absolute = resolve(target);
-  const stat = statSync(absolute);
+  const stat = lstatSync(absolute);
+  if (stat.isSymbolicLink()) {
+    console.warn(`skipping symlink: ${displayPath(absolute)}`);
+    return [];
+  }
   if (stat.isFile()) return [absolute];
   if (!stat.isDirectory()) throw new Error(`Not a file or directory: ${target}`);
 
@@ -74,7 +78,18 @@ function filesForTarget(target) {
     .split("\0")
     .filter(Boolean)
     .map(file => join(root, file))
-    .filter(file => SOURCE_EXTENSIONS.has(extname(file)));
+    .filter(file => SOURCE_EXTENSIONS.has(extname(file)))
+    .filter(file => {
+      try {
+        if (!lstatSync(file).isSymbolicLink()) return true;
+        console.warn(`skipping symlink: ${displayPath(file)}`);
+        return false;
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        console.warn(`skipping missing tracked path: ${displayPath(file)}`);
+        return false;
+      }
+    });
 }
 
 function collectFiles(targets) {

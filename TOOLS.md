@@ -81,7 +81,7 @@ node ../LemmaScript/tools/migrate-0.5-specs.mjs .          # rewrite tracked Typ
 ../LemmaScript/tools/check.sh dafny                         # or lean
 ```
 
-Review and commit the source diff normally. Any annotation the codemod cannot translate is left unchanged, reported with its file and line, and causes a non-zero exit. The production parser has no 0.5 compatibility path.
+Review and commit the source diff normally. Any annotation the codemod cannot translate is left unchanged, reported with its file and line, and causes a non-zero exit. Tracked symlinks are skipped rather than followed. The production parser has no 0.5 compatibility path.
 
 ## Adding a New Feature
 

@@ -34,11 +34,12 @@ expect_absent tools/fixtures/unsupported-extraction.def.lean
 migration_tmp="$(mktemp -d)"
 trap 'rm -rf "$migration_tmp"' EXIT
 cp tools/fixtures/migrate-0.5-specs.input.txt "$migration_tmp/case.ts"
+ln -s missing.md "$migration_tmp/AGENTS.md"
 
 expect_failure \
   "migration check missed 0.5 spec syntax" \
   node tools/migrate-0.5-specs.mjs --check "$migration_tmp/case.ts"
 
-node tools/migrate-0.5-specs.mjs "$migration_tmp/case.ts"
+node tools/migrate-0.5-specs.mjs "$migration_tmp/AGENTS.md" "$migration_tmp/case.ts"
 diff -u tools/fixtures/migrate-0.5-specs.expected.txt "$migration_tmp/case.ts"
 node tools/migrate-0.5-specs.mjs --check "$migration_tmp/case.ts"
