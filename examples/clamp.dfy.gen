@@ -14,5 +14,3 @@ method clamp(x: int, lo: int, hi: int) returns (res: int)
   }
   return result;
 }
-
-// LemmaScript: skipped clampAll
