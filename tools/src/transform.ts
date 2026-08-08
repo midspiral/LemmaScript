@@ -2527,7 +2527,8 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   });
 
   // Def file: Velvet methods
-  // Pure functions get a thin wrapper that calls Pure.fnName
+  // Pure functions get a thin wrapper. Lean keeps pure definitions in the
+  // `Pure` namespace; Dafny flattens that namespace, so its call is unqualified.
   // def-by-method functions also skip their method wrappers
   const pureDefNames = new Set([...pureDefs.map(d => d.name), ...defByMethods.map(d => d.name)]);
   const methods: FnMethod[] = mod.functions.map(fn => {
@@ -2540,7 +2541,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
 
     _forofCounters.clear();
     let body = pureDefNames.has(fn.name)
-      ? [{ kind: "return" as const, value: { kind: "app" as const, fn: `Pure.${fn.name}`, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) } }]
+      ? [{ kind: "return" as const, value: { kind: "app" as const, fn: _opts.backend === "lean" ? `Pure.${fn.name}` : fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) } }]
       : promoteAssignedLets(transformStmts(fn.body, mod.typeDecls));
 
     // Lean-only method-body rewrites (Velvet can't WP-synthesize monadic matches
