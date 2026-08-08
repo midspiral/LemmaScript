@@ -1,6 +1,6 @@
 /**
- * Monadic HOF — callback calls a Velvet method (non-pure function).
- * Tests: mapM variant selection, call-graph purity propagation.
+ * Imperative clamp supported by both backends.
+ * Tests: mutable locals, conditional assignment, requires/ensures.
  */
 
 function clamp(x: number, lo: number, hi: number): number {
@@ -14,9 +14,4 @@ function clamp(x: number, lo: number, hi: number): number {
     result = hi;
   }
   return result;
-}
-
-function clampAll(arr: number[], lo: number, hi: number): number[] {
-  //@ requires lo <= hi
-  return arr.map((x) => clamp(x, lo, hi));
 }
