@@ -9,8 +9,8 @@
  * The Dafny model (StringTrim preamble) mirrors that exact set via
  * IsJSWhitespace. `trimAsciiWs` below is the regression test for the earlier
  * space-only model: it cannot verify unless tab and newline are also stripped.
- * The `//@ skip` runtimeSanityCheck (run via `tsx examples/trim.ts`) exercises
- * the non-ASCII code points against real TS semantics.
+ * The runtimeSanityCheck (run via `tsx examples/trim.ts`) exercises the
+ * non-ASCII code points against real TS semantics.
  */
 
 export function trimmed(s: string): string {
@@ -26,7 +26,6 @@ export function trimAsciiWs(): string {
   return '\tx\n'.trim();
 }
 
-//@ skip
 export function runtimeSanityCheck(): boolean {
   // Code points TS trim() MUST strip (the modeled IsJSWhitespace set).
   const strip = [

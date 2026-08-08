@@ -47,9 +47,13 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `declare-type N { f: T, ... }` | Before any statement | Declare a record type for cross-file types (see §2.5). |
 | `extern` | Before function declaration | Treat function as a body-less axiom — extract signature only, skip body (see §2.11). `//@ extern NS.method` registers it under a dotted name. |
 | `autohavoc` | File-level, or before a `//@ verify` function | Abstract every unmodellable expression to a nondeterministic value, so verification rests only on declared contracts (see §2.12). Dafny only. |
-| `skip` | Before any statement | Omit statement from verification model (for side-effect-only code). |
+| `skip` | Before a statement or top-level value declaration | Omit it from the verification model (for side-effect-only code or an intentionally unsupported declaration). |
 
 ### 2.2 Spec Expression Grammar
+
+At top level, `//@ skip` may precede a function, class, or `const` declaration;
+the declaration is omitted entirely. Use `//@ extern` instead when verified
+callers still need its signature and contract.
 
 The expression language is a subset of TypeScript with verification extensions.
 

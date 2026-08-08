@@ -2007,6 +2007,19 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   _externs.clear();
   _externSigTypes.length = 0;
 
+  // Match a `//@ <kw>` directive only as the first non-whitespace on a line,
+  // so prose mentioning an annotation does not activate it.
+  function hasLineDirective(text: string, kw: string): boolean {
+    return new RegExp(String.raw`^[ \t]*//@ ${kw}\b`, "m").test(text);
+  }
+
+  // Declaration-level directives must be attached as leading comments. Do
+  // not scan a function's whole body: a statement-level `//@ skip` inside it
+  // must not omit the enclosing function.
+  function hasLeadingDirective(node: Node, kw: string): boolean {
+    return node.getLeadingCommentRanges().some(r => hasLineDirective(r.getText(), kw));
+  }
+
   // Share the module's ts-morph Project with parseTsType (scratch source file
   // for type-string parsing). Done before declare-type parsing so any
   // parseTsType call downstream uses the same Project.
@@ -2103,6 +2116,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   const constants: RawConst[] = [];
   for (const stmt of sourceFile.getStatements()) {
     if (Node.isVariableStatement(stmt)) {
+      if (hasLeadingDirective(stmt, "skip")) continue;
       for (const decl of stmt.getDeclarationList().getDeclarations()) {
         if (stmt.getDeclarationList().getFlags() & 2 /* const */) {
           const init = decl.getInitializer();
@@ -2181,11 +2195,9 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // regex — but its callers should still be verifiable against an
   // uninterpreted predicate. Parallel to auto-extern for cross-file calls,
   // and emitted the same way (`function {:axiom} foo(...)` in Dafny).
-  // Match a `//@ <kw>` directive only as the first non-whitespace on a line, so
-  // a mention mid-line in prose or inside a block/JSDoc comment (e.g. "the
-  // `//@ extern` annotation", or ` * //@ extern`) doesn't falsely trigger it.
-  function hasLineDirective(text: string, kw: string): boolean {
-    return new RegExp(String.raw`^[ \t]*//@ ${kw}\b`, "m").test(text);
+  function hasSkip(f: { node: FunctionDeclaration; parentStmt?: Node }) {
+    return hasLeadingDirective(f.parentStmt ?? f.node, "skip")
+      || (!!f.parentStmt && hasLeadingDirective(f.node, "skip"));
   }
   function hasExtern(f: { node: FunctionDeclaration; parentStmt?: Node }) {
     if (hasLineDirective(f.node.getFullText(), "extern")) return true;
@@ -2214,7 +2226,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     return null;
   }
   for (const f of allFns) {
-    if (!hasExtern(f)) continue;
+    if (hasSkip(f) || !hasExtern(f)) continue;
     const qualified = externName(f) ?? f.name;
     const flat = qualified.replace(/\./g, "_");
     if (_externs.has(qualified)) continue;
@@ -2247,8 +2259,13 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     }
     return false;
   }
-  const hasVerifyDirective = hasLineDirective(sourceFile.getFullText(), "verify");
-  const nonExternFns = allFns.filter(f => !hasExtern(f));
+  const nonExternFns = allFns.filter(f => !hasSkip(f) && !hasExtern(f));
+  const hasVerifiedClassMethod = sourceFile.getClasses().some(cls =>
+    !hasLeadingDirective(cls, "skip") && cls.getMethods().some(method =>
+      !hasLeadingDirective(method, "skip") && hasLineDirective(method.getFullText(), "verify"),
+    ),
+  );
+  const hasVerifyDirective = nonExternFns.some(hasVerify) || hasVerifiedClassMethod;
   const fnsToExtract = hasVerifyDirective ? nonExternFns.filter(hasVerify) : nonExternFns;
 
   // `//@ autohavoc` — enable the auto-havoc abstraction (see autohavoc.ts).
@@ -2628,8 +2645,10 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // Extract classes with //@ verify methods
   const classes: RawClass[] = [];
   for (const cls of sourceFile.getClasses()) {
+    if (hasLeadingDirective(cls, "skip")) continue;
     const methods: RawFunction[] = [];
     for (const method of cls.getMethods()) {
+      if (hasLeadingDirective(method, "skip")) continue;
       if (!method.getFullText().includes('//@ verify')) continue;
       methods.push(extractFunction(method as any));
     }
