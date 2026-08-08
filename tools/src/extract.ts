@@ -518,19 +518,78 @@ function extractExpr(node: Expression): RawExpr {
 
   // Arrow function: (x) => expr or (x) => { stmts }
   if (Node.isArrowFunction(node)) {
-    const params = node.getParameters().map(p => {
+    // A binding pattern is not an identifier in either backend. Keep the
+    // callback arity unchanged by replacing a flat object pattern with one
+    // synthetic parameter and binding its fields at the start of the body:
+    //   ({ x, y: z }) => e
+    // becomes, in Raw IR, the equivalent of
+    //   (_lambdaParam0) => { const x = _lambdaParam0.x;
+    //                        const z = _lambdaParam0.y; return e; }
+    // transform's lambda flattener later turns these immutable lets back into
+    // the expression form required by Dafny lambdas. More involved binding
+    // semantics stay explicit errors rather than leaking pattern text into a
+    // generated backend identifier.
+    const destructureBindings: RawStmt[] = [];
+    const params = node.getParameters().map((p, paramIndex) => {
       const typeNode = p.getTypeNode();
-      return { name: p.getName(), tsType: typeNode ? typeNode.getText() : undefined };
+      const tsType = typeNode ? typeNode.getText() : undefined;
+      const nameNode = p.getNameNode();
+      if (Node.isIdentifier(nameNode)) return { name: nameNode.getText(), tsType };
+      if (Node.isArrayBindingPattern(nameNode)) {
+        throw new Error(`array binding pattern in arrow parameter not yet supported: ${nameNode.getText()}`);
+      }
+      if (!Node.isObjectBindingPattern(nameNode)) {
+        throw new Error(`unsupported arrow parameter binding: ${p.getName()}`);
+      }
+      if (p.getInitializer()) {
+        throw new Error(`defaulted object binding pattern in arrow parameter not yet supported: ${p.getText()}`);
+      }
+
+      const paramName = freshName(`_lambdaParam${paramIndex}`);
+      for (const el of nameNode.getElements()) {
+        if (el.getDotDotDotToken()) {
+          throw new Error(`rest property in arrow parameter destructuring not yet supported: ${el.getText()}`);
+        }
+        if (el.getInitializer()) {
+          throw new Error(`default value in arrow parameter destructuring not yet supported: ${el.getText()}`);
+        }
+        const localNode = el.getNameNode();
+        if (!Node.isIdentifier(localNode)) {
+          throw new Error(`nested binding pattern in arrow parameter destructuring not yet supported: ${el.getText()}`);
+        }
+        const localName = localNode.getText();
+        const propNode = el.getPropertyNameNode();
+        if (propNode && !Node.isIdentifier(propNode)) {
+          throw new Error(`computed or literal property in arrow parameter destructuring not yet supported: ${el.getText()}`);
+        }
+        destructureBindings.push({
+          kind: "let",
+          name: localName,
+          mutable: false,
+          tsType: null,
+          init: {
+            kind: "field",
+            obj: { kind: "var", name: paramName },
+            field: propNode ? propNode.getText() : localName,
+          },
+          line: p.getStartLineNumber(),
+        });
+      }
+      return { name: paramName, tsType };
     });
     // Return type from the checker — inferred when unannotated — so resolve can
     // type return-position record literals and give the lambda a real fn type.
     const returnTsType = typeToString(node.getReturnType());
     const body = node.getBody();
     if (Node.isExpression(body)) {
-      return { kind: "lambda", params, body: extractExpr(body), returnTsType };
+      const expr = extractExpr(body);
+      const loweredBody = destructureBindings.length === 0
+        ? expr
+        : [...destructureBindings, { kind: "return" as const, value: expr, line: body.getStartLineNumber() }];
+      return { kind: "lambda", params, body: loweredBody, returnTsType };
     }
     if (Node.isBlock(body)) {
-      return { kind: "lambda", params, body: extractStmts(body.getStatements()), returnTsType };
+      return { kind: "lambda", params, body: [...destructureBindings, ...extractStmts(body.getStatements())], returnTsType };
     }
     throw new Error(`Unsupported arrow function body: ${node.getText().slice(0, 80)}`);
   }

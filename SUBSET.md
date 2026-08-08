@@ -76,7 +76,7 @@ Loops are where most of the proof effort lives: a `while` or `for` usually needs
 
 Plain functions are the core unit. Parameters and the return type are read from your annotations. A function whose body is a single expression (or is recursive) becomes prover-level *and* spec-usable — you can mention it inside other `//@ ` specs — so write predicate helpers as expression-bodied functions.
 
-Generics work: `<T extends Base>` parameters, plus the higher-order array methods `.map`, `.filter`, `.some`, `.every`, `.find`, `.findIndex` with inline arrow functions. Lambdas passed to these get their parameter types inferred.
+Generics work: `<T extends Base>` parameters, plus the higher-order array methods `.map`, `.filter`, `.some`, `.every`, `.find`, `.findIndex` with inline arrow functions. Lambdas passed to these get their parameter types inferred. Flat object-destructured lambda parameters are supported; array, nested, defaulted, and rest binding patterns are not.
 
 `async` functions are supported **only when they contain no `await`** — the `Promise<T>` wrapper is just unwrapped to `T`. A real `await` / genuine async is not modelable.
 
