@@ -127,6 +127,7 @@ export interface RawSwitch {
   kind: "switch";
   expr: RawExpr;
   discriminant: string;     // field name if x.field, empty if just x
+  // Each label is the decoded value of a source string literal.
   cases: { label: string; body: RawStmt[] }[];
   defaultBody: RawStmt[];
   line: number;

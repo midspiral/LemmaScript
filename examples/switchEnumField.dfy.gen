@@ -20,3 +20,20 @@ lemma weight_ensures(p: Perm)
   ensures (weight(p) >= 1)
 {
 }
+
+method pickPlainString(kind: string) returns (res: int)
+  ensures (res >= 0)
+{
+  match kind {
+    case "small" =>
+      return 1;
+    case "medium" =>
+      return 2;
+    case "large" =>
+      return 3;
+    case "15m" =>
+      return 4;
+    case _ =>
+      return 0;
+  }
+}

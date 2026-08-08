@@ -842,7 +842,7 @@ return result;
 
 ### 4.4 Discriminant Dispatch → Match
 
-Both `switch` on a discriminant and if-chains on a discriminant translate to `match` in both backends. `lsc` detects the pattern: conditions of the form `x.field === "variant"` (or `x === "variant"` for enum-like types) on the same variable.
+Both `switch` on a discriminant and if-chains on a discriminant translate to `match` in both backends. `lsc` detects the pattern: conditions of the form `x.field === "variant"` (or `x === "variant"` for enum-like types) on the same variable. Switch cases on a declared string-literal union become datatype constructors; cases on a plain `string` remain quoted string-literal patterns.
 
 **If-chain:**
 ```typescript

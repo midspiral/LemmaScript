@@ -133,6 +133,7 @@ export type TStmt =
       doneWith: TExpr | null;
       body: TStmt[] }
   | { kind: "switch"; expr: TExpr; discriminant: string;
+      // Labels are decoded source string-literal values.
       cases: { label: string; body: TStmt[] }[];
       defaultBody: TStmt[] }
   | { kind: "forof"; names: string[]; nameTypes: Ty[]; iterable: TExpr;

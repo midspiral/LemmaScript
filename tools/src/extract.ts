@@ -1721,10 +1721,16 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       // B: ...`) — the stripped breaks are the switch exits.
       const clauseInfos = s.getClauses().map(clause => {
         const stmts = extractStmts(clause.getStatements());
+        let label: string | null = null;
+        if (Node.isCaseClause(clause)) {
+          const labelExpr = extractExpr(clause.getExpression());
+          if (labelExpr.kind !== "str") {
+            throw new Error(`Unsupported switch case at line ${clause.getStartLineNumber()}: expected a string literal`);
+          }
+          label = labelExpr.value;
+        }
         return {
-          label: Node.isCaseClause(clause)
-            ? clause.getExpression().getText().replace(/^["']|["']$/g, "")
-            : null,
+          label,
           stmts,
           exits: isExit(stmts[stmts.length - 1]),
         };

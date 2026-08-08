@@ -6,8 +6,6 @@
  * `x` is actually a discriminated union with discriminant `f`.
  */
 
-//@ backend dafny
-
 type Tag = "read" | "write" | "exec";
 interface Perm { tag: Tag; level: number }
 
@@ -22,5 +20,18 @@ export function weight(p: Perm): number {
       return 2;
     case "exec":
       return 3;
+  }
+}
+
+/** Plain strings use literal-valued cases, not datatype constructors. */
+export function pickPlainString(kind: string): number {
+  //@ verify
+  //@ ensures \result >= 0
+  switch (kind) {
+    case "small":  return 1;
+    case "medium": return 2;
+    case "large":  return 3;
+    case "15m":    return 4;
+    default:       return 0;
   }
 }

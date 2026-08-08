@@ -43,13 +43,16 @@ export type Expr =
 
 /** A match-arm pattern. Backend-neutral: `.some x`, `.syn seq`, `.none` are held
  *  structurally and rendered to each backend's constructor syntax by its emitter
- *  (`Some(x)` / `syn(seq)` in Dafny, `.some x` / `.syn seq` in Lean). */
+ *  (`Some(x)` / `syn(seq)` in Dafny, `.some x` / `.syn seq` in Lean). String
+ *  literals are stored decoded and quoted/escaped by the backend emitter. */
 export type MatchPattern =
   | { kind: "wild" }                                    // "_"
-  | { kind: "ctor"; ctor: string; binders: string[] };  // ".some x" ⇒ {ctor:"some", binders:["x"]}; ".none" ⇒ binders:[]
+  | { kind: "ctor"; ctor: string; binders: string[] }   // ".some x" ⇒ {ctor:"some", binders:["x"]}; ".none" ⇒ binders:[]
+  | { kind: "literal"; value: string };                 // `"small"` ⇒ {value:"small"}
 
 export const pWild = (): MatchPattern => ({ kind: "wild" });
 export const pCtor = (c: string, ...binders: string[]): MatchPattern => ({ kind: "ctor", ctor: c, binders });
+export const pLiteral = (value: string): MatchPattern => ({ kind: "literal", value });
 
 // Named payload records for the shapes repeated across IR nodes. Purely
 // structural — identical to the object-literal types they replace, so
