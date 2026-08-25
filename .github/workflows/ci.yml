@@ -31,6 +31,8 @@ jobs:
       - name: Typecheck examples
         run: npm run typecheck:examples
 
+      - uses: ./.github/actions/setup-dafny
+
       - name: Reject implicit declaration skips
         run: ./tools/test-fixtures.sh
 
@@ -46,8 +48,6 @@ jobs:
             echo "$untracked"
             exit 1
           fi
-
-      - uses: ./.github/actions/setup-dafny
 
       # Drift + additions-only only; `dafny verify` runs in the sharded
       # `examples-dafny` job below (parallel), off this job's critical path.

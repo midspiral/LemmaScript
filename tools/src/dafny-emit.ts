@@ -189,13 +189,14 @@ function paramList(params: { name: string; type: Ty }[]): string {
   return params.map(p => `${escapeName(p.name)}: ${tyToDafny(p.type)}`).join(", ");
 }
 
-/** Format a method signature header, omitting `returns` for void methods.
- *  Dafny's definite-assignment rule rejects unassigned out-parameters, so a
- *  `returns (res: ())` on a void method fails verification. */
+/** Format a method signature header, normally omitting `returns` for void
+ *  methods. A body-less impure extern opts into a Unit out-parameter so the
+ *  shared method-call lifting can bind its call like any other expression. */
 function methodHeader(prefix: string, params: { name: string; type: Ty }[], returnType: Ty,
-                      scope?: { requires: Expr[]; ensures: Expr[]; body: Stmt[] }): string {
+                      scope?: { requires: Expr[]; ensures: Expr[]; body: Stmt[] },
+                      includeVoidReturn = false): string {
   const sig = `${prefix}(${paramList(params)})`;
-  if (returnType.kind === "void") return sig;
+  if (returnType.kind === "void" && !includeVoidReturn) return sig;
   // The out-parameter is `res` by default, but a param (an Express handler's
   // `(req, res)`), body local, or callee named `res` would shadow it. Check only
   // *this method's own* signature and body — `res` is common module-wide (fields,
@@ -916,10 +917,21 @@ function emitDecl(d: Decl): string {
     }
 
     case "extern": {
-      // Body-less Dafny function — `:axiom` makes Dafny accept the missing body
-      // and treats it as an uninterpreted symbol. Any `requires`/`ensures` were
-      // lifted from the source declaration's annotations.
+      // `:axiom` makes Dafny accept the missing body. Pure externs are
+      // uninterpreted functions (deterministic/extensional); impure externs are
+      // methods, so every invocation gets an independent arbitrary result
+      // constrained only by its per-call contract.
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
+      if (d.impure) {
+        const scope = { requires: d.requires, ensures: d.ensures, body: [] as Stmt[] };
+        const lines = [methodHeader(
+          `method {:axiom} ${escapeName(d.name)}${tp}`,
+          d.params, d.returnType, scope, true,
+        )];
+        for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
+        for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
+        return lines.join("\n");
+      }
       const lines = [`function {:axiom} ${escapeName(d.name)}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
       for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
       for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);

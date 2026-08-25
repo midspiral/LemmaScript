@@ -217,11 +217,12 @@ export interface RawConst {
   value: RawExpr;
 }
 
-/** Externally-declared pure function — auto-detected during call extraction
- *  when ts-morph resolves the callee to a declaration in a different `.ts`
- *  source file. Emitted in Dafny as `function {:axiom} <flat>(...): R` with
- *  any `requires`/`ensures` lifted from the source declaration's annotations
- *  so callers reason against the same contract the source itself verified.
+/** Externally-declared function — auto-detected during call extraction when
+ *  ts-morph resolves the callee to a declaration in a different `.ts` source
+ *  file. Pure externs emit as Dafny `function {:axiom}` declarations; externs
+ *  marked `//@ impure` emit as body-less methods so each call may return a
+ *  different value. Any `requires`/`ensures` are lifted from the source
+ *  declaration so callers reason against the same per-call contract.
  *  Spec strings here are unresolved — resolve.ts parses them in the extern's
  *  own param scope. */
 export interface RawExtern {
@@ -232,6 +233,7 @@ export interface RawExtern {
   returnType: string;      // TS type string
   requires: string[];      // copied `//@ requires` annotation strings
   ensures: string[];       // copied `//@ ensures` annotation strings
+  impure: boolean;         // `//@ impure` — call-by-call nondeterminism (Dafny method)
 }
 
 export interface RawModule {

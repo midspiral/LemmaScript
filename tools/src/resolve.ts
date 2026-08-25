@@ -83,6 +83,13 @@ interface NarrowedIndex {
   idx: AccessPath;
 }
 
+interface ExternSignature {
+  flat: string;
+  params: Ty[];
+  returnTy: Ty;
+  impure: boolean;
+}
+
 interface Ctx {
   env: Env | null;
   typeDecls: TypeDeclInfo[];
@@ -92,7 +99,7 @@ interface Ctx {
   pureFns: Set<string>;  // names of pure functions in this module
   fnParams: Map<string, Ty[]>;  // function name → parameter types
   fnReturns: Map<string, Ty>;  // function name → return type
-  externs: Map<string, { flat: string; params: Ty[]; returnTy: Ty }>;  // qualified name → declared signature (from `//@ extern`)
+  externs: Map<string, ExternSignature>;  // qualified name → declared signature (from `//@ extern`)
   inSpec: boolean;
   inLambda: boolean;
   narrowedPaths: NarrowedPath[];  // pure access path narrowing for conditional then-branches
@@ -476,11 +483,18 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Array" && fn.field === "isArray") return "pure";
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "String" && fn.field === "fromCharCode") return "pure";
   if (fn.kind === "var" && (ctx.inSpec || ctx.inLambda) && ctx.pureFns.has(fn.name)) return "spec-pure";
-  // Bare-name `//@ extern` declarations are emitted as `function {:axiom}` —
-  // pure from the verifier's perspective. Classify them as pure so callers
-  // don't get lifted to statement-level binds (which would force lambdas to
-  // become multi-statement, illegal in Dafny).
-  if (fn.kind === "var" && ctx.externs.has(fn.name)) return "pure";
+  // Bare-name externs are pure by default. `//@ impure` externs are method
+  // calls: lift them to statement-level binds so repeated invocations remain
+  // independent. A method call cannot occur in a spec or lambda expression.
+  if (fn.kind === "var") {
+    const ext = ctx.externs.get(fn.name);
+    if (ext) {
+      if (!ext.impure) return "pure";
+      if (ctx.inSpec) throw new Error(`impure extern ${fn.name} cannot be called from a specification`);
+      if (ctx.inLambda) throw new Error(`impure extern ${fn.name} cannot be called from a lambda`);
+      return "method";
+    }
+  }
   if (fn.kind === "var" && lookup(ctx.env, fn.name)?.kind === "fn") return "pure";
   if (fn.kind === "var" && ctx.inSpec) {
     // Not a known pure function — could be external (Lean-defined spec helper).
@@ -856,15 +870,23 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       }
       // Extern dispatch: `NS.method(args)` where NS.method is declared via
       // `//@ extern`. Rewrite into a flat-name call (`NS_method(args)`) so the
-      // rest of the pipeline sees an ordinary pure function. The extern's
-      // declaration is emitted alongside the file as `function {:axiom} ...`.
+      // rest of the pipeline sees an ordinary named call. Pure externs remain
+      // expressions; `//@ impure` externs are lifted as method calls.
       if (e.fn.kind === "field" && e.fn.obj.kind === "var") {
         const qualified = `${e.fn.obj.name}.${e.fn.field}`;
         const ext = ctx.externs.get(qualified);
         if (ext) {
+          if (ext.impure && ctx.inSpec)
+            throw new Error(`impure extern ${qualified} cannot be called from a specification`);
+          if (ext.impure && ctx.inLambda)
+            throw new Error(`impure extern ${qualified} cannot be called from a lambda`);
           const args = e.args.map(a => resolveExpr(a, ctx));
           const fn: TExpr = { kind: "var", name: ext.flat, ty: { kind: "unknown" } };
-          return { kind: "call", fn, args, ty: ext.returnTy, callKind: "pure", paramTys: ext.params };
+          return {
+            kind: "call", fn, args, ty: ext.returnTy,
+            callKind: ext.impure ? "method" : "pure",
+            paramTys: ext.params,
+          };
         }
       }
       const fn = resolveExpr(e.fn, ctx);
@@ -1608,8 +1630,33 @@ function collectCallsStmts(stmts: RawStmt[], fns: Set<string>, out: Set<string>)
   }
 }
 
-function computePureFns(functions: RawFunction[]): Set<string> {
+/** Dotted/bare spelling of a raw call target, when statically named. */
+function rawCalleeName(e: RawExpr): string | null {
+  if (e.kind === "var") return e.name;
+  if (e.kind === "field") {
+    const obj = rawCalleeName(e.obj);
+    return obj ? `${obj}.${e.field}` : null;
+  }
+  return null;
+}
+
+/** Whether a raw function body invokes any extern marked `//@ impure`. */
+function containsImpureExternCall(v: unknown, names: Set<string>): boolean {
+  if (Array.isArray(v)) return v.some(x => containsImpureExternCall(x, names));
+  if (v === null || typeof v !== "object") return false;
+  const node = v as { kind?: string; fn?: RawExpr };
+  if (node.kind === "call" && node.fn) {
+    const callee = rawCalleeName(node.fn);
+    if (callee && names.has(callee)) return true;
+  }
+  return Object.values(v).some(x => containsImpureExternCall(x, names));
+}
+
+function computePureFns(functions: RawFunction[], externDecls: import("./rawir.js").RawExtern[]): Set<string> {
   const allFnNames = new Set(functions.map(fn => fn.name));
+  const impureExternNames = new Set(
+    externDecls.filter(ext => ext.impure).flatMap(ext => [ext.qualified, ext.flat]),
+  );
   // //@ pure functions are always considered pure — never taint callers
   const forcePure = new Set(functions.filter(fn => fn.pure).map(fn => fn.name));
 
@@ -1623,7 +1670,9 @@ function computePureFns(functions: RawFunction[]): Set<string> {
 
   // Seed: syntactically non-pure functions (skip //@ pure)
   const nonPure = new Set(
-    functions.filter(fn => !forcePure.has(fn.name) && !isSyntacticallyPure(fn.body)).map(fn => fn.name)
+    functions.filter(fn => !forcePure.has(fn.name) &&
+      (!isSyntacticallyPure(fn.body) || containsImpureExternCall(fn.body, impureExternNames)))
+      .map(fn => fn.name)
   );
 
   // Build reverse graph: fn → set of functions that call it
@@ -1672,7 +1721,7 @@ function containsReturn(stmts: RawStmt[]): boolean {
 function resolveFunction(
   fn: RawFunction, typeDecls: TypeDeclInfo[], pureFns: Set<string>,
   fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map(),
-  externs: Map<string, { flat: string; params: Ty[]; returnTy: Ty }> = new Map(),
+  externs: Map<string, ExternSignature> = new Map(),
   moduleConstants: Map<string, Ty> = new Map(),
   opts?: { thisBinding?: { name: string; ty: Ty }; forcePure?: boolean }
 ): TFunction {
@@ -1719,7 +1768,7 @@ function resolveFunction(
   };
 }
 
-function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map(), externs: Map<string, { flat: string; params: Ty[]; returnTy: Ty }> = new Map(), moduleConstants: Map<string, Ty> = new Map()): import("./typedir.js").TClass {
+function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map(), externs: Map<string, ExternSignature> = new Map(), moduleConstants: Map<string, Ty> = new Map()): import("./typedir.js").TClass {
   const fields = cls.fields.map(f => ({ name: f.name, ty: parseTsType(f.tsType) }));
   // Create a synthetic record type for 'this' so field access resolves
   const thisType: Ty = { kind: "user", name: cls.name };
@@ -1759,7 +1808,7 @@ function precomputeFieldTypesInner(typeDecls: TypeDeclInfo[]) {
 export function resolveModule(raw: RawModule): TModule {
   _warnedRefEq.clear();
   precomputeFieldTypes(raw.typeDecls);
-  const pureFns = computePureFns(raw.functions);
+  const pureFns = computePureFns(raw.functions, raw.externs ?? []);
   // Pre-compute function parameter and return types
   const fnParams = new Map<string, Ty[]>();
   const fnReturns = new Map<string, Ty>();
@@ -1772,14 +1821,14 @@ export function resolveModule(raw: RawModule): TModule {
   // also register in fnReturns so ordinary `foo(args)` calls get the right
   // return type at resolution; dotted externs are handled in resolveExpr's
   // call case via the externs map directly.
-  const externs = new Map<string, { flat: string; params: Ty[]; returnTy: Ty }>();
+  const externs = new Map<string, ExternSignature>();
   // First pass: register signatures so spec resolution (below) can reference
   // them — including the extern referring to itself, or specs that mention
   // sibling externs.
   for (const ext of raw.externs ?? []) {
     const params = ext.params.map(p => parseTsType(p.tsType));
     const returnTy = parseTsType(ext.returnType);
-    externs.set(ext.qualified, { flat: ext.flat, params, returnTy });
+    externs.set(ext.qualified, { flat: ext.flat, params, returnTy, impure: ext.impure });
     if (!ext.qualified.includes(".")) fnReturns.set(ext.qualified, returnTy);
   }
   // Second pass: resolve the lifted `requires`/`ensures` strings in each
@@ -1806,6 +1855,7 @@ export function resolveModule(raw: RawModule): TModule {
       returnTy: sig.returnTy,
       requires,
       ensures,
+      impure: ext.impure,
     };
   });
   const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };

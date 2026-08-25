@@ -194,11 +194,10 @@ export interface OpaqueType {
   name: string;
 }
 
-/** Externally-declared pure function: `function {:axiom} name(...): returnType`
- *  in Dafny. No body — the prover treats it as an uninterpreted symbol of the
- *  declared type. Auto-detected during extraction for cross-file calls; any
- *  `requires`/`ensures` on the source declaration are lifted along so callers
- *  reason against the same contract the source itself verified. */
+/** Externally-declared operation. Pure externs are uninterpreted Dafny
+ *  functions; impure externs are body-less methods whose result is an
+ *  independent arbitrary value at each call. Any source `requires`/`ensures`
+ *  travel with the declaration. */
 export interface ExternDecl {
   kind: "extern";
   name: string;                                 // flat name (dots → underscores)
@@ -207,6 +206,7 @@ export interface ExternDecl {
   returnType: Ty;
   requires: Expr[];
   ensures: Expr[];
+  impure: boolean;
 }
 
 export type Decl = Inductive | Structure | FnDef | FnDefByMethod | FnMethod | Namespace | ClassDecl | ConstDecl | TypeAlias | OpaqueType | ExternDecl;
