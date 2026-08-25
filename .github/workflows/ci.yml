@@ -255,6 +255,8 @@ jobs:
             branch: lemmascript
     steps:
       - uses: actions/checkout@v6
+        with:
+          path: LemmaScript
 
       # Staging override: on a PR from branch <b>, if the case-study repo has a
       # branch named <pinned>-<b>, clone that instead of the pinned branch.
@@ -274,25 +276,26 @@ jobs:
               branch="$staging"
             fi
           fi
-          git clone --branch "$branch" "$repo" ../case-study
+          git clone --branch "$branch" "$repo" case-study
 
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
 
-      - run: cd tools && npm ci
+      - run: npm ci
+        working-directory: LemmaScript/tools
 
-      - uses: ./.github/actions/setup-lean
+      - uses: ./LemmaScript/.github/actions/setup-lean
         with:
-          lake-package-directory: ../case-study
+          lake-package-directory: case-study
           use-github-cache: 'true'
 
       - name: Regenerate and build Lean
-        working-directory: ../case-study
+        working-directory: case-study
         run: ../LemmaScript/tools/check.sh lean
 
       - name: Check generated Lean files are up to date
-        working-directory: ../case-study
+        working-directory: case-study
         run: |
           git diff --exit-code -- '*.def.lean' '*.types.lean'
           untracked=$(git ls-files --others --exclude-standard -- '*.def.lean' '*.types.lean')

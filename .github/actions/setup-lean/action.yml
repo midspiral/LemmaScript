@@ -14,16 +14,22 @@ runs:
   steps:
     - name: Clone Loom fork
       shell: bash
+      env:
+        LAKE_PACKAGE_DIRECTORY: ${{ inputs.lake-package-directory }}
       run: |
-        if [ ! -d ../loom ]; then
-          git clone https://github.com/namin/loom.git -b lemma ../loom
+        dependency_root="$(cd "$LAKE_PACKAGE_DIRECTORY/.." && pwd)"
+        if [ ! -d "$dependency_root/loom" ]; then
+          git clone https://github.com/namin/loom.git -b lemma "$dependency_root/loom"
         fi
 
     - name: Clone Velvet fork
       shell: bash
+      env:
+        LAKE_PACKAGE_DIRECTORY: ${{ inputs.lake-package-directory }}
       run: |
-        if [ ! -d ../velvet ]; then
-          git clone https://github.com/namin/velvet.git -b lemma ../velvet
+        dependency_root="$(cd "$LAKE_PACKAGE_DIRECTORY/.." && pwd)"
+        if [ ! -d "$dependency_root/velvet" ]; then
+          git clone https://github.com/namin/velvet.git -b lemma "$dependency_root/velvet"
         fi
 
     - uses: leanprover/lean-action@v1
