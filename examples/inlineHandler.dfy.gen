@@ -29,7 +29,7 @@ function StringIndexOfFromN(s: string, sub: string, from: nat): int
   else StringIndexOfFromN(s, sub, from + 1)
 }
 
-function {:axiom} readSafe(path: string): string
+method {:axiom} readSafe(path: string) returns (res: string)
   requires safePath(path)
 
 function safePath(path: string): bool
@@ -46,7 +46,8 @@ method get_entries(req: Unknown, res: Unknown) returns (res': Unknown)
     var i_t1: Unknown := *;
     return i_t1;
   }
-  var contents := readSafe(filePath);
-  var i_t2: Unknown := *;
-  return i_t2;
+  var i_t2 := readSafe(filePath);
+  var contents := i_t2;
+  var i_t3: Unknown := *;
+  return i_t3;
 }

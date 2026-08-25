@@ -1,6 +1,5 @@
-//@ backend dafny
-
 //@ extern
+//@ pure
 declare function rollDie(): number;
 
 export function twoDrawsAgree(): boolean {

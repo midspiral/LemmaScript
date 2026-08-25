@@ -190,7 +190,7 @@ function paramList(params: { name: string; type: Ty }[]): string {
 }
 
 /** Format a method signature header, normally omitting `returns` for void
- *  methods. A body-less impure extern opts into a Unit out-parameter so the
+ *  methods. A body-less impure extern uses a Unit out-parameter so the
  *  shared method-call lifting can bind its call like any other expression. */
 function methodHeader(prefix: string, params: { name: string; type: Ty }[], returnType: Ty,
                       scope?: { requires: Expr[]; ensures: Expr[]; body: Stmt[] },

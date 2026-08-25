@@ -31,13 +31,16 @@ expect_absent tools/fixtures/unsupported-dafny-emission.dfy
 expect_absent tools/fixtures/unsupported-extraction.types.lean
 expect_absent tools/fixtures/unsupported-extraction.def.lean
 
-# A deterministic extern remains extensional, while `//@ impure` makes the two
-# call results independent and therefore invalidates the equality proof. Copy
-# to a temporary directory so expected generated artifacts never enter fixtures.
+# Extern results are independent by default, while `//@ pure` opts into the
+# deterministic/extensional model. Cover both same-file extern declarations and
+# a pure cross-file source annotation. Copy to a temporary directory so expected
+# generated artifacts never enter fixtures.
 fixture_dir=$(mktemp -d)
 trap 'rm -rf "$fixture_dir"' EXIT
 cp tools/fixtures/deterministic-extern-equality.ts "$fixture_dir/deterministic.ts"
 cp tools/fixtures/impure-extern-equality.ts "$fixture_dir/impure.ts"
+cp tools/fixtures/pure-cross-file-equality.ts "$fixture_dir/pure-cross-file.ts"
+cp tools/fixtures/pure-cross-file-source.ts "$fixture_dir/pure-cross-file-source.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/impure.ts"
 if ! grep -Fq 'method {:axiom} rollDie' "$fixture_dir/impure.dfy.gen"; then
@@ -46,6 +49,12 @@ if ! grep -Fq 'method {:axiom} rollDie' "$fixture_dir/impure.dfy.gen"; then
 fi
 
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/deterministic.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/pure-cross-file.ts"
+npx tsx tools/src/lsc.ts gen --backend=lean "$fixture_dir/deterministic.ts"
+npx tsx tools/src/lsc.ts gen --backend=lean "$fixture_dir/pure-cross-file.ts"
 expect_failure \
-  "Dafny equated two calls to an impure extern" \
+  "Lean accepted a default-impure extern" \
+  npx tsx tools/src/lsc.ts gen --backend=lean "$fixture_dir/impure.ts"
+expect_failure \
+  "Dafny equated two calls to a default-impure extern" \
   npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/impure.ts"

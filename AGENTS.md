@@ -74,10 +74,10 @@ These are the ones that bite repeatedly:
 
 - **`//@ assume` is not a proof shortcut.** It emits `assume P;` in Dafny, telling the verifier to trust `P` unconditionally. It is appropriate to constrain a `//@ havoc`'d value (whose true behavior is outside the LS fragment) — and that's about it. Don't reach for it to paper over a proof obligation you don't feel like discharging. If you find yourself adding `//@ assume` to make verification pass on code you wrote, restructure the algorithm or prove the lemma. (Same goes for `//@ assume false` to silence a `throw new Error(...)` path — instead, characterize the valid-input domain in `//@ requires`.)
 - **`//@ havoc` is Dafny-only.** It marks the RHS of a declaration or assignment as nondeterministic. The Lean backend will reject files that use it. Pair it with `//@ assume` immediately after if you need to constrain the resulting value (`|cleaned| <= |text|`, for example).
-- **`//@ extern` is the deterministic cousin of `//@ havoc`.** Use it when callers should reason *parametric over* a function whose body is out of model (regex, IO, parser). The axiom is deterministic and extensional — proofs that depend on `f(x) == f(x)` go through. Add `//@ impure` to an extern (or to a cross-file source declaration) when each call needs an independent result; this emits a body-less Dafny method and does not model shared heap effects.
+- **`//@ extern` is impure by default.** Use it when callers should reason *parametric over* a function whose body is out of model (regex, IO, parser). Each call gets an independent result from a body-less Dafny method. Add `//@ pure` to an extern (or cross-file source declaration) only when it is deterministic and extensional — then proofs that depend on `f(x) == f(x)` go through. `//@ impure` remains an explicit spelling of the default; neither model captures shared heap effects.
 - **`//@ ` annotations don't support `\old(...)`.** For mutating methods, `this.field` in `ensures` is the post-state; pre-state references must be added as `old(this.field)` in `.dfy` proof additions (see SPEC.md §2.8).
 - **Empty Dafny lemma body means *proven*.** `lemma foo() ensures P {}` is auto-discharged by Z3 — it is not "skipped" or "unproven." Only `assume` / `havoc` / weak specs side-step the verifier.
-- **Regex isn't in the model.** Code that uses `RegExp`, `String.prototype.match`, `String.prototype.replace(regex, ...)`, etc. cannot be verified inside the LS fragment. Either rewrite to non-regex string operations, or wrap the regex behind `//@ havoc` / `//@ extern` and verify the surrounding logic.
+- **Regex isn't in the model.** Code that uses `RegExp`, `String.prototype.match`, `String.prototype.replace(regex, ...)`, etc. cannot be verified inside the LS fragment. Either rewrite to non-regex string operations, or wrap the regex behind `//@ havoc` / `//@ extern` and verify the surrounding logic. Add `//@ pure` to an extern wrapper when its runtime behavior is deterministic.
 
 ## Dafny verification workflow
 
@@ -114,7 +114,7 @@ import opened Std.Arithmetic.DivMod     // LemmaMulStrictInequality(x,y,z): x<y 
 When verifying a small slice of a larger TS project:
 
 - Add `//@ verify` to the function bodies you want verified. As soon as *any* function in the file has it, `lsc` switches to opt-in mode and silently skips the rest. Type and `const` declarations are always extracted.
-- For functions outside the LS fragment that you still want callers to reason about, use `//@ extern` (deterministic axiom) or `//@ havoc` (nondeterministic).
+- For functions outside the LS fragment that you still want callers to reason about, use `//@ extern` (call-varying by default), `//@ pure` with `//@ extern` (deterministic axiom), or `//@ havoc` (nondeterministic value).
 - **In-place means in-place.** When the user asks for in-place verification of an existing function, add annotations only. Don't refactor the production code, don't restructure control flow, don't rename things. The point is that the verified function and the shipping function are byte-for-byte the same.
 
 ## Case studies and external repos

@@ -2509,8 +2509,8 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   // def→types import below reads it; Dafny never passes an override.
   const moduleBase = moduleBaseOverride ?? base;
 
-  // Externs: pure declarations become uninterpreted functions; `//@ impure`
-  // declarations become body-less methods so calls have independent results.
+  // Externs are body-less methods by default so calls have independent results;
+  // `//@ pure` declarations become uninterpreted functions.
   // Contracts come along in either case. A pure extern's `\result` denotes its
   // application; an impure extern keeps `\result` for the method out-parameter.
   const externDecls: Decl[] = (mod.externs ?? []).map(ext => {

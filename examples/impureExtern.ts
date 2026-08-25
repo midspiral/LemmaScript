@@ -1,9 +1,10 @@
 /**
- * Cross-file `//@ impure` extern.
+ * Default-impure cross-file extern.
  *
  * The imported declaration is opaque to this verification target, but its
- * marker prevents two calls from being collapsed by extensional equality.
- * Each roll is arbitrary and independently constrained to [1, 6].
+ * lack of a `//@ pure` marker prevents two calls from being collapsed by
+ * extensional equality. Each roll is arbitrary and independently constrained
+ * to [1, 6].
  */
 
 //@ backend dafny

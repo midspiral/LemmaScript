@@ -29,7 +29,7 @@ function StringIndexOfFromN(s: string, sub: string, from: nat): int
   else StringIndexOfFromN(s, sub, from + 1)
 }
 
-function {:axiom} readFileSafe(path: string): string
+method {:axiom} readFileSafe(path: string) returns (res: string)
   requires validPath(path)
 
 datatype Entry = Entry(id: string, name: string)
@@ -47,7 +47,8 @@ method loadEntry(req: Unknown) returns (res: string)
   if !(i_t0) {
     return "invalid path";
   }
-  var raw := readFileSafe(filePath);
+  var i_t1 := readFileSafe(filePath);
+  var raw := i_t1;
   var entry: Entry := *;
   return entry.name;
 }
@@ -58,16 +59,18 @@ method mergeEntries(req: Unknown) returns (res: string)
   var b: string := *;
   var pa := (("./data/" + a) + ".json");
   var pb := (("./data/" + b) + ".json");
-  var i_t1 := validPath(pa);
-  if !(i_t1) {
+  var i_t2 := validPath(pa);
+  if !(i_t2) {
     return "invalid a";
   }
-  var i_t2 := validPath(pb);
-  if !(i_t2) {
+  var i_t3 := validPath(pb);
+  if !(i_t3) {
     return "invalid b";
   }
-  var _ := readFileSafe(pa);
-  var _ := readFileSafe(pb);
+  var i_t4 := readFileSafe(pa);
+  var _ := i_t4;
+  var i_t5 := readFileSafe(pb);
+  var _ := i_t5;
   var merged: string := *;
   return merged;
 }

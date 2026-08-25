@@ -483,9 +483,9 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Array" && fn.field === "isArray") return "pure";
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "String" && fn.field === "fromCharCode") return "pure";
   if (fn.kind === "var" && (ctx.inSpec || ctx.inLambda) && ctx.pureFns.has(fn.name)) return "spec-pure";
-  // Bare-name externs are pure by default. `//@ impure` externs are method
-  // calls: lift them to statement-level binds so repeated invocations remain
-  // independent. A method call cannot occur in a spec or lambda expression.
+  // Bare-name externs are methods by default: lift them to statement-level
+  // binds so repeated invocations remain independent. `//@ pure` externs stay
+  // expressions. A method call cannot occur in a spec or lambda expression.
   if (fn.kind === "var") {
     const ext = ctx.externs.get(fn.name);
     if (ext) {
@@ -870,8 +870,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       }
       // Extern dispatch: `NS.method(args)` where NS.method is declared via
       // `//@ extern`. Rewrite into a flat-name call (`NS_method(args)`) so the
-      // rest of the pipeline sees an ordinary named call. Pure externs remain
-      // expressions; `//@ impure` externs are lifted as method calls.
+      // rest of the pipeline sees an ordinary named call. `//@ pure` externs
+      // remain expressions; default externs are lifted as method calls.
       if (e.fn.kind === "field" && e.fn.obj.kind === "var") {
         const qualified = `${e.fn.obj.name}.${e.fn.field}`;
         const ext = ctx.externs.get(qualified);
@@ -1640,7 +1640,7 @@ function rawCalleeName(e: RawExpr): string | null {
   return null;
 }
 
-/** Whether a raw function body invokes any extern marked `//@ impure`. */
+/** Whether a raw function body invokes any extern resolved as impure. */
 function containsImpureExternCall(v: unknown, names: Set<string>): boolean {
   if (Array.isArray(v)) return v.some(x => containsImpureExternCall(x, names));
   if (v === null || typeof v !== "object") return false;

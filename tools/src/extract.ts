@@ -34,8 +34,8 @@ function withHavocKey<T>(key: string | null, fn: () => T): T {
 
 /** Auto-detected cross-file calls. Populated by `extractExpr` whenever it sees
  *  a call `Obj.method(...)` or `foo(...)` whose ts-morph symbol resolves to a
- *  different `.ts` source file. Emitted in Dafny as `function {:axiom} <flat>`
- *  by default, or as a body-less method when the source has `//@ impure`.
+ *  different `.ts` source file. Emitted in Dafny as a body-less method by
+ *  default, or as `function {:axiom} <flat>` when the source has `//@ pure`.
  *  Cleared at the start of every `extractModule`. */
 const _externs = new Map<string, import("./rawir.js").RawExtern>();
 /** Signature types of *kept* externs, for the imported-type resolver: a type
@@ -163,7 +163,7 @@ function detectCrossFileExtern(
   const annots = collectFunctionAnnotations(externalDecl);
   const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
   const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
-  const impure = hasBareFunctionAnnotation(externalDecl, "impure");
+  const impure = externIsImpure(externalDecl);
   return { qualified, flat, typeParams, params, returnType, requires, ensures, impure };
 }
 
@@ -790,6 +790,22 @@ function hasBareFunctionAnnotation(node: Node, keyword: string, body?: Node[]): 
     }
   }
   return false;
+}
+
+/** Externs are call-varying by default. `//@ pure` opts into a deterministic,
+ *  extensional function model; `//@ impure` remains an explicit spelling of
+ *  the default. The parent statement matters for const-bound arrow functions. */
+function externIsImpure(node: Node, parentStmt?: Node): boolean {
+  const hasMarker = (keyword: string) =>
+    hasBareFunctionAnnotation(node, keyword) ||
+    (!!parentStmt && parentStmt.getLeadingCommentRanges()
+      .some(r => r.getText().trim() === `//@ ${keyword}`));
+  const pure = hasMarker("pure");
+  const impure = hasMarker("impure");
+  if (pure && impure) {
+    throw new Error("extern declaration cannot be both //@ pure and //@ impure");
+  }
+  return !pure;
 }
 
 /** Check for bare `//@ pure` annotation (no expression). */
@@ -2013,9 +2029,9 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   const typeDecls: TypeDeclInfo[] = [];
   // Cross-file calls are auto-externed: ts-morph resolves the call's symbol;
   // if it's defined in a different source file we treat the symbol as opaque
-  // and emit a body-less `function {:axiom}` in Dafny. Populated by
-  // `extractExpr` during call extraction (only symbols *actually used* end up
-  // here), deduped by qualified name.
+  // and emit a body-less method by default (`function {:axiom}` with `//@ pure`).
+  // Populated by `extractExpr` during call extraction (only symbols *actually
+  // used* end up here), deduped by qualified name.
   _externs.clear();
   _externSigTypes.length = 0;
 
@@ -2209,7 +2225,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
   // when the function is outside LS's verification model — e.g., wraps a
   // regex — but its callers should still be verifiable against an
   // uninterpreted predicate. Parallel to auto-extern for cross-file calls,
-  // and emitted the same way (`function {:axiom} foo(...)` in Dafny).
+  // and emitted with the same default-impure / explicit-pure rule.
   function hasSkip(f: { node: FunctionDeclaration; parentStmt?: Node }) {
     return hasLeadingDirective(f.parentStmt ?? f.node, "skip")
       || (!!f.parentStmt && hasLeadingDirective(f.node, "skip"));
@@ -2222,11 +2238,6 @@ export function extractModule(sourceFile: SourceFile): RawModule {
       }
     }
     return false;
-  }
-  function hasImpure(f: { node: FunctionDeclaration; parentStmt?: Node }) {
-    if (hasBareFunctionAnnotation(f.node, "impure")) return true;
-    return !!f.parentStmt && f.parentStmt.getLeadingCommentRanges()
-      .some(r => r.getText().trim() === "//@ impure");
   }
   // `//@ extern NS.method` registers the extern under a *dotted* qualified name,
   // so a real `NS.method(args)` call dispatches to it (resolve.ts) with no
@@ -2267,7 +2278,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
     _externs.set(qualified, {
       qualified, flat, typeParams, params, returnType, requires, ensures,
-      impure: hasImpure(f),
+      impure: externIsImpure(f.node, f.parentStmt),
     });
   }
 

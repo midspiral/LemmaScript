@@ -41,12 +41,12 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `ghost x = e` | Before any statement | Ghost variable reassignment. |
 | `assert e` | Before any statement | Assertion (`assertGadget` in Lean, `assert` in Dafny). |
 | `assume e` | Before any statement | Trusted assumption — emits `assume e;` in Dafny. Dafny backend only. See §2.3. |
-| `pure` | Before function declaration | Force function to be pure — required to call from another function's `requires`/`ensures`. Dafny: `function by method` if body can't auto-convert (see §5.1). |
+| `pure` | Before function declaration | Force a verified function to be pure, or opt an extern/cross-file declaration into the deterministic and extensional function model. Required for calls from `requires`/`ensures`. See §2.9, §2.11, and §5.1. |
 | `havoc` | Before a variable declaration | Nondeterministic value — skip init expression (see §2.9). |
 | `havoc <key>` | Before a variable declaration | Nondeterministic subexpression — replace calls matching `<key>` (see §2.10). |
 | `declare-type N { f: T, ... }` | Before any statement | Declare a record type for cross-file types (see §2.5). |
 | `extern` | Before function declaration | Treat function as a body-less axiom — extract signature only, skip body (see §2.11). `//@ extern NS.method` registers it under a dotted name. |
-| `impure` | Alongside `extern`, or on a cross-file source declaration | Model each call with an independent arbitrary result instead of a deterministic function (see §2.9–2.11). Dafny only. |
+| `impure` | Alongside `extern`, or on a cross-file source declaration | Explicitly select the default call-varying extern model. Each call gets an independent arbitrary result. Dafny only. See §2.9–2.11. |
 | `autohavoc` | File-level, or before a `//@ verify` function | Abstract every unmodellable expression to a nondeterministic value, so verification rests only on declared contracts (see §2.12). Dafny only. |
 | `skip` | Before a statement or top-level value declaration | Omit it from the verification model (for side-effect-only code or an intentionally unsupported declaration). |
 
@@ -262,9 +262,9 @@ class Counter {
 
 ### 2.9 Cross-File Calls
 
-A call to a symbol declared in another `.ts` file (resolved via ts-morph) is emitted by default as `function {:axiom} <flat>(...): T` — opaque, uninterpreted, deterministic, and extensional. Any `//@ requires` / `//@ ensures` on the source declaration are lifted onto the axiom so callers reason against the same contract the source verified; the lift is transitive through nested cross-file references. Only symbols *actually called* are externed; `.d.ts` declarations are skipped (covered by built-in dispatch, §3.8). No annotation is required.
+A call to a symbol declared in another `.ts` file (resolved via ts-morph) is emitted by default as a body-less Dafny `method {:axiom}`. Every invocation receives an independent arbitrary result satisfying that invocation's lifted `//@ requires` / `//@ ensures`, so two calls with equal arguments are not assumed equal. Contracts lift transitively through nested cross-file references; only symbols *actually called* are externed, and `.d.ts` declarations are skipped (covered by built-in dispatch, §3.8). No annotation is required.
 
-Mark an effectful or nondeterministic source declaration `//@ impure` to emit its auto-extern as a body-less Dafny `method {:axiom}` instead. Every invocation then receives an independent arbitrary result satisfying that invocation's lifted contract, so two calls with equal arguments are not assumed equal. An impure call makes its caller a method and cannot appear in a specification or lambda. This models call-varying results, not shared heap effects; it is Dafny-only.
+Mark a deterministic, side-effect-free source declaration `//@ pure` to emit its auto-extern as `function {:axiom} <flat>(...): T` instead. That model is opaque, deterministic, and extensional, so proofs may use `f(x) == f(x)` and the call may appear in a specification or lambda. Default-impure calls make their callers methods and cannot appear in specifications or lambdas. `//@ impure` remains an explicit spelling of the default. This models call-varying results, not shared heap effects; impure externs are Dafny-only.
 
 ### 2.10 Havoc: `//@ havoc`
 
@@ -356,20 +356,21 @@ Mark a function declaration as an opaque axiom — signature (with any `//@ requ
 
 ```typescript
 //@ extern
+//@ pure
 export function match(str: string, pattern: string): boolean { ... }  // regex, out of model
 ```
 
 → Dafny: `function {:axiom} match_(str: string, pattern: string): bool`
 
-Same machinery as cross-file auto-extern (§2.9): registered in the same externs map, lifted contract, name-escaped at emission so Dafny-keyword collisions (`match` → `match_`) resolve consistently. The difference from auto-extern is the trigger — cross-file fires automatically, in-file requires the explicit annotation.
+Same machinery as cross-file auto-extern (§2.9): registered in the same externs map, lifted contract, name-escaped at emission so Dafny-keyword collisions (`match` → `match_`) resolve consistently. The difference from auto-extern is the trigger — cross-file fires automatically, in-file requires `//@ extern`. Purity is independent: both are impure by default and use `//@ pure` to opt into a function axiom.
 
-**Use case:** the function is outside LS's model (regex, IO, parser) but callers should still verify *parametric over its behavior*. The axiom is deterministic and extensional, so proofs that depend on `f(x) == f(x)` go through. Unlike `//@ havoc`, which is nondeterministic at each call site and defeats determinism-dependent proofs.
+**Use case:** add `//@ pure` when deterministic code outside LS's model (such as regex or a parser) should remain extensional, so proofs that depend on `f(x) == f(x)` go through. Leave IO or nondeterministic operations at the impure default. Unlike `//@ havoc`, either extern model can carry a per-call contract.
 
-For an extern whose result may vary between calls, add a separate `//@ impure` line next to `//@ extern`. Dafny emits `method {:axiom} ... returns (res: T)` and applies any `requires`/`ensures` per invocation. Cross-file auto-externs inherit the same marker from their source declaration (§2.9).
+Without `//@ pure`, Dafny emits `method {:axiom} ... returns (res: T)` and applies any `requires`/`ensures` per invocation. A separate `//@ impure` line is accepted as an explicit statement of this default. Cross-file auto-externs inherit `//@ pure` or `//@ impure` from their source declaration (§2.9).
 
 In brownfield `//@ verify` mode (§2.6), `//@ extern` declarations are still extracted as externs; only their bodies are skipped.
 
-Bare-name deterministic `//@ extern` calls are classified as pure (since they emit as `function {:axiom}`), so they are not lifted out of enclosing expressions by the method-call-lifting pass (§3.6). This means a deterministic bare-name extern call can appear inside a lambda body without producing a multi-statement lambda. Dotted deterministic externs (cross-file `NS.method` calls) go through a separate dispatch and are also pure. Impure extern calls are lifted and therefore cannot occur inside a lambda.
+Bare-name `//@ pure` extern calls are classified as pure (since they emit as `function {:axiom}`), so they are not lifted out of enclosing expressions by the method-call-lifting pass (§3.6). This means a pure bare-name extern call can appear inside a lambda body without producing a multi-statement lambda. Dotted pure externs (cross-file `NS.method` calls) go through a separate dispatch and are also pure. Default-impure extern calls are lifted and therefore cannot occur inside a lambda.
 
 **Dotted name.** Write `//@ extern fs.readFileSync` to give the extern a dotted name. A real `fs.readFileSync(...)` call in the code then resolves to this extern (§2.9) and is checked against its contract — so you can contract a library function directly, without writing a wrapper. Use a body-less `declare function` to carry the signature and the `//@ requires`/`//@ ensures`. (A function defined in the current file always wins over a same-named one in another file.)
 
