@@ -65,7 +65,7 @@ Each emitter dispatches on `(receiverTy, method)` to decide syntax. For example,
 
 ## Externs
 
-When a call resolves to a pure function declared in a *different* `.ts` file, extract records it as a `RawExtern` (resolved to `TExtern`, lowered to `ExternDecl`). The Dafny emitter renders these as top-of-file `function {:axiom} Name(...): R` with the source declaration's `requires`/`ensures` lifted along, so callers reason against the same contract the source verified. Externs are emitted before all other declarations so they're in scope everywhere.
+When a call resolves to a function declared in a *different* `.ts` file, extract records it as a `RawExtern` (resolved to `TExtern`, lowered to `ExternDecl`). The Dafny emitter renders it as a top-of-file `function {:axiom} Name(...): R` by default, or as a body-less `method {:axiom}` when the source declaration has `//@ impure`; the latter gives every call an independent result. In both cases the source `requires`/`ensures` are lifted along. Externs are emitted before all other declarations so they're in scope everywhere.
 
 ## Spec Expression Parser
 

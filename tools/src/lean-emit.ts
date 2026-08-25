@@ -818,6 +818,9 @@ function emitDecl(d: Decl): string {
       return `def ${escapeName(d.name)} : ${tyToLean(d.type)} := ${emitExpr(d.value)}`;
 
     case "extern": {
+      if (d.impure) {
+        throw new Error("//@ impure extern is not supported in the Lean backend");
+      }
       // Mirror Dafny's `function {:axiom}`: an uninterpreted total function.
       // In Lean that is an `opaque` declaration (sound — it commits to no body,
       // only to the type being inhabited). Any `requires`/`ensures` the source

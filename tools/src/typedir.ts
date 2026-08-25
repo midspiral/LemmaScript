@@ -197,6 +197,7 @@ export interface TExtern {
   returnTy: Ty;
   requires: TExpr[];
   ensures: TExpr[];
+  impure: boolean;
 }
 
 export interface TModule {

@@ -34,7 +34,8 @@ function withHavocKey<T>(key: string | null, fn: () => T): T {
 
 /** Auto-detected cross-file calls. Populated by `extractExpr` whenever it sees
  *  a call `Obj.method(...)` or `foo(...)` whose ts-morph symbol resolves to a
- *  different `.ts` source file. Emitted in Dafny as `function {:axiom} <flat>`.
+ *  different `.ts` source file. Emitted in Dafny as `function {:axiom} <flat>`
+ *  by default, or as a body-less method when the source has `//@ impure`.
  *  Cleared at the start of every `extractModule`. */
 const _externs = new Map<string, import("./rawir.js").RawExtern>();
 /** Signature types of *kept* externs, for the imported-type resolver: a type
@@ -162,7 +163,8 @@ function detectCrossFileExtern(
   const annots = collectFunctionAnnotations(externalDecl);
   const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
   const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
-  return { qualified, flat, typeParams, params, returnType, requires, ensures };
+  const impure = hasBareFunctionAnnotation(externalDecl, "impure");
+  return { qualified, flat, typeParams, params, returnType, requires, ensures, impure };
 }
 
 /** Build a concat-tree from a mixed list of literal and SpreadElement nodes.
@@ -774,15 +776,25 @@ function collectFunctionAnnotations(fn: Node): Annotation[] {
   return collectAnnotations(fn);
 }
 
-/** Check for bare `//@ pure` annotation (no expression). */
-function hasPureAnnotation(node: Node, body?: Node[]): boolean {
+/** Check for a bare function annotation such as `//@ pure` or `//@ impure`.
+ *  Function annotations may precede the declaration or its first statement. */
+function hasBareFunctionAnnotation(node: Node, keyword: string, body?: Node[]): boolean {
+  if (!body) {
+    const fnBody = (node as any).getBody?.();
+    if (fnBody && Node.isBlock(fnBody)) body = fnBody.getStatements() as Node[];
+  }
   const nodes = body && body.length > 0 ? [node, body[0]] : [node];
   for (const n of nodes) {
     for (const range of n.getLeadingCommentRanges()) {
-      if (range.getText().trim() === "//@ pure") return true;
+      if (range.getText().trim() === `//@ ${keyword}`) return true;
     }
   }
   return false;
+}
+
+/** Check for bare `//@ pure` annotation (no expression). */
+function hasPureAnnotation(node: Node, body?: Node[]): boolean {
+  return hasBareFunctionAnnotation(node, "pure", body);
 }
 
 // ── Type declaration extraction ──────────────────────────────
@@ -2211,6 +2223,11 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     }
     return false;
   }
+  function hasImpure(f: { node: FunctionDeclaration; parentStmt?: Node }) {
+    if (hasBareFunctionAnnotation(f.node, "impure")) return true;
+    return !!f.parentStmt && f.parentStmt.getLeadingCommentRanges()
+      .some(r => r.getText().trim() === "//@ impure");
+  }
   // `//@ extern NS.method` registers the extern under a *dotted* qualified name,
   // so a real `NS.method(args)` call dispatches to it (resolve.ts) with no
   // wrapper — e.g. `//@ extern fs.readFileSync` lets you call `fs.readFileSync`
@@ -2248,7 +2265,10 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     const annots = collectFunctionAnnotations(f.node);
     const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
     const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
-    _externs.set(qualified, { qualified, flat, typeParams, params, returnType, requires, ensures });
+    _externs.set(qualified, {
+      qualified, flat, typeParams, params, returnType, requires, ensures,
+      impure: hasImpure(f),
+    });
   }
 
   // If any function has //@ verify, only extract those (brownfield mode).

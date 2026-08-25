@@ -2509,10 +2509,10 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   // def→types import below reads it; Dafny never passes an override.
   const moduleBase = moduleBaseOverride ?? base;
 
-  // Externs: emit as top-of-file `function {:axiom}` (Dafny) declarations.
-  // Any `requires`/`ensures` from the source declaration come along so callers
-  // see the same spec the source itself verified. Substitute `\result` with the
-  // function call (same pattern as for in-file pure-function ensures).
+  // Externs: pure declarations become uninterpreted functions; `//@ impure`
+  // declarations become body-less methods so calls have independent results.
+  // Contracts come along in either case. A pure extern's `\result` denotes its
+  // application; an impure extern keeps `\result` for the method out-parameter.
   const externDecls: Decl[] = (mod.externs ?? []).map(ext => {
     const fnCall: Expr = { kind: "app", fn: ext.flat, args: ext.params.map(p => ({ kind: "var" as const, name: p.name })) };
     return {
@@ -2522,7 +2522,10 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
       params: ext.params.map(p => ({ name: p.name, type: p.ty })),
       returnType: ext.returnTy,
       requires: ext.requires.map(transformExpr),
-      ensures: ext.ensures.map(e => replaceVar(transformExpr(e), "\\result", fnCall)),
+      ensures: ext.ensures.map(e => ext.impure
+        ? transformExpr(e)
+        : replaceVar(transformExpr(e), "\\result", fnCall)),
+      impure: ext.impure,
     };
   });
 
