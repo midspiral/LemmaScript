@@ -40,7 +40,7 @@ cp tools/fixtures/deterministic-extern-equality.ts "$fixture_dir/deterministic.t
 cp tools/fixtures/impure-extern-equality.ts "$fixture_dir/impure.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/impure.ts"
-if ! rg -q '^method \{:axiom\} rollDie' "$fixture_dir/impure.dfy.gen"; then
+if ! grep -Fq 'method {:axiom} rollDie' "$fixture_dir/impure.dfy.gen"; then
   echo "ERROR: impure extern did not emit as a body-less method"
   exit 1
 fi
