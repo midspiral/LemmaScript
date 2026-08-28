@@ -47,12 +47,28 @@ export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number, ex
   console.log("Running dafny verify...");
   try {
     const content = readFileSync(dfyPath, "utf-8");
+    const usesJavaScriptStrings = content.includes("// LemmaScript string model: javascript-utf16-code-units");
+    const usesStandardLibrary = content.includes("Std.");
+    if (usesJavaScriptStrings && usesStandardLibrary) {
+      console.error(
+        "ERROR: this proof combines JavaScript strings with Dafny's standard library. " +
+        "Dafny 4.11 cannot load its Unicode-scalar standard library while LemmaScript " +
+        "uses UTF-16 code units. Remove the Std.* dependency or move it to a string-free module."
+      );
+      return false;
+    }
     const args: string[] = ["verify"];
-    if (content.includes("Std.")) args.push("--standard-libraries");
+    if (usesStandardLibrary) args.push("--standard-libraries");
     if (timeLimit) args.push("--verification-time-limit", String(timeLimit));
     if (extraFlags) {
       for (const tok of extraFlags.split(/\s+/)) if (tok) args.push(tok);
     }
+    // JavaScript strings are UTF-16 code-unit sequences. Dafny 4 defaults to
+    // Unicode scalar chars, so pin the legacy char mode for string-bearing
+    // generated programs.
+    // Dafny 4.11 warns that the option is deprecated; allow that CLI warning,
+    // while verification errors still fail normally.
+    if (usesJavaScriptStrings) args.push("--unicode-char:false", "--allow-warnings");
     args.push(dfyPath);
     execFileSync("dafny", args, { cwd: dir, stdio: "inherit" });
     return true;
