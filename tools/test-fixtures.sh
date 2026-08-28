@@ -38,6 +38,7 @@ fixture_dir=$(mktemp -d)
 trap 'rm -rf "$fixture_dir"' EXIT
 cp tools/fixtures/deterministic-extern-equality.ts "$fixture_dir/deterministic.ts"
 cp tools/fixtures/impure-extern-equality.ts "$fixture_dir/impure.ts"
+cp tools/fixtures/javascript-utf16-strings.ts "$fixture_dir/utf16.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/impure.ts"
 if ! grep -Fq 'method {:axiom} rollDie' "$fixture_dir/impure.dfy.gen"; then
@@ -49,3 +50,15 @@ npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/det
 expect_failure \
   "Dafny equated two calls to an impure extern" \
   npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/impure.ts"
+
+# JavaScript string length/indexing are UTF-16-code-unit operations. Astral
+# characters therefore occupy two Dafny chars, and lone surrogates remain
+# representable instead of being replaced while writing the generated file.
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/utf16.ts"
+grep -Fq '// LemmaScript string model: javascript-utf16-code-units' "$fixture_dir/utf16.dfy.gen"
+grep -Fq '"\uD83D\uDE00"' "$fixture_dir/utf16.dfy.gen"
+grep -Fq '"\uD83D"' "$fixture_dir/utf16.dfy.gen"
+
+expect_failure \
+  "Dafny standard library was combined with JavaScript UTF-16 strings" \
+  npx tsx -e 'import { dafnyVerify } from "./tools/src/dafny-commands.ts"; process.exit(dafnyVerify("tools/fixtures/string-with-standard-library.dfy", process.cwd()) ? 0 : 1)'

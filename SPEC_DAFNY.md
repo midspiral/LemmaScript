@@ -88,6 +88,7 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | Helper | When | Purpose |
 |--------|------|---------|
 | `SeqIndexOf` | `arr.indexOf(x)` | First-index search (`-1` if absent) |
+| `SeqFilter` / `SeqAll` / `SeqFoldLeft` | `filter` / `every` / `reduce` | Local recursive collection helpers (no Dafny standard-library dependency) |
 | `SeqFindIndex` | `arr.findIndex(f)` | Predicate first-index search |
 | `SeqFind` | `arr.find(f)` | Predicate first-match search |
 | `SeqFindLast` | `arr.findLast(f)` | Predicate last-match search |
@@ -118,6 +119,14 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 
 Standard libraries are auto-detected: if `foo.dfy` contains `import Std.`, the `--standard-libraries` flag is added.
 
-The shared `--time-limit=<seconds>` flag (SPEC.md §7) maps to Dafny's `--verification-time-limit`; `--extra-flags=<string>` is forwarded verbatim to `dafny verify`.
+JavaScript strings are sequences of UTF-16 code units, so `lsc check` pins
+Dafny to `--unicode-char:false`. Generated files that use source strings carry
+the marker `LemmaScript string model: javascript-utf16-code-units`. Dafny 4.11's
+precompiled standard library was built for Unicode-scalar chars and cannot be
+loaded in this mode. LemmaScript therefore uses local helpers for generated
+`filter`, `every`, and `reduce` operations, and fails closed with an actionable
+error if a string-bearing proof addition still imports `Std.*`. A string-free
+proof may continue to use the standard library.
 
+The shared `--time-limit=<seconds>` flag (SPEC.md §7) maps to Dafny's `--verification-time-limit`; `--extra-flags=<string>` is forwarded verbatim to `dafny verify`.
 
