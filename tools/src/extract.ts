@@ -11,6 +11,7 @@ import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
 import { normalizeBigIntLiteral } from "./rawir.js";
 import { setUserNames, freshName } from "./names.js";
+import { DEFAULT_OPTIONS, type LscOptions } from "./config.js";
 
 // ── Expression extraction ────────────────────────────────────
 
@@ -35,7 +36,8 @@ function withHavocKey<T>(key: string | null, fn: () => T): T {
 /** Auto-detected cross-file calls. Populated by `extractExpr` whenever it sees
  *  a call `Obj.method(...)` or `foo(...)` whose ts-morph symbol resolves to a
  *  different `.ts` source file. Emitted in Dafny as `function {:axiom} <flat>`
- *  by default, or as a body-less method when the source has `//@ impure`.
+ *  when effectively pure, or as a body-less method when effectively impure
+ *  after project defaults and source overrides.
  *  Cleared at the start of every `extractModule`. */
 const _externs = new Map<string, import("./rawir.js").RawExtern>();
 /** Signature types of *kept* externs, for the imported-type resolver: a type
@@ -53,6 +55,8 @@ let _currentSourceFile: SourceFile | null = null;
  *  that no verified function actually calls — and whose TS return types
  *  often don't translate to valid Dafny. */
 let _inFunctionExtraction = false;
+/** Effective options for the current extraction. Reset at extractModule entry. */
+let _extractOptions: LscOptions = DEFAULT_OPTIONS;
 /** Counter for synthetic names used by let-statement array destructuring
  *  when the initializer isn't a bare variable (single-eval temp). */
 let _destrCounter = 0;
@@ -163,7 +167,7 @@ function detectCrossFileExtern(
   const annots = collectFunctionAnnotations(externalDecl);
   const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
   const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
-  const impure = hasBareFunctionAnnotation(externalDecl, "impure");
+  const impure = externIsImpure(externalDecl, qualified);
   return { qualified, flat, typeParams, params, returnType, requires, ensures, impure };
 }
 
@@ -795,6 +799,37 @@ function hasBareFunctionAnnotation(node: Node, keyword: string, body?: Node[]): 
 /** Check for bare `//@ pure` annotation (no expression). */
 function hasPureAnnotation(node: Node, body?: Node[]): boolean {
   return hasBareFunctionAnnotation(node, "pure", body);
+}
+
+function enclosingVariableStatement(node: Node): Node | undefined {
+  let current = node.getParent();
+  while (current && !Node.isSourceFile(current)) {
+    if (Node.isVariableStatement(current)) return current;
+    current = current.getParent();
+  }
+  return undefined;
+}
+
+/** `pure`/`impure` may be attached to a function, its first statement, or the
+ *  variable statement that owns a const arrow. */
+function hasExternModeAnnotation(node: Node, keyword: "pure" | "impure", parentStmt?: Node): boolean {
+  if (hasBareFunctionAnnotation(node, keyword)) return true;
+  if (Node.isVariableDeclaration(node)) {
+    const init = node.getInitializer();
+    if (init && Node.isArrowFunction(init) && hasBareFunctionAnnotation(init, keyword)) return true;
+  }
+  const statement = parentStmt ?? enclosingVariableStatement(node);
+  return !!statement && statement.getLeadingCommentRanges()
+    .some(r => r.getText().trim() === `//@ ${keyword}`);
+}
+
+function externIsImpure(node: Node, name: string, parentStmt?: Node): boolean {
+  const pure = hasExternModeAnnotation(node, "pure", parentStmt);
+  const impure = hasExternModeAnnotation(node, "impure", parentStmt);
+  if (pure && impure) throw new Error(`${name}: extern cannot be both //@ pure and //@ impure`);
+  if (impure) return true;
+  if (pure) return false;
+  return _extractOptions["extern-default"] === "impure";
 }
 
 // ── Type declaration extraction ──────────────────────────────
@@ -2006,7 +2041,8 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
 
 // ── Module extraction ────────────────────────────────────────
 
-export function extractModule(sourceFile: SourceFile): RawModule {
+export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFAULT_OPTIONS): RawModule {
+  _extractOptions = options;
   // Seed the fresh-name check (names.ts) before anything mints: every
   // Identifier token in the module, a deliberate over-approximation.
   setUserNames(new Set(sourceFile.getDescendantsOfKind(SyntaxKind.Identifier).map(i => i.getText())));
@@ -2223,11 +2259,6 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     }
     return false;
   }
-  function hasImpure(f: { node: FunctionDeclaration; parentStmt?: Node }) {
-    if (hasBareFunctionAnnotation(f.node, "impure")) return true;
-    return !!f.parentStmt && f.parentStmt.getLeadingCommentRanges()
-      .some(r => r.getText().trim() === "//@ impure");
-  }
   // `//@ extern NS.method` registers the extern under a *dotted* qualified name,
   // so a real `NS.method(args)` call dispatches to it (resolve.ts) with no
   // wrapper — e.g. `//@ extern fs.readFileSync` lets you call `fs.readFileSync`
@@ -2267,7 +2298,7 @@ export function extractModule(sourceFile: SourceFile): RawModule {
     const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
     _externs.set(qualified, {
       qualified, flat, typeParams, params, returnType, requires, ensures,
-      impure: hasImpure(f),
+      impure: externIsImpure(f.node, qualified, f.parentStmt),
     });
   }
 

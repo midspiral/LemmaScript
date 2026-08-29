@@ -483,8 +483,8 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Array" && fn.field === "isArray") return "pure";
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "String" && fn.field === "fromCharCode") return "pure";
   if (fn.kind === "var" && (ctx.inSpec || ctx.inLambda) && ctx.pureFns.has(fn.name)) return "spec-pure";
-  // Bare-name externs are pure by default. `//@ impure` externs are method
-  // calls: lift them to statement-level binds so repeated invocations remain
+  // Effectively pure bare-name externs are function calls. Impure externs are
+  // lifted to statement-level method binds so repeated invocations remain
   // independent. A method call cannot occur in a spec or lambda expression.
   if (fn.kind === "var") {
     const ext = ctx.externs.get(fn.name);
@@ -1640,7 +1640,7 @@ function rawCalleeName(e: RawExpr): string | null {
   return null;
 }
 
-/** Whether a raw function body invokes any extern marked `//@ impure`. */
+/** Whether a raw function body invokes any extern resolved as impure. */
 function containsImpureExternCall(v: unknown, names: Set<string>): boolean {
   if (Array.isArray(v)) return v.some(x => containsImpureExternCall(x, names));
   if (v === null || typeof v !== "object") return false;

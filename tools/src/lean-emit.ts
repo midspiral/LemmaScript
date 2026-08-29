@@ -819,7 +819,9 @@ function emitDecl(d: Decl): string {
 
     case "extern": {
       if (d.impure) {
-        throw new Error("//@ impure extern is not supported in the Lean backend");
+        throw new Error(
+          "impure extern is not supported in the Lean backend; add //@ pure to this extern or use extern-default: pure",
+        );
       }
       // Mirror Dafny's `function {:axiom}`: an uninterpreted total function.
       // In Lean that is an `opaque` declaration (sound — it commits to no body,

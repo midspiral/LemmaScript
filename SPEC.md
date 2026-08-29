@@ -28,7 +28,8 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | Keyword | Placement | Meaning |
 |---------|-----------|---------|
 | `backend` | Top of file | Restrict file to a specific backend (see §2.6) |
-| `safe-slice` | Top of file | Opt into JS-clamping semantics for two-arg `arr.slice(lo, hi)` (see §2.7) |
+| `option <key> <value>` | Top of file | Override an eligible `lemmascript.json` option for this file (see §7.6) |
+| `safe-slice` | Top of file | Legacy alias for `option safe-slice true` (see §2.7) |
 | `verify` | Before first statement of function/method body | Mark function for verification (see §2.5) |
 | `requires` | Before first statement of function body | Precondition |
 | `ensures` | Before first statement of function body | Postcondition (`\result` refers to return value) |
@@ -212,7 +213,7 @@ A file-level directive that restricts the file to a specific backend:
 
 When `lsc` runs with a different backend (e.g., `--backend=lean`), the file is silently skipped. This is used for features only supported in one backend, such as class methods (Dafny only).
 
-A second file-level directive, `//@ safe-slice`, opts the file into JS-clamping semantics for two-arg `arr.slice(lo, hi)`: the emitted Dafny goes through a `SafeSlice` helper that clamps both bounds to `[0, |s|]` rather than producing a direct `s[lo..hi]` (which Dafny requires `0 <= lo <= hi <= |s|`). Off by default — files that wrote `.slice` calls with provable bounds get direct emission. Files verifying production code that relies on JS's permissive slicing opt in with the directive at the top.
+The `safe-slice` option selects JS-clamping semantics for two-arg `arr.slice(lo, hi)`: the emitted Dafny goes through a `SafeSlice` helper that clamps both bounds to `[0, |s|]` rather than producing a direct `s[lo..hi]` (which Dafny requires `0 <= lo <= hi <= |s|`). It is off by default and can be enabled project-wide in `lemmascript.json` or per file with `//@ option safe-slice true`. The older top-of-file `//@ safe-slice` spelling remains an alias. A file can override a project default with `//@ option safe-slice false` when its bounds are proved.
 
 ### 2.8 Classes
 
@@ -262,7 +263,7 @@ class Counter {
 
 ### 2.9 Cross-File Calls
 
-A call to a symbol declared in another `.ts` file (resolved via ts-morph) is emitted by default as `function {:axiom} <flat>(...): T` — opaque, uninterpreted, deterministic, and extensional. Any `//@ requires` / `//@ ensures` on the source declaration are lifted onto the axiom so callers reason against the same contract the source verified; the lift is transitive through nested cross-file references. Only symbols *actually called* are externed; `.d.ts` declarations are skipped (covered by built-in dispatch, §3.8). No annotation is required.
+A call to a symbol declared in another `.ts` file (resolved via ts-morph) is emitted by default as `function {:axiom} <flat>(...): T` — opaque, uninterpreted, deterministic, and extensional. Any `//@ requires` / `//@ ensures` on the source declaration are lifted onto the axiom so callers reason against the same contract the source verified; the lift is transitive through nested cross-file references. Only symbols *actually called* are externed; `.d.ts` declarations are skipped (covered by built-in dispatch, §3.8). No annotation is required. A project's `extern-default: impure` changes unmarked externs to the method model described next; `//@ pure` on the source declaration restores deterministic behavior for one extern.
 
 Mark an effectful or nondeterministic source declaration `//@ impure` to emit its auto-extern as a body-less Dafny `method {:axiom}` instead. Every invocation then receives an independent arbitrary result satisfying that invocation's lifted contract, so two calls with equal arguments are not assumed equal. An impure call makes its caller a method and cannot appear in a specification or lambda. This models call-varying results, not shared heap effects; it is Dafny-only.
 
@@ -365,7 +366,7 @@ Same machinery as cross-file auto-extern (§2.9): registered in the same externs
 
 **Use case:** the function is outside LS's model (regex, IO, parser) but callers should still verify *parametric over its behavior*. The axiom is deterministic and extensional, so proofs that depend on `f(x) == f(x)` go through. Unlike `//@ havoc`, which is nondeterministic at each call site and defeats determinism-dependent proofs.
 
-For an extern whose result may vary between calls, add a separate `//@ impure` line next to `//@ extern`. Dafny emits `method {:axiom} ... returns (res: T)` and applies any `requires`/`ensures` per invocation. Cross-file auto-externs inherit the same marker from their source declaration (§2.9).
+For an extern whose result may vary between calls, add a separate `//@ impure` line next to `//@ extern`, or set `extern-default: impure` in `lemmascript.json`. Dafny emits `method {:axiom} ... returns (res: T)` and applies any `requires`/`ensures` per invocation. Cross-file auto-externs use the same effective default and inherit `//@ pure` / `//@ impure` overrides from their source declaration (§2.9); writing both markers is an error.
 
 In brownfield `//@ verify` mode (§2.6), `//@ extern` declarations are still extracted as externs; only their bodies are skipped.
 
@@ -1307,6 +1308,7 @@ lsc regen --backend=dafny <file.ts>           — regenerate with three-way merg
 lsc extract <file.ts>                          — print Raw IR JSON (debugging)
 lsc info <file.ts>                             — write a JSON summary of verified functions (backend-neutral)
 lsc info --typed <file.ts>                     — print the machine-readable Typed IR contract (stdout)
+lsc config [<file.ts>]                         — print discovered config and effective options
 lsc claimcheck [<file.ts>]                     — check //@ contract prose vs //@ ensures (forwards to lemmascript-claimcheck)
 lsc version                                    — print the lemmascript package version
 ```
@@ -1315,6 +1317,7 @@ Default backend is Dafny. `extract` and `info` are backend-neutral and always ru
 
 **Flags:**
 - `--backend=lean|dafny` — select the backend (default Dafny).
+- `--config=<path>` — use a specific `lemmascript.json` instead of nearest-ancestor discovery.
 - `--time-limit=<seconds>` — per-VC verification time limit (Dafny: `--verification-time-limit`).
 - `--extra-flags=<string>` — extra flags forwarded verbatim to the backend prover.
 - `--slow` — in batch mode, run full `check` even on entries whose `LemmaScript-files.txt` timeout exceeds 60s (otherwise those degrade to `gen-check`).
@@ -1322,7 +1325,7 @@ Default backend is Dafny. `extract` and `info` are backend-neutral and always ru
 ### 7.1 `gen`
 
 - **Lean:** writes `foo.types.lean` + `foo.def.lean`
-- **Dafny:** writes `foo.dfy.gen`, seeds `foo.dfy` if missing
+- **Dafny:** writes `foo.dfy.gen`, seeds `foo.dfy` if missing; `proof-dir` may relocate both
 
 ### 7.2 `check`
 
@@ -1353,11 +1356,30 @@ and `bodyKinds` — a census of statement/expression kinds appearing in the body
 (with `assume` reported distinctly from `assert`), so consumers can classify
 functions (havoc/assume usage) without receiving bodies.
 
-The `dafny` section carries `emittedNames`, the source-name → emitted-Dafny-name
+The top-level `options` object is the effective config after file overrides. The
+`dafny` section carries `emittedNames`, the source-name → emitted-Dafny-name
 map from an in-memory Dafny emission (so consumers never re-derive mangling
 rules); if that emission fails, it degrades to `{ "error": … }` without failing
 the command. Backend-neutral otherwise; the file's `//@ backend` directive is
 reported as `backendDirective`.
+
+### 7.6 Project configuration: `lemmascript.json`
+
+For each source file, `lsc` discovers the nearest `lemmascript.json` at or above
+it; absent means current behavior. Unknown keys and bad values are errors.
+
+| Key | Values | Default | File override |
+|---|---|---|---|
+| `extern-default` | `pure` \| `impure` | `pure` | yes |
+| `safe-slice` | boolean | `false` | yes |
+| `proof-dir` | relative path | source directory | no (Dafny only) |
+
+Eligible settings use `//@ option <key> <value>` before the first source
+statement. File values override project values; duplicates are errors.
+`proof-dir` mirrors the source's config-relative path under its configured root
+(see SPEC_DAFNY.md §1). `lsc config foo.ts` prints the config path, effective
+options, and resolved Dafny artifact directory; `lsc config` reports defaults
+from the current directory. `backend` is deliberately not a config option.
 
 ---
 
