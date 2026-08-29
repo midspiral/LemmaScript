@@ -7,6 +7,7 @@ import { exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "
 import type { Ty } from "./typedir.js";
 import { freshName, freshNameWhere, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
+import { DEFAULT_OPTIONS, type LscOptions } from "./config.js";
 
 /** Fresh binder for a comprehension wrapping the given subexpressions: `base`
  *  verbatim unless one of them references it, then primed until free. A *local*
@@ -953,10 +954,8 @@ function emitDecl(d: Decl): string {
 const _neededPreambles = new Set<string>();
 function needPreamble(key: string) { _neededPreambles.add(key); }
 
-/** File-level opt-in for JS-clamp semantics on `arr.slice(lo, hi)`. Set by
- *  `emitDafnyFile` from the `//@ safe-slice` directive; consulted by the
- *  array-method emit. Off by default — case studies that wrote their `.slice`
- *  calls with provable bounds get direct `s[lo..hi]` emission. */
+/** Effective JS-clamp semantics for `arr.slice(lo, hi)`, resolved from project
+ *  config plus file directives before emission. */
 let _useSafeSlice = false;
 
 const POW2 = `function Pow2(n: int): int
@@ -1537,8 +1536,8 @@ function translatePattern(p: MatchPattern): string {
 }
 
 
-export function emitDafnyFile(file: Module, tsFileName?: string, opts?: { safeSlice?: boolean }): string {
-  _useSafeSlice = !!opts?.safeSlice;
+export function emitDafnyFile(file: Module, tsFileName?: string, options: LscOptions = DEFAULT_OPTIONS): string {
+  _useSafeSlice = options["safe-slice"];
   resetDafnyNameCache();
   buildRecordCtorMap(file.decls);
   _neededPreambles.clear();

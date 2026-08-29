@@ -16,9 +16,12 @@ Whatever you do, the TS file is the source of truth for *the program*. The hand-
 npx lsc gen   --backend=<dafny|lean> path/to/foo.ts   # generate artifacts
 npx lsc check --backend=<dafny|lean> path/to/foo.ts   # gen + verify
 npx lsc regen --backend=dafny        path/to/foo.ts   # three-way merge after TS changes
+npx lsc config                       path/to/foo.ts   # show effective options and Dafny artifact directory
 ```
 
 Default backend is Dafny. Pass `--backend=...` explicitly anyway — case-study CIs and helper scripts all do, and the default has been flipped before.
+
+If `lemmascript.json` sets `proof-dir`, all Dafny companions (`.dfy.gen`, `.dfy`, `.dfy.base`, `.dfy.merged`) live in the mirrored directory reported by `lsc config`, not beside the TS file. The edit boundaries and regen rules below apply at that mapped location unchanged.
 
 After editing `lsc` itself (anything under `tools/`), run `npm run build` before re-invoking `npx lsc` — the CLI runs the compiled `tools/dist/lsc.js`, not the TS source.
 

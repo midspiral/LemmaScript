@@ -57,6 +57,7 @@ const LINK_NAMES = {
   "/spec-lean/": "Lean backend spec",
   "/tools/": "Toolchain architecture",
   "/design/": "Design",
+  "/design-config/": "Project configuration design",
   "/architecture-narrowing/": "Narrowing architecture",
   "/agents/": "Guidance for agents",
 }
@@ -144,6 +145,7 @@ export default defineConfig({
           label: "Under the hood",
           items: [
             { label: "Design rationale", link: "/design/" },
+            { label: "Project configuration", link: "/design-config/" },
             { label: "Toolchain architecture", link: "/tools/" },
             { label: "Architecture: narrowing", link: "/architecture-narrowing/" },
             { label: "Guidance for agents", link: "/agents/" },

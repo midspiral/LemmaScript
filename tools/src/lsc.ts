@@ -6,7 +6,7 @@
  */
 
 import { Project, ScriptTarget } from "ts-morph";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync } from "fs";
 import { execFileSync } from "child_process";
 import { createRequire } from "module";
 import path from "path";
@@ -21,6 +21,14 @@ import { emitDafnyFile, emittedNameMap } from "./dafny-emit.js";
 import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-commands.js";
 import { leanGen, leanCheck } from "./lean-commands.js";
 import { runInfo, runTypedInfo, type TypedInfoDafny } from "./info-command.js";
+import {
+  findUp,
+  loadConfigOptions,
+  parseFileOptions,
+  resolveDafnyArtifactDir,
+  resolveOptions,
+  type LscOptions,
+} from "./config.js";
 
 /** Version of the lemmascript package — the root package.json sits two levels
  *  above this module from both tools/src/ (tsx) and tools/dist/ (installed). */
@@ -90,6 +98,17 @@ function main() {
     args.splice(backendIdx, 1);
   }
 
+  const configIdx = args.findIndex(a => a.startsWith("--config="));
+  let configPath: string | undefined;
+  if (configIdx >= 0) {
+    configPath = args[configIdx].slice("--config=".length);
+    if (!configPath) {
+      console.error("Invalid --config: expected a path after '='");
+      process.exit(1);
+    }
+    args.splice(configIdx, 1);
+  }
+
   const timeLimitIdx = args.findIndex(a => a.startsWith("--time-limit="));
   let timeLimit: number | undefined;
   if (timeLimitIdx >= 0) {
@@ -149,7 +168,8 @@ function main() {
 
   const [cmd, filePath] = args;
   if (!cmd) {
-    console.error("Usage: lsc <gen|check|regen|extract|info> [--backend=lean|dafny] <file.ts>");
+    console.error("Usage: lsc <gen|check|regen|extract|info> [--backend=lean|dafny] [--config=path] <file.ts>");
+    console.error("       lsc config [--config=path] [<file.ts>]");
     console.error("       lsc info --typed <file.ts>   (machine-readable Typed IR contract to stdout)");
     console.error("       lsc <gen|gen-check|check> [--backend=…] [--slow]   (no file: batch over LemmaScript-files.txt)");
     console.error("       lsc claimcheck [<file.ts>] [flags…]   (forwards to lemmascript-claimcheck)");
@@ -160,11 +180,15 @@ function main() {
     console.error(`--typed is only valid with the info command (got: ${cmd})`);
     process.exit(1);
   }
-  if (!filePath) {
-    runBatch(cmd, backend, slow);
+  if (cmd === "config") {
+    runConfig(filePath, configPath);
     return;
   }
-  runFile(cmd, filePath, backend, timeLimit, extraFlags, noVerify, typedInfo);
+  if (!filePath) {
+    runBatch(cmd, backend, slow, configPath);
+    return;
+  }
+  runFile(cmd, filePath, backend, timeLimit, extraFlags, noVerify, typedInfo, configPath);
 }
 
 // LemmaScript-files.txt, parsed: `filepath [timeout_in_seconds] [extra dafny
@@ -184,11 +208,42 @@ function readEntries(): { file: string; timeout?: number; flags?: string }[] {
     });
 }
 
+function effectiveOptions(
+  sourcePath: string,
+  sourceText: string,
+  configPath?: string,
+): { options: LscOptions; configFile: string | null } {
+  const loaded = loadConfigOptions(sourcePath, configPath);
+  const fileOptions = parseFileOptions(sourceText, sourcePath);
+  const options = resolveOptions({ ...loaded.explicit, ...fileOptions }, sourcePath);
+  return { options, configFile: loaded.configFile };
+}
+
+/** `lsc config [file.ts]` — report discovery, effective values, and routing. */
+function runConfig(filePath: string | undefined, configPath?: string): void {
+  if (!filePath) {
+    // loadConfigOptions starts discovery at a source file's parent, so use a
+    // synthetic path under cwd for the directory-oriented command form.
+    const probe = path.join(process.cwd(), ".lemmascript-config-probe.ts");
+    const loaded = loadConfigOptions(probe, configPath);
+    const options = resolveOptions(loaded.explicit, loaded.configFile ?? process.cwd());
+    console.log(JSON.stringify({ configFile: loaded.configFile, options }, null, 2));
+    return;
+  }
+
+  const sourcePath = path.resolve(filePath);
+  if (!existsSync(sourcePath)) throw new Error(`File not found: ${sourcePath}`);
+  const sourceText = readFileSync(sourcePath, "utf8");
+  const { options, configFile } = effectiveOptions(sourcePath, sourceText, configPath);
+  const artifactDir = resolveDafnyArtifactDir(sourcePath, configFile, options);
+  console.log(JSON.stringify({ configFile, options, artifactDir }, null, 2));
+}
+
 // Batch over LemmaScript-files.txt. `check` entries with a timeout above 60s
 // (the CI limit) are gen-check only, unless --slow. Fail-fast: the first
 // failing entry exits. tools/check.sh drives this from source;
 // installed-package consumers run `lsc check`.
-function runBatch(cmd: string, backend: "lean" | "dafny", slow: boolean) {
+function runBatch(cmd: string, backend: "lean" | "dafny", slow: boolean, configPath?: string) {
   if (cmd !== "gen" && cmd !== "gen-check" && cmd !== "check") {
     console.error(`No file given, and batch mode supports gen|gen-check|check (not ${cmd}).`);
     process.exit(1);
@@ -196,14 +251,44 @@ function runBatch(cmd: string, backend: "lean" | "dafny", slow: boolean) {
   for (const e of readEntries()) {
     if (cmd === "check" && backend === "dafny" && !slow && e.timeout !== undefined && e.timeout > 60) {
       console.log(`=== ${path.basename(e.file)} (timeout ${e.timeout}s > 60s, gen-check only) ===`);
-      runFile("gen-check", e.file, backend, undefined, undefined);
+      runFile("gen-check", e.file, backend, undefined, undefined, false, false, configPath);
     } else {
-      runFile(cmd, e.file, backend, e.timeout, e.flags);
+      runFile(cmd, e.file, backend, e.timeout, e.flags, false, false, configPath);
     }
   }
 }
 
-function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeLimit: number | undefined, extraFlags: string | undefined, noVerify = false, typedInfo = false) {
+function guardRelocatedDafnyProof(
+  sourceDir: string,
+  artifactDir: string,
+  base: string,
+  targetDfyPath: string,
+): void {
+  if (path.resolve(sourceDir) === path.resolve(artifactDir) || existsSync(targetDfyPath)) return;
+  const legacyPaths = [
+    path.join(sourceDir, `${base}.dfy`),
+    path.join(sourceDir, `${base}.dfy.base`),
+    path.join(sourceDir, `${base}.dfy.merged`),
+  ].filter(existsSync);
+  if (legacyPaths.length === 0) return;
+
+  throw new Error(
+    `proof-dir maps '${base}' to ${artifactDir}, but existing proof state would be left behind:\n` +
+    legacyPaths.map(p => `  ${p}`).join("\n") +
+    `\nMove the hand-written .dfy to ${targetDfyPath}, inspect or remove stale .dfy.base/.dfy.merged files, then rerun. The .dfy.gen file is regeneratable.`,
+  );
+}
+
+function runFile(
+  cmd: string,
+  filePath: string,
+  backend: "lean" | "dafny",
+  timeLimit: number | undefined,
+  extraFlags: string | undefined,
+  noVerify = false,
+  typedInfo = false,
+  configPath?: string,
+) {
   const absPath = path.resolve(filePath);
   if (!existsSync(absPath)) {
     console.error(`File not found: ${absPath}`);
@@ -211,17 +296,7 @@ function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeL
   }
 
   // Find nearest tsconfig.json for import resolution; fall back to bare options
-  function findTsConfig(from: string): string | undefined {
-    let dir = path.dirname(from);
-    while (true) {
-      const candidate = path.join(dir, "tsconfig.json");
-      if (existsSync(candidate)) return candidate;
-      const parent = path.dirname(dir);
-      if (parent === dir) return undefined;
-      dir = parent;
-    }
-  }
-  const tsConfigFilePath = findTsConfig(absPath);
+  const tsConfigFilePath = findUp("tsconfig.json", absPath) ?? undefined;
   const project = tsConfigFilePath
     ? new Project({ tsConfigFilePath })
     : new Project({ compilerOptions: { strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"] } });
@@ -229,6 +304,7 @@ function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeL
   project.resolveSourceFileDependencies();
 
   const fullText = sourceFile.getFullText();
+  const { options, configFile } = effectiveOptions(absPath, fullText, configPath);
 
   // Check //@ backend directive — skip if backend doesn't match.
   // `extract` and `info` are backend-neutral and always run.
@@ -237,9 +313,6 @@ function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeL
     console.log(`Skipped: ${path.basename(filePath)} (//@ backend ${backendDirective[1]}, current: ${backend})`);
     return;
   }
-
-  // File-level directives consumed by the Dafny emitter.
-  const safeSlice = /\/\/@ safe-slice\b/.test(fullText);
 
   // `//@ lean-module <name>` overrides the Lean module base (default: file
   // basename). Lean module names are flat/global, so two identically-named
@@ -250,7 +323,7 @@ function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeL
   const leanModuleOverride = leanModuleDirective ? leanModuleDirective[1] : undefined;
 
   // Extract: ts-morph → Raw IR
-  const raw = extractModule(sourceFile);
+  const raw = extractModule(sourceFile, options);
 
   if (cmd === "extract") {
     console.log(JSON.stringify(raw, null, 2));
@@ -282,12 +355,12 @@ function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeL
       if (typesFile) typesFile = peepholeModule(typesFile, "dafny");
       defFile = peepholeModule(defFile, "dafny");
       const merged = { ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] };
-      emitDafnyFile(merged, path.basename(filePath), { safeSlice });
+      emitDafnyFile(merged, path.basename(filePath), options);
       dafnyInfo = { emittedNames: Object.fromEntries(emittedNameMap()) };
     } catch (err) {
       dafnyInfo = { error: err instanceof Error ? err.message : String(err) };
     }
-    runTypedInfo(raw, typed, lscVersion(), backendDirective ? backendDirective[1] : null, dafnyInfo);
+    runTypedInfo(raw, typed, lscVersion(), backendDirective ? backendDirective[1] : null, options, dafnyInfo);
     return;
   }
 
@@ -301,10 +374,14 @@ function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeL
     defFile = peepholeModule(defFile, "dafny");
     const allDecls = [...(typesFile?.decls ?? []), ...defFile.decls];
     const merged = { ...defFile, decls: allDecls };
-    const text = emitDafnyFile(merged, path.basename(filePath), { safeSlice });
-    const genPath = path.join(dir, `${base}.dfy.gen`);
-    const dfyPath = path.join(dir, `${base}.dfy`);
-    const basePath = path.join(dir, `${base}.dfy.base`);
+    const text = emitDafnyFile(merged, path.basename(filePath), options);
+    const artifactDir = resolveDafnyArtifactDir(absPath, configFile, options);
+    const genPath = path.join(artifactDir, `${base}.dfy.gen`);
+    const dfyPath = path.join(artifactDir, `${base}.dfy`);
+    const basePath = path.join(artifactDir, `${base}.dfy.base`);
+
+    guardRelocatedDafnyProof(dir, artifactDir, base, dfyPath);
+    mkdirSync(artifactDir, { recursive: true });
 
     if (cmd === "gen") { dafnyGen(genPath, dfyPath, text); return; }
     if (cmd === "gen-check") {
@@ -315,10 +392,10 @@ function runFile(cmd: string, filePath: string, backend: "lean" | "dafny", timeL
     if (cmd === "check") {
       dafnyGen(genPath, dfyPath, text);
       if (!dafnyCheckDiff(genPath, dfyPath)) process.exit(1);
-      if (!dafnyVerify(dfyPath, dir, timeLimit, extraFlags)) process.exit(1);
+      if (!dafnyVerify(dfyPath, artifactDir, timeLimit, extraFlags)) process.exit(1);
       return;
     }
-    if (cmd === "regen") { dafnyRegen(genPath, dfyPath, basePath, text, dir, timeLimit, extraFlags, noVerify); return; }
+    if (cmd === "regen") { dafnyRegen(genPath, dfyPath, basePath, text, artifactDir, timeLimit, extraFlags, noVerify); return; }
     console.error(`Unknown command: ${cmd}`);
     process.exit(1);
   }

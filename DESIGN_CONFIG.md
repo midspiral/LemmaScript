@@ -1,6 +1,6 @@
 # DESIGN_CONFIG — Project options via `lemmascript.json`
 
-**Status:** proposal, not implemented. Immediately motivated by projects that want to opt into impure externs or place Dafny artifacts outside the TS source tree, with #211 (Dafny strings as JavaScript UTF-16 code units) and #205 (JavaScript number semantics) as future users of the same mechanism. The initial implementation covers the config machinery, `extern-default`, the existing `safe-slice` choice, and `proof-dir`; it does not implement either JavaScript model option. Today `lsc` has no place to put such settings: behavior and artifact layout are fixed by the CLI, tweaked only by per-file `//@` directives and ad-hoc flags.
+**Status:** initial implementation complete. The registry, `extern-default`, `safe-slice`, `proof-dir`, file overrides, and `lsc config` are implemented. #211 (Dafny strings as JavaScript UTF-16 code units) and #205 (JavaScript number semantics) remain future users of the mechanism and are not implemented here.
 **Date:** August 2026
 
 ## Requirements

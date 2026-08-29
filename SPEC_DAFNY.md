@@ -17,6 +17,16 @@ The `.dfy.gen` extension prevents Dafny tooling from auto-verifying it.
 
 The diff between gen and dfy must be **additions only** — the LLM may insert helper lemmas, ghost predicates, assert statements, and loop invariants, but may not modify generated lines.
 
+`"proof-dir": "proofs"` in `lemmascript.json` relocates the complete Dafny
+artifact set while preserving the pair: a source `src/search/foo.ts` under that
+config uses `proofs/src/search/foo.dfy.gen` and `proofs/src/search/foo.dfy`.
+Regen state (`.dfy.base` and `.dfy.merged`) lives there too. The path is relative
+to the config file, and source subdirectories are mirrored to prevent basename
+collisions. The source must be below the config directory. When enabling the
+option, move the hand-written `.dfy`; `.dfy.gen` can be regenerated. If `lsc`
+finds an existing beside-source proof but no mapped proof, it fails instead of
+silently seeding a new `.dfy`. Lean artifacts are not affected by this option.
+
 ---
 
 ## 2. Pure Functions
@@ -94,7 +104,7 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | `SeqFilterSome` | filterMap pattern (§3.7) | Drop `None`s and unwrap to `seq<T>` |
 | `SeqFlatten` | `arr.flat()` | Flatten one level |
 | `SeqJoin` | `arr.join(sep)` | Join into a string |
-| `SafeSlice` | `arr.slice(lo, hi)` under `//@ safe-slice` | Bounds-clamping slice |
+| `SafeSlice` | `arr.slice(lo, hi)` with effective `safe-slice: true` | Bounds-clamping slice |
 | `Perm` | `perm(a, b)` (spec-only) | `predicate Perm<T(==)>(a, b) { multiset(a) == multiset(b) }` |
 
 **String:**
@@ -119,5 +129,4 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 Standard libraries are auto-detected: if `foo.dfy` contains `import Std.`, the `--standard-libraries` flag is added.
 
 The shared `--time-limit=<seconds>` flag (SPEC.md §7) maps to Dafny's `--verification-time-limit`; `--extra-flags=<string>` is forwarded verbatim to `dafny verify`.
-
 

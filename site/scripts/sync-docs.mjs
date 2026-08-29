@@ -27,6 +27,7 @@ const DOCS = [
   { src: "SPEC_LEAN.md", out: "spec-lean.md" },
   { src: "TOOLS.md", out: "tools.md", title: "Toolchain architecture" },
   { src: "DESIGN.md", out: "design.md" },
+  { src: "DESIGN_CONFIG.md", out: "design-config.md", title: "Project configuration design" },
   { src: "ARCHITECTURE_NARROWING.md", out: "architecture-narrowing.md" },
   { src: "AGENTS.md", out: "agents.md", title: "Guidance for agents" },
 ]
@@ -42,6 +43,7 @@ const ROUTES = {
   "SPEC_LEAN.md": "/spec-lean/",
   "TOOLS.md": "/tools/",
   "DESIGN.md": "/design/",
+  "DESIGN_CONFIG.md": "/design-config/",
   "ARCHITECTURE_NARROWING.md": "/architecture-narrowing/",
   "AGENTS.md": "/agents/",
 }

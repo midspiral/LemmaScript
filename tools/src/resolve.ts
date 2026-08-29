@@ -1640,7 +1640,7 @@ function rawCalleeName(e: RawExpr): string | null {
   return null;
 }
 
-/** Whether a raw function body invokes any extern marked `//@ impure`. */
+/** Whether a raw function body invokes any extern resolved as impure. */
 function containsImpureExternCall(v: unknown, names: Set<string>): boolean {
   if (Array.isArray(v)) return v.some(x => containsImpureExternCall(x, names));
   if (v === null || typeof v !== "object") return false;
