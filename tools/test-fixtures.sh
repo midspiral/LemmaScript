@@ -38,6 +38,7 @@ fixture_dir=$(mktemp -d)
 trap 'rm -rf "$fixture_dir"' EXIT
 cp tools/fixtures/deterministic-extern-equality.ts "$fixture_dir/deterministic.ts"
 cp tools/fixtures/impure-extern-equality.ts "$fixture_dir/impure.ts"
+cp examples/safeSlice.ts "$fixture_dir/legacy-safe-slice.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/impure.ts"
 if ! grep -Fq 'method {:axiom} rollDie' "$fixture_dir/impure.dfy.gen"; then
@@ -49,6 +50,12 @@ npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/det
 expect_failure \
   "Dafny equated two calls to an impure extern" \
   npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/impure.ts"
+
+npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/legacy-safe-slice.ts"
+if ! grep -Fq 'function SafeSlice' "$fixture_dir/legacy-safe-slice.dfy.gen"; then
+  echo "ERROR: legacy //@ safe-slice no longer enables safe slice emission"
+  exit 1
+fi
 
 # Project configuration: nearest-ancestor discovery, generic file overrides,
 # extern defaults, safe-slice, and mirrored Dafny artifact routing. Work from a
@@ -131,6 +138,9 @@ fi
 expect_failure \
   "Lean accepted an extern made impure by project config" \
   npx tsx tools/src/lsc.ts gen --backend=lean "$configured"
+expect_failure \
+  "an extern was accepted with both //@ pure and //@ impure" \
+  npx tsx tools/src/lsc.ts gen --backend=dafny "$config_fixture/src/conflicting-extern.ts"
 
 expect_failure \
   "unknown file option was accepted" \
@@ -151,6 +161,9 @@ expect_failure \
 expect_failure \
   "bad lemmascript.json value was accepted" \
   npx tsx tools/src/lsc.ts config tools/fixtures/config-invalid-value/source.ts
+expect_failure \
+  "proof-dir accepted a source outside the pinned config directory" \
+  npx tsx tools/src/lsc.ts config --config="$config_fixture/lemmascript.json" "$fixture_dir/deterministic.ts"
 
 expect_failure \
   "proof-dir silently bypassed a sibling hand-written proof" \
