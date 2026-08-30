@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for AI coding agents working on LemmaScript itself or on projects that use it. Human-oriented docs live in [README.md](README.md), [SPEC.md](SPEC.md), [SPEC_DAFNY.md](SPEC_DAFNY.md), [SPEC_LEAN.md](SPEC_LEAN.md), [DESIGN.md](DESIGN.md), [TOOLS.md](TOOLS.md). This file collects the things that are easy to get wrong if you only read those.
+Guidance for AI coding agents working on LemmaScript itself or on projects that use it. Human-oriented docs live in [README.md](README.md), [SPEC.md](SPEC.md), [SPEC_DAFNY.md](SPEC_DAFNY.md), [SPEC_LEAN.md](SPEC_LEAN.md), [DESIGN.md](DESIGN.md), [DESIGN_NUMBERS.md](DESIGN_NUMBERS.md), [TOOLS.md](TOOLS.md). This file collects the things that are easy to get wrong if you only read those.
 
 ## What LemmaScript is
 

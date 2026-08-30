@@ -58,6 +58,7 @@ const LINK_NAMES = {
   "/tools/": "Toolchain architecture",
   "/design/": "Design",
   "/design-config/": "Project configuration design",
+  "/design-numbers/": "JavaScript number semantics design",
   "/architecture-narrowing/": "Narrowing architecture",
   "/agents/": "Guidance for agents",
 }
@@ -146,6 +147,7 @@ export default defineConfig({
           items: [
             { label: "Design rationale", link: "/design/" },
             { label: "Project configuration", link: "/design-config/" },
+            { label: "JavaScript number semantics", link: "/design-numbers/" },
             { label: "Toolchain architecture", link: "/tools/" },
             { label: "Architecture: narrowing", link: "/architecture-narrowing/" },
             { label: "Guidance for agents", link: "/agents/" },
