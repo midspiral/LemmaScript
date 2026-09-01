@@ -28,7 +28,6 @@ const DOCS = [
   { src: "TOOLS.md", out: "tools.md", title: "Toolchain architecture" },
   { src: "DESIGN.md", out: "design.md" },
   { src: "DESIGN_CONFIG.md", out: "design-config.md", title: "Project configuration design" },
-  { src: "DESIGN_NUMBERS.md", out: "design-numbers.md", title: "JavaScript number semantics design" },
   { src: "ARCHITECTURE_NARROWING.md", out: "architecture-narrowing.md" },
   { src: "AGENTS.md", out: "agents.md", title: "Guidance for agents" },
 ]
@@ -45,7 +44,6 @@ const ROUTES = {
   "TOOLS.md": "/tools/",
   "DESIGN.md": "/design/",
   "DESIGN_CONFIG.md": "/design-config/",
-  "DESIGN_NUMBERS.md": "/design-numbers/",
   "ARCHITECTURE_NARROWING.md": "/architecture-narrowing/",
   "AGENTS.md": "/agents/",
 }
