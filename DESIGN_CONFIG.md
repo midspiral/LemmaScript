@@ -118,9 +118,9 @@ A future `dafny-lib` option would select where `filter`/`every`/`reduce` come fr
 
 The two would interact: Dafny's precompiled standard library is built for Unicode-scalar chars and cannot load under `--unicode-char:false`. After config and file layers are merged, `resolveOptions` must implement exactly this rule: if `javascript-utf16` is true and `dafny-lib` is absent, supply the dependent default `local-lib`; if `dafny-lib` is explicitly `std-lib`, reject the combination and name both keys. An explicit incompatible choice is never silently replaced. PR #211's per-file fail-closed check would stay as the last line of defense (a UTF-16 file whose *proof additions* import `Std.*`), because the config can't see hand-written proof text; its message should name the config key. A string-free file could keep importing `Std.*` in its proofs: the header marker would only be emitted when strings actually appear.
 
-### `javascript-numbers` (issue #205)
+### `number-semantics` (issue #205)
 
-A later implementation of #205 would need (a) a type-mapping change in resolve/emit (`number` → a wrapping newtype rather than `int`/`nat`), and (b) verifier flags (`--type-system-refresh --general-traits=datatype --general-newtypes`). Both slot into the design as a `"javascript-numbers": boolean` registry entry, a preamble variant, a header marker, and a flag mapping in `dafnyVerify`. The future header/flag pattern in §5 lets it add a token rather than a second bespoke comment.
+JavaScript numbers need an enum-shaped semantic choice, not a `javascript-numbers` boolean. [DESIGN_NUMBERS.md](DESIGN_NUMBERS.md) proposes `number-semantics: "idealized" | "safe-integer" | "javascript"`, with today's model as the default and the middle value still subject to research. A wrapping `bv64` newtype is not a JavaScript Number model: bitvector operators implement modulo-2^64 integer arithmetic, not rounded binary64 arithmetic. This future option needs a backend-neutral number kind, operation-specific lowering, capability/version gates, an artifact marker, and explicit rejection wherever the selected backend has not implemented the faithful semantics.
 
 ## 4. Threading through the pipeline
 
@@ -146,7 +146,7 @@ The initial options do not require non-default verifier flags, so this proposal 
 // lsc options: javascript-utf16
 ```
 
-The future line is space-separated `key` (boolean) or `key=value` tokens, listing only non-default options that *materially affected this file* (UTF-16 would appear only when the file has strings; `dafny-lib` would never appear because it changes emitted helpers, not verifier flags). `dafnyVerify` would parse the line and map tokens to flags: `javascript-utf16` → `--unicode-char:false --allow-warnings`; `javascript-numbers` → the #205 flags. The additions-only check already guarantees `.dfy` and `.dfy.gen` share the header, so flipping an option in `lemmascript.json` would surface as an ordinary generator change: `regen` three-way-merges the new header line in, then verifies under the new flags.
+The future line is space-separated `key` (boolean) or `key=value` tokens, listing only non-default options that *materially affected this file* (UTF-16 would appear only when the file has strings; `dafny-lib` would never appear because it changes emitted helpers, not verifier flags). `dafnyVerify` would parse the line and map tokens to flags: `javascript-utf16` → `--unicode-char:false --allow-warnings`; a future `number-semantics=javascript` marker would select the version/capability checks and any flags established by the number-backend spike. The additions-only check already guarantees `.dfy` and `.dfy.gen` share the header, so flipping an option in `lemmascript.json` would surface as an ordinary generator change: `regen` three-way-merges the new header line in, then verifies under the new flags.
 
 Reading future flags from the artifact rather than from the config is deliberate: the two could not drift within one `lsc check`, while a standalone `.dfy` (a fixture, a file someone pulled out of a repo) would still verify correctly and a reader would see the model on line 2.
 
@@ -175,7 +175,7 @@ Reading future flags from the artifact rather than from the config is deliberate
 - Per-function option overrides. `//@ option` is file-level; function facts keep their specific annotations.
 - A `backend` config option. `--backend=` selects the command target and `//@ backend` declares file membership; neither is a semantic model option.
 - Relocating Lean artifacts with `proof-dir`. Lean paths participate in module names and Lake roots, unlike standalone Dafny files, so that needs its own design.
-- Implementing `javascript-utf16`, `dafny-lib`, or `javascript-numbers`; they are future applications documented above, not initial registry entries.
+- Implementing `javascript-utf16`, `dafny-lib`, or `number-semantics`; they are future applications documented above, not initial registry entries.
 - Nested/namespaced config (`{"dafny": {…}}`). Flat kebab-case keys with a backend column in the docs are enough for the initial options; revisit past ~15.
 - `time-limit` / `extra-flags` as project defaults. `LemmaScript-files.txt` already carries them per file; adding a project-wide default is a registry entry away if a case study asks.
 - JSON Schema generation (`lsc config --schema`). Cheap follow-up from the registry; not needed to land.
