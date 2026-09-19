@@ -1320,7 +1320,12 @@ Default backend is Dafny. `extract` and `info` are backend-neutral and always ru
 - `--config=<path>` — use a specific `lemmascript.json` instead of nearest-ancestor discovery.
 - `--time-limit=<seconds>` — per-VC verification time limit (Dafny: `--verification-time-limit`).
 - `--extra-flags=<string>` — extra flags forwarded verbatim to the backend prover.
-- `--slow` — in batch mode, run full `check` even on entries whose `LemmaScript-files.txt` timeout exceeds 60s (otherwise those degrade to `gen-check`).
+- `--slow` — in batch mode, verify entries whose manifest timeout exceeds 60s (otherwise those get `gen-check`, unless `--time-limit` is supplied).
+
+In batch mode, `--time-limit` and `--extra-flags` independently override the
+corresponding manifest values; omitted options retain the per-entry settings.
+For Dafny `check`, an explicit timeout enables verification even above 60s without `--slow`.
+`--extra-flags=` clears the manifest flags. Repeating either flag is an error.
 
 ### 7.1 `gen`
 

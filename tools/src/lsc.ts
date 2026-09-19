@@ -128,8 +128,8 @@ function main() {
     args.splice(extraFlagsIdx, 1);
   }
 
-  // --slow (batch mode only): verify every entry with its own timeout instead
-  // of degrading slow ones to gen-check.
+  // --slow (batch mode only): verify entries with long manifest timeouts
+  // instead of degrading them to gen-check.
   let slow = false;
   const slowIdx = args.indexOf("--slow");
   if (slowIdx >= 0) {
@@ -185,7 +185,7 @@ function main() {
     return;
   }
   if (!filePath) {
-    runBatch(cmd, backend, slow, configPath);
+    runBatch(cmd, backend, slow, timeLimit, extraFlags, configPath);
     return;
   }
   runFile(cmd, filePath, backend, timeLimit, extraFlags, noVerify, typedInfo, configPath);
@@ -239,21 +239,30 @@ function runConfig(filePath: string | undefined, configPath?: string): void {
   console.log(JSON.stringify({ configFile, options, artifactDir }, null, 2));
 }
 
-// Batch over LemmaScript-files.txt. `check` entries with a timeout above 60s
-// (the CI limit) are gen-check only, unless --slow. Fail-fast: the first
-// failing entry exits. tools/check.sh drives this from source;
-// installed-package consumers run `lsc check`.
-function runBatch(cmd: string, backend: "lean" | "dafny", slow: boolean, configPath?: string) {
+// Batch over LemmaScript-files.txt. Without --slow or an explicit --time-limit,
+// Dafny check entries with manifest timeouts above 60s run gen-check only.
+// Fail-fast: the first failing entry exits.
+function runBatch(
+  cmd: string,
+  backend: "lean" | "dafny",
+  slow: boolean,
+  timeLimit?: number,
+  extraFlags?: string,
+  configPath?: string,
+) {
   if (cmd !== "gen" && cmd !== "gen-check" && cmd !== "check") {
     console.error(`No file given, and batch mode supports gen|gen-check|check (not ${cmd}).`);
     process.exit(1);
   }
+  const verifySlow = slow || timeLimit !== undefined;
   for (const e of readEntries()) {
-    if (cmd === "check" && backend === "dafny" && !slow && e.timeout !== undefined && e.timeout > 60) {
-      console.log(`=== ${path.basename(e.file)} (timeout ${e.timeout}s > 60s, gen-check only) ===`);
+    const timeout = timeLimit ?? e.timeout;
+    const flags = extraFlags ?? e.flags;
+    if (cmd === "check" && backend === "dafny" && !verifySlow && timeout !== undefined && timeout > 60) {
+      console.log(`=== ${path.basename(e.file)} (timeout ${timeout}s > 60s, gen-check only) ===`);
       runFile("gen-check", e.file, backend, undefined, undefined, false, false, configPath);
     } else {
-      runFile(cmd, e.file, backend, e.timeout, e.flags, false, false, configPath);
+      runFile(cmd, e.file, backend, timeout, flags, false, false, configPath);
     }
   }
 }
