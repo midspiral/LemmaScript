@@ -8,6 +8,7 @@
 
 import { existsSync, readFileSync } from "fs";
 import path from "path";
+import { ts } from "ts-morph";
 
 export const OPTION_SPECS = {
   "extern-default": {
@@ -95,35 +96,6 @@ export function validateOptions(raw: unknown, source: string): ExplicitOptions {
   return out as ExplicitOptions;
 }
 
-/** Last line in the leading-comment region. Directives after code are errors. */
-function leadingCommentLineCount(lines: string[]): number {
-  let inBlock = false;
-  for (let i = 0; i < lines.length; i++) {
-    let rest = lines[i];
-    if (i === 0) rest = rest.replace(/^\uFEFF/, "");
-    if (i === 0 && rest.startsWith("#!")) continue;
-    while (true) {
-      rest = rest.trimStart();
-      if (inBlock) {
-        const end = rest.indexOf("*/");
-        if (end < 0) break;
-        inBlock = false;
-        rest = rest.slice(end + 2);
-        continue;
-      }
-      if (rest.length === 0 || rest.startsWith("//")) break;
-      if (rest.startsWith("/*")) {
-        const end = rest.indexOf("*/", 2);
-        if (end < 0) { inBlock = true; break; }
-        rest = rest.slice(end + 2);
-        continue;
-      }
-      return i;
-    }
-  }
-  return lines.length;
-}
-
 function parseDirectiveValue(key: keyof OptionSpecs, text: string, source: string): LscOptions[typeof key] {
   const spec = OPTION_SPECS[key] as AnyOptionSpec;
   if (spec.type === "boolean") {
@@ -136,10 +108,54 @@ function parseDirectiveValue(key: keyof OptionSpecs, text: string, source: strin
   return parseValue(key, text, source);
 }
 
+/**
+ * Find comment lines, marking those that occur before any code.
+ *
+ * Use the parsed syntax tree to skip strings, regexes, and template text.
+ * Without those boundaries, the scanner can read /[/*]/ as a block comment
+ * or treat a template's closing backtick as the start of another template.
+ */
+function* fileCommentLines(sourceText: string): Generator<{ text: string; index: number; inLeadingRegion: boolean }> {
+  // Normalize once so a leading BOM also works before a shebang.
+  sourceText = sourceText.replace(/^\uFEFF/, "");
+  const lines = sourceText.split(/\r\n|[\n\r\u2028\u2029]/);
+  const sourceFile = ts.createSourceFile(
+    "lemmascript-options.ts", sourceText, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS,
+  );
+  const literalEnds = new Map<number, number>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteral(node) || ts.isRegularExpressionLiteral(node) || ts.isTemplateLiteralToken(node)) {
+      // Skip template text, keeping real comments inside ${...} visible.
+      // Missing recovery tokens must not send the scanner back to its start.
+      const start = node.getStart(sourceFile);
+      if (node.end > start) literalEnds.set(start, node.end);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, sourceText,
+  );
+  let inLeadingRegion = true;
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    if (token === ts.SyntaxKind.SingleLineCommentTrivia || token === ts.SyntaxKind.MultiLineCommentTrivia) {
+      const firstLine = sourceFile.getLineAndCharacterOfPosition(scanner.getTokenStart()).line;
+      const lastLine = sourceFile.getLineAndCharacterOfPosition(scanner.getTokenEnd() - 1).line;
+      for (let index = firstLine; index <= lastLine; index++) {
+        yield { text: lines[index], index, inLeadingRegion };
+      }
+    } else if (token !== ts.SyntaxKind.WhitespaceTrivia && token !== ts.SyntaxKind.NewLineTrivia &&
+               token !== ts.SyntaxKind.ShebangTrivia) {
+      inLeadingRegion = false;
+      const end = literalEnds.get(scanner.getTokenStart());
+      if (end !== undefined) scanner.resetTokenState(end);
+    }
+  }
+}
+
 /** Parse top-of-file `//@ option key value` directives and legacy aliases. */
 export function parseFileOptions(sourceText: string, source: string): ExplicitOptions {
-  const lines = sourceText.split(/\r?\n/);
-  const leadingLines = leadingCommentLineCount(lines);
   const seen = new Map<keyof OptionSpecs, number>();
   const out: Record<string, unknown> = {};
 
@@ -184,7 +200,9 @@ export function parseFileOptions(sourceText: string, source: string): ExplicitOp
     }
   };
 
-  for (let i = 0; i < lines.length; i++) parseLine(lines[i], i, i < leadingLines);
+  for (const { text, index, inLeadingRegion } of fileCommentLines(sourceText)) {
+    parseLine(text, index, inLeadingRegion);
+  }
   return out as ExplicitOptions;
 }
 
