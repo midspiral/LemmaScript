@@ -1,10 +1,9 @@
 import «clampAll.def»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
 prove_correct clampElement by
-  loom_solve
+  velvet_vcgen [clampElement] with finish
 
 prove_correct clampAll by
-  loom_solve
+  velvet_vcgen [clampAll] with finish

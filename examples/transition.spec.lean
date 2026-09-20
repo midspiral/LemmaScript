@@ -1,5 +1,5 @@
 import «transition.types»
 
-@[grind, loomAbstractionSimp]
+@[grind, simp]
 def lastEvent (events : Array Event) : Event :=
   events[events.size - 1]!

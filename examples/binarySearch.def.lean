@@ -4,37 +4,36 @@
 -/
 import «binarySearch.spec»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method sortedFrom (arr : Array Int) (i : Nat) return (res : Bool)
+method sortedFrom (arr : Array Int) (i : Nat) returns (res : Bool)
   do
     return Pure.sortedFrom arr i
 
-method sorted (arr : Array Int) return (res : Bool)
+method sorted (arr : Array Int) returns (res : Bool)
   do
     return Pure.sorted arr
 
-method binarySearch (arr : Array Int) (target : Int) return (res : Int)
-  require Pure.sorted arr
-  ensures res ≥ -1
-  ensures res < arr.size
-  ensures res ≥ 0 → arr[res.toNat]! = target
-  ensures res = -1 → ∀ k : Int, 0 ≤ k → k < arr.size → arr[k.toNat]! ≠ target
+method binarySearch (arr : Array Int) (target : Int) returns (res : Int)
+  requires require_1: (Pure.sorted arr : Prop)
+  ensures ensures_1: (res ≥ -1 : Prop)
+  ensures ensures_2: (res < arr.size : Prop)
+  ensures ensures_3: (res ≥ 0 → arr[res.toNat]! = target : Prop)
+  ensures ensures_4: (res = -1 → ∀ k : Int, 0 ≤ k → k < arr.size → arr[k.toNat]! ≠ target : Prop)
   do
     let mut lo : Int := 0
     let mut hi : Int := arr.size - 1
     let mut result : Int := -1
     while lo ≤ hi
-      invariant 0 ≤ lo
-      invariant lo ≤ arr.size
-      invariant -1 ≤ hi
-      invariant hi < arr.size
-      invariant ∀ k : Int, 0 ≤ k → k < lo → arr[k.toNat]! ≠ target
-      invariant ∀ k : Int, hi < k → k < arr.size → arr[k.toNat]! ≠ target
-      invariant result = -1 ∨ result ≥ 0 ∧ result < arr.size ∧ arr[result.toNat]! = target
-      done_with result ≠ -1 ∨ ¬(lo ≤ hi)
+      invariant invariant_1: (0 ≤ lo : Prop)
+      invariant invariant_2: (lo ≤ arr.size : Prop)
+      invariant invariant_3: (-1 ≤ hi : Prop)
+      invariant invariant_4: (hi < arr.size : Prop)
+      invariant invariant_5: (∀ k : Int, 0 ≤ k → k < lo → arr[k.toNat]! ≠ target : Prop)
+      invariant invariant_6: (∀ k : Int, hi < k → k < arr.size → arr[k.toNat]! ≠ target : Prop)
+      invariant invariant_7: (result = -1 ∨ result ≥ 0 ∧ result < arr.size ∧ arr[result.toNat]! = target : Prop)
       decreasing (hi - lo + 1).toNat
+      done_with (result ≠ -1 ∨ ¬(lo ≤ hi) : Prop)
     do
       let mid := (lo + hi) / 2
       if arr[mid.toNat]! = target then

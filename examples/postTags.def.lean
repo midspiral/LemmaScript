@@ -4,22 +4,21 @@
 -/
 import «postTags.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method hasTagFrom (tags : Array String) (tag : String) («from» : Int) return (res : Bool)
-  require 0 ≤ «from»
-  require «from» ≤ tags.size
-  ensures res = true → ∃ k : Nat, k < tags.size ∧ tags[k]! = tag
+method hasTagFrom (tags : Array String) (tag : String) («from» : Int) returns (res : Bool)
+  requires require_1: (0 ≤ «from» : Prop)
+  requires require_2: («from» ≤ tags.size : Prop)
+  ensures ensures_1: (res = true → ∃ k : Nat, k < tags.size ∧ tags[k]! = tag : Prop)
   do
     return Pure.hasTagFrom tags tag «from»
 
-method visibility (post : Post) return (res : String)
-  ensures res = "draft" ∨ res = "live"
+method visibility (post : Post) returns (res : String)
+  ensures ensures_1: (res = "draft" ∨ res = "live" : Prop)
   do
     return Pure.visibility post
 
-method hasTag (post : Post) (tag : String) return (res : Bool)
-  ensures (match post.tags with | .some _ => false | .none => true) → res = false
+method hasTag (post : Post) (tag : String) returns (res : Bool)
+  ensures ensures_1: ((match post.tags with | .some _ => false | .none => true) → res = false : Prop)
   do
     return Pure.hasTag post tag

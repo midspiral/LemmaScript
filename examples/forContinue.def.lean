@@ -4,17 +4,16 @@
 -/
 import «forContinue.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method countOdds (xs : Array Int) return (res : Int)
-  ensures res ≤ xs.size
+method countOdds (xs : Array Int) returns (res : Int)
+  ensures ensures_1: (res ≤ xs.size : Prop)
   do
     let mut n : Int := 0
     let mut i : Nat := 0
     while i < xs.size
-      invariant i ≤ xs.size
-      invariant n ≤ i
+      invariant invariant_1: (i ≤ xs.size : Prop)
+      invariant invariant_2: (n ≤ i : Prop)
       decreasing xs.size - i
     do
       if Int.tmod xs[i]! 2 = 0 then
@@ -24,14 +23,14 @@ method countOdds (xs : Array Int) return (res : Int)
         i := i + 1
     return n
 
-method copyNonzero (xs : Array Int) return (res : Array Int)
-  ensures res.size ≤ xs.size
+method copyNonzero (xs : Array Int) returns (res : Array Int)
+  ensures ensures_1: (res.size ≤ xs.size : Prop)
   do
     let mut out : Array Int := #[]
     let mut i : Nat := 0
     while i < xs.size
-      invariant i ≤ xs.size
-      invariant out.size ≤ i
+      invariant invariant_1: (i ≤ xs.size : Prop)
+      invariant invariant_2: (out.size ≤ i : Prop)
       decreasing xs.size - i
     do
       let v := xs[i]!
@@ -44,33 +43,39 @@ method copyNonzero (xs : Array Int) return (res : Array Int)
         i := i + 1
     return out
 
-method countPositivesNonNested (grid : Array (Array Int)) return (res : Int)
-  ensures res ≥ 0
+method countPositivesNonNested (grid : Array (Array Int)) returns (res : Int)
+  ensures ensures_1: (res ≥ 0 : Prop)
   do
     let mut total : Int := 0
     let mut i : Nat := 0
     while i < grid.size
-      invariant i ≤ grid.size
-      invariant total ≥ 0
+      invariant invariant_1: (i ≤ grid.size : Prop)
+      invariant invariant_2: (total ≥ 0 : Prop)
       decreasing grid.size - i
     do
       let mut row : Array Int := grid[i]!
-      for _x_idx in [:row.size]
-        invariant _x_idx ≤ row.size
-        invariant total ≥ 0
+      let _rangeStop0 : Nat := row.size
+      for _x_idx in [:_rangeStop0]
+        invariant invariant_3: (_x_idx ≤ row.size : Prop)
+        invariant invariant_4: (total ≥ 0 : Prop)
+        done_with (let _x_idx : Nat := _rangeStop0; (_x_idx ≤ row.size : Prop) ∧ (total ≥ 0 : Prop))
       do
+        let _x_idx : Nat := _x_idx
         let x := row[_x_idx]!
         if !(x ≤ 0) then
           total := total + 1
       i := i + 1
     return total
 
-method lastPresent (xs : Array (Option Int)) return (res : Option Int)
+method lastPresent (xs : Array (Option Int)) returns (res : Option Int)
   do
     let mut cur : Option Int := none
-    for _x_idx in [:xs.size]
-      invariant _x_idx ≤ xs.size
+    let _rangeStop0 : Nat := xs.size
+    for _x_idx in [:_rangeStop0]
+      invariant invariant_1: (_x_idx ≤ xs.size : Prop)
+      done_with (let _x_idx : Nat := _rangeStop0; (_x_idx ≤ xs.size : Prop))
     do
+      let _x_idx : Nat := _x_idx
       let x := xs[_x_idx]!
       if h_x : (x).isSome = true then
         let _x_val := (x).get h_x
@@ -79,12 +84,15 @@ method lastPresent (xs : Array (Option Int)) return (res : Option Int)
         pure ()
     return cur
 
-method lastBeforeGap (xs : Array (Option Int)) return (res : Option Int)
+method lastBeforeGap (xs : Array (Option Int)) returns (res : Option Int)
   do
     let mut cur : Option Int := none
-    for _x_idx in [:xs.size]
-      invariant _x_idx ≤ xs.size
+    let _rangeStop0 : Nat := xs.size
+    for _x_idx in [:_rangeStop0]
+      invariant invariant_1: (_x_idx ≤ xs.size : Prop)
+      done_with (let _x_idx : Nat := _rangeStop0; (_x_idx ≤ xs.size : Prop))
     do
+      let _x_idx : Nat := _x_idx
       let x := xs[_x_idx]!
       if h_x : (x).isSome = true then
         let _x_val := (x).get h_x
@@ -93,22 +101,22 @@ method lastBeforeGap (xs : Array (Option Int)) return (res : Option Int)
         break
     return cur
 
-method countKeep (items : Array Item) return (res : Int)
-  ensures 0 ≤ res
-  ensures res ≤ items.size
+method countKeep (items : Array Item) returns (res : Int)
+  ensures ensures_1: (0 ≤ res : Prop)
+  ensures ensures_2: (res ≤ items.size : Prop)
   do
     let mut count : Int := 0
     let mut i : Nat := 0
     let mut _loopRet : Int := count
     while i < items.size
-      invariant 0 ≤ i
-      invariant i ≤ items.size
-      invariant 0 ≤ count
-      invariant count ≤ i
-      invariant 0 ≤ _loopRet
-      invariant _loopRet ≤ items.size
-      done_with True
+      invariant invariant_1: (0 ≤ i : Prop)
+      invariant invariant_2: (i ≤ items.size : Prop)
+      invariant invariant_3: (0 ≤ count : Prop)
+      invariant invariant_4: (count ≤ i : Prop)
+      invariant invariant_5: (0 ≤ _loopRet : Prop)
+      invariant invariant_6: (_loopRet ≤ items.size : Prop)
       decreasing items.size - i
+      done_with (true : Prop)
     do
       if (items[i]!).kind = Kind.skip then
         i := i + 1

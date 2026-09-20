@@ -1,16 +1,15 @@
 import «forContinue.def»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
 prove_correct countOdds by
-  loom_solve
+  velvet_vcgen [countOdds] with finish
 
 prove_correct copyNonzero by
-  loom_solve
+  velvet_vcgen [copyNonzero] with finish
 
 prove_correct countPositivesNonNested by
-  loom_solve
+  velvet_vcgen [countPositivesNonNested] with finish
 
 prove_correct countKeep by
-  loom_solve
+  velvet_vcgen [countKeep] with finish

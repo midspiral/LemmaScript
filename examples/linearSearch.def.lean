@@ -4,24 +4,23 @@
 -/
 import LemmaScript
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method linearSearch (arr : Array Int) (target : Int) return (res : Int)
-  ensures res ≥ -1
-  ensures res < arr.size
-  ensures res ≥ 0 → arr[res.toNat]! = target
-  ensures res = -1 → ∀ k : Nat, k < arr.size → arr[k]! ≠ target
+method linearSearch (arr : Array Int) (target : Int) returns (res : Int)
+  ensures ensures_1: (res ≥ -1 : Prop)
+  ensures ensures_2: (res < arr.size : Prop)
+  ensures ensures_3: (res ≥ 0 → arr[res.toNat]! = target : Prop)
+  ensures ensures_4: (res = -1 → ∀ k : Nat, k < arr.size → arr[k]! ≠ target : Prop)
   do
     let mut i : Nat := 0
     let mut result : Int := -1
     while i < arr.size
-      invariant 0 ≤ i
-      invariant i ≤ arr.size
-      invariant ∀ k : Nat, k < i → arr[k]! ≠ target
-      invariant result = -1 ∨ result ≥ 0 ∧ result < arr.size ∧ arr[result.toNat]! = target
-      done_with result ≠ -1 ∨ ¬(i < arr.size)
+      invariant invariant_1: (0 ≤ i : Prop)
+      invariant invariant_2: (i ≤ arr.size : Prop)
+      invariant invariant_3: (∀ k : Nat, k < i → arr[k]! ≠ target : Prop)
+      invariant invariant_4: (result = -1 ∨ result ≥ 0 ∧ result < arr.size ∧ arr[result.toNat]! = target : Prop)
       decreasing arr.size - i
+      done_with (result ≠ -1 ∨ ¬(i < arr.size) : Prop)
     do
       if arr[i]! = target then
         result := i

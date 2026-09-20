@@ -4,12 +4,11 @@
 -/
 import «nestedPush.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method pushItem (items : Array Int) (v : Int) return (res : Array Int)
-  ensures res.size = items.size + 1
-  ensures res[items.size]! = v
+method pushItem (items : Array Int) (v : Int) returns (res : Array Int)
+  ensures ensures_1: (res.size = items.size + 1 : Prop)
+  ensures ensures_2: (res[items.size]! = v : Prop)
   do
     let mut b : Bag := { items := items }
     b := { b with items := Array.push b.items v }

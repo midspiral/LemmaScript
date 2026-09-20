@@ -4,19 +4,21 @@
 -/
 import LemmaScript
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method arrayContains (arr : Array Int) (target : Int) return (res : Bool)
-  ensures res = true → ∃ k : Nat, k < arr.size ∧ arr[k]! = target
-  ensures res = false → ∀ k : Nat, k < arr.size → arr[k]! ≠ target
+method arrayContains (arr : Array Int) (target : Int) returns (res : Bool)
+  ensures ensures_1: (res = true → ∃ k : Nat, k < arr.size ∧ arr[k]! = target : Prop)
+  ensures ensures_2: (res = false → ∀ k : Nat, k < arr.size → arr[k]! ≠ target : Prop)
   do
     let mut found : Bool := false
-    for _x_idx in [:arr.size]
-      invariant _x_idx ≤ arr.size
-      invariant found = false → ∀ k : Nat, k < _x_idx → arr[k]! ≠ target
-      invariant found = true → ∃ k : Nat, k < arr.size ∧ arr[k]! = target
+    let _rangeStop0 : Nat := arr.size
+    for _x_idx in [:_rangeStop0]
+      invariant invariant_1: (_x_idx ≤ arr.size : Prop)
+      invariant invariant_2: (found = false → ∀ k : Nat, k < _x_idx → arr[k]! ≠ target : Prop)
+      invariant invariant_3: (found = true → ∃ k : Nat, k < arr.size ∧ arr[k]! = target : Prop)
+      done_with (let _x_idx : Nat := _rangeStop0; (_x_idx ≤ arr.size : Prop) ∧ (found = false → ∀ k : Nat, k < _x_idx → arr[k]! ≠ target : Prop) ∧ (found = true → ∃ k : Nat, k < arr.size ∧ arr[k]! = target : Prop))
     do
+      let _x_idx : Nat := _x_idx
       let x := arr[_x_idx]!
       if x = target then
         found := true

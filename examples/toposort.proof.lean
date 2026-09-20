@@ -1,7 +1,6 @@
 import «toposort.def»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 set_option maxHeartbeats 400000
 
 theorem allDistinct_means_no_dups (s : Array String) (n : Nat)
@@ -234,43 +233,41 @@ theorem adj_invariant_preserved
     exact hold k hk' v (Array.contains_iff.mpr hv')
 
 section TopoProof
-set_option loom.solver "custom"
 set_option hygiene false in
-macro_rules
-| `(tactic|loom_solver) => `(tactic| first
-  | (strip_withname; grind (splits := 30))
-  | (strip_withname; omega)
+macro "topo_solve" : tactic => `(tactic| first
+  | (grind (splits := 30) [-allDistinct])
+  | (omega)
   -- Specifically discharge the adjacency-preservation VC
-  | (strip_withname; apply adj_invariant_preserved <;> assumption)
+  | (apply adj_invariant_preserved <;> assumption)
   -- Preservation by helper lemmas
-  | (strip_withname; apply contains_invariant_preserved_int <;> assumption)
-  | (strip_withname; apply hashset_contains_invariant_preserved <;> assumption)
-  | (strip_withname; apply adjacency_emptyArrays_preserved <;> assumption)
-  | (strip_withname; apply enqueued_witness_preserved <;> assumption)
-  | (strip_withname; apply enqueued_witness_bound_widen <;> assumption)
+  | (apply contains_invariant_preserved_int <;> assumption)
+  | (apply hashset_contains_invariant_preserved <;> assumption)
+  | (apply adjacency_emptyArrays_preserved <;> assumption)
+  | (apply enqueued_witness_preserved <;> assumption)
+  | (apply enqueued_witness_bound_widen <;> assumption)
+  | (have h := enqueued_witness_preserved nodeIds enqueued _id_idx3 invariant_21
+     grind [-allDistinct])
   -- Distinctness assertion: nodeIds[i] not yet enqueued
-  | (strip_withname; apply not_enqueued_of_distinct <;> assumption)
+  | (apply not_enqueued_of_distinct <;> (first | assumption | grind [-allDistinct]))
   -- Size bound: enqueued.insert v ≤ nodeIdSet.size when v is "new"
-  | (strip_withname
-     apply Nat.le_trans
+  | (apply Nat.le_trans
      · apply hashset_subset_insert_size <;> assumption
      · assumption)
   -- Joint insert preservation for invariant_41
-  | (strip_withname
-     apply joint_insert_preserves_inDegree_le_zero <;> (first | assumption | omega))
-  | (strip_withname
-     apply inDegree_insert_preserves_decrement <;> assumption)
+  | (apply joint_insert_preserves_inDegree_le_zero <;> (first | assumption | omega))
+  | (apply inDegree_insert_preserves_decrement <;> assumption)
   -- Establishment of inner-loop neighbor invariant
-  | (strip_withname
-     apply neighbors_in_nodeIdSet <;> assumption)
-  | (strip_withname;
-     simp only [Array.size_push, Std.HashSet.size_insert];
+  | (apply neighbors_in_nodeIdSet <;> assumption)
+  | (simp only [Array.size_push, Std.HashSet.size_insert];
      (try (generalize Std.HashSet.size _ = _es at *));
      split <;> omega)
-  | (strip_withname; omega))
+  | (omega))
 
 set_option maxHeartbeats 16000000 in
 prove_correct topologicalSort by
-  loom_solve!
+  velvet_vcgen [topologicalSort]
+  all_goals expose_names
+  all_goals repeat' apply And.intro
+  all_goals topo_solve
 
 end TopoProof

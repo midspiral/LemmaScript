@@ -4,18 +4,17 @@
 -/
 import «ctorName.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method depthOf (k : CallKind) return (res : Int)
-  ensures res ≥ 0
+method depthOf (k : CallKind) returns (res : Int)
+  ensures ensures_1: (res ≥ 0 : Prop)
   do
     return Pure.depthOf k
 
-method specPure (depth : Int) return (res : CallKind)
+method specPure (depth : Int) returns (res : CallKind)
   do
     return Pure.specPure depth
 
-method plain  return (res : CallKind)
+method plain  returns (res : CallKind)
   do
     return Pure.plain 

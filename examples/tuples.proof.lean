@@ -1,16 +1,15 @@
 import «tuples.def»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
 prove_correct swap by
-  unfold Pure.swap; loom_solve
+  velvet_vcgen [swap] with finish [Pure.swap]
 
 prove_correct middle by
-  unfold Pure.middle; loom_solve
+  velvet_vcgen [middle] with finish [Pure.middle]
 
 prove_correct addFirstTwo by
-  unfold Pure.addFirstTwo; loom_solve
+  velvet_vcgen [addFirstTwo] with finish [Pure.addFirstTwo]
 
 prove_correct homogeneousStaysSeq by
-  unfold Pure.homogeneousStaysSeq; loom_solve
+  velvet_vcgen [homogeneousStaysSeq] with finish [Pure.homogeneousStaysSeq]

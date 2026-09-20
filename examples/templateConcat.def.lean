@@ -4,14 +4,13 @@
 -/
 import «templateConcat.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method noSep (a : Int) (b : Int) return (res : String)
+method noSep (a : Int) (b : Int) returns (res : String)
   do
     return Pure.noSep a b
 
-method bracketed (a : Int) (b : Int) return (res : Int)
-  ensures res ≥ 4
+method bracketed (a : Int) (b : Int) returns (res : Int)
+  ensures ensures_1: (res ≥ 4 : Prop)
   do
     return Pure.bracketed a b

@@ -1,171 +1,173 @@
 import «spec.def»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
--- Pure functions: unfold + loom_solve
+-- Pure functions: unfold their compiled definitions.
 prove_correct evalPartial by
-  unfold Pure.evalPartial; loom_solve
+  velvet_vcgen [evalPartial] with finish [Pure.evalPartial]
 
 prove_correct evalSwitch by
-  unfold Pure.evalSwitch; loom_solve
+  velvet_vcgen [evalSwitch] with finish [Pure.evalSwitch]
 
 prove_correct isHighPriority by
-  unfold Pure.isHighPriority; loom_solve
+  velvet_vcgen [isHighPriority] with finish [Pure.isHighPriority]
 
 prove_correct defaultConfig by
-  unfold Pure.defaultConfig; loom_solve
+  velvet_vcgen [defaultConfig] with finish [Pure.defaultConfig]
 
 prove_correct withThreshold by
-  unfold Pure.withThreshold; loom_solve
+  velvet_vcgen [withThreshold] with finish [Pure.withThreshold]
 
 prove_correct clampTernary by
-  unfold Pure.clampTernary; loom_solve
+  velvet_vcgen [clampTernary] with finish [Pure.clampTernary]
 
 prove_correct demoteOnFail by
-  unfold Pure.demoteOnFail; loom_solve
+  velvet_vcgen [demoteOnFail] with finish [Pure.demoteOnFail]
 
 prove_correct makeHighItem by
-  unfold Pure.makeHighItem; loom_solve
+  velvet_vcgen [makeHighItem] with finish [Pure.makeHighItem]
 
 prove_correct midpoint by
-  unfold Pure.midpoint; loom_solve
+  velvet_vcgen [midpoint] with finish [Pure.midpoint]
 
 prove_correct exactBigIntLiteral by
-  unfold Pure.exactBigIntLiteral; loom_solve
+  velvet_vcgen [exactBigIntLiteral] with finish [Pure.exactBigIntLiteral]
 
 prove_correct exactNegativeBigIntLiteral by
-  unfold Pure.exactNegativeBigIntLiteral; loom_solve
+  velvet_vcgen [exactNegativeBigIntLiteral] with finish [Pure.exactNegativeBigIntLiteral]
 
 prove_correct wrapOne by
-  unfold Pure.wrapOne; loom_solve
+  velvet_vcgen [wrapOne] with finish [Pure.wrapOne]
 
 prove_correct threeElems by
-  unfold Pure.threeElems; loom_solve
+  velvet_vcgen [threeElems]
+  all_goals simp [Pure.threeElems]
 
 prove_correct append by
-  unfold Pure.append; loom_solve
+  velvet_vcgen [append] with finish [Pure.append]
 
 -- HOFs
 prove_correct doubleAll by
-  unfold Pure.doubleAll; loom_solve
+  velvet_vcgen [doubleAll] with finish [Pure.doubleAll]
 
 prove_correct keepPositive by
-  unfold Pure.keepPositive; loom_solve
+  velvet_vcgen [keepPositive] with finish [Pure.keepPositive]
 
 prove_correct allBelow by
-  unfold Pure.allBelow; loom_solve
+  velvet_vcgen [allBelow] with finish [Pure.allBelow]
 
 prove_correct anyNegative by
-  unfold Pure.anyNegative; loom_solve
+  velvet_vcgen [anyNegative] with finish [Pure.anyNegative]
 
 -- Pure function call in HOF lambda
 prove_correct negate by
-  unfold Pure.negate; loom_solve
+  velvet_vcgen [negate] with finish [Pure.negate]
 
 prove_correct negateAll by
-  unfold Pure.negateAll; loom_solve
+  velvet_vcgen [negateAll] with finish [Pure.negateAll]
 
 prove_correct hasValue by
-  unfold Pure.hasValue; loom_solve
+  velvet_vcgen [hasValue] with finish [Pure.hasValue]
 
 prove_correct replaceAt by
-  unfold Pure.replaceAt; loom_solve
+  velvet_vcgen [replaceAt] with finish [Pure.replaceAt]
 
 prove_correct replaceAtInt by
-  unfold Pure.replaceAtInt; loom_solve
+  velvet_vcgen [replaceAtInt] with finish [Pure.replaceAtInt]
 
 -- String ops
 prove_correct findSubstr by
-  unfold Pure.findSubstr; loom_solve
+  velvet_vcgen [findSubstr] with finish [Pure.findSubstr]
 
 prove_correct getSlice by
-  unfold Pure.getSlice; loom_solve
+  velvet_vcgen [getSlice] with finish [Pure.getSlice]
 
 -- While loops
 prove_correct countAbove by
-  loom_solve
+  velvet_vcgen [countAbove] with finish
 
 prove_correct search by
-  loom_solve
+  velvet_vcgen [search] with finish
 
 -- Monadic lifting (calls search)
 prove_correct sumSearchResults by
-  loom_solve
+  velvet_vcgen [sumSearchResults] with finish
 
 -- For-of loop
 prove_correct forOfContains by
-  loom_solve
+  velvet_vcgen [forOfContains] with finish
 
 -- Monadic lifting in records and nested args
-prove_correct clampedItem by loom_solve
-prove_correct clampedMidpoint by loom_solve
+prove_correct clampedItem by
+  velvet_vcgen [clampedItem] with finish
+prove_correct clampedMidpoint by
+  velvet_vcgen [clampedMidpoint] with finish
 
 -- Deep-path narrowing: body and ensures both use nested Some/None matches
 prove_correct deepAccess by
-  unfold Pure.deepAccess; loom_solve
+  velvet_vcgen [deepAccess] with finish [Pure.deepAccess]
 
 -- Negative truthiness `!x` and bare optional truthiness `if (x)`
 prove_correct negVar by
-  unfold Pure.negVar; loom_solve
+  velvet_vcgen [negVar] with finish [Pure.negVar]
 
 prove_correct negField by
-  unfold Pure.negField; loom_solve
+  velvet_vcgen [negField] with finish [Pure.negField]
 
 prove_correct truthyVar by
-  unfold Pure.truthyVar; loom_solve
+  velvet_vcgen [truthyVar] with finish [Pure.truthyVar]
 
 -- Nullish coalescing
 prove_correct nullishVar by
-  unfold Pure.nullishVar; loom_solve
+  velvet_vcgen [nullishVar] with finish [Pure.nullishVar]
 
 prove_correct nullishMapGet by
-  unfold Pure.nullishMapGet; loom_solve
+  velvet_vcgen [nullishMapGet] with finish [Pure.nullishMapGet]
 
 -- `k in m ? m[k] : default` narrowing (ruleConditionalInMap)
 prove_correct inCheckRecordGet by
-  unfold Pure.inCheckRecordGet; loom_solve
+  velvet_vcgen [inCheckRecordGet] with finish [Pure.inCheckRecordGet]
 
 -- Map-index narrowing via requires / if / assert / while invariants
 prove_correct requiresInMap by
-  unfold Pure.requiresInMap; loom_solve
+  velvet_vcgen [requiresInMap] with finish [Pure.requiresInMap]
 
 prove_correct ifInMapBlock by
-  unfold Pure.ifInMapBlock; loom_solve
+  velvet_vcgen [ifInMapBlock] with finish [Pure.ifInMapBlock]
 
 prove_correct ifNotInMapEarlyReturn by
-  unfold Pure.ifNotInMapEarlyReturn; loom_solve
+  velvet_vcgen [ifNotInMapEarlyReturn] with finish [Pure.ifNotInMapEarlyReturn]
 
 prove_correct assertInMap by
-  loom_solve
+  velvet_vcgen [assertInMap] with finish
 
 prove_correct whileInvariantInMap by
-  loom_solve
+  velvet_vcgen [whileInvariantInMap] with finish
 
 -- Chained && of optional checks in ternary
 prove_correct nestedAndTernary by
-  unfold Pure.nestedAndTernary; loom_solve
+  velvet_vcgen [nestedAndTernary] with finish [Pure.nestedAndTernary]
 
 -- Discriminated-union narrowing
 prove_correct area by
-  unfold Pure.area; loom_solve
+  velvet_vcgen [area] with finish [Pure.area]
 
 prove_correct describeIfCircle by
-  unfold Pure.describeIfCircle; loom_solve
+  velvet_vcgen [describeIfCircle] with finish [Pure.describeIfCircle]
 
 -- Ternary in spec with optional narrowing (parallels truthyVar)
 prove_correct ternarySpecOpt by
-  unfold Pure.ternarySpecOpt; loom_solve
+  velvet_vcgen [ternarySpecOpt] with finish [Pure.ternarySpecOpt]
 
 -- Optional chaining
 prove_correct ocField by
-  unfold Pure.ocField; loom_solve
+  velvet_vcgen [ocField] with finish [Pure.ocField]
 
 prove_correct ocChain by
-  unfold Pure.ocChain; loom_solve
+  velvet_vcgen [ocChain] with finish [Pure.ocChain]
 
 prove_correct ocMethodCall by
-  unfold Pure.ocMethodCall; loom_solve
+  velvet_vcgen [ocMethodCall] with finish [Pure.ocMethodCall]
 
 prove_correct ocIndex by
-  unfold Pure.ocIndex; loom_solve
+  velvet_vcgen [ocIndex] with finish [Pure.ocIndex]

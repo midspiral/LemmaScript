@@ -1,7 +1,6 @@
 import «arraySum.def»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
 prove_correct arraySum by
-  loom_solve
+  velvet_vcgen [arraySum] with finish

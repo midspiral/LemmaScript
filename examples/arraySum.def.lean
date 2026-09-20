@@ -4,18 +4,17 @@
 -/
 import «arraySum.spec»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method arraySum (arr : Array Int) return (res : Int)
-  ensures res = sumTo arr arr.size
+method arraySum (arr : Array Int) returns (res : Int)
+  ensures ensures_1: (res = sumTo arr arr.size : Prop)
   do
     let mut sum : Int := 0
     let mut i : Nat := 0
     while i < arr.size
-      invariant 0 ≤ i
-      invariant i ≤ arr.size
-      invariant sum = sumTo arr i
+      invariant invariant_1: (0 ≤ i : Prop)
+      invariant invariant_2: (i ≤ arr.size : Prop)
+      invariant invariant_3: (sum = sumTo arr i : Prop)
       decreasing arr.size - i
     do
       sum := sum + arr[i]!

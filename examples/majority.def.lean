@@ -4,30 +4,29 @@
 -/
 import «majority.spec»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method occOf (arr : Array Int) (x : Int) (n : Nat) return (res : Int)
-  require 0 ≤ n
-  require n ≤ arr.size
+method occOf (arr : Array Int) (x : Int) (n : Nat) returns (res : Int)
+  requires require_1: (0 ≤ n : Prop)
+  requires require_2: (n ≤ arr.size : Prop)
   do
     return Pure.occOf arr x n
 
-method majority (arr : Array Int) return (res : Int)
-  require ∀ k : Nat, k < arr.size → arr[k]! ≥ 0
-  ensures res = -1 ∨ res ≥ 0 ∧ 2 * Pure.occOf arr res arr.size > arr.size
-  ensures (∃ x : Nat, 2 * Pure.occOf arr x arr.size > arr.size) → res ≠ -1
+method majority (arr : Array Int) returns (res : Int)
+  requires require_1: (∀ k : Nat, k < arr.size → arr[k]! ≥ 0 : Prop)
+  ensures ensures_1: (res = -1 ∨ res ≥ 0 ∧ 2 * Pure.occOf arr res arr.size > arr.size : Prop)
+  ensures ensures_2: ((∃ x : Nat, 2 * Pure.occOf arr x arr.size > arr.size) → res ≠ -1 : Prop)
   do
     let mut cand : Int := 0
     let mut cnt : Int := 0
     let mut i : Nat := 0
     while i < arr.size
-      invariant 0 ≤ i
-      invariant i ≤ arr.size
-      invariant cnt ≥ 0
-      invariant cand ≥ 0
-      invariant 2 * Pure.occOf arr cand i ≤ i + cnt
-      invariant ∀ y : Int, y ≠ cand → 2 * Pure.occOf arr y i ≤ i - cnt
+      invariant invariant_1: (0 ≤ i : Prop)
+      invariant invariant_2: (i ≤ arr.size : Prop)
+      invariant invariant_3: (cnt ≥ 0 : Prop)
+      invariant invariant_4: (cand ≥ 0 : Prop)
+      invariant invariant_5: (2 * Pure.occOf arr cand i ≤ i + cnt : Prop)
+      invariant invariant_6: (∀ y : Int, y ≠ cand → 2 * Pure.occOf arr y i ≤ i - cnt : Prop)
       decreasing arr.size - i
     do
       if cnt = 0 then
@@ -41,9 +40,9 @@ method majority (arr : Array Int) return (res : Int)
     let mut occ : Int := 0
     let mut j : Nat := 0
     while j < arr.size
-      invariant 0 ≤ j
-      invariant j ≤ arr.size
-      invariant occ = Pure.occOf arr cand j
+      invariant invariant_7: (0 ≤ j : Prop)
+      invariant invariant_8: (j ≤ arr.size : Prop)
+      invariant invariant_9: (occ = Pure.occOf arr cand j : Prop)
       decreasing arr.size - j
     do
       if arr[j]! = cand then

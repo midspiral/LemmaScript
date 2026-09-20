@@ -1,7 +1,6 @@
 import «nestedPush.def»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
 prove_correct pushItem by
-  loom_solve
+  velvet_vcgen [pushItem] with finish

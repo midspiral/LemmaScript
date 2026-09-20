@@ -4,22 +4,21 @@
 -/
 import LemmaScript
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method isSorted (arr : Array Int) return (res : Bool)
-  require arr.size > 0
-  ensures res = true → ∀ k : Nat, k + 1 < arr.size → arr[k]! ≤ arr[k + 1]!
-  ensures res = false → ∃ k : Nat, k + 1 < arr.size ∧ arr[k]! > arr[k + 1]!
+method isSorted (arr : Array Int) returns (res : Bool)
+  requires require_1: (arr.size > 0 : Prop)
+  ensures ensures_1: (res = true → ∀ k : Nat, k + 1 < arr.size → arr[k]! ≤ arr[k + 1]! : Prop)
+  ensures ensures_2: (res = false → ∃ k : Nat, k + 1 < arr.size ∧ arr[k]! > arr[k + 1]! : Prop)
   do
     let mut result : Bool := true
     let mut i : Nat := 0
     while i + 1 < arr.size
-      invariant i < arr.size
-      invariant result = true → ∀ k : Nat, k < i → arr[k]! ≤ arr[k + 1]!
-      invariant result = false → ∃ k : Nat, k + 1 < arr.size ∧ arr[k]! > arr[k + 1]!
-      done_with result = false ∨ ¬(i + 1 < arr.size)
+      invariant invariant_1: (i < arr.size : Prop)
+      invariant invariant_2: (result = true → ∀ k : Nat, k < i → arr[k]! ≤ arr[k + 1]! : Prop)
+      invariant invariant_3: (result = false → ∃ k : Nat, k + 1 < arr.size ∧ arr[k]! > arr[k + 1]! : Prop)
       decreasing arr.size - i
+      done_with (result = false ∨ ¬(i + 1 < arr.size) : Prop)
     do
       if arr[i]! > arr[i + 1]! then
         result := false

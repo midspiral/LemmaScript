@@ -1,7 +1,6 @@
 import «perm.def»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
 namespace PermProof
 
@@ -51,24 +50,26 @@ theorem countOn_bounds (xs : Array Bool) :
 end PermProof
 
 prove_correct countOn by
-  loom_solve
-  · exact (PermProof.countOn_bounds xs).2
-  · exact (PermProof.countOn_bounds xs).1
+  velvet_vcgen [countOn] with try finish
+  all_goals expose_names
+  all_goals first | exact (PermProof.countOn_bounds xs).1 | exact (PermProof.countOn_bounds xs).2
 
 prove_correct permRefl by
-  unfold Pure.permRefl; loom_solve
+  velvet_vcgen [permRefl] with finish [Pure.permRefl]
 
 prove_correct permSymm by
-  unfold Pure.permSymm; loom_solve
+  velvet_vcgen [permSymm] with finish [Pure.permSymm]
 
 prove_correct permConcatComm by
-  unfold Pure.permConcatComm; loom_solve
+  velvet_vcgen [permConcatComm] with finish [Pure.permConcatComm]
 
 -- The payoff: `countOn` is permutation-invariant. `countOn` is the multiplicity
 -- of `true` (countOn_eq_count), and `List.Perm.count_eq` makes any count equal
 -- across permutations.
 prove_correct countOnPerm by
-  unfold Pure.countOnPerm
-  loom_solve
+  velvet_vcgen [countOnPerm, Pure.countOnPerm]
+  all_goals expose_names
+  all_goals try simp only [Pure.countOnPerm] at *
+  all_goals try grind
   rw [PermProof.countOn_eq_count, PermProof.countOn_eq_count]
   exact_mod_cast require_1.count_eq true

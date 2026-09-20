@@ -4,147 +4,146 @@
 -/
 import «spec.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method evalPartial (e : Expr) return (res : Int)
-  ensures (match e with | .lit _e_val => res = _e_val | _ => true)
-  ensures (match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true)
+method evalPartial (e : Expr) returns (res : Int)
+  ensures ensures_1: ((match e with | .lit _e_val => res = _e_val | _ => true) : Prop)
+  ensures ensures_2: ((match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true) : Prop)
   do
     return Pure.evalPartial e
 
-method evalSwitch (e : Expr) return (res : Int)
-  ensures (match e with | .lit _e_val => res = _e_val | _ => true)
-  ensures (match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true)
-  ensures (match e with | .neg _e_inner => res = 0 - _e_inner | _ => true)
+method evalSwitch (e : Expr) returns (res : Int)
+  ensures ensures_1: ((match e with | .lit _e_val => res = _e_val | _ => true) : Prop)
+  ensures ensures_2: ((match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true) : Prop)
+  ensures ensures_3: ((match e with | .neg _e_inner => res = 0 - _e_inner | _ => true) : Prop)
   do
     return Pure.evalSwitch e
 
-method isHighPriority (p : Priority) return (res : Bool)
-  ensures p = Priority.high → res = true
-  ensures p ≠ Priority.high → res = false
+method isHighPriority (p : Priority) returns (res : Bool)
+  ensures ensures_1: (p = Priority.high → res = true : Prop)
+  ensures ensures_2: (p ≠ Priority.high → res = false : Prop)
   do
     return Pure.isHighPriority p
 
-method defaultConfig  return (res : Config)
-  ensures res.threshold = 0
-  ensures res.enabled = true
+method defaultConfig  returns (res : Config)
+  ensures ensures_1: (res.threshold = 0 : Prop)
+  ensures ensures_2: (res.enabled = true : Prop)
   do
     return Pure.defaultConfig 
 
-method withThreshold (c : Config) (t : Nat) return (res : Config)
-  ensures res.threshold = t
-  ensures res.enabled = c.enabled
+method withThreshold (c : Config) (t : Nat) returns (res : Config)
+  ensures ensures_1: (res.threshold = t : Prop)
+  ensures ensures_2: (res.enabled = c.enabled : Prop)
   do
     return Pure.withThreshold c t
 
-method clampTernary (x : Int) (lo : Int) (hi : Int) return (res : Int)
-  require lo ≤ hi
-  ensures res ≥ lo
-  ensures res ≤ hi
-  ensures res = (if x < lo then lo else if x > hi then hi else x)
+method clampTernary (x : Int) (lo : Int) (hi : Int) returns (res : Int)
+  requires require_1: (lo ≤ hi : Prop)
+  ensures ensures_1: (res ≥ lo : Prop)
+  ensures ensures_2: (res ≤ hi : Prop)
+  ensures ensures_3: (res = (if x < lo then lo else if x > hi then hi else x) : Prop)
   do
     return Pure.clampTernary x lo hi
 
-method demoteOnFail (p : Priority) (ok : Bool) return (res : Priority)
+method demoteOnFail (p : Priority) (ok : Bool) returns (res : Priority)
   do
     return Pure.demoteOnFail p ok
 
-method makeHighItem (v : Int) return (res : PriorityItem)
+method makeHighItem (v : Int) returns (res : PriorityItem)
   do
     return Pure.makeHighItem v
 
-method midpoint (lo : Int) (hi : Int) return (res : Int)
-  ensures res = (lo + hi) / 2
+method midpoint (lo : Int) (hi : Int) returns (res : Int)
+  ensures ensures_1: (res = (lo + hi) / 2 : Prop)
   do
     return Pure.midpoint lo hi
 
-method exactBigIntLiteral  return (res : Int)
-  ensures res = 9007199254740993
-  ensures res ≠ 9007199254740992
+method exactBigIntLiteral  returns (res : Int)
+  ensures ensures_1: (res = 9007199254740993 : Prop)
+  ensures ensures_2: (res ≠ 9007199254740992 : Prop)
   do
     return Pure.exactBigIntLiteral 
 
-method exactNegativeBigIntLiteral  return (res : Int)
-  ensures res = -9007199254740993
-  ensures res ≠ -9007199254740992
+method exactNegativeBigIntLiteral  returns (res : Int)
+  ensures ensures_1: (res = -9007199254740993 : Prop)
+  ensures ensures_2: (res ≠ -9007199254740992 : Prop)
   do
     return Pure.exactNegativeBigIntLiteral 
 
-method wrapOne (x : Int) return (res : Array Int)
-  ensures res.size = 1
+method wrapOne (x : Int) returns (res : Array Int)
+  ensures ensures_1: (res.size = 1 : Prop)
   do
     return Pure.wrapOne x
 
-method threeElems (a : Int) (b : Int) (c : Int) return (res : Array Int)
-  ensures res.size = 3
+method threeElems (a : Int) (b : Int) (c : Int) returns (res : Array Int)
+  ensures ensures_1: (res.size = 3 : Prop)
   do
     return Pure.threeElems a b c
 
-method append (arr : Array Int) (x : Int) return (res : Array Int)
+method append (arr : Array Int) (x : Int) returns (res : Array Int)
   do
     return Pure.append arr x
 
-method doubleAll (arr : Array Int) return (res : Array Int)
-  ensures res.size = arr.size
+method doubleAll (arr : Array Int) returns (res : Array Int)
+  ensures ensures_1: (res.size = arr.size : Prop)
   do
     return Pure.doubleAll arr
 
-method keepPositive (arr : Array Int) return (res : Array Int)
+method keepPositive (arr : Array Int) returns (res : Array Int)
   do
     return Pure.keepPositive arr
 
-method allBelow (arr : Array Int) (cap : Int) return (res : Bool)
+method allBelow (arr : Array Int) (cap : Int) returns (res : Bool)
   do
     return Pure.allBelow arr cap
 
-method anyNegative (arr : Array Int) return (res : Bool)
+method anyNegative (arr : Array Int) returns (res : Bool)
   do
     return Pure.anyNegative arr
 
-method negate (x : Int) return (res : Int)
-  ensures res = 0 - x
+method negate (x : Int) returns (res : Int)
+  ensures ensures_1: (res = 0 - x : Prop)
   do
     return Pure.negate x
 
-method negateAll (arr : Array Int) return (res : Array Int)
-  ensures res.size = arr.size
+method negateAll (arr : Array Int) returns (res : Array Int)
+  ensures ensures_1: (res.size = arr.size : Prop)
   do
     return Pure.negateAll arr
 
-method hasValue (arr : Array Int) (v : Int) return (res : Bool)
+method hasValue (arr : Array Int) (v : Int) returns (res : Bool)
   do
     return Pure.hasValue arr v
 
-method replaceAt (arr : Array Int) (i : Nat) (v : Int) return (res : Array Int)
-  require i < arr.size
+method replaceAt (arr : Array Int) (i : Nat) (v : Int) returns (res : Array Int)
+  requires require_1: (i < arr.size : Prop)
   do
     return Pure.replaceAt arr i v
 
-method replaceAtInt (arr : Array Int) (i : Int) (v : Int) return (res : Array Int)
-  require i ≥ 0
-  require i < arr.size
+method replaceAtInt (arr : Array Int) (i : Int) (v : Int) returns (res : Array Int)
+  requires require_1: (i ≥ 0 : Prop)
+  requires require_2: (i < arr.size : Prop)
   do
     return Pure.replaceAtInt arr i v
 
-method findSubstr (s : String) (sub : String) return (res : Int)
+method findSubstr (s : String) (sub : String) returns (res : Int)
   do
     return Pure.findSubstr s sub
 
-method getSlice (s : String) (start : Nat) («end» : Nat) return (res : String)
-  require start ≤ «end»
-  require «end» ≤ s.length
+method getSlice (s : String) (start : Nat) («end» : Nat) returns (res : String)
+  requires require_1: (start ≤ «end» : Prop)
+  requires require_2: («end» ≤ s.length : Prop)
   do
     return Pure.getSlice s start «end»
 
-method countAbove (arr : Array Int) (threshold : Int) return (res : Int)
-  ensures res ≤ arr.size
+method countAbove (arr : Array Int) (threshold : Int) returns (res : Int)
+  ensures ensures_1: (res ≤ arr.size : Prop)
   do
     let mut count : Nat := 0
     let mut i : Nat := 0
     while i < arr.size
-      invariant i ≤ arr.size
-      invariant count ≤ i
+      invariant invariant_1: (i ≤ arr.size : Prop)
+      invariant invariant_2: (count ≤ i : Prop)
       decreasing arr.size - i
     do
       if arr[i]! > threshold then
@@ -152,20 +151,20 @@ method countAbove (arr : Array Int) (threshold : Int) return (res : Int)
       i := i + 1
     return count
 
-method search (arr : Array Int) (target : Int) return (res : Int)
-  ensures res ≥ -1
-  ensures res < arr.size
-  ensures res ≥ 0 → arr[res.toNat]! = target
-  ensures arr.size > 0 → res = -1 → ∀ k : Nat, k < arr.size → arr[k]! ≠ target
+method search (arr : Array Int) (target : Int) returns (res : Int)
+  ensures ensures_1: (res ≥ -1 : Prop)
+  ensures ensures_2: (res < arr.size : Prop)
+  ensures ensures_3: (res ≥ 0 → arr[res.toNat]! = target : Prop)
+  ensures ensures_4: (arr.size > 0 → res = -1 → ∀ k : Nat, k < arr.size → arr[k]! ≠ target : Prop)
   do
     let mut result : Int := -1
     let mut i : Nat := 0
     while i < arr.size
-      invariant i ≤ arr.size
-      invariant result = -1 ∨ result ≥ 0 ∧ result < arr.size ∧ arr[result.toNat]! = target
-      invariant ∀ k : Nat, k < i → arr[k]! ≠ target
-      done_with result ≠ -1 ∨ i ≥ arr.size
+      invariant invariant_1: (i ≤ arr.size : Prop)
+      invariant invariant_2: (result = -1 ∨ result ≥ 0 ∧ result < arr.size ∧ arr[result.toNat]! = target : Prop)
+      invariant invariant_3: (∀ k : Nat, k < i → arr[k]! ≠ target : Prop)
       decreasing arr.size - i
+      done_with (result ≠ -1 ∨ i ≥ arr.size : Prop)
     do
       if arr[i]! = target then
         result := i
@@ -173,7 +172,7 @@ method search (arr : Array Int) (target : Int) return (res : Int)
       i := i + 1
     return result
 
-method sumSearchResults (arr : Array Int) (a : Int) (b : Int) return (res : Int)
+method sumSearchResults (arr : Array Int) (a : Int) (b : Int) returns (res : Int)
   do
     let mut sum : Int := 0
     let _t0 ← search arr a
@@ -181,194 +180,197 @@ method sumSearchResults (arr : Array Int) (a : Int) (b : Int) return (res : Int)
     sum := _t0 + _t1
     return sum
 
-method forOfContains (arr : Array Int) (target : Int) return (res : Bool)
-  ensures res = true → ∃ k : Nat, k < arr.size ∧ arr[k]! = target
+method forOfContains (arr : Array Int) (target : Int) returns (res : Bool)
+  ensures ensures_1: (res = true → ∃ k : Nat, k < arr.size ∧ arr[k]! = target : Prop)
   do
     let mut found : Bool := false
-    for _x_idx in [:arr.size]
-      invariant _x_idx ≤ arr.size
-      invariant found = false → ∀ k : Nat, k < _x_idx → arr[k]! ≠ target
-      invariant found = true → ∃ k : Nat, k < arr.size ∧ arr[k]! = target
+    let _rangeStop0 : Nat := arr.size
+    for _x_idx in [:_rangeStop0]
+      invariant invariant_1: (_x_idx ≤ arr.size : Prop)
+      invariant invariant_2: (found = false → ∀ k : Nat, k < _x_idx → arr[k]! ≠ target : Prop)
+      invariant invariant_3: (found = true → ∃ k : Nat, k < arr.size ∧ arr[k]! = target : Prop)
+      done_with (let _x_idx : Nat := _rangeStop0; (_x_idx ≤ arr.size : Prop) ∧ (found = false → ∀ k : Nat, k < _x_idx → arr[k]! ≠ target : Prop) ∧ (found = true → ∃ k : Nat, k < arr.size ∧ arr[k]! = target : Prop))
     do
+      let _x_idx : Nat := _x_idx
       let x := arr[_x_idx]!
       if x = target then
         found := true
         break
     return found
 
-method clampedItem (x : Int) return (res : PriorityItem)
-  ensures res.level = Priority.high
+method clampedItem (x : Int) returns (res : PriorityItem)
+  ensures ensures_1: (res.level = Priority.high : Prop)
   do
     let mut tmp : Int := x
     let _t2 ← clampTernary tmp 0 100
     return { level := Priority.high, value := _t2 }
 
-method clampedMidpoint (a : Int) (b : Int) return (res : Int)
-  require a ≤ b
-  ensures res ≥ a
-  ensures res ≤ b
+method clampedMidpoint (a : Int) (b : Int) returns (res : Int)
+  requires require_1: (a ≤ b : Prop)
+  ensures ensures_1: (res ≥ a : Prop)
+  ensures ensures_2: (res ≤ b : Prop)
   do
     let _t3 ← midpoint a b
     let mut mid : Int := _t3
     let _t4 ← clampTernary mid a b
     return _t4
 
-method deepAccess (t : Tree) return (res : Int)
-  ensures (match t.middle with | .some _t_middle_val => (match _t_middle_val.leaf with | .some _t_middle_leaf_val => res = _t_middle_leaf_val.value | .none => true) | .none => true)
-  ensures (match t.middle with | .some _ => false | .none => true) → res = 0
+method deepAccess (t : Tree) returns (res : Int)
+  ensures ensures_1: ((match t.middle with | .some _t_middle_val => (match _t_middle_val.leaf with | .some _t_middle_leaf_val => res = _t_middle_leaf_val.value | .none => true) | .none => true) : Prop)
+  ensures ensures_2: ((match t.middle with | .some _ => false | .none => true) → res = 0 : Prop)
   do
     return Pure.deepAccess t
 
-method ocField (o : Option Outer) return (res : Option Inner)
-  ensures (match o with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true)
-  ensures (match o with | .some _o_val => res = _o_val.inner | .none => true)
+method ocField (o : Option Outer) returns (res : Option Inner)
+  ensures ensures_1: ((match o with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) : Prop)
+  ensures ensures_2: ((match o with | .some _o_val => res = _o_val.inner | .none => true) : Prop)
   do
     return Pure.ocField o
 
-method ocChain (o : Option Outer) return (res : Option Int)
-  ensures (match o with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true)
-  ensures (match o with | .some _o_val => (match _o_val.inner with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) | .none => true)
-  ensures (match o with | .some _o_val => (match _o_val.inner with | .some _o_inner_val => (match res with | .some _value => _value == _o_inner_val.val | .none => false) | .none => true) | .none => true)
+method ocChain (o : Option Outer) returns (res : Option Int)
+  ensures ensures_1: ((match o with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) : Prop)
+  ensures ensures_2: ((match o with | .some _o_val => (match _o_val.inner with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) | .none => true) : Prop)
+  ensures ensures_3: ((match o with | .some _o_val => (match _o_val.inner with | .some _o_inner_val => (match res with | .some _value => _value == _o_inner_val.val | .none => false) | .none => true) | .none => true) : Prop)
   do
     return Pure.ocChain o
 
-method ocMethodCall (s : Option (Std.HashSet String)) (k : String) return (res : Option Bool)
-  ensures (match s with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true)
-  ensures (match s with | .some _s_val => (match res with | .some _value => _value == _s_val.contains k | .none => false) | .none => true)
+method ocMethodCall (s : Option (Std.HashSet String)) (k : String) returns (res : Option Bool)
+  ensures ensures_1: ((match s with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) : Prop)
+  ensures ensures_2: ((match s with | .some _s_val => (match res with | .some _value => _value == _s_val.contains k | .none => false) | .none => true) : Prop)
   do
     return Pure.ocMethodCall s k
 
-method ocIndex (m : Option (Std.HashMap String String)) (k : String) return (res : Option String)
-  ensures (match m with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true)
-  ensures (match m with | .some _m_val => res = _m_val.get? k | .none => true)
+method ocIndex (m : Option (Std.HashMap String String)) (k : String) returns (res : Option String)
+  ensures ensures_1: ((match m with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) : Prop)
+  ensures ensures_2: ((match m with | .some _m_val => res = _m_val.get? k | .none => true) : Prop)
   do
     return Pure.ocIndex m k
 
-method nullishVar (o : Option Inner) (fallback : Int) return (res : Int)
-  ensures (match o with | .some _ => false | .none => true) → res = fallback
-  ensures (match o with | .some _o_val => res = _o_val.val | .none => true)
+method nullishVar (o : Option Inner) (fallback : Int) returns (res : Int)
+  ensures ensures_1: ((match o with | .some _ => false | .none => true) → res = fallback : Prop)
+  ensures ensures_2: ((match o with | .some _o_val => res = _o_val.val | .none => true) : Prop)
   do
     return Pure.nullishVar o fallback
 
-method nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) return (res : Int)
-  ensures ¬(m.contains k) → res = fallback
-  ensures m.contains k → res = m.get! k
+method nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) returns (res : Int)
+  ensures ensures_1: (¬(m.contains k) → res = fallback : Prop)
+  ensures ensures_2: (m.contains k → res = m.get! k : Prop)
   do
     return Pure.nullishMapGet m k fallback
 
-method inCheckRecordGet (m : Std.HashMap String Int) (k : String) (fallback : Int) return (res : Int)
-  ensures ¬(m.contains k) → res = fallback
-  ensures m.contains k → if m.contains k then let _value := m[k]!
-_value == res else false
+method inCheckRecordGet (m : Std.HashMap String Int) (k : String) (fallback : Int) returns (res : Int)
+  ensures ensures_1: (¬(m.contains k) → res = fallback : Prop)
+  ensures ensures_2: (m.contains k → if m.contains k then let _value := m[k]!
+_value == res else false : Prop)
   do
     return Pure.inCheckRecordGet m k fallback
 
-method requiresInMap (m : Std.HashMap String Int) (k : String) return (res : Int)
-  require m.contains k
-  ensures res = m.get! k
+method requiresInMap (m : Std.HashMap String Int) (k : String) returns (res : Int)
+  requires require_1: (m.contains k : Prop)
+  ensures ensures_1: (res = m.get! k : Prop)
   do
     return Pure.requiresInMap m k
 
-method ifInMapBlock (m : Std.HashMap String Int) (k : String) (fallback : Int) return (res : Int)
-  ensures m.contains k → if m.contains k then let _value := m[k]!
-_value == res else false
-  ensures ¬(m.contains k) → res = fallback
+method ifInMapBlock (m : Std.HashMap String Int) (k : String) (fallback : Int) returns (res : Int)
+  ensures ensures_1: (m.contains k → if m.contains k then let _value := m[k]!
+_value == res else false : Prop)
+  ensures ensures_2: (¬(m.contains k) → res = fallback : Prop)
   do
     return Pure.ifInMapBlock m k fallback
 
-method ifNotInMapEarlyReturn (m : Std.HashMap String Int) (k : String) (fallback : Int) return (res : Int)
-  ensures ¬(m.contains k) → res = fallback
-  ensures m.contains k → if m.contains k then let _value := m[k]!
-_value == res else false
+method ifNotInMapEarlyReturn (m : Std.HashMap String Int) (k : String) (fallback : Int) returns (res : Int)
+  ensures ensures_1: (¬(m.contains k) → res = fallback : Prop)
+  ensures ensures_2: (m.contains k → if m.contains k then let _value := m[k]!
+_value == res else false : Prop)
   do
     return Pure.ifNotInMapEarlyReturn m k fallback
 
-method assertInMap (m : Std.HashMap String Int) (k : String) (fallback : Int) return (res : Int)
-  ensures m.contains k → if m.contains k then let _value := m[k]!
-_value == res else false
-  ensures ¬(m.contains k) → res = fallback
+method assertInMap (m : Std.HashMap String Int) (k : String) (fallback : Int) returns (res : Int)
+  ensures ensures_1: (m.contains k → if m.contains k then let _value := m[k]!
+_value == res else false : Prop)
+  ensures ensures_2: (¬(m.contains k) → res = fallback : Prop)
   do
     if !(m.contains k) then
       return fallback
     assertGadget ((m.contains k) = true)
     return m.get! k
 
-method whileInvariantInMap (m : Std.HashMap String Int) (k : String) (reps : Nat) return (res : Int)
-  require m.contains k
-  ensures res = m.get! k * reps
+method whileInvariantInMap (m : Std.HashMap String Int) (k : String) (reps : Nat) returns (res : Int)
+  requires require_1: (m.contains k : Prop)
+  ensures ensures_1: (res = m.get! k * reps : Prop)
   do
     let mut total : Int := 0
     let mut i : Nat := 0
     while i < reps
-      invariant m.contains k
-      invariant i ≤ reps
-      invariant total = m.get! k * i
+      invariant invariant_1: (m.contains k : Prop)
+      invariant invariant_2: (i ≤ reps : Prop)
+      invariant invariant_3: (total = m.get! k * i : Prop)
       decreasing reps - i
     do
       total := total + m.get! k
       i := i + 1
     return total
 
-method negVar (o : Option Inner) (fallback : Int) return (res : Int)
-  ensures (match o with | .some _ => false | .none => true) → res = fallback
-  ensures (match o with | .some _o_val => res = _o_val.val | .none => true)
+method negVar (o : Option Inner) (fallback : Int) returns (res : Int)
+  ensures ensures_1: ((match o with | .some _ => false | .none => true) → res = fallback : Prop)
+  ensures ensures_2: ((match o with | .some _o_val => res = _o_val.val | .none => true) : Prop)
   do
     return Pure.negVar o fallback
 
-method negField (o : Outer) (fallback : Int) return (res : Int)
-  ensures (match o.inner with | .some _ => false | .none => true) → res = fallback
-  ensures (match o.inner with | .some _o_inner_val => res = _o_inner_val.val | .none => true)
+method negField (o : Outer) (fallback : Int) returns (res : Int)
+  ensures ensures_1: ((match o.inner with | .some _ => false | .none => true) → res = fallback : Prop)
+  ensures ensures_2: ((match o.inner with | .some _o_inner_val => res = _o_inner_val.val | .none => true) : Prop)
   do
     return Pure.negField o fallback
 
-method truthyVar (o : Option Inner) (fallback : Int) return (res : Int)
-  ensures (match o with | .some _o_val => res = _o_val.val | .none => true)
-  ensures (match o with | .some _ => false | .none => true) → res = fallback
+method truthyVar (o : Option Inner) (fallback : Int) returns (res : Int)
+  ensures ensures_1: ((match o with | .some _o_val => res = _o_val.val | .none => true) : Prop)
+  ensures ensures_2: ((match o with | .some _ => false | .none => true) → res = fallback : Prop)
   do
     return Pure.truthyVar o fallback
 
-method nestedAndTernary (o : Option Outer) (fallback : Int) return (res : Int)
-  ensures (match o with | .some _ => false | .none => true) → res = fallback
-  ensures (match o with | .some _o_val => (match _o_val.inner with | .some _ => false | .none => true) → res = fallback | .none => true)
-  ensures (match o with | .some _o_val => (match _o_val.inner with | .some _o_inner_val => res = _o_inner_val.val | .none => true) | .none => true)
+method nestedAndTernary (o : Option Outer) (fallback : Int) returns (res : Int)
+  ensures ensures_1: ((match o with | .some _ => false | .none => true) → res = fallback : Prop)
+  ensures ensures_2: ((match o with | .some _o_val => (match _o_val.inner with | .some _ => false | .none => true) → res = fallback | .none => true) : Prop)
+  ensures ensures_3: ((match o with | .some _o_val => (match _o_val.inner with | .some _o_inner_val => res = _o_inner_val.val | .none => true) | .none => true) : Prop)
   do
     return Pure.nestedAndTernary o fallback
 
-method area (s : Shape) return (res : Int)
-  ensures (match s with | .circle _s_radius => res = _s_radius * _s_radius | _ => true)
-  ensures (match s with | .square _s_side => res = _s_side * _s_side | _ => true)
+method area (s : Shape) returns (res : Int)
+  ensures ensures_1: ((match s with | .circle _s_radius => res = _s_radius * _s_radius | _ => true) : Prop)
+  ensures ensures_2: ((match s with | .square _s_side => res = _s_side * _s_side | _ => true) : Prop)
   do
     return Pure.area s
 
-method describeIfCircle (s : Shape) (fallback : Int) return (res : Int)
-  ensures (match s with | .circle _s_radius => res = _s_radius * _s_radius | _ => true)
-  ensures (match s with | .square _s_side => res = fallback | _ => true)
+method describeIfCircle (s : Shape) (fallback : Int) returns (res : Int)
+  ensures ensures_1: ((match s with | .circle _s_radius => res = _s_radius * _s_radius | _ => true) : Prop)
+  ensures ensures_2: ((match s with | .square _s_side => res = fallback | _ => true) : Prop)
   do
     return Pure.describeIfCircle s fallback
 
-method ternarySpecOpt (o : Option Inner) (fallback : Int) return (res : Int)
-  ensures res = (match o with | .some _o_val => _o_val.val | .none => fallback)
+method ternarySpecOpt (o : Option Inner) (fallback : Int) returns (res : Int)
+  ensures ensures_1: (res = (match o with | .some _o_val => _o_val.val | .none => fallback) : Prop)
   do
     return Pure.ternarySpecOpt o fallback
 
-method projectedCodePure (error : RpcErrorView) return (res : Int)
-  ensures res = error.code
+method projectedCodePure (error : RpcErrorView) returns (res : Int)
+  ensures ensures_1: (res = error.code : Prop)
   do
     return Pure.projectedCodePure error
 
-method dispatchProjectedPure (outcome : ProjectedOutcome) return (res : Int)
-  ensures (match outcome with | .«rpc-error» _outcome_code _outcome_message _outcome_data => res = _outcome_code | _ => true)
+method dispatchProjectedPure (outcome : ProjectedOutcome) returns (res : Int)
+  ensures ensures_1: ((match outcome with | .«rpc-error» _outcome_code _outcome_message _outcome_data => res = _outcome_code | _ => true) : Prop)
   do
     return Pure.dispatchProjectedPure outcome
 
-method projectedCode (error : RpcErrorView) return (res : Int)
-  ensures res = error.code
+method projectedCode (error : RpcErrorView) returns (res : Int)
+  ensures ensures_1: (res = error.code : Prop)
   do
     let mut code : Int := error.code
     return code
 
-method dispatchProjected (outcome : ProjectedOutcome) return (res : Int)
-  ensures (match outcome with | .«rpc-error» _outcome_code _outcome_message _outcome_data => res = _outcome_code | _ => true)
+method dispatchProjected (outcome : ProjectedOutcome) returns (res : Int)
+  ensures ensures_1: ((match outcome with | .«rpc-error» _outcome_code _outcome_message _outcome_data => res = _outcome_code | _ => true) : Prop)
   do
     if (match outcome with | .«rpc-error» .. => true | _ => false) then
       let _outcome_code := (match outcome with | .«rpc-error» _v _ _ => _v | _ => (default : Int))
