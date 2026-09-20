@@ -29,7 +29,7 @@ runs:
       run: |
         dependency_root="$(cd "$LAKE_PACKAGE_DIRECTORY/.." && pwd)"
         if [ ! -d "$dependency_root/velvet" ]; then
-          git clone https://github.com/namin/velvet.git -b lemma "$dependency_root/velvet"
+          git clone https://github.com/namin/velvet.git -b lemma2 "$dependency_root/velvet"
         fi
 
     - uses: leanprover/lean-action@v1

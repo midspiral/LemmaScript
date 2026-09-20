@@ -80,7 +80,7 @@ jobs:
 
       - name: Clone Velvet fork
         if: inputs.backend == 'lean'
-        run: test -d ../velvet || git clone https://github.com/namin/velvet.git -b lemma ../velvet
+        run: test -d ../velvet || git clone https://github.com/namin/velvet.git -b lemma2 ../velvet
 
       - name: Setup Lean
         if: inputs.backend == 'lean'
