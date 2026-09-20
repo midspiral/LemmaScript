@@ -4,15 +4,14 @@
 -/
 import «discriminantTrailing.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method classify (s : Shape) return (res : String)
+method classify (s : Shape) returns (res : String)
   do
     return Pure.classify s
 
-method tally (s : Shape) return (res : Int)
-  ensures res ≥ 10
+method tally (s : Shape) returns (res : Int)
+  ensures ensures_1: (res ≥ 10 : Prop)
   do
     let mut n : Int := 0
     if (match s with | .circle => true | _ => false) then

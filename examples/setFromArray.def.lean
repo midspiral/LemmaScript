@@ -4,14 +4,13 @@
 -/
 import «setFromArray.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method dedupSize (arr : Array Int) return (res : Int)
+method dedupSize (arr : Array Int) returns (res : Int)
   do
     return Pure.dedupSize arr
 
-method member (arr : Array Int) (x : Int) return (res : Bool)
-  ensures res ↔ (∃ i : Nat, i < arr.size ∧ arr[i]! = x)
+method member (arr : Array Int) (x : Int) returns (res : Bool)
+  ensures ensures_1: (res ↔ (∃ i : Nat, i < arr.size ∧ arr[i]! = x) : Prop)
   do
     return Pure.member arr x

@@ -4,20 +4,19 @@
 -/
 import «andChainStmt.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method total (xs : Array Int) return (res : Int)
-  ensures res = xs.size
+method total (xs : Array Int) returns (res : Int)
+  ensures ensures_1: (res = xs.size : Prop)
   do
     return Pure.total xs
 
-method use (v : Int) return (res : Int)
-  ensures res = v
+method use (v : Int) returns (res : Int)
+  ensures ensures_1: (res = v : Prop)
   do
     return Pure.use v
 
-method single (b : Option Box) return (res : Unit)
+method single (b : Option Box) returns (res : Unit)
   do
     if h_b : (b).isSome = true then
       let _b_val := (b).get h_b
@@ -26,7 +25,7 @@ method single (b : Option Box) return (res : Unit)
     else
       pure ()
 
-method chained (b : Option Box) return (res : Unit)
+method chained (b : Option Box) returns (res : Unit)
   do
     if h_b : (b).isSome = true then
       let _b_val := (b).get h_b
@@ -39,7 +38,7 @@ method chained (b : Option Box) return (res : Unit)
     else
       pure ()
 
-method fieldPath (b : Box) return (res : Unit)
+method fieldPath (b : Box) returns (res : Unit)
   do
     if h_b_inner : (b.inner).isSome = true then
       let _b_inner_val := (b.inner).get h_b_inner
@@ -48,7 +47,7 @@ method fieldPath (b : Box) return (res : Unit)
     else
       pure ()
 
-method plain (p : Bool) (q : Bool) return (res : Bool)
-  ensures res = (p ∧ q)
+method plain (p : Bool) (q : Bool) returns (res : Bool)
+  ensures ensures_1: (res = (p ∧ q) : Prop)
   do
     return Pure.plain p q

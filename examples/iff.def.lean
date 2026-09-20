@@ -4,18 +4,17 @@
 -/
 import «iff.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method isEven (x : Int) return (res : Bool)
-  require x ≥ 0
-  ensures res ↔ Int.tmod x 2 = 0
+method isEven (x : Int) returns (res : Bool)
+  requires require_1: (x ≥ 0 : Prop)
+  ensures ensures_1: (res ↔ Int.tmod x 2 = 0 : Prop)
   do
     return Pure.isEven x
 
-method sameParity (x : Int) (y : Int) return (res : Bool)
-  require x ≥ 0
-  require y ≥ 0
-  ensures res ↔ (Int.tmod x 2 = 0 ↔ Int.tmod y 2 = 0)
+method sameParity (x : Int) (y : Int) returns (res : Bool)
+  requires require_1: (x ≥ 0 : Prop)
+  requires require_2: (y ≥ 0 : Prop)
+  ensures ensures_1: (res ↔ (Int.tmod x 2 = 0 ↔ Int.tmod y 2 = 0) : Prop)
   do
     return Pure.sameParity x y

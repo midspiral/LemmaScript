@@ -4,21 +4,20 @@
 -/
 import LemmaScript
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method maxElement (arr : Array Int) return (res : Int)
-  require arr.size > 0
-  ensures ∀ k : Nat, k < arr.size → arr[k]! ≤ res
-  ensures ∃ k : Nat, k < arr.size ∧ arr[k]! = res
+method maxElement (arr : Array Int) returns (res : Int)
+  requires require_1: (arr.size > 0 : Prop)
+  ensures ensures_1: (∀ k : Nat, k < arr.size → arr[k]! ≤ res : Prop)
+  ensures ensures_2: (∃ k : Nat, k < arr.size ∧ arr[k]! = res : Prop)
   do
     let mut max : Int := arr[0]!
     let mut i : Nat := 1
     while i < arr.size
-      invariant 1 ≤ i
-      invariant i ≤ arr.size
-      invariant ∀ k : Nat, k < i → arr[k]! ≤ max
-      invariant ∃ k : Nat, k < i ∧ arr[k]! = max
+      invariant invariant_1: (1 ≤ i : Prop)
+      invariant invariant_2: (i ≤ arr.size : Prop)
+      invariant invariant_3: (∀ k : Nat, k < i → arr[k]! ≤ max : Prop)
+      invariant invariant_4: (∃ k : Nat, k < i ∧ arr[k]! = max : Prop)
       decreasing arr.size - i
     do
       if arr[i]! > max then

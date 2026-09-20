@@ -4,20 +4,19 @@
 -/
 import «recordIndexByEnum.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method budgetFor (b : Budgets) (level : Level) return (res : Int)
-  ensures res = b.low ∨ res = b.medium ∨ res = b.high
+method budgetFor (b : Budgets) (level : Level) returns (res : Int)
+  ensures ensures_1: (res = b.low ∨ res = b.medium ∨ res = b.high : Prop)
   do
     return Pure.budgetFor b level
 
-method maybeBudget (b : OptBudgets) (level : String) return (res : Option Int)
-  ensures res = b.low ∨ res = b.high
+method maybeBudget (b : OptBudgets) (level : String) returns (res : Option Int)
+  ensures ensures_1: (res = b.low ∨ res = b.high : Prop)
   do
     return Pure.maybeBudget b level
 
-method lowOrMid (b : Budgets) (level : String) return (res : Int)
-  ensures res = b.low ∨ res = b.medium
+method lowOrMid (b : Budgets) (level : String) returns (res : Int)
+  ensures ensures_1: (res = b.low ∨ res = b.medium : Prop)
   do
     return Pure.lowOrMid b level

@@ -1,6 +1,9 @@
--- LemmaScript library — re-exports Velvet/Loom
-import Velvet.Syntax
-import Velvet.Std
-import LemmaScript.WPGenArrayM
-import LemmaScript.WPGenOption
-import LemmaScript.WPGenHashSet
+-- LemmaScript support for Velvet 2 and Lean 4.34.
+import Velvet
+import Mathlib.Tactic.SplitIfs
+import Mathlib.Tactic.NormNum
+import Mathlib.Algebra.BigOperators.Intervals
+import Mathlib.Algebra.Ring.Int.Defs
+import LemmaScript.ArrayM
+import LemmaScript.HashSet
+import LemmaScript.Range

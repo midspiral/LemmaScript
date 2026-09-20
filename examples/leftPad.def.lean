@@ -4,23 +4,22 @@
 -/
 import LemmaScript
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method leftPad (str : String) (len : Nat) (ch : String) return (res : String)
-  require ch.length = 1
-  ensures str.length ≥ len → res = str
-  ensures str.length < len → res.length = len
+method leftPad (str : String) (len : Nat) (ch : String) returns (res : String)
+  requires require_1: (ch.length = 1 : Prop)
+  ensures ensures_1: (str.length ≥ len → res = str : Prop)
+  ensures ensures_2: (str.length < len → res.length = len : Prop)
   do
     let mut len : Nat := len
     let mut result : String := str
     len := len - str.length
     let mut i : Nat := 0
     while i < len
-      invariant result.length = str.length + i
-      invariant i ≥ 0
-      invariant len > 0 → i ≤ len
-      invariant len ≤ 0 → result = str
+      invariant invariant_1: (result.length = str.length + i : Prop)
+      invariant invariant_2: (i ≥ 0 : Prop)
+      invariant invariant_3: (len > 0 → i ≤ len : Prop)
+      invariant invariant_4: (len ≤ 0 → result = str : Prop)
       decreasing len - i
     do
       result := ch ++ result

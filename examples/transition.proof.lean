@@ -1,20 +1,18 @@
 import «transition.def»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
 prove_correct transition by
-  unfold Pure.transition; loom_solve
+  velvet_vcgen [transition] with finish [Pure.transition]
 
 prove_correct runSession by
-  loom_solve
+  velvet_vcgen [runSession] with finish
 
 -- Standalone property: if the last event is timeout, runSession returns idle.
-open TotalCorrectness DemonicChoice in
+open Std.Internal.Do in
 theorem runSession_timeout_resets (events : Array Event)
     (h1 : events.size > 0) (h2 : lastEvent events = .timeout) :
-    triple (events.size > 0 ∧ lastEvent events = .timeout)
-           (runSession events)
-           (fun res => res = State.idle) := by
-  unfold runSession
-  loom_solve
+    Triple (runSession events)
+           (events.size > 0 ∧ lastEvent events = .timeout)
+           (fun res => res = State.idle) False := by
+  velvet_vcgen [runSession] with finish

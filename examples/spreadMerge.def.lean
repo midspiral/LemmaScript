@@ -4,31 +4,30 @@
 -/
 import «spreadMerge.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method mergeComplete (base : Budgets) (over : Budgets) return (res : Budgets)
-  ensures res.low = over.low
-  ensures res.high = over.high
+method mergeComplete (base : Budgets) (over : Budgets) returns (res : Budgets)
+  ensures ensures_1: (res.low = over.low : Prop)
+  ensures ensures_2: (res.high = over.high : Prop)
   do
     return Pure.mergeComplete base over
 
-method withDefaults (base : Config) (over : Config) return (res : Config)
-  ensures (match over.retries with | .some _ => false | .none => true) → res.retries = base.retries
-  ensures (match over.retries with | .some _over_retries_val => (match res.retries with | .some _value => _value == _over_retries_val | .none => false) | .none => true)
-  ensures (match over.timeout with | .some _ => false | .none => true) → res.timeout = base.timeout
-  ensures (match over.timeout with | .some _over_timeout_val => (match res.timeout with | .some _value => _value == _over_timeout_val | .none => false) | .none => true)
+method withDefaults (base : Config) (over : Config) returns (res : Config)
+  ensures ensures_1: ((match over.retries with | .some _ => false | .none => true) → res.retries = base.retries : Prop)
+  ensures ensures_2: ((match over.retries with | .some _over_retries_val => (match res.retries with | .some _value => _value == _over_retries_val | .none => false) | .none => true) : Prop)
+  ensures ensures_3: ((match over.timeout with | .some _ => false | .none => true) → res.timeout = base.timeout : Prop)
+  ensures ensures_4: ((match over.timeout with | .some _over_timeout_val => (match res.timeout with | .some _value => _value == _over_timeout_val | .none => false) | .none => true) : Prop)
   do
     return Pure.withDefaults base over
 
-method applyOverride (base : Budgets) (over : Option Budgets) return (res : Budgets)
-  ensures (match over with | .some _ => false | .none => true) → res = base
-  ensures (match over with | .some _over_val => res = _over_val | .none => true)
+method applyOverride (base : Budgets) (over : Option Budgets) returns (res : Budgets)
+  ensures ensures_1: ((match over with | .some _ => false | .none => true) → res = base : Prop)
+  ensures ensures_2: ((match over with | .some _over_val => res = _over_val | .none => true) : Prop)
   do
     return Pure.applyOverride base over
 
-method mergeChain (a : Budgets) (b : Budgets) (c : Budgets) return (res : Budgets)
-  ensures res.low = c.low
-  ensures res.high = c.high
+method mergeChain (a : Budgets) (b : Budgets) (c : Budgets) returns (res : Budgets)
+  ensures ensures_1: (res.low = c.low : Prop)
+  ensures ensures_2: (res.high = c.high : Prop)
   do
     return Pure.mergeChain a b c

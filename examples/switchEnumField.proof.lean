@@ -1,11 +1,9 @@
 import «switchEnumField.def»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
 prove_correct weight by
-  unfold Pure.weight
-  loom_solve
+  velvet_vcgen [weight] with finish [Pure.weight]
 
 prove_correct pickPlainString by
-  loom_solve
+  velvet_vcgen [pickPlainString] with finish

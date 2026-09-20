@@ -4,21 +4,20 @@
 -/
 import «transition.spec»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method transition (state : State) (event : Event) return (res : State)
-  ensures event = Event.timeout → res = State.idle
+method transition (state : State) (event : Event) returns (res : State)
+  ensures ensures_1: (event = Event.timeout → res = State.idle : Prop)
   do
     return Pure.transition state event
 
-method runSession (events : Array Event) return (res : State)
+method runSession (events : Array Event) returns (res : State)
   do
     let mut state : State := State.idle
     let mut i : Nat := 0
     while i < events.size
-      invariant i ≤ events.size
-      invariant i > 0 → events[i - 1]! = Event.timeout → state = State.idle
+      invariant invariant_1: (i ≤ events.size : Prop)
+      invariant invariant_2: (i > 0 → events[i - 1]! = Event.timeout → state = State.idle : Prop)
       decreasing events.size - i
     do
       state ← transition state events[i]!

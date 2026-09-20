@@ -96,10 +96,12 @@ const LEAN_KEYWORDS = new Set([
 // `res`, but primed (e.g. `res'`) when a module identifier is named `res` — set
 // by the method case. `\result` in an ensures/body must use the same name.
 let _resultName = "res";
+let _invariantIndex = 0;
+let _rangeIndex = 0;
 
 function escapeName(name: string): string {
   // \result is carried through the IR as the var name "\\result"; render it
-  // as the method's return-value identifier (matches `return (res : T)`).
+  // as the method's return-value identifier (matches `returns (res : T)`).
   if (name === "\\result") return _resultName;
   return LEAN_KEYWORDS.has(name) ? `«${name}»` : name;
 }
@@ -334,8 +336,8 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       const twos = ".2".repeat(e.index);
       return e.index === e.arity - 1 ? `${obj}${twos}` : `${obj}${twos}.1`;
     }
-    case "emptyMap": return `Std.HashMap.empty`;
-    case "emptySet": return `Std.HashSet.empty`;
+    case "emptyMap": return `∅`;
+    case "emptySet": return `∅`;
     case "default": return `(default : ${tyToLean(e.type)})`;
 
     case "methodCall": {
@@ -657,11 +659,9 @@ function emitStmt(s: Stmt, indent: number): string {
       const lines = [`${pad}while ${emitExpr(s.cond)}`];
       const prevBoolCtx = _boolCtx;
       _boolCtx = false;
-      for (const inv of s.invariants) lines.push(`${pad}  invariant ${emitExpr(inv)}`);
-      // `done_with True` (the auto-supplied fact for breaking loops) is a Prop;
-      // the bool literal would need a coercion, so emit the Prop `True` directly.
-      if (s.doneWith) lines.push(`${pad}  done_with ${s.doneWith.kind === "bool" && s.doneWith.value ? "True" : emitExpr(s.doneWith)}`);
+      for (const inv of s.invariants) lines.push(`${pad}  invariant invariant_${++_invariantIndex}: (${emitExpr(inv)} : Prop)`);
       if (s.decreasing) lines.push(`${pad}  decreasing ${emitExpr(s.decreasing)}`);
+      if (s.doneWith) lines.push(`${pad}  done_with (${emitExpr(s.doneWith)} : Prop)`);
       _boolCtx = prevBoolCtx;
       lines.push(`${pad}do`);
       lines.push(emitStmts(s.body, indent + 1));
@@ -669,12 +669,22 @@ function emitStmt(s: Stmt, indent: number): string {
     }
 
     case "forin": {
-      const lines = [`${pad}for ${s.idx} in [:${emitExpr(s.bound)}]`];
+      // Velvet 2 needs an explicit exit assertion when invariants use the cursor.
+      // Preserve the range endpoint used by the old rule, including on `break`.
+      const stop = freshName(`_rangeStop${_rangeIndex++}`);
+      const idx = escapeName(s.idx);
+      const lines = [`${pad}let ${stop} : Nat := ${emitExpr(s.bound)}`,
+        `${pad}for ${idx} in [:${stop}]`];
       const prevBoolCtx = _boolCtx;
-      _boolCtx = false; // invariants are Prop
-      for (const inv of s.invariants) lines.push(`${pad}  invariant ${emitExpr(inv)}`);
+      _boolCtx = false;
+      const invariants = s.invariants.map(inv => `(${emitExpr(inv)} : Prop)`);
+      for (const inv of invariants)
+        lines.push(`${pad}  invariant invariant_${++_invariantIndex}: ${inv}`);
+      if (invariants.length > 0)
+        lines.push(`${pad}  done_with (let ${idx} : Nat := ${stop}; ${invariants.join(" ∧ ")})`);
       _boolCtx = prevBoolCtx;
       lines.push(`${pad}do`);
+      lines.push(`${pad}  let ${idx} : Nat := ${idx}`);
       lines.push(emitStmts(s.body, indent + 1));
       return lines.join("\n");
     }
@@ -794,9 +804,11 @@ function emitDecl(d: Decl): string {
       _resultName = freshNameWhere("res", n =>
         d.params.some(p => escapeName(p.name) === n) ||
         usesNameInDecl(d.requires, d.ensures, d.body, n));
-      const lines = [`method ${d.name} ${params} return (${_resultName} : ${tyToLean(d.returnType)})`];
-      for (const r of d.requires) lines.push(`  require ${emitExpr(r)}`);
-      for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
+      _invariantIndex = 0;
+      _rangeIndex = 0;
+      const lines = [`method ${d.name} ${params} returns (${_resultName} : ${tyToLean(d.returnType)})`];
+      d.requires.forEach((r, i) => lines.push(`  requires require_${i + 1}: (${emitExpr(r)} : Prop)`));
+      d.ensures.forEach((e, i) => lines.push(`  ensures ensures_${i + 1}: (${emitExpr(e)} : Prop)`));
       lines.push("  do");
       _boolCtx = true;
       lines.push(emitStmts(d.body, 2));

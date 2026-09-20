@@ -1,7 +1,6 @@
 import «packet.def»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
 prove_correct nextSeq by
-  unfold Pure.nextSeq; loom_solve
+  velvet_vcgen [nextSeq] with finish [Pure.nextSeq]

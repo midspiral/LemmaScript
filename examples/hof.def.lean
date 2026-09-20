@@ -4,28 +4,27 @@
 -/
 import «hof.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method doubleAll (arr : Array Int) return (res : Array Int)
-  ensures res.size = arr.size
+method doubleAll (arr : Array Int) returns (res : Array Int)
+  ensures ensures_1: (res.size = arr.size : Prop)
   do
     return Pure.doubleAll arr
 
-method positives (arr : Array Int) return (res : Array Int)
+method positives (arr : Array Int) returns (res : Array Int)
   do
     return Pure.positives arr
 
-method allPositive (arr : Array Int) return (res : Bool)
+method allPositive (arr : Array Int) returns (res : Bool)
   do
     return Pure.allPositive arr
 
-method hasNegative (arr : Array Int) return (res : Bool)
+method hasNegative (arr : Array Int) returns (res : Bool)
   do
     return Pure.hasNegative arr
 
-method visibleElementsForQuote (comparisonElements : QuoteElements) (quoteId : String) return (res : Array QuoteElement)
-  ensures res.size ≤ (comparisonElements.Elements).size
-  ensures ∀ e : QuoteElement, res.contains e → e.QuoteId = quoteId ∧ (match e.ConditionallyHidden with | .some _value => ¬(_value) | .none => true)
+method visibleElementsForQuote (comparisonElements : QuoteElements) (quoteId : String) returns (res : Array QuoteElement)
+  ensures ensures_1: (res.size ≤ (comparisonElements.Elements).size : Prop)
+  ensures ensures_2: (∀ e : QuoteElement, res.contains e → e.QuoteId = quoteId ∧ (match e.ConditionallyHidden with | .some _value => ¬(_value) | .none => true) : Prop)
   do
     return Pure.visibleElementsForQuote comparisonElements quoteId

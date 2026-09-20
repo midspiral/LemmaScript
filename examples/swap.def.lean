@@ -4,15 +4,14 @@
 -/
 import LemmaScript
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method swap (arr : Array Int) (i : Nat) (j : Nat) return (res : Array Int)
-  require i < arr.size
-  require j < arr.size
-  ensures res.size = arr.size
-  ensures res[i]! = arr[j]!
-  ensures res[j]! = arr[i]!
+method swap (arr : Array Int) (i : Nat) (j : Nat) returns (res : Array Int)
+  requires require_1: (i < arr.size : Prop)
+  requires require_2: (j < arr.size : Prop)
+  ensures ensures_1: (res.size = arr.size : Prop)
+  ensures ensures_2: (res[i]! = arr[j]! : Prop)
+  ensures ensures_3: (res[j]! = arr[i]! : Prop)
   do
     let mut result : Array Int := arr
     let tmp := result[i]!

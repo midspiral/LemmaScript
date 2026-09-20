@@ -4,21 +4,20 @@
 -/
 import «unionInArray.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method area (s : Shape) return (res : Int)
+method area (s : Shape) returns (res : Int)
   do
     return Pure.area s
 
-method shapes  return (res : Array Shape)
+method shapes  returns (res : Array Shape)
   do
     return Pure.shapes 
 
-method oneRect  return (res : Array Shape)
+method oneRect  returns (res : Array Shape)
   do
     return Pure.oneRect 
 
-method total  return (res : Int)
+method total  returns (res : Int)
   do
     return Pure.total 

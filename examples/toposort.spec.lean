@@ -1,6 +1,6 @@
 import LemmaScript
 
-@[grind, loomAbstractionSimp]
+@[grind, simp]
 def allDistinct (s : Array String) (n : Nat) : Prop :=
   if h : n = 0 then True
   else if h2 : n ≤ s.size then

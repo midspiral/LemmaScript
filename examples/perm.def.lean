@@ -4,33 +4,32 @@
 -/
 import «perm.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method countOn (xs : Array Bool) return (res : Int)
-  ensures 0 ≤ res
-  ensures res ≤ xs.size
+method countOn (xs : Array Bool) returns (res : Int)
+  ensures ensures_1: (0 ≤ res : Prop)
+  ensures ensures_2: (res ≤ xs.size : Prop)
   do
     return Pure.countOn xs
 
-method permRefl (xs : Array Bool) return (res : Bool)
-  ensures (xs.toList).Perm (xs.toList)
+method permRefl (xs : Array Bool) returns (res : Bool)
+  ensures ensures_1: ((xs.toList).Perm (xs.toList) : Prop)
   do
     return Pure.permRefl xs
 
-method permSymm (xs : Array Bool) (ys : Array Bool) return (res : Bool)
-  require (xs.toList).Perm (ys.toList)
-  ensures (ys.toList).Perm (xs.toList)
+method permSymm (xs : Array Bool) (ys : Array Bool) returns (res : Bool)
+  requires require_1: ((xs.toList).Perm (ys.toList) : Prop)
+  ensures ensures_1: ((ys.toList).Perm (xs.toList) : Prop)
   do
     return Pure.permSymm xs ys
 
-method permConcatComm (xs : Array Bool) (ys : Array Bool) return (res : Bool)
-  ensures ((xs ++ ys).toList).Perm ((ys ++ xs).toList)
+method permConcatComm (xs : Array Bool) (ys : Array Bool) returns (res : Bool)
+  ensures ensures_1: (((xs ++ ys).toList).Perm ((ys ++ xs).toList) : Prop)
   do
     return Pure.permConcatComm xs ys
 
-method countOnPerm (xs : Array Bool) (ys : Array Bool) return (res : Bool)
-  require (xs.toList).Perm (ys.toList)
-  ensures Pure.countOn xs = Pure.countOn ys
+method countOnPerm (xs : Array Bool) (ys : Array Bool) returns (res : Bool)
+  requires require_1: ((xs.toList).Perm (ys.toList) : Prop)
+  ensures ensures_1: (Pure.countOn xs = Pure.countOn ys : Prop)
   do
     return Pure.countOnPerm xs ys

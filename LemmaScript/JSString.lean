@@ -7,7 +7,7 @@ namespace JSString
 
 /-- JS `String.indexOf(sub)`: character index of first occurrence, or -1. -/
 def indexOf (s : String) (sub : String) : Int :=
-  go s.data sub.data 0
+  go s.toList sub.toList 0
 where
   go : List Char → List Char → Nat → Int
   | [], _, _ => -1
@@ -18,7 +18,7 @@ where
 /-- JS `String.slice(start, end)`: substring from character index `start`
     up to (but not including) `end`. -/
 def slice (s : String) (start stop : Int) : String :=
-  ⟨(s.data.drop start.toNat).take (stop.toNat - start.toNat)⟩
+  String.ofList ((s.toList.drop start.toNat).take (stop.toNat - start.toNat))
 
 private theorem go_bound (chars : List Char) (sub : List Char) (idx : Nat) :
     indexOf.go chars sub idx = -1 ∨
@@ -36,8 +36,8 @@ private theorem go_bound (chars : List Char) (sub : List Char) (idx : Nat) :
 theorem indexOf_lt_length (s : String) (sub : String) (h : indexOf s sub ≠ -1) :
     0 ≤ indexOf s sub ∧ indexOf s sub < ↑s.length := by
   unfold indexOf at *
-  have := go_bound s.data sub.data 0
-  simp [String.length] at this ⊢
+  have := go_bound s.toList sub.toList 0
+  simp only [Nat.zero_add, String.length_toList] at this
   omega
 
 end JSString

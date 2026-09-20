@@ -4,65 +4,64 @@
 -/
 import «nameClash.types»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method delKey (d : Std.HashMap String Int) (k : String) return (res : Std.HashMap String Int)
-  ensures ¬(res.contains k)
-  ensures ∀ j : String, j ≠ k → d.contains j → res.contains j ∧ res.get! j = d.get! j
+method delKey (d : Std.HashMap String Int) (k : String) returns (res : Std.HashMap String Int)
+  ensures ensures_1: (¬(res.contains k) : Prop)
+  ensures ensures_2: (∀ j : String, j ≠ k → d.contains j → res.contains j ∧ res.get! j = d.get! j : Prop)
   do
     return Pure.delKey d k
 
-method single (n : Int) return (res : Array Int)
-  ensures res.size = 1
-  ensures res[0]! = n
+method single (n : Int) returns (res : Array Int)
+  ensures ensures_1: (res.size = 1 : Prop)
+  ensures ensures_2: (res[0]! = n : Prop)
   do
     return Pure.single n
 
-method anyOdd (n : Int) return (res : Bool)
-  ensures res → Int.tmod n 2 = 1
-  ensures Int.tmod n 2 = 1 → res
+method anyOdd (n : Int) returns (res : Bool)
+  ensures ensures_1: (res → Int.tmod n 2 = 1 : Prop)
+  ensures ensures_2: (Int.tmod n 2 = 1 → res : Prop)
   do
     return Pure.anyOdd n
 
-method underscoreVsMangled (i_x : Int) return (res : Int)
-  ensures res = i_x
+method underscoreVsMangled (i_x : Int) returns (res : Int)
+  ensures ensures_1: (res = i_x : Prop)
   do
     return Pure.underscoreVsMangled i_x
 
-method keywordVsMangled («match» : Int) return (res : Int)
-  ensures res = «match»
+method keywordVsMangled («match» : Int) returns (res : Int)
+  ensures ensures_1: (res = «match» : Prop)
   do
     return Pure.keywordVsMangled «match»
 
-method passThrough (res : Int) return (res' : Int)
-  ensures res' = res + 0
+method passThrough (res : Int) returns (res' : Int)
+  ensures ensures_1: (res' = res + 0 : Prop)
   do
     return Pure.passThrough res
 
-method sumTo (x : Int) return (res' : Int)
-  require x ≥ 0
-  ensures res' ≥ 0
+method sumTo (x : Int) returns (res' : Int)
+  requires require_1: (x ≥ 0 : Prop)
+  ensures ensures_1: (res' ≥ 0 : Prop)
   do
     let mut res : Int := 0
     let mut i : Int := 0
     while i < x
-      invariant 0 ≤ i
-      invariant i ≤ x
-      invariant res ≥ 0
+      invariant invariant_1: (0 ≤ i : Prop)
+      invariant invariant_2: (i ≤ x : Prop)
+      invariant invariant_3: (res ≥ 0 : Prop)
       decreasing (x - i).toNat
     do
       res := res + i
       i := i + 1
     return res
 
-method callee (x : Int) return (res : Int)
-  ensures res = x + 1
+method callee (x : Int) returns (res : Int)
+  ensures ensures_1: (res = x + 1 : Prop)
   do
     return Pure.callee x
 
-method tempClash (_t0 : Int) (i_t0 : Int) return (res : Int)
-  ensures res = _t0 + 1 + i_t0 + 1
+method tempClash (_t0 : Int) (i_t0 : Int) returns (res : Int)
+  ensures ensures_1: (res = _t0 + 1 + i_t0 + 1 : Prop)
   do
     let mut z : Int := 0
     let _t0' ← callee _t0
@@ -70,40 +69,40 @@ method tempClash (_t0 : Int) (i_t0 : Int) return (res : Int)
     z := _t0' + _t1
     return z
 
-method someEscCollision (_x : Int) (i_x : Int) return (res : Bool)
-  ensures res → _x > 0
+method someEscCollision (_x : Int) (i_x : Int) returns (res : Bool)
+  ensures ensures_1: (res → _x > 0 : Prop)
   do
     return Pure.someEscCollision _x i_x
 
-method resAssignOnly (x : Int) return (res' : Int)
-  ensures res' = x
+method resAssignOnly (x : Int) returns (res' : Int)
+  ensures ensures_1: (res' = x : Prop)
   do
     let mut res : Int := 0
     res := 1
     return x
 
-method constructorVsLocal (error : String) return (res : ClashVerdict)
-  ensures (match res with | .error .. => true | _ => false)
-  ensures (match res with | .error _result_error => _result_error = error | _ => true)
+method constructorVsLocal (error : String) returns (res : ClashVerdict)
+  ensures ensures_1: ((match res with | .error .. => true | _ => false) : Prop)
+  ensures ensures_2: ((match res with | .error _result_error => _result_error = error | _ => true) : Prop)
   do
     return Pure.constructorVsLocal error
 
-method isRpcError (verdict : HyphenVerdict) return (res : Bool)
-  ensures res → (match verdict with | .«rpc-error» .. => true | _ => false)
+method isRpcError (verdict : HyphenVerdict) returns (res : Bool)
+  ensures ensures_1: (res → (match verdict with | .«rpc-error» .. => true | _ => false) : Prop)
   do
     return Pure.isRpcError verdict
 
-method _foo (x : Int) return (res : Int)
-  ensures res = x
+method _foo (x : Int) returns (res : Int)
+  ensures ensures_1: (res = x : Prop)
   do
     return Pure._foo x
 
-method i_foo (x : Int) return (res : Int)
-  ensures res = x
+method i_foo (x : Int) returns (res : Int)
+  ensures ensures_1: (res = x : Prop)
   do
     return Pure.i_foo x
 
-method useBox (b : _Box) return (res : Int)
-  ensures res = b.x
+method useBox (b : _Box) returns (res : Int)
+  ensures ensures_1: (res = b.x : Prop)
   do
     return Pure.useBox b
