@@ -148,7 +148,7 @@ LemmaScript models `number` as `Int`/`int` by default. The user can annotate var
 - Array indexing syntax (Lean: `arr[i.toNat]!` vs `arr[i]!`)
 - Interaction with ghost functions (which naturally take `Nat` for structural recursion)
 
-For most programs (array algorithms, business logic, state machines), integer reasoning is what you want. The safe-integer question (overflow at 2^53) is deferred — for now, we reason about mathematical integers and trust that production values stay in range.
+For most programs (array algorithms, business logic, state machines), integer reasoning is what you want. The safe-integer question (overflow at 2^53) is deferred — for now, we reason about mathematical integers and trust that production values stay in range. [DESIGN_NUMBERS.md](DESIGN_NUMBERS.md) specifies the research and backend gates for an opt-in faithful JavaScript `Number` model.
 
 ---
 
@@ -237,4 +237,3 @@ The LLM can help with proof tactics and ghost definitions. It cannot help with m
 | **RSC** | Prior art for TS verification. LemmaScript uses explicit annotations on a restricted fragment with full proving power, rather than refinement type inference. |
 | **runtime guard** | The enforcement layer between verified and unverified TypeScript. |
 | **lean-lsp-mcp** | The bridge between LLMs and Lean's proof engine. |
-

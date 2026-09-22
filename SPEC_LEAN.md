@@ -137,7 +137,7 @@ This enables proofs by standard Lean induction over sequences of calls. The Velv
 
 **Spec references:** In `//@ ensures`, `//@ requires`, and `//@ invariant` annotations, calls to pure functions are resolved as `Pure.fnName`. The resolve phase classifies these as `spec-pure` call kind, and the transform emits the qualified name. Calls to external Lean-defined spec helpers (e.g., `sumTo` in a hand-written `.spec.lean`) pass through unqualified.
 
-Deterministic `//@ extern` declarations become opaque Lean functions. `//@ impure` externs are Dafny-only and are rejected by the Lean backend.
+Deterministic extern declarations become opaque Lean functions. Impure externs are Dafny-only and are rejected by the Lean backend, whether selected explicitly with `//@ impure` or inherited from `extern-default: impure`; add `//@ pure` to an individual extern used by a Lean file.
 
 **Proof note:** Since the method body is `return Pure.foo ...`, proofs need `unfold Pure.foo` before `loom_solve` to expose the logic.
 

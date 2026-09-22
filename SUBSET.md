@@ -34,7 +34,7 @@ Two things shape what you can verify:
 | `number` (non-integer literal) | real | `0.8`, `3.14` become reals; mixed int/real arithmetic coerces automatically. |
 | `bigint` | integer | Same as `number`; `32n`, `0xffffn` literals supported, exact past 2^53. |
 | `boolean` | bool | |
-| `string` | string | |
+| `string` | string | Modelled per the project's `string-semantics` (SPEC_DAFNY.md §4): Unicode scalars by default, UTF-16 code units under `"javascript-utf16"`. |
 | `T[]` / `Array<T>` / `readonly T[]` | sequence | |
 | `[A, B, ...]` (heterogeneous tuple) | tuple | Native tuple (`(A, B)` / `A × B`). Access needs a literal index (`t[0]`, `t[1]`); `const [a, b] = t` works. |
 | `[T, T, ...]` (homogeneous tuple) | sequence | Same-typed elements model as a `seq` (more capable than a fixed tuple). |

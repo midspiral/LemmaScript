@@ -1,6 +1,6 @@
 ---
 title: "CLI reference (lsc)"
-description: "Every lsc command, flag, and file convention — gen, check, regen, extract, info, claimcheck, and batch mode."
+description: "Every lsc command, flag, and file convention — gen, check, regen, extract, info, config, claimcheck, and batch mode."
 ---
 
 <!-- Hand-written manual page (not synced from repo root). Source of truth for
@@ -12,6 +12,7 @@ The `lsc` command drives the whole toolchain. Install it globally
 
 ```sh
 lsc <gen|gen-check|check|regen|extract|info> [--backend=lean|dafny] [flags] <file.ts>
+lsc config [--config=path] [<file.ts>]
 lsc <gen|gen-check|check> [--backend=…] [--slow]        # no file: batch over LemmaScript-files.txt
 lsc claimcheck [<file.ts>] [flags…]                     # forwards to lemmascript-claimcheck
 ```
@@ -24,17 +25,19 @@ exits `0` on success and `1` on any failure.
 
 | Command | What it does |
 |---|---|
-| `lsc gen <file.ts>` | Generate backend code next to the source file |
+| `lsc gen <file.ts>` | Generate backend code (next to the source unless `proof-dir` is configured) |
 | `lsc gen-check <file.ts>` | `gen`, then verify the hand-edited file is additions-only vs. the generated one (Dafny) |
 | `lsc check <file.ts>` | `gen` + additions-only check + run the prover — the full loop |
 | `lsc regen <file.ts>` | Regenerate after a TS edit, three-way-merging to preserve proof additions (Dafny) |
 | `lsc extract <file.ts>` | Dump the Raw IR as JSON to stdout (backend-neutral) |
 | `lsc info <file.ts>` | Write `<file>.ts.json`, a per-function spec summary (backend-neutral) |
+| `lsc config [<file.ts>]` | Show the discovered config, effective options, and resolved Dafny artifact directory |
 | `lsc claimcheck [<file.ts>]` | Check each function's plain-English `//@ contract` against its formal clauses |
 
 ### `lsc gen`
 
-Generates the backend files next to your TypeScript source.
+Generates backend files next to your TypeScript source unless a Dafny
+`proof-dir` is configured.
 
 - **Dafny** (`--backend=dafny`, the default): writes `<name>.dfy.gen` (always
   regeneratable — never edit) and, on first run, `<name>.dfy` (the file you and your
@@ -65,6 +68,13 @@ Never delete `<name>.dfy` and `gen` fresh — you'd lose every proof addition.
 additions-only check, skipping the prover (CI uses this when a separate `check`
 pass does the verifying).
 
+Recovery state depends on the failure stage. A conflict restores the original proof
+and retains the old `.dfy.base`; an additions-only failure also retains that anchor.
+If the merge is clean and additions-only but verification fails, `.dfy.base` instead
+advances to the new generation already present in the proof. Keep it while fixing
+the proof. A successful `regen` removes the anchor, also under `--no-verify`.
+Do not discard an anchor solely because a command failed.
+
 ### `lsc extract` and `lsc info`
 
 Backend-neutral: they run regardless of any `//@ backend` directive.
@@ -73,6 +83,22 @@ Backend-neutral: they run regardless of any `//@ backend` directive.
   tools to consume LemmaScript's frontend instead of re-parsing TypeScript.
 - `info` writes `<file>.ts.json`: each function's signature plus its `requires` /
   `ensures` / `decreases` clauses. Tools like `lemmascript-seal` build on this.
+
+### `lsc config`
+
+Discovers the nearest `lemmascript.json` above a source file and prints its
+effective options after top-of-file overrides. With a file, the report also
+contains the absolute Dafny artifact directory; without one, discovery starts
+at the current directory. Use `--config=<path>` to pin a particular file.
+
+```json
+{
+  "extern-default": "impure",
+  "string-semantics": "unicode-scalar",
+  "safe-slice": true,
+  "proof-dir": "proofs"
+}
+```
 
 ### `lsc claimcheck`
 
@@ -95,15 +121,26 @@ src/scanner.ts 300 --isolate-assertions
 Format: `filepath [timeout_in_seconds] [extra prover flags…]`. Batching is
 fail-fast — the first failing entry stops the run.
 
-One safeguard: in a `check` batch (Dafny), entries whose timeout exceeds **60
-seconds** are downgraded to `gen-check` (generation + additions-only, no proving) so
-routine runs stay fast. Pass `--slow` to verify every entry with its full timeout.
+By default, a Dafny `check` batch runs `gen-check` (generation + additions-only,
+no proving) for entries whose manifest timeout exceeds **60 seconds**. Pass
+`--slow` to verify those entries with their manifest timeouts, or supply
+`--time-limit` to verify every entry with that timeout, even above 60 seconds.
+
+CLI `--time-limit` and `--extra-flags` values override the corresponding manifest
+values independently. Omitted options retain each entry's setting; an explicit
+`--extra-flags=` clears its flags. Repeating either flag is an error.
+
+```sh
+lsc check --backend=dafny --time-limit=120  # verify every entry with this limit
+lsc check --backend=dafny --extra-flags="--isolate-assertions"
+```
 
 ## Flags
 
 | Flag | Applies to | Meaning |
 |---|---|---|
 | `--backend=dafny\|lean` | all except extract/info | Backend to target. Default: `dafny` |
+| `--config=<path>` | config-aware commands | Pin `lemmascript.json` instead of nearest-ancestor discovery |
 | `--time-limit=<seconds>` | check, regen | Prover time limit (positive integer) |
 | `--extra-flags="…"` | check, regen | Extra flags passed to the prover verbatim |
 | `--slow` | batch `check` | Verify long-timeout entries instead of downgrading them |
@@ -114,14 +151,24 @@ routine runs stay fast. Pass `--slow` to verify every entry with its full timeou
 | Directive | Effect |
 |---|---|
 | `//@ backend <dafny\|lean>` | The file belongs to one backend; commands for the other backend skip it (`extract`/`info` always run) |
-| `//@ safe-slice` | File-level option consumed by the Dafny emitter |
+| `//@ option <key> <value>` | Override an eligible project option before the first source statement |
+| `//@ safe-slice` | Legacy alias for `//@ option safe-slice true` |
 | `//@ lean-module <name>` | Overrides the Lean module base name (Lean module names are global; this prevents collisions between identically-named files) |
 
 ## Project resolution
 
-`lsc` resolves imports using the **nearest `tsconfig.json`** above the source file;
-without one it falls back to strict ESNext defaults. From a source checkout, the
+`lsc` resolves imports using the **nearest `tsconfig.json`** and options using the
+nearest `lemmascript.json` above the source file. Without a TS config it falls
+back to strict ESNext defaults; without a LemmaScript config it uses backward-
+compatible option defaults. From a source checkout, the
 equivalent of `lsc` is `npx tsx <checkout>/tools/src/lsc.ts` — no build step needed.
+
+For Lean checks, the nearest ancestor containing either `lakefile.lean` or
+`lakefile.toml` is the build directory. Discovery starts in the source directory
+and includes the filesystem root. A nearer TOML project takes precedence over
+an outer Lean project, and vice versa. If neither file is found, `lsc check`
+reports an error without starting Lake. A missing proof file also fails before
+Lake is started.
 
 ## Next
 

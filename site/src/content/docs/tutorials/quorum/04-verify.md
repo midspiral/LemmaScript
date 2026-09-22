@@ -158,15 +158,16 @@ Z3 (Dafny's solver) is nondeterministic with multiplication. A proof involving `
 
 **Fix:** Prove multiplication facts with small inductive helper lemmas or with the standard Dafny library instead of relying on Z3 to figure them out.
 
-### Stale .dfy.base
+### Regeneration recovery state
 
-If `regen` produces duplicate declarations or strange merge artifacts, a stale `.dfy.base` file is the cause.
+After a clean additions-only merge, a verifier failure leaves `.dfy.base` pointing to the new generation already present in the proof. Keep this anchor while fixing the proof; it prevents the next regen from merging that generation again.
 
-**Fix:**
+A merge conflict retains the old anchor and restores the original proof. Inspect `.dfy.merged` before retrying. Do not treat every retained `.dfy.base` as stale or delete it just because verification failed.
+
+A successful `regen` removes the anchor, including under `--no-verify`. To clear it manually, first establish that the proof matches the current generated file and verifies:
 ```bash
-rm -f src/domain.dfy.base
+lsc check --backend=dafny src/domain.ts && rm -f src/domain.dfy.base
 ```
-Then re-run regen.
 
 ### Callee ensures not available
 

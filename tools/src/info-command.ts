@@ -14,6 +14,7 @@ import { writeFileSync } from "fs";
 import type { RawFunction, RawModule } from "./rawir.js";
 import type { TFunction, TModule } from "./typedir.js";
 import { parseTsType, tyToCanonical } from "./types.js";
+import type { LscOptions } from "./config.js";
 
 interface FnInfo {
   sig: string;
@@ -113,6 +114,7 @@ export function runTypedInfo(
   typed: TModule,
   version: string,
   backendDirective: string | null,
+  options: LscOptions,
   dafny: TypedInfoDafny,
 ): void {
   const rawByName = new Map(raw.functions.map(f => [f.name, f]));
@@ -123,6 +125,7 @@ export function runTypedInfo(
     lemmascript: version,
     file: typed.file,
     backendDirective,
+    options,
     typeDecls: typed.typeDecls,
     externs: typed.externs,
     constants: typed.constants,

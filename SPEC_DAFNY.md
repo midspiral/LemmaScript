@@ -17,6 +17,16 @@ The `.dfy.gen` extension prevents Dafny tooling from auto-verifying it.
 
 The diff between gen and dfy must be **additions only** — the LLM may insert helper lemmas, ghost predicates, assert statements, and loop invariants, but may not modify generated lines.
 
+`"proof-dir": "proofs"` in `lemmascript.json` relocates the complete Dafny
+artifact set while preserving the pair: a source `src/search/foo.ts` under that
+config uses `proofs/src/search/foo.dfy.gen` and `proofs/src/search/foo.dfy`.
+Regen state (`.dfy.base` and `.dfy.merged`) lives there too. The path is relative
+to the config file, and source subdirectories are mirrored to prevent basename
+collisions. The source must be below the config directory. When enabling the
+option, move the hand-written `.dfy`; `.dfy.gen` can be regenerated. If `lsc`
+finds an existing beside-source proof but no mapped proof, it fails instead of
+silently seeding a new `.dfy`. Lean artifacts are not affected by this option.
+
 ---
 
 ## 2. Pure Functions
@@ -50,13 +60,13 @@ Non-pure functions become Dafny `method` declarations.
 
 1. Read old `foo.dfy.gen` before overwriting
 2. Regenerate `foo.dfy.gen`
-3. If `foo.dfy` doesn't exist → create from gen, verify, done
-4. If gen changed → three-way merge (`git merge-file`) using old gen as base
+3. If `foo.dfy` doesn't exist → create from gen, verify unless `--no-verify`, done
+4. Choose the existing `.dfy.base`, or otherwise the old gen, as the anchor; merge (`git merge-file`) when the new gen differs
 5. Check additions-only invariant
-6. Verify merged `foo.dfy`
-7. On success, delete `.dfy.base` (gen is now the anchor)
+6. Verify merged `foo.dfy` unless `--no-verify`; if verification fails, advance `.dfy.base` to the new gen before exiting with failure
+7. On success, delete `.dfy.base` (gen is now the anchor), including when verification was explicitly skipped
 
-On merge conflict, the original `foo.dfy` is restored and the merged result is saved as `foo.dfy.merged` for manual inspection.
+On merge conflict, the original `foo.dfy` is restored and the merged result is saved as `foo.dfy.merged` for manual inspection. Conflicts and additions-only failures retain the old anchor. A verifier failure after a clean additions-only merge instead retains the new anchor, because the proof already contains that generation; the next retry must not merge it a second time.
 
 ---
 
@@ -95,7 +105,7 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | `SeqFilterSome` | filterMap pattern (§3.7) | Drop `None`s and unwrap to `seq<T>` |
 | `SeqFlatten` | `arr.flat()` | Flatten one level |
 | `SeqJoin` | `arr.join(sep)` | Join into a string |
-| `SafeSlice` | `arr.slice(lo, hi)` under `//@ safe-slice` | Bounds-clamping slice |
+| `SafeSlice` | `arr.slice(lo, hi)` with effective `safe-slice: true` | Bounds-clamping slice |
 | `Perm` | `perm(a, b)` (spec-only) | `predicate Perm<T(==)>(a, b) { multiset(a) == multiset(b) }` |
 
 **String:**
@@ -106,6 +116,13 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | `StringSplit` | `s.split(d)` | Axiomatic split (`1 <= \|res\| <= \|s\| + 1`) |
 | `StringTrim` | `s.trim()` / `s.trimEnd()` / `s.trimStart()` | Trim (also provides `StringTrimRight` / `StringTrimLeft`); strips the full ECMAScript whitespace set via `IsJSWhitespace`, not just `' '` |
 | `StringToLower` / `StringToUpper` | `s.toLowerCase()` / `s.toUpperCase()` | Case folding |
+
+**String profile.** `string-semantics` in `lemmascript.json` (SPEC.md §7.6) selects which model of JavaScript strings a proof is made under; each is a named identity the proof's claims are relative to (DESIGN_STRINGS.md):
+
+| Identity | `lemmascript.json` | Claim |
+|---|---|---|
+| `unicode-scalar-1` | `"unicode-scalar"` (default) | Dafny `string` under `--unicode-char:true`: strings are Unicode scalar sequences. `.length`, indexing, `slice`, `charCodeAt`, and `indexOf` are over scalars and differ from JavaScript for astral text; unpaired surrogates are outside the domain (refused in literals; `String.fromCharCode` requires a scalar); case mapping is ASCII-only. No header token. |
+| `javascript-utf16-1` | `"javascript-utf16"` | Dafny `string` under `--unicode-char:false`: strings are UTF-16 code-unit sequences. `.length`, indexing, `slice`, `charCodeAt`, and `String.fromCharCode` (`0 <= n < 0x10000`) are exact; `filter`/`every`/`reduce` use local `SeqFilter`/`SeqAll`/`SeqFoldLeft` helpers because the Dafny standard library cannot load in this mode; case mapping is ASCII-only. Generated files carry `// lsc options: string-semantics=javascript-utf16`. |
 
 ---
 
@@ -119,14 +136,16 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 
 Standard libraries are auto-detected: if `foo.dfy` contains `import Std.`, the `--standard-libraries` flag is added.
 
-JavaScript strings are sequences of UTF-16 code units, so `lsc check` pins
-Dafny to `--unicode-char:false`. Generated files that use source strings carry
-the marker `LemmaScript string model: javascript-utf16-code-units`. Dafny 4.11's
-precompiled standard library was built for Unicode-scalar chars and cannot be
-loaded in this mode. LemmaScript therefore uses local helpers for generated
-`filter`, `every`, and `reduce` operations, and fails closed with an actionable
-error if a string-bearing proof addition still imports `Std.*`. A string-free
-proof may continue to use the standard library.
+The char mode is read from the artifact, not the config, so a standalone `.dfy`
+verifies under the model it was generated for: `dafnyVerify` pins
+`--unicode-char:true` unless the header carries
+`// lsc options: string-semantics=javascript-utf16`, in which case it passes
+`--unicode-char:false --allow-deprecation` (only the `:false` value is deprecated
+in Dafny 4.11; `--allow-deprecation` waives exactly that warning, whereas
+`--allow-warnings` would also un-fatal vacuity and missing-`{:axiom}` warnings).
+Dafny's precompiled standard library cannot load under `--unicode-char:false`, so
+a `javascript-utf16` proof whose additions import `Std.*` fails closed with an
+error naming `string-semantics`; a `unicode-scalar` proof may use it freely.
 
 The shared `--time-limit=<seconds>` flag (SPEC.md §7) maps to Dafny's `--verification-time-limit`; `--extra-flags=<string>` is forwarded verbatim to `dafny verify`.
 

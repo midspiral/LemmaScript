@@ -55,6 +55,21 @@ Type names: `Expr`, `Stmt`, `Module`, `MatchArm`, `StmtMatchArm`, and `Decl` = `
 
 **Emit** (`lean-emit.ts` / `dafny-emit.ts`): IR → text. Each emitter maps `Ty` objects to backend type syntax and method calls to backend-specific syntax.
 
+## Options
+
+`config.ts` owns the `OPTION_SPECS` registry, nearest-ancestor
+`lemmascript.json` discovery, JSON and `//@ option` validation, defaults, and
+cross-option checks. `lsc.ts` merges explicit project values with eligible
+top-of-file overrides and resolves once per source file. It passes the result
+to extraction/emission; those phases never read config files.
+`string-semantics` is consumed by the Dafny emitter (literal escaping, char-sensitive
+preambles, helper source, and the `// lsc options:` header token) and by extraction
+(surrogate literals under the default); `dafnyVerify` derives the char-mode flags from
+that token, never from the config. `proof-dir` is
+consumed only by `lsc.ts`, which maps the complete Dafny companion set before
+calling the unchanged Dafny command helpers. `TransformOptions` remains
+backend-intrinsic pipeline configuration and is deliberately separate.
+
 ## Method Calls
 
 All TS `receiver.method(args)` calls produce `methodCall` IR nodes carrying the receiver, its type, the TS method name, the args, and a `monadic` flag. No renaming — the IR stores the TS name (`"map"`, `"indexOf"`, `"with"`, `"get"`, etc.) and the receiver type disambiguates.
@@ -65,7 +80,7 @@ Each emitter dispatches on `(receiverTy, method)` to decide syntax. For example,
 
 ## Externs
 
-When a call resolves to a function declared in a *different* `.ts` file, extract records it as a `RawExtern` (resolved to `TExtern`, lowered to `ExternDecl`). The Dafny emitter renders it as a top-of-file `function {:axiom} Name(...): R` by default, or as a body-less `method {:axiom}` when the source declaration has `//@ impure`; the latter gives every call an independent result. In both cases the source `requires`/`ensures` are lifted along. Externs are emitted before all other declarations so they're in scope everywhere.
+When a call resolves to a function declared in a *different* `.ts` file, extract records it as a `RawExtern` (resolved to `TExtern`, lowered to `ExternDecl`). The Dafny emitter renders it as a top-of-file `function {:axiom} Name(...): R` by default, or as a body-less `method {:axiom}` when selected by `extern-default: impure` or `//@ impure`; the latter gives every call an independent result. A source `//@ pure` overrides an impure project default. In both cases the source `requires`/`ensures` are lifted along. Externs are emitted before all other declarations so they're in scope everywhere.
 
 ## Spec Expression Parser
 
@@ -135,7 +150,12 @@ Each TS source produces two Dafny files:
 
 - **`foo.dfy.gen`** — always regeneratable from TS. The merge base.
 - **`foo.dfy`** — source of truth. Starts as a copy of `.dfy.gen`, then accumulates user/LLM proof additions. The diff between `.dfy.gen` and `.dfy` must be additions-only.
-- **`foo.dfy.base`** — transient three-way-merge anchor written by `regen` when a regenerated `.dfy.gen` diverges from a dirty `.dfy`; deleted on a clean, verified merge.
+- **`foo.dfy.base`** — transient three-way-merge anchor. A conflict or additions-only failure retains the old anchor; verification failure after a clean additions-only merge advances it to the new gen. Successful `regen` removes it, including with `--no-verify`. Do not discard it simply because a command failed.
+
+With `proof-dir`, `lsc.ts` mirrors the source's config-relative directory under
+the configured root and places `.dfy.gen`, `.dfy`, `.dfy.base`, and
+`.dfy.merged` together there. The command helpers receive mapped paths and do
+not implement routing themselves.
 
 ### Commands (`dafny-commands.ts`)
 
@@ -275,4 +295,5 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 | `lean-commands.ts` | CLI | Lean gen/check commands |
 | `dafny-commands.ts` | CLI | Dafny gen/gen-check/regen/check commands |
 | `info-command.ts` | CLI | `lsc info` — per-function spec summary JSON; `--typed` — Typed IR contract for satellites |
+| `config.ts` | CLI/shared | Option registry, config discovery/validation, file overrides, artifact path mapping |
 | `lsc.ts` | CLI | Wires the pipeline, dispatches to backend |

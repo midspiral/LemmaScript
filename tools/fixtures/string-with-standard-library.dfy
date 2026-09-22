@@ -1,4 +1,4 @@
-// LemmaScript string model: javascript-utf16-code-units
+// lsc options: string-semantics=javascript-utf16
 import opened Std.Arithmetic.Mul
 
 lemma StringAndStandardLibraryAreIncompatible() {}

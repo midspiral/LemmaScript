@@ -137,8 +137,10 @@ Three gotchas worth knowing up front:
 - **Nonlinear arithmetic is flaky.** A bare `assert a*b >= 0` can verify locally and fail in
   CI (Z3 is nondeterministic). Prove multiplication facts with tiny **inductive helper
   lemmas** instead — deterministic, and they pass `--isolate-assertions`.
-- **`regen` duplicating declarations?** A stale `*.dfy.base` (the merge anchor) is the cause —
-  `rm` it and re-run.
+- **`regen` recovery state is intentional.** After a clean merge and verifier failure,
+  `*.dfy.base` records the generation already in the proof. Keep it while fixing proofs.
+  Conflicts retain the older anchor instead; inspect `.dfy.merged` before retrying.
+  See [the recovery guidance](AGENTS.md#when-regen-needs-merge-state-recovery) before removing an anchor.
 - **Not everything is expressible** in `//@` specs (e.g. no `multiset`). Find the strongest
   *statable* property, prove that, and note the gap.
 

@@ -16,9 +16,12 @@ Whatever you do, the TS file is the source of truth for *the program*. The hand-
 npx lsc gen   --backend=<dafny|lean> path/to/foo.ts   # generate artifacts
 npx lsc check --backend=<dafny|lean> path/to/foo.ts   # gen + verify
 npx lsc regen --backend=dafny        path/to/foo.ts   # three-way merge after TS changes
+npx lsc config                       path/to/foo.ts   # show effective options and Dafny artifact directory
 ```
 
 Default backend is Dafny. Pass `--backend=...` explicitly anyway — case-study CIs and helper scripts all do, and the default has been flipped before.
+
+If `lemmascript.json` sets `proof-dir`, all Dafny companions (`.dfy.gen`, `.dfy`, `.dfy.base`, `.dfy.merged`) live in the mirrored directory reported by `lsc config`, not beside the TS file. The edit boundaries and regen rules below apply at that mapped location unchanged.
 
 After editing `lsc` itself (anything under `tools/`), run `npm run build` before re-invoking `npx lsc` — the CLI runs the compiled `tools/dist/lsc.js`, not the TS source.
 
@@ -53,20 +56,19 @@ npx lsc regen --backend=dafny foo.ts
 
 Do **not** `rm foo.dfy foo.dfy.gen && npx lsc gen ...` — that drops every proof addition you (or the previous agent) made in `foo.dfy`. `regen` does a three-way merge against the old `.dfy.gen` and preserves additions. On conflict it restores the original `foo.dfy` and writes the merged result to `foo.dfy.merged` for manual inspection.
 
-### When regen duplicates declarations: delete `foo.dfy.base`
+### When regen needs merge-state recovery
 
-`regen` anchors its three-way merge on `foo.dfy.base` if that file exists, otherwise on the previous `.dfy.gen`. It writes `foo.dfy.base` when it starts a merge and **deletes it only on success** (after verification passes). So if a `regen` ends in `FAILED` (verification) or `CONFLICT`, a **stale `foo.dfy.base` is left on disk** — seeded from that run's old gen.
+`regen` anchors its three-way merge on `foo.dfy.base` if that file exists, otherwise on the previous `.dfy.gen`. When a merge is clean but verification fails, `regen` advances `foo.dfy.base` to the newly generated `.dfy.gen` before reporting failure. That anchor is intentional: the proof file already contains the new generated content, so the next regen can preserve proof additions while merging from the generation it actually contains.
 
-The next `regen` then anchors on that stale base instead of the current `.dfy.gen`. If the TS changed again in the meantime, the merge base no longer matches either side and `git merge-file` mis-resolves by **appending fresh copies of the changed declaration and everything after it** — the symptom is a cascade of `Error: Duplicate member name: ...` from Dafny.
+A merge conflict keeps the old anchor and restores the original proof; inspect `foo.dfy.merged` before retrying. An additions-only failure also keeps the old anchor; repair the generated-line changes in the proof. Do not delete either anchor merely to make the next command run.
 
-**Fix:** delete the stale base and regen again:
+A successful `regen` removes `.dfy.base`, including under `--no-verify` after a clean additions-only merge. To clear recovery state manually, first confirm that the proof matches the current generated file and verifies:
 
 ```sh
-rm -f foo.dfy.base
-npx lsc regen --backend=dafny foo.ts
+npx lsc check --backend=dafny foo.ts && rm -f foo.dfy.base
 ```
 
-With no `.base` present, regen correctly anchors on the current `.dfy.gen`, preserves your proof additions, and merges cleanly. (Equivalently: after any failed `regen`, fix the proofs in `foo.dfy` and run `lsc check` — which never touches `.base` — then `rm -f foo.dfy.base` before your next `regen`.) Keep `*.dfy.base` out of version control.
+Only after that successful check is the current `.dfy.gen` an established replacement anchor. On older checkouts, back up the proof and recovery files before investigating a suspected stale anchor; a failed command alone is not evidence that deleting it is safe. Keep `*.dfy.base` out of version control.
 
 ## Annotation pitfalls
 
@@ -101,7 +103,7 @@ import opened Std.Arithmetic.DivMod     // LemmaMulStrictInequality(x,y,z): x<y 
                                         // LemmaModMultiplesBasic(m,p): m>=0 && p>0 ==> (m*p)%p == 0
 ```
 
-`lsc`'s `dafnyVerify` (`tools/dist/dafny-commands.js`) **auto-adds `--standard-libraries` whenever the `.dfy` text contains the substring `Std.`** — so an `import opened` is all you need; no CLI flag or config change, and `lsc check` picks it up. The imports go in as an *inserted* block (additions-only — don't touch the generated header). Euclidean identities (`x == x/p*p + x%p`, `0 <= x%p < p`) and small distributivity (`(k+1)*p == k*p + p`) *are* reliable inline; reserve the library for the cancellation and monotonicity goals.
+`lsc`'s `dafnyVerify` (`tools/dist/dafny-commands.js`) **auto-adds `--standard-libraries` whenever the `.dfy` text contains the substring `Std.`** — so an `import opened` is all you need; no CLI flag or config change, and `lsc check` picks it up. (Exception: a project with `"string-semantics": "javascript-utf16"` cannot use `Std.*` — Dafny's standard library does not load under `--unicode-char:false`; `lsc check` refuses the combination with a message naming the key.) The imports go in as an *inserted* block (additions-only — don't touch the generated header). Euclidean identities (`x == x/p*p + x%p`, `0 <= x%p < p`) and small distributivity (`(k+1)*p == k*p + p`) *are* reliable inline; reserve the library for the cancellation and monotonicity goals.
 
 ## Lean verification workflow
 
