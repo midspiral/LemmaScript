@@ -7,7 +7,7 @@ Guidance for AI coding agents working on LemmaScript itself or on projects that 
 A verification toolchain for TypeScript. The user writes ordinary TS with `//@ ` annotations. `lsc` generates:
 - **Dafny** — one `.dfy.gen` (always regeneratable) + one `.dfy` (the source of truth where proof additions accumulate). Diff must be additions-only.
 - **Lean 4 / Velvet / Loom** — four files: `.types.lean` + `.def.lean` are generated; `.spec.lean` + `.proof.lean` are hand-written.
-- **F* (experimental)** — a generated `.fst.gen` and an additions-only working `.fst`, named from the source path. Higher-order functions and the shared mathematical value model; see [SPEC_FSTAR.md](SPEC_FSTAR.md).
+- **F* (experimental)** — a generated `fstar/foo.fst.gen` and an additions-only working `fstar/foo.fst` beside `foo.ts`. Higher-order functions and the shared mathematical value model; see [SPEC_FSTAR.md](SPEC_FSTAR.md).
 
 Whatever you do, the TS file is the source of truth for *the program*. The hand-written verification files are the source of truth for *the proof*. Don't conflate them.
 
@@ -117,6 +117,8 @@ import opened Std.Arithmetic.DivMod     // LemmaMulStrictInequality(x,y,z): x<y 
 Use `lsc check --backend=fstar foo.ts` (or `node tools/dist/lsc.js` after building this checkout). `fstar.exe` must be on PATH, or `FSTAR_EXE` must name an absolute executable path. `//@ backend fstar` skips a source when running other backends; `//@ backend dafny,fstar` permits both. `./regen-fstar.sh` regenerates and verifies every example without skips.
 
 Never edit `.fst.gen`; add proofs only to the working `.fst`, preserving every generated line. Use `regen --backend=fstar` after TS changes. The Dafny recovery/anchor rules above also apply to `.fst.base` and `.fst.merged`. `proof-dir` remains Dafny-only. Admissions, source option directives, `.fsti` companions, and unchecked project dependencies are rejected. `--time-limit` is a process deadline; only the resource flags listed in SPEC_FSTAR are allowed.
+
+Companions live in a `fstar/` subdirectory beside the TS source, with the same basename. Verify through `lsc`: it handles the internal module filename in a temporary directory. Commands migrate the previous `LS.M<stem>_<digest>.fst` companions and recovery state automatically, but stop if both layouts exist rather than overwrite either proof set.
 
 The backend functionalizes local mutation and loops; captured-state mutation and `await` remain unsupported. Source externs, havoc and assumptions remain explicit trust boundaries. Do not add `assume` or statement-level `skip` to make a proof pass. Returned-function application works, but domain-restricted callback types and recursive tree combinator adapters remain future work. The runtime is verified explicitly before each example, and proof additions may use `opaque_to_smt` to control unfolding without admitting a body.
 

@@ -1333,7 +1333,7 @@ For Dafny `check`, an explicit timeout enables verification even above 60s witho
 
 - **Lean:** writes `foo.types.lean` + `foo.def.lean`
 - **Dafny:** writes `foo.dfy.gen`, seeds `foo.dfy` if missing; `proof-dir` may relocate both
-- **F*:** writes `<module>.fst.gen`, seeds `<module>.fst` if missing, beside the source
+- **F*:** writes `fstar/<basename>.fst.gen`, seeds `fstar/<basename>.fst` if missing, in a subdirectory beside the source
 
 ### 7.2 `check`
 

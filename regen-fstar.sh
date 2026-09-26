@@ -1,5 +1,6 @@
 #!/bin/bash
 # Regenerate F* companions, preserve proof additions, and verify every example.
+# Companions live in examples/fstar/; TypeScript sources stay in examples/.
 # Pass --no-verify for regeneration only. Other arguments go to lsc regen.
 set -u
 cd "$(dirname "$0")" || exit 1

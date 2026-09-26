@@ -22,7 +22,7 @@ import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-comma
 import { leanGen, leanCheck } from "./lean-commands.js";
 import { emitFstarFile } from "./fstar-emit.js";
 import { checkFstarSource } from "./fstar-source.js";
-import { fstarPaths, fstarFlags, fstarGen, fstarCheckDiff, fstarVerify, fstarRegen } from "./fstar-commands.js";
+import { fstarPaths, migrateFstarArtifacts, fstarFlags, fstarGen, fstarCheckDiff, fstarVerify, fstarRegen } from "./fstar-commands.js";
 import { runInfo, runTypedInfo, type TypedInfoDafny } from "./info-command.js";
 import {
   findUp,
@@ -358,6 +358,7 @@ function runFile(
     const root = path.dirname(configFile ?? tsConfigFilePath ?? absPath);
     const files = fstarPaths(absPath, root);
     const text = emitFstarFile(typed, files.moduleName);
+    migrateFstarArtifacts(absPath, files);
     if (cmd === "regen") {
       fstarRegen(files.gen, files.proof, files.base, text, timeLimit, extraFlags, noVerify);
       return;

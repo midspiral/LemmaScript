@@ -179,11 +179,11 @@ The prototype uses the familiar Dafny-style pair. TS remains the source of truth
 
 | Artifact | Ownership |
 | --- | --- |
-| `examples/LS.MfstarClosures_f14fb73fccf0.fst.gen` | Generated baseline; always regeneratable |
-| `examples/LS.MfstarClosures_f14fb73fccf0.fst` | Generated program plus hand-written proof additions; verified by F* |
-| `examples/LS.MfstarClosures_f14fb73fccf0.fst.base`, `.fst.merged` | Temporary merge/recovery state |
+| `examples/fstar/fstarClosures.fst.gen` | Generated baseline; always regeneratable |
+| `examples/fstar/fstarClosures.fst` | Generated program plus hand-written proof additions; verified by F* |
+| `examples/fstar/fstarClosures.fst.base`, `.fst.merged` | Temporary merge/recovery state |
 
-The module declaration matches the working `.fst` filename. Names combine an escaped basename and a digest of the path relative to the config/tsconfig directory, falling back to the source directory. This resolves case/punctuation collisions and survives checkout relocation with the same layout. The existing `proof-dir` option is explicitly Dafny-only; extending it to F* requires an explicit routing/module-resolution change, not silently borrowing Dafny's paths.
+Companions use the source basename inside a sibling `fstar/` directory. Internal module names combine an escaped basename and a digest of the path relative to the config/tsconfig directory, falling back to the source directory. This resolves case/punctuation collisions and survives checkout relocation with the same layout. The verifier copies each working proof to a temporary filename matching its module declaration, keeping opaque filenames out of the repository. Commands migrate the old module-named companions together with their baselines and recovery state, refusing to combine two existing sets. The existing `proof-dir` option remains Dafny-only.
 
 `gen` replaces only the baseline and seeds a missing working file. `check` enforces additions-only and verifies the working module. `regen` merges against the correct old generation, preserves proof additions, and retains recovery state on failure. Carry over the documented Dafny conflict and failed-verification anchor rules. Never recreate a working proof by deleting it.
 

@@ -1,20 +1,42 @@
 /** F* artifacts, isolated runtime checking, and proof-preserving regeneration. */
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "fs";
 import { execFileSync } from "child_process";
 import { createHash } from "crypto";
 import { tmpdir } from "os";
 import path from "path";
 import { fileURLToPath } from "url";
-import { proofRegen } from "./proof-files.js";
-export { proofGen as fstarGen, proofCheckDiff as fstarCheckDiff } from "./proof-files.js";
+import { proofGen, proofRegen } from "./proof-files.js";
+export { proofCheckDiff as fstarCheckDiff } from "./proof-files.js";
 
 export function fstarPaths(source: string, root: string) {
   const relative = path.relative(root, source).split(path.sep).join("/");
   const digest = createHash("sha256").update(relative).digest("hex").slice(0, 12);
-  const stem = path.basename(source, ".ts").replace(/[^A-Za-z0-9]/g, "_");
+  const basename = path.basename(source, ".ts");
+  const stem = basename.replace(/[^A-Za-z0-9]/g, "_");
   const moduleName = `LS.M${stem}_${digest}`;
-  const proof = path.join(path.dirname(source), `${moduleName}.fst`);
+  const proof = path.join(path.dirname(source), "fstar", `${basename}.fst`);
   return { moduleName, proof, gen: proof + ".gen", base: proof + ".base" };
+}
+
+/** Move the old module-named companions together, including recovery state. */
+export function migrateFstarArtifacts(source: string, files: ReturnType<typeof fstarPaths>): void {
+  const legacy = path.join(path.dirname(source), `${files.moduleName}.fst`);
+  const suffixes = ["", ".gen", ".base", ".merged", "i"];
+  const present = suffixes.filter(suffix => existsSync(legacy + suffix));
+  if (!present.length) return;
+  if (suffixes.some(suffix => existsSync(files.proof + suffix))) {
+    throw new Error(`F*: both legacy and relocated proof artifacts exist: ${legacy} and ${files.proof}. Reconcile them before rerunning; no files were moved.`);
+  }
+  mkdirSync(path.dirname(files.proof), { recursive: true });
+  for (const suffix of present) {
+    renameSync(legacy + suffix, files.proof + suffix);
+    console.log(`Moved: ${legacy + suffix} -> ${files.proof + suffix}`);
+  }
+}
+
+export function fstarGen(gen: string, proof: string, text: string): void {
+  mkdirSync(path.dirname(gen), { recursive: true });
+  proofGen(gen, proof, text);
 }
 
 // Only resource tuning is accepted. In particular, never allow lax checking,
@@ -86,11 +108,15 @@ export function fstarVerify(proof: string, timeLimit?: number, extraFlags?: stri
     const generated = existsSync(proof + ".gen") ? readFileSync(proof + ".gen", "utf8") : "";
     checkFstarProof(source, generated);
     if (existsSync(proof + "i")) throw new Error("F*: .fsti companions are not supported; verification must check the generated implementation");
+    // Repository filenames follow the TS source. F* requires its input filename
+    // to match the module declaration, so use that name only inside scratch.
+    const moduleName = codeOnly(source).match(/^\s*module\s+([A-Z][\w']*(?:\.[A-Z][\w']*)*)\s*(?:\r?\n|$)/)?.[1];
+    if (!moduleName || moduleName.toLowerCase() === "ls.runtime") throw new Error("F*: expected a module declaration distinct from the packaged LS.Runtime");
     // A private working directory prevents a sibling .fsti, .checked file, or
     // unverified project module from replacing the implementation we check.
     // Each run checks one TS module, the packaged runtime and the F* library.
     scratch = mkdtempSync(path.join(tmpdir(), "lsc-fstar-"));
-    const file = path.basename(proof);
+    const file = `${moduleName}.fst`;
     copyFileSync(proof, path.join(scratch, file));
     const runtime = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../fstar/LS.Runtime.fst");
     copyFileSync(runtime, path.join(scratch, "LS.Runtime.fst"));
@@ -126,5 +152,6 @@ export function fstarVerify(proof: string, timeLimit?: number, extraFlags?: stri
 }
 
 export function fstarRegen(gen: string, proof: string, base: string, text: string, timeLimit?: number, extraFlags?: string, noVerify = false): void {
+  mkdirSync(path.dirname(gen), { recursive: true });
   proofRegen(gen, proof, base, text, () => fstarVerify(proof, timeLimit, extraFlags), noVerify);
 }
