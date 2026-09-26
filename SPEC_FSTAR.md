@@ -29,10 +29,11 @@ Put `//@ backend fstar` at the top of a source to select only F*, or `//@ backen
 | [fstarComposition.ts](examples/fstarComposition.ts) | Composition over three arbitrary types, a concrete caller's arithmetic postcondition, a callback's quantified guarantee. |
 | [fstarArrays.ts](examples/fstarArrays.ts) | A closure capturing a generic array; map preserves length and filtering cannot increase it. Its working `.fst` also proves map fusion by induction, as a hand-written proof addition. |
 | [fstarIteration.ts](examples/fstarIteration.ts) | A decreasing recursive iterator preserves a callback guarantee; returning and applying the iterator retains its postcondition. |
+| [fstarCompiler.ts](examples/fstarCompiler.ts) | An optimizing compiler returns continuation-passing closures, with semantic preservation for every environment and continuation. It checks constant folding, zero multiplication and lexical `let` bindings using exact `bigint` values. |
 
-All 75 top-level examples generate and verify with F*. The other examples exercise the shared language fragment; the working [F* companions](examples/fstar/README.md) include proofs of binary search, sorting, permutation invariance, stack traversal and collection algorithms. Source contracts and explicit trust annotations are preserved.
+All 76 top-level examples generate and verify with F*. The other examples exercise the shared language fragment; the working [F* companions](examples/fstar/README.md) include proofs of binary search, sorting, permutation invariance, stack traversal and collection algorithms. Source contracts and explicit trust annotations are preserved.
 
-The four examples above use general application that the current Dafny/Lean lowering rejects. They demonstrate the implemented F* path, not an inherent inability of Dafny or Lean to reason about these programs. See [DESIGN_FSTAR.md](DESIGN_FSTAR.md) for the comparison and subsequent milestones.
+The five examples above use general application that the current Dafny/Lean lowering rejects. They demonstrate the implemented F* path, not an inherent inability of Dafny or Lean to reason about these programs. See [DESIGN_FSTAR.md](DESIGN_FSTAR.md) for the comparison and subsequent milestones.
 
 ## Supported fragment
 

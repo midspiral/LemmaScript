@@ -14,6 +14,7 @@ import { narrowModule } from "../src/narrow.ts";
 import { emitFstarFile } from "../src/fstar-emit.ts";
 import { checkFstarSource } from "../src/fstar-source.ts";
 import { checkFstarProof, fstarFlags, fstarPaths, migrateFstarArtifacts, fstarVerify, fstarRegen, fstarCheckDiff } from "../src/fstar-commands.ts";
+import { compile as compileExpression, evaluate, shadowingDemo, type Expression, type Environment, type Continuation } from "../../examples/fstarCompiler.ts";
 
 const cli = fileURLToPath(new URL("../src/lsc.ts", import.meta.url));
 const loader = createRequire(import.meta.url).resolve("tsx");
@@ -98,6 +99,65 @@ for (const file of ["fstarClosures.ts", "fstarComposition.ts", "fstarArrays.ts",
     assert.equal(verify(readFileSync(join(examples, file), "utf8")), true);
   });
 }
+
+// Check the universal compiler theorem independently of the concrete demo's
+// normalization proof, which the example sweep verifies in its working .fst.
+const compilerSource = readFileSync(join(examples, "fstarCompiler.ts"), "utf8");
+const compilerCore = compilerSource.slice(0, compilerSource.indexOf("export function shadowingDemo"));
+test("CPS compiler preserves every environment and continuation", realFstar, () => {
+  assert.equal(verify(compilerCore), true);
+});
+for (const [label, before, after] of [
+  ["dropping the continuation in the zero optimization", "continuation(0n)", "0n"],
+  ["forgetting lexical binding", "body(bind(environment, expression.name, x), continuation)", "body(environment, continuation)"],
+] as const) {
+  test(`CPS compiler proof rejects ${label}`, realFstar, () => {
+    const broken = compilerCore.replace(before, after);
+    assert.notEqual(broken, compilerCore);
+    assert.equal(verify(broken), false);
+  });
+}
+
+test("compiled closures agree with the interpreter across trees, environments and continuations", () => {
+  const literal = (value: bigint): Expression => ({ kind: "literal", value });
+  const variable = (name: number): Expression => ({ kind: "variable", name });
+  const programs: Expression[] = [
+    { kind: "add", left: literal(17n), right: literal(25n) },
+    { kind: "multiply", left: literal(6n), right: literal(7n) },
+    { kind: "multiply", left: variable(0), right: literal(0n) },
+    { kind: "let", name: 0, value: variable(1), body: variable(0) },
+  ];
+  let seed = 19;
+  const choose = (n: number): number => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed % n;
+  };
+  function tree(depth: number): Expression {
+    if (depth === 0) return choose(2) === 0 ? literal(BigInt(choose(7) - 3)) : variable(choose(2));
+    switch (choose(3)) {
+      case 0: return { kind: "add", left: tree(depth - 1), right: tree(depth - 1) };
+      case 1: return { kind: "multiply", left: tree(depth - 1), right: tree(depth - 1) };
+      default: return { kind: "let", name: choose(2), value: tree(depth - 1), body: tree(depth - 1) };
+    }
+  }
+  for (let i = 0; i < 128; i++) programs.push(tree(3));
+  const continuations: Continuation[] = [x => x, x => 10n * x + 1n, x => x * x, () => 7n];
+  for (const expression of programs) {
+    const code = compileExpression(expression);
+    for (const input of [-3n, -1n, 0n, 2n, 5n, 9007199254740993n]) {
+      const environment: Environment = name => input + BigInt(name);
+      const expected = evaluate(expression, environment);
+      for (const continuation of continuations) {
+        assert.equal(code(environment, continuation), continuation(expected));
+      }
+    }
+  }
+  for (const input of [-7n, -1n, 0n, 1n, 13n, 9007199254740993n]) {
+    assert.equal(shadowingDemo(input), 30n * (input + 1n) + 1n);
+  }
+  // A zero-valued expression must still call its continuation.
+  assert.equal(compileExpression(programs[2])(() => 99n, () => 7n), 7n);
+});
 
 test("local generic closures, shadowed names, zero arguments, booleans and indexing", realFstar, () => {
   assert.equal(verify(String.raw`
