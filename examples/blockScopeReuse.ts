@@ -11,7 +11,7 @@
  * Dafny's legal nested-block shadowing is left alone.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 // A counting `for` then a separate `while`, both written with `i`. The `while`'s
 // `i` is renamed (→ `i_2`) so the two no longer collide.

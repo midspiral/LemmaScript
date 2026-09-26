@@ -1,6 +1,6 @@
 # LemmaScript (Tech Preview)
 
-A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations. The toolchain generates verifiable code from your TypeScript in Dafny, Lean 4 (with Velvet/Loom), or an experimental pure F* backend.
+A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations. The toolchain generates verifiable code from your TypeScript in Dafny, Lean 4 (with Velvet/Loom), or an experimental F* backend.
 
 See [SPEC.md](SPEC.md), [DESIGN.md](DESIGN.md), and [GETTING_STARTED.md](GETTING_STARTED.md).
 
@@ -88,14 +88,15 @@ lake build
 
 ### F* backend (experimental)
 
-The F* backend supports pure higher-order functions, returned closures, generic composition, and array combinators. Install [F*](https://github.com/FStarLang/FStar/blob/master/INSTALL.md), then from this checkout run:
+The F* backend supports higher-order functions and returned closures alongside the existing examples with loops, records, arrays, strings, maps and sets. Install [F*](https://github.com/FStarLang/FStar/blob/master/INSTALL.md), then from this checkout run:
 
 ```sh
 npm run build
 node tools/dist/lsc.js check --backend=fstar examples/fstarClosures.ts
+./regen-fstar.sh  # regenerate and verify all examples, preserving proofs
 ```
 
-Sources marked `//@ backend fstar` are skipped by the other backends. Generated `.fst.gen` files and working `.fst` proofs follow the additions-only `gen`/`check`/`regen` workflow. See [SPEC_FSTAR.md](SPEC_FSTAR.md) for the supported subset and all four examples, and [DESIGN_FSTAR.md](DESIGN_FSTAR.md) for the rationale and remaining work. Tested with F* 2026.09.20; Dafny remains the default.
+Sources marked `//@ backend fstar` are skipped by the other backends. Generated `.fst.gen` files and working `.fst` proofs follow the additions-only `gen`/`check`/`regen` workflow. See [SPEC_FSTAR.md](SPEC_FSTAR.md) for the supported model and examples, and [DESIGN_FSTAR.md](DESIGN_FSTAR.md) for the rationale and remaining work. Tested with F* 2026.09.20; Dafny remains the default.
 
 ## Continuous Integration
 

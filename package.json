@@ -1,7 +1,7 @@
 {
   "name": "lemmascript",
   "version": "0.6.4",
-  "description": "A verification toolchain for TypeScript — generates Lean 4 or Dafny from annotated TS",
+  "description": "A verification toolchain for TypeScript \u2014 generates Lean 4 or Dafny from annotated TS",
   "type": "module",
   "engines": {
     "node": ">=18"
@@ -10,7 +10,8 @@
     "lsc": "tools/dist/lsc.js"
   },
   "files": [
-    "tools/dist"
+    "tools/dist",
+    "tools/fstar"
   ],
   "scripts": {
     "build": "tsc -p tools/tsconfig.json",

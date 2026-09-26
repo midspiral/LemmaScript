@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { Project, ScriptTarget } from "ts-morph";
 import { extractModule } from "../src/extract.ts";
 import { resolveModule } from "../src/resolve.ts";
+import { autoHavocModule } from "../src/autohavoc.ts";
 import { narrowModule } from "../src/narrow.ts";
 import { emitFstarFile } from "../src/fstar-emit.ts";
 import { checkFstarSource } from "../src/fstar-source.ts";
@@ -27,7 +28,7 @@ function compile(source: string, module = "Test"): string {
   const file = project.createSourceFile("input.ts", source);
   const raw = extractModule(file);
   checkFstarSource(file, raw);
-  return emitFstarFile(narrowModule(resolveModule(raw)), module);
+  return emitFstarFile(autoHavocModule(narrowModule(resolveModule(raw))), module);
 }
 function temporary(run: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "lsc-fstar-test-"));
@@ -38,6 +39,7 @@ function verify(source: string): boolean {
   temporary(dir => {
     const file = join(dir, "Test.fst");
     writeFileSync(file, compile(source));
+    writeFileSync(file + ".gen", readFileSync(file));
     ok = fstarVerify(file, 20);
   });
   return ok;
@@ -112,37 +114,105 @@ for (const [label, code] of [
 }
 
 for (const [label, code, error] of [
-  ["mutable closure", `export function bad():()=>number { let x=0; return ():number => ++x; }`, /mutable local/],
-  ["array mutation", `export function bad(xs:number[]):number { xs.push(1); return xs.length; }`, /statement 'expr'/],
+  ["mutable closure", `export function bad():()=>number { let x=0; return ():number => ++x; }`, /mutation of captured variable/],
   ["module mutation", `const xs=[1]; xs[0]=2; export function bad():number { return xs[0]; }`, /module-level statement/],
   ["escaped array constant", `export const xs=[1]; export function bad():number { return xs[0]; }`, /scalar module constants/],
-  ["callback mutation", `export function bad(xs:number[]):number[] { return xs.map((x:number):number => { xs[0]=x; return x; }); }`, /statement 'assign'/],
+  ["callback mutation", `export function bad(xs:number[]):number[] { return xs.map((x:number):number => { xs[0]=x; return x; }); }`, /mutation of captured variable/],
   ["reference equality", `export function bad(xs:number[],ys:number[]):boolean { return xs===ys; }`, /reference equality/],
   ["function identity", `export function bad(f:()=>number,g:()=>number):boolean { return f===g; }`, /reference equality/],
   ["index callback", `export function bad(xs:number[]):number[] { return xs.map((x:number,i:number):number => x+i); }`, /1-parameter callback/],
   ["thisArg", `export function bad(xs:number[]):number[] { return xs.map((x:number):number => x, 0); }`, /thisArg/],
   ["reduce without initial", `export function bad(xs:number[]):number { return xs.reduce((x:number,y:number):number=>x+y); }`, /initial values/],
-  ["optional parameter", `export function bad(x?:number):number { return 1; }`, /optional, defaulted, and rest/],
-  ["default parameter", `export function bad(x:number=1):number { return x; }`, /optional, defaulted, and rest/],
-  ["rest parameter", `export function bad(...xs:number[]):number { return xs.length; }`, /optional, defaulted, and rest/],
-  ["async", `export async function bad():Promise<number> { return 1; }`, /async functions/],
+  ["destructured parameters", `export function bad([x,y]:[number,number]):number { return x+y; }`, /destructured parameters/],
+  ["default parameter", `export function bad(x:number=1):number { return x; }`, /defaulted and rest/],
+  ["rest parameter", `export function bad(...xs:number[]):number { return xs.length; }`, /defaulted and rest/],
+  ["async", `export async function bad():Promise<number> { return await Promise.resolve(1); }`, /async functions|await/i],
   ["constraint", `export function bad<A extends number>(x:A):number { return x; }`, /constrained/],
   ["type alias shadowing", `type A=number; export function bad<A>(x:A):A { return x; }`, /shadowing type aliases/],
   ["nested contract", `export function bad():(x:number)=>number { return (x:number):number => {\n //@ ensures false\n return x; }; }`, /nested lambda contracts/],
-  ["fallthrough branch", `export function bad(b:boolean):number { if(b) { const x=1; } return 0; }`, /branch fallthrough/],
-  ["lexical block", `export function bad():number { const x=0; { const x=1; } return x; }`, /standalone lexical blocks/],
-  ["destructured parameters", `export function bad([x,y]:number[]):number { return x+y; }`, /destructured parameters/],
   ["unsafe literal", `export function bad():number { return 9007199254740993; }`, /safe integers/],
-  ["fraction", `export function bad():number { return 1.5; }`, /safe integers/],
   ["skip", `export function bad(xs:number[]):number {\n //@ skip\n xs.push(1);\n return xs.length; }`, /statement-level skip/],
-  ["assume", `export function bad(x:number):number {\n //@ assume x > 0\n return x; }`, /assume is not supported/],
-  ["havoc", `export function bad():number {\n //@ havoc\n const x:number = 0; return x; }`, /havoc/],
-  ["autohavoc", `export function bad(x:number):number {\n //@ autohavoc\n return x; }`, /autohavoc/],
-  ["extern", `//@ extern\nexport function external(x:number):number { return x; }\nexport function bad(x:number):number { return external(x); }`, /externs/],
   ["contract", `export function bad(x:number):number {\n //@ contract x > 0\n return x; }`, /contract annotations/],
 ] as const) {
   test(`generation rejects ${label}`, () => assert.throws(() => compile(code), error));
 }
+
+
+for (const [label, code] of [
+  ["loop mutation and early returns", String.raw`export function size(xs:number[]):number {
+    //@ ensures \result === xs.length
+    let n=0;
+    while (n<xs.length) {
+      //@ invariant 0 <= n && n <= xs.length
+      n++;
+    }
+    return n;
+  }`],
+  ["local arrays and lexical scope", String.raw`export function size(b:boolean):number {
+    //@ ensures \result === 2
+    let xs:number[]=[];
+    { const x=1; xs.push(x); }
+    if(b) { const x=2; xs.push(x); } else { xs.push(3); }
+    return xs.length;
+  }`],
+  ["optional arguments", String.raw`export function f(x?:number):number { return x ?? 0; }
+    export function test():number { //@ ensures \result === 0
+      return f();
+    }`],
+
+  ["deterministic extern", String.raw`//@ extern
+    export function external(x:number):number { return x; }
+    export function test(x:number):boolean {
+      //@ ensures \result
+      return external(x)===external(x);
+    }`],
+  ["explicit source havoc and assume", String.raw`export function sample():number {
+    //@ ensures \result >= 0
+    //@ havoc
+    const x:number=0;
+    //@ assume x >= 0
+    return x;
+  }`],
+] as const) {
+  test(`expanded model verifies ${label}`, realFstar, () => assert.equal(verify(code), true));
+}
+for (const [label, code] of [
+  ["incorrect loop invariant", String.raw`export function bad(n:number):number {
+    //@ requires n > 0
+    let i=0;
+    while(i<n) {
+      //@ invariant i === 0
+      i++;
+    }
+    return i;
+  }`],
+  ["independent impure calls", String.raw`//@ extern
+    //@ impure
+    export function roll():number { return 0; }
+    export function bad():boolean {
+      //@ ensures \result
+      return roll()===roll();
+    }`],
+  ["independent havoc loop iterations", String.raw`export function bad():number {
+    //@ ensures \result === 0
+    let total=0;
+    for(let i=0;i<2;i++) {
+      //@ invariant 0 <= i && i <= 2
+      //@ havoc
+      const x:number=0;
+      total += i===0 ? x : -x;
+    }
+    return total;
+  }`],
+] as const) {
+  test(`expanded model rejects ${label}`, realFstar, () => assert.equal(verify(code), false));
+}
+
+test("generated trust cannot be enlarged by proof additions", () => {
+  const generated = "module Test\nassume val external : int -> GTot int\n";
+  checkFstarProof(generated + "let fact () : Lemma (1==1) = ()\n", generated);
+  assert.throws(() => checkFstarProof(generated + "let bad () = assume False\n", generated));
+});
 
 test("resource flags are accepted while verification bypass flags are rejected", () => {
   assert.deepEqual(fstarFlags("--fuel 3 --z3rlimit=30"), ["--fuel", "3", "--z3rlimit", "30"]);
@@ -152,10 +222,17 @@ test("resource flags are accepted while verification bypass flags are rejected",
 });
 test("proof admission/options are rejected but mentions in comments and strings are fine", () => {
   checkFstarProof('module Test\n// admit\n(* assume (* nested *) false *)\nlet label = "#push-options admit"\n');
-  for (const addition of ['#push-options "--lax"', "assume val impossible : False", "let nope = admit ()", "[@@admit] let x=1", "let nope = FStar.Tactics.Builtins.set_options \"--lax\""]) {
+  for (const addition of ['#push-options "--lax"', "assume val impossible : False", "let nope = admit ()", "let nope = FStar.Tactics.Builtins.tadmit ()", "[@@admit] let x=1", "let nope = FStar.Tactics.Builtins.set_options \"--lax\""]) {
     assert.throws(() => checkFstarProof("module Test\n" + addition));
   }
 });
+test("opaque SMT definitions still require a valid proof", realFstar, () => temporary(dir => {
+  const file = join(dir, "Test.fst");
+  const source = 'module Test\n[@@"opaque_to_smt"]\nlet bad () : Lemma False = ()\n';
+  checkFstarProof(source);
+  writeFileSync(file, source);
+  assert.equal(fstarVerify(file, 20), false);
+}));
 test(".fsti companions and missing verifiers fail", () => temporary(dir => {
   const file = join(dir, "Test.fst");
   writeFileSync(file, "module Test\nlet x=1\n");
@@ -209,4 +286,17 @@ test("CLI honors backend selection and fails before writing on unsupported input
   const files = fstarPaths(file, dir);
   assert.ok(existsSync(files.proof));
   assert.ok(existsSync(files.gen));
+}));
+
+test("comma-separated backend selectors permit each named backend", () => temporary(dir => {
+  const file = join(dir, "a.ts");
+  writeFileSync(file, "//@ backend dafny,fstar\nexport function f(x:number):number { return x; }\n");
+  const lean = runCli(dir, ["gen", "--backend=lean", file]);
+  assert.equal(lean.status, 0, lean.stderr);
+  assert.match(lean.stdout, /Skipped/);
+  for (const backend of ["dafny", "fstar"]) {
+    const result = runCli(dir, ["gen", `--backend=${backend}`, file]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stdout, /Skipped/);
+  }
 }));

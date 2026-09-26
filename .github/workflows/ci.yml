@@ -89,9 +89,7 @@ jobs:
 
       - name: Verify F* examples and check artifact drift
         run: |
-          for f in examples/fstar*.ts; do
-            node tools/dist/lsc.js check --backend=fstar --time-limit=60 "$f"
-          done
+          ./regen-fstar.sh --time-limit=120
           git diff --exit-code -- '*.fst' '*.fst.gen'
           untracked=$(git ls-files --others --exclude-standard -- '*.fst' '*.fst.gen')
           if [ -n "$untracked" ]; then

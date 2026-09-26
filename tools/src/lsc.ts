@@ -322,8 +322,8 @@ function runFile(
 
   // Check //@ backend directive — skip if backend doesn't match.
   // `extract` and `info` are backend-neutral and always run.
-  const backendDirective = fullText.match(/\/\/@ backend (\w+)/);
-  if (cmd !== "extract" && cmd !== "info" && backendDirective && backendDirective[1] !== backend) {
+  const backendDirective = fullText.match(/^\/\/@ backend ([a-z]+(?:\s*,\s*[a-z]+)*)\s*$/m);
+  if (cmd !== "extract" && cmd !== "info" && backendDirective && !backendDirective[1].split(/\s*,\s*/).includes(backend)) {
     console.log(`Skipped: ${path.basename(filePath)} (//@ backend ${backendDirective[1]}, current: ${backend})`);
     return;
   }
@@ -354,7 +354,7 @@ function runFile(
     if (!["gen", "gen-check", "check", "regen"].includes(cmd)) throw new Error(`Unknown command: ${cmd}`);
     fstarFlags(extraFlags); // validate before writing any artifacts
     checkFstarSource(sourceFile, raw);
-    const typed = narrowModule(resolveModule(raw));
+    const typed = autoHavocModule(narrowModule(resolveModule(raw)));
     const root = path.dirname(configFile ?? tsConfigFilePath ?? absPath);
     const files = fstarPaths(absPath, root);
     const text = emitFstarFile(typed, files.moduleName);

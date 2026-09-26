@@ -1,4 +1,4 @@
-//@ backend dafny
+//@ backend dafny,fstar
 
 /**
  * Count Bad Pairs (LeetCode 2364).

@@ -1,6 +1,6 @@
 // examples/safeSlice.ts
 
-//@ backend dafny
+//@ backend dafny,fstar
 //@ safe-slice
 
 

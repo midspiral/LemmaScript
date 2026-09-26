@@ -2,49 +2,54 @@
 // Add proofs in the .fst; regenerate with lsc regen --backend=fstar.
 module LS.MfstarArrays_a85fad51182f
 
-let rec ls_map (#a:Type) (#b:Type) (f:a -> Tot b) (xs:list a)
-  : Tot (ys:list b{FStar.List.Tot.length ys == FStar.List.Tot.length xs})
-    (decreases xs) =
-  match xs with
-  | [] -> []
-  | x::tl -> f x :: ls_map f tl
+module R = LS.Runtime
+module S = FStar.Sequence
+module FS = FStar.FiniteSet.Base
+module FM = FStar.FiniteMap.Base
+open FStar.FiniteSet.Ambient
+open FStar.FiniteMap.Ambient
+open FStar.Real
 
-let rec ls_filter (#a:Type) (f:a -> Tot bool) (xs:list a)
-  : Tot (ys:list a{FStar.List.Tot.length ys <= FStar.List.Tot.length xs})
-    (decreases xs) =
-  match xs with
-  | [] -> []
-  | x::tl -> if f x then x :: ls_filter f tl else ls_filter f tl
+let v_mapper (#v_A:Type) (v_items:(S.seq v_A))
+  : Ghost ((v_A -> GTot v_A) -> GTot (S.seq v_A))
+      (requires (
+        True
+      ))
+      (ensures (fun ls_result ->
+        True
+      )) =
+  (fun (v_f:(v_A -> GTot v_A)) ->
+    (R.map (v_f) (v_items)))
 
-let v_mapper (#v_A:Type) (v_items:(list v_A))
-  : Tot ((v_A -> Tot v_A) -> Tot (list v_A)) =
-  (fun (v_f:(v_A -> Tot v_A)) ->
-    (ls_map (v_f) (v_items)))
-
-let v_incrementAll (v_items:(list int))
-  : Pure (list int)
-    (requires (True))
-    (ensures (fun ls_result -> ((FStar.List.Tot.length ls_result) == (FStar.List.Tot.length v_items)))) =
+let v_incrementAll  (v_items:(S.seq int))
+  : Ghost (S.seq int)
+      (requires (
+        True
+      ))
+      (ensures (fun ls_result ->
+        ((S.length (ls_result)) == (S.length (v_items)))
+      )) =
   ((v_mapper (v_items)) ((fun (v_x:int) ->
     (v_x + (1)))))
 
-let v_doublePositives (v_items:(list int))
-  : Pure (list int)
-    (requires (True))
-    (ensures (fun ls_result -> ((FStar.List.Tot.length ls_result) <= (FStar.List.Tot.length v_items)))) =
-  ((v_mapper ((ls_filter ((fun (v_x:int) ->
+let v_doublePositives  (v_items:(S.seq int))
+  : Ghost (S.seq int)
+      (requires (
+        True
+      ))
+      (ensures (fun ls_result ->
+        ((S.length (ls_result)) <= (S.length (v_items)))
+      )) =
+  ((v_mapper ((R.filter ((fun (v_x:int) ->
     (v_x > (0)))) (v_items)))) ((fun (v_x:int) ->
     (v_x * (2)))))
 
 // Proof addition: mapping twice agrees with mapping the composed callback.
-let rec map_fusion (#a:Type) (#b:Type) (#c:Type)
-  (f:a -> Tot b) (g:b -> Tot c) (xs:list a)
-  : Lemma (ls_map g (ls_map f xs) == ls_map (fun x -> g (f x)) xs)
-    (decreases xs) =
-  match xs with
-  | [] -> ()
-  | _::tl -> map_fusion f g tl
+let map_fusion (#a:Type) (#b:Type) (#c:Type)
+  (f:a -> GTot b) (g:b -> GTot c) (xs:S.seq a)
+  : Lemma (R.map g (R.map f xs) == R.map (fun x -> g (f x)) xs) =
+  assert (S.equal (R.map g (R.map f xs)) (R.map (fun x -> g (f x)) xs))
 
-let mapper_fusion (#a:Type) (xs:list a) (f:a -> Tot a) (g:a -> Tot a)
+let mapper_fusion (#a:Type) (xs:S.seq a) (f:a -> GTot a) (g:a -> GTot a)
   : Lemma (v_mapper (v_mapper xs f) g == v_mapper xs (fun x -> g (f x))) =
   map_fusion f g xs

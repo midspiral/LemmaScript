@@ -1,4 +1,4 @@
-//@ backend lean
+//@ backend lean,fstar
 /**
  * Monadic HOF — callback calls a Velvet method (non-pure function).
  * Tests: mapM variant selection, call-graph purity propagation.

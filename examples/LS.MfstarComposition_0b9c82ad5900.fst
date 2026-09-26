@@ -2,23 +2,43 @@
 // Add proofs in the .fst; regenerate with lsc regen --backend=fstar.
 module LS.MfstarComposition_0b9c82ad5900
 
-let v_compose (#v_A:Type) (#v_B:Type) (#v_C:Type) (v_outer:(v_B -> Tot v_C)) (v_inner:(v_A -> Tot v_B))
-  : Pure (v_A -> Tot v_C)
-    (requires (True))
-    (ensures (fun ls_result -> (forall (v_value:v_A). ((ls_result (v_value)) == (v_outer ((v_inner (v_value)))))))) =
+module R = LS.Runtime
+module S = FStar.Sequence
+module FS = FStar.FiniteSet.Base
+module FM = FStar.FiniteMap.Base
+open FStar.FiniteSet.Ambient
+open FStar.FiniteMap.Ambient
+open FStar.Real
+
+let v_compose (#v_A:Type) (#v_B:Type) (#v_C:Type) (v_outer:(v_B -> GTot v_C)) (v_inner:(v_A -> GTot v_B))
+  : Ghost (v_A -> GTot v_C)
+      (requires (
+        True
+      ))
+      (ensures (fun ls_result ->
+        (forall (v_value:v_A). ((ls_result (v_value)) == (v_outer ((v_inner (v_value))))))
+      )) =
   (fun (v_value:v_A) ->
     (v_outer ((v_inner (v_value)))))
 
-let v_incrementThenDouble (v_x:int)
-  : Pure int
-    (requires (True))
-    (ensures (fun ls_result -> (ls_result == ((v_x + (1)) * (2))))) =
+let v_incrementThenDouble  (v_x:int)
+  : Ghost int
+      (requires (
+        True
+      ))
+      (ensures (fun ls_result ->
+        (ls_result == ((v_x + (1)) * (2)))
+      )) =
   ((v_compose ((fun (v_n:int) ->
     (v_n * (2)))) ((fun (v_n:int) ->
     (v_n + (1))))) (v_x))
 
-let v_twice (v_f:(int -> Tot int)) (v_x:int)
-  : Pure int
-    (requires ((forall (v_y:int). ((v_f (v_y)) >= v_y))))
-    (ensures (fun ls_result -> (ls_result >= v_x))) =
+let v_twice  (v_f:(int -> GTot int)) (v_x:int)
+  : Ghost int
+      (requires (
+        (forall (v_y:int). ((v_f (v_y)) >= v_y))
+      ))
+      (ensures (fun ls_result ->
+        (ls_result >= v_x)
+      )) =
   (v_f ((v_f (v_x))))

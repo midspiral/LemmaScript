@@ -2,22 +2,42 @@
 // Add proofs in the .fst; regenerate with lsc regen --backend=fstar.
 module LS.MfstarClosures_f14fb73fccf0
 
-let v_makeAdder (v_n:int)
-  : Pure (int -> Tot int)
-    (requires (True))
-    (ensures (fun ls_result -> (forall (v_x:int). ((ls_result (v_x)) == (v_x + v_n))))) =
+module R = LS.Runtime
+module S = FStar.Sequence
+module FS = FStar.FiniteSet.Base
+module FM = FStar.FiniteMap.Base
+open FStar.FiniteSet.Ambient
+open FStar.FiniteMap.Ambient
+open FStar.Real
+
+let v_makeAdder  (v_n:int)
+  : Ghost (int -> GTot int)
+      (requires (
+        True
+      ))
+      (ensures (fun ls_result ->
+        (forall (v_x:int). ((ls_result (v_x)) == (v_x + v_n)))
+      )) =
   (fun (v_x:int) ->
     (v_x + v_n))
 
-let v_addThroughClosure (v_n:int) (v_x:int)
-  : Pure int
-    (requires (True))
-    (ensures (fun ls_result -> (ls_result == (v_x + v_n)))) =
+let v_addThroughClosure  (v_n:int) (v_x:int)
+  : Ghost int
+      (requires (
+        True
+      ))
+      (ensures (fun ls_result ->
+        (ls_result == (v_x + v_n))
+      )) =
   ((v_makeAdder (v_n)) (v_x))
 
-let v_addTwice (v_n:int) (v_x:int)
-  : Pure int
-    (requires (True))
-    (ensures (fun ls_result -> (ls_result == ((v_x + v_n) + v_n)))) =
-  let v_add : (int -> Tot int) = (v_makeAdder (v_n)) in
-  (v_add ((v_add (v_x))))
+let v_addTwice  (v_n:int) (v_x:int)
+  : Ghost int
+      (requires (
+        True
+      ))
+      (ensures (fun ls_result ->
+        (ls_result == ((v_x + v_n) + v_n))
+      )) =
+  (let v_add_10 = (v_makeAdder (v_n)) in
+  (v_add_10 ((v_add_10 (v_x)))))

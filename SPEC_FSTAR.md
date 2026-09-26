@@ -1,7 +1,6 @@
 # F* backend (experimental)
 
-The F* backend verifies a pure, total subset of LemmaScript. It supports functions returning functions, arbitrary function application such as `makeAdder(n)(x)`, immutable captures, and generic composition. Function `requires` and `ensures` become checked F* `Pure` signatures, so callers can use the postcondition directly. This backend does not yet implement the full fragment in [SPEC.md](SPEC.md); unsupported constructs fail generation.
-
+The F* backend verifies LemmaScript's mathematical value model, including higher-order functions, local mutation, loops, records, tagged unions, classes, arrays, strings, maps and sets. Function `requires` and `ensures` become checked F* `Ghost` signatures; function values use `GTot` arrows, so callers can use returned-closure guarantees directly. TypeScript remains the executable program. The F* model is for verification, not code extraction.
 ## Running it
 
 Install F* using its [official installer](https://github.com/FStarLang/FStar/blob/master/INSTALL.md); the tested release and CI pin are [v2026.09.20](https://github.com/FStarLang/FStar/releases/tag/v2026.09.20), with bundled Z3 4.13.3. If already installed, check discovery with `fstar.exe --version`. Set `FSTAR_EXE` to an absolute executable path if it is not on PATH.
@@ -17,7 +16,9 @@ node tools/dist/lsc.js regen --backend=fstar examples/fstarClosures.ts
 
 An installed package exposing `lsc` uses the same arguments. `gen` needs no F* installation; `check` and `regen` do. `gen-check` checks the additions-only diff without verification, and `regen --no-verify` merges without verification. With no file argument, `gen`, `gen-check`, and `check` use the existing `LemmaScript-files.txt` batch mechanism. `tools/check.sh fstar` is also available.
 
-Put `//@ backend fstar` at the top of a source to skip it when running the Dafny and Lean backends. Pass `--backend=fstar` explicitly: Dafny remains the default. The repository's F* CI job verifies all four `examples/fstar*.ts` files and checks generated-file drift; the reusable external `verify.yml` workflow has not yet been extended to F*.
+Put `//@ backend fstar` at the top of a source to select only F*, or `//@ backend dafny,fstar` to allow both backends. Pass `--backend=fstar` explicitly: Dafny remains the default. The repository's F* CI job verifies every top-level `examples/*.ts` file and checks generated-file drift; the reusable external `verify.yml` workflow has not yet been extended to F*.
+
+`./regen-fstar.sh` builds the compiler, regenerates every example while preserving proof additions, and verifies each working proof. It reports failures and backend skips as errors. `./regen-fstar.sh --no-verify` only regenerates; resource options such as `--time-limit=120` are forwarded to `lsc regen`.
 
 ## Examples
 
@@ -28,22 +29,28 @@ Put `//@ backend fstar` at the top of a source to skip it when running the Dafny
 | [fstarArrays.ts](examples/fstarArrays.ts) | A closure capturing a generic array; map preserves length and filtering cannot increase it. Its working `.fst` also proves map fusion by induction, as a hand-written proof addition. |
 | [fstarIteration.ts](examples/fstarIteration.ts) | A decreasing recursive iterator preserves a callback guarantee; returning and applying the iterator retains its postcondition. |
 
-These examples use general application that the current Dafny/Lean lowering rejects. They demonstrate the implemented F* path, not an inherent inability of Dafny or Lean to reason about these programs. See [DESIGN_FSTAR.md](DESIGN_FSTAR.md) for the comparison and subsequent milestones.
+The other examples exercise the shared language fragment; the working F* companions include proofs of binary search, sorting, permutation invariance, stack traversal and collection algorithms. Source contracts and explicit trust annotations are preserved.
+
+The four examples above use general application that the current Dafny/Lean lowering rejects. They demonstrate the implemented F* path, not an inherent inability of Dafny or Lean to reason about these programs. See [DESIGN_FSTAR.md](DESIGN_FSTAR.md) for the comparison and subsequent milestones.
 
 ## Supported fragment
 
 | Construct | Representation and limits |
 | --- | --- |
-| Integer `number`, `bigint`, `nat`, boolean | F* `int`, `int`, `nat`, `bool`. Integer `+`, `-`, `*`, ordering and numeric/boolean equality; boolean operations and conditions. Number literals must be safe integers. |
-| Generic parameters, simple aliases | Implicit F* type parameters and expanded non-generic aliases. Constrained/defaulted generics and generic parameters shadowing aliases are rejected. |
-| Function values | Total, pure arrows; typed arrow lambdas and immutable captures, including arrays. Zero-argument functions take F* `unit`. No function reference equality. |
-| Control flow | Immutable local bindings, returns, conditional expressions, and `if` branches that are empty or return. Nonempty fallthrough branches, loops, and mutation are rejected. |
-| Arrays | Finite dense lists, literals, length, indexing with proven bounds. Runtime reference equality is rejected; specifications use mathematical equality. |
-| Array combinators | Unary `map`, `filter`, `every`, `some`; binary `reduce` with an explicit initial accumulator, preserving left-fold direction. No index/array callback parameters or `thisArg`. |
-| Specifications | `requires`, `ensures`, `decreases`, checked `assert`, `forall`, `exists`, implication/equivalence, array membership. `\result` is a real result binder, including function-valued results. Contracts belong on top-level functions; nested lambda contracts are rejected. |
-| Recursion | Same-function recursion with F* termination checking; optional explicit `decreases`. Mutual recursion is rejected. |
+| Numbers | Mathematical `int`, `nat`, `real`; `bigint` retains signed truncating division/remainder semantics. Bare numeric division is real division; `Math.floor(a/b)` rounds downward. Unsafe integer literals are rejected. |
+| Strings | Sequences of UTF-16 code units, including indexing, slicing, concatenation, searching and trimming. Unicode case conversion is a deterministic unconstrained library abstraction. |
+| Arrays | `FStar.Sequence`, with checked indexing, value updates, slicing, searching, map/filter/fold and sorting. Sorting requires a total preorder and preserves multiplicities. Runtime array identity comparison is rejected. |
+| Maps and sets | F* finite maps/sets. String keys use a proved sequence-to-list encoding to obtain decidable key equality. Iteration follows the existing unordered collection model. |
+| Data types | Options, tuples, records, tagged unions, enums, aliases and generics. Optional record fields default to `None`. Opaque values have no observable constructors. |
+| Functions | Pure, total ghost arrows, immutable captures, general application, function-valued records and returned functions. No captured-state mutation or function identity comparison. |
+| Control flow | Mutable locals and collection updates become fresh value bindings; conditionals and switches preserve scope. Loops become total recursive continuations, including break, continue and early return. |
+| Classes | Methods receive an explicit record representing `this` and return a result/state pair. Postconditions observe the updated state. This is not a shared-heap or aliasing model. |
+| Specifications | `requires`, `ensures`, `assert`, quantifiers, implication/equivalence, membership, loop invariants and decreases. Postconditions retain a result binder, including function-valued results. |
+| Explicit trust | `extern`, `impure`, `havoc`, `autohavoc` and `assume` retain their source meaning. See the trust boundary below. |
 
-Use explicit parameter types on lambdas. Explicit lambda return types are advisable where shared inference cannot determine them. Only the listed array methods are recognized; there is no general method dispatch. Optional values, strings, records, tagged unions, classes, mutable captures, division/remainder, floats, async, exceptions, externs/cross-file calls, `assume`, `havoc`, `autohavoc`, and statement-level `skip` are outside this first subset. Destructured parameters and standalone lexical blocks are rejected. Module constants must be scalar; arrays are supported as parameters and locals, since escaped module arrays could be mutated before a verified call. Executable module-level statements are also rejected. Use `requires`/`ensures`; the existing `contract` annotation is not supported here.
+Loop invariants are preconditions of the recursive continuation. The emitter infers simple counter decreases; other loops expose a named `<function>_loopN_measure` helper to define and prove in the working `.fst`. Self recursion uses an explicit decreases clause or a suitable size/structural measure checked by F*. `preorder` demonstrates a hand-written pending-work measure. Termination obligations are never admitted.
+
+Use explicit lambda parameter types where inference cannot recover them. Array callbacks are unary except initialized `reduce` and sort comparators, which are binary. Index/array callback parameters and `thisArg` are rejected. Generic parameters shadowing aliases, constrained/defaulted generics, default/rest parameters, named-function parameter destructuring, nested lambda contracts, statement-level `skip`, `contract`, mutual recursion and `await` remain unsupported. An async inline handler without `await` is modeled synchronously; Promise scheduling is outside the model. Module constants must be scalar, and executable module statements need an explicit extraction boundary.
 
 ## Proof ownership and regeneration
 
@@ -55,8 +62,10 @@ Proof additions must preserve program behavior: add checked lemmas, assertions a
 
 ## Verification and trust boundary
 
-The runner verifies a fresh copy of the working module in a temporary directory with `--force --report_assumes error`. It does not load adjacent `.checked` caches or project modules, and rejects `.fsti` companions. This initial single-module backend only relies on the installed F* standard library. Missing executables, nonzero exits, and timeouts fail the command; a printed “Verified module” line is not treated as success on its own.
+The runner copies the working module and packaged [LS.Runtime.fst](tools/fstar/LS.Runtime.fst) into a fresh temporary directory. It explicitly verifies the runtime with `--force --cache_checked_modules --report_assumes error`, then verifies the working module against that newly checked dependency. This matters: merely including an unchecked F* dependency can load it laxly. Adjacent project caches, unchecked project modules and `.fsti` companions cannot replace the implementation. Missing executables, nonzero exits and timeouts fail the command.
 
-`--time-limit=30` sets a 30-second process deadline. Resource tuning through `--extra-flags` is restricted to non-negative integer values for `--fuel`, `--ifuel`, `--max_fuel`, `--max_ifuel`, `--z3rlimit`, `--z3rlimit_factor`, and `--z3seed`. Z3 resource limits are not seconds. Source option directives, declaration attributes, admissions and unsafe casts are rejected in working proofs. This conservative policy can be relaxed deliberately when richer proof automation is supported.
+Deterministic source externs become explicit `assume val` declarations with their contracts. Impure calls and havoc sites receive invocation/call-site/iteration traces so separate evaluations cannot be equated by extensionality. Source `assume` remains an explicit assumption and is reported by F*; it is not a discharged obligation. Unicode case conversion has an explicit uninterpreted deterministic declaration with no assumed output properties. The runtime's classical decision helper relies on F*'s foundational standard library. None of these abstractions establish the behavior of unverified external implementations.
 
-TypeScript still executes the program. Numbers use LemmaScript's idealized integer model, not JavaScript IEEE-754 arithmetic; overflow, NaN and infinities are not established by these proofs. Arrays must be dense, standard arrays and stay immutable during the verified computation. Function arguments from unverified TS callers are assumed pure, terminating, and compliant with their specifications; a TS arrow type cannot establish those properties. The translator, model assumptions, proof additions, installed F* libraries/verifier, and SMT solver are trusted. Named dependent callback types, domain-restricted callbacks, recursive tree combinators, and effectful callbacks remain future work.
+Proof additions may not add assumptions, admissions, unsafe casts, declaration attributes or source option directives. The sole allowed attribute is `opaque_to_smt`, which hides a checked body from automatic unfolding while retaining its checked contract. The checker compares generated and working trust declarations and enforces an additions-only diff. `--extra-flags` accepts only non-negative integer resource values for `--fuel`, `--ifuel`, `--max_fuel`, `--max_ifuel`, `--z3rlimit`, `--z3rlimit_factor` and `--z3seed`. Z3 resource limits are not seconds; `--time-limit` bounds each verifier process.
+
+Numbers use LemmaScript's idealized arithmetic, not JavaScript IEEE-754 overflow, NaN or infinities. Arrays must be dense standard arrays. Updates use value semantics; alias-visible mutation, sparse arrays, shared heap effects and scheduling are not established. Callback arguments from unverified TS callers must be pure, terminating and compliant with their contracts. The compiler, model assumptions, reviewed proof additions, installed F* libraries/verifier and SMT solver remain trusted. Named dependent callback types and domain-restricted recursive combinators remain future work.

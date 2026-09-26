@@ -2,7 +2,7 @@
  * Simple class example — verified counter with bounds.
  * Dafny backend only (Lean class support not yet implemented).
  */
-//@ backend dafny
+//@ backend dafny,fstar
 
 export class Counter {
   private count: number;

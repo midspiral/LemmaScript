@@ -1,4 +1,4 @@
-//@ backend dafny
+//@ backend dafny,fstar
 // Bitwise OR (`|`) on non-negative bigints lowers to the recursive BitOr helper
 // in the Dafny backend (the twin of BitAnd). Dafny has no `|` on `int`, only on
 // bitvectors, so the operator is modeled arithmetically.

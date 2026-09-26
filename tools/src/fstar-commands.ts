@@ -1,9 +1,10 @@
-/** F* artifacts and verification for the experimental, self-contained subset. */
+/** F* artifacts, isolated runtime checking, and proof-preserving regeneration. */
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { execFileSync } from "child_process";
 import { createHash } from "crypto";
 import { tmpdir } from "os";
 import path from "path";
+import { fileURLToPath } from "url";
 import { proofRegen } from "./proof-files.js";
 export { proofGen as fstarGen, proofCheckDiff as fstarCheckDiff } from "./proof-files.js";
 
@@ -60,13 +61,20 @@ function codeOnly(source: string): string {
   return code;
 }
 
-export function checkFstarProof(source: string): void {
-  const code = codeOnly(source);
+export function checkFstarProof(source: string, generated = ""): void {
+  // This attribute only hides a checked definition's body from SMT unfolding;
+  // it preserves its signature and still requires F* to check the body.
+  const code = codeOnly(source.replace(/\[@@?\s*"opaque_to_smt"\s*\]/g, ""));
   if (/#\s*(?:[\w-]*options|lang)\b|\b(?:set_options|push_options|pop_options|reset_options)\b/.test(code)) {
     throw new Error("F*: source option directives are not supported; pass approved resource options through --extra-flags");
   }
-  if (/\[@|\b(?:assume|admit|admitP|unsafe_coerce)\b/.test(code)) {
+  if (/\[@|\b(?:\w*admit\w*|unsafe_\w*|magic)\b|\bnew\s+val\b/.test(code)) {
     throw new Error("F*: admissions, assumptions, unsafe casts, and declaration attributes are not supported in proof additions");
+  }
+  // Explicit source trust is preserved in the regenerated baseline. Additions
+  // cannot introduce another assumption, even by duplicating a generated line.
+  if ((code.match(/\bassume\b/g) ?? []).length !== (codeOnly(generated).match(/\bassume\b/g) ?? []).length) {
+    throw new Error("F*: assumptions may only come from the generated source model, not proof additions");
   }
 }
 
@@ -74,17 +82,30 @@ export function fstarVerify(proof: string, timeLimit?: number, extraFlags?: stri
   let scratch: string | undefined;
   try {
     const flags = fstarFlags(extraFlags);
-    checkFstarProof(readFileSync(proof, "utf8"));
+    const source = readFileSync(proof, "utf8");
+    const generated = existsSync(proof + ".gen") ? readFileSync(proof + ".gen", "utf8") : "";
+    checkFstarProof(source, generated);
     if (existsSync(proof + "i")) throw new Error("F*: .fsti companions are not supported; verification must check the generated implementation");
     // A private working directory prevents a sibling .fsti, .checked file, or
     // unverified project module from replacing the implementation we check.
-    // This first backend supports one TS module plus the installed F* library.
+    // Each run checks one TS module, the packaged runtime and the F* library.
     scratch = mkdtempSync(path.join(tmpdir(), "lsc-fstar-"));
     const file = path.basename(proof);
     copyFileSync(proof, path.join(scratch, file));
+    const runtime = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../fstar/LS.Runtime.fst");
+    copyFileSync(runtime, path.join(scratch, "LS.Runtime.fst"));
+    // F* may load dependencies laxly when their checked files are absent.
+    // Verify our runtime explicitly, then use only that fresh checked result.
+    execFileSync(process.env.FSTAR_EXE || "fstar.exe", [
+      ...flags, "--report_assumes", "error", "--cache_checked_modules", "--force", "LS.Runtime.fst",
+    ], {
+      cwd: scratch, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      timeout: timeLimit === undefined ? undefined : timeLimit * 1000,
+      killSignal: "SIGKILL", maxBuffer: 16 * 1024 * 1024,
+    });
     console.log(`Running F* verification: ${proof}`);
     const output = execFileSync(process.env.FSTAR_EXE || "fstar.exe", [
-      ...flags, "--report_assumes", "error", "--force", file,
+      ...flags, "--report_assumes", /\bassume\s*\(/.test(codeOnly(generated)) ? "warn" : "error", "--force", file,
     ], {
       cwd: scratch, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
       timeout: timeLimit === undefined ? undefined : timeLimit * 1000,

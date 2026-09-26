@@ -1,6 +1,6 @@
 # DESIGN_FSTAR — A backend for higher-order verification
 
-**Status:** experimental pure backend implemented; broader callback contracts and recursive traversals remain proposed.
+**Status:** experimental backend implemented across the example suite; dependent callback domains and recursive combinator adapters remain proposed.
 **Date:** September 26, 2026 (feasibility experiments September 25).
 **Baseline:** LemmaScript 0.6.4, commit `097f18f`; Dafny 4.11.0; F* 2026.09.20 with its bundled Z3 4.13.3.
 
@@ -12,17 +12,19 @@ The case is weaker if the objective is simply supporting more uses of `map`, `fi
 
 The main uncertainty is proof ergonomics and engineering cost, rather than whether Dafny can express higher-order reasoning at all. Dafny has first-class functions, lambdas, and total, partial, and heap-reading arrow types (`->`, `-->`, `~>`). Its methods are not first-class function values. See the [Dafny reference on arrow types](https://dafny.org/latest/DafnyRef/DafnyRef).
 
-## Implemented first slice
+## Implemented backend
 
-`gen`, `gen-check`, `check`, and proof-preserving `regen --backend=fstar` now work. The examples [fstarClosures.ts](examples/fstarClosures.ts), [fstarComposition.ts](examples/fstarComposition.ts), [fstarArrays.ts](examples/fstarArrays.ts), and [fstarIteration.ts](examples/fstarIteration.ts) are marked `//@ backend fstar` and verify with the installed F* 2026.09.20. See [SPEC_FSTAR.md](SPEC_FSTAR.md) for runnable commands, exact supported syntax, artifact ownership, and trust assumptions.
+`gen`, `gen-check`, `check`, and proof-preserving `regen --backend=fstar` work across the top-level example suite. `./regen-fstar.sh` builds the compiler, preserves proof additions, verifies each example, and fails on any failure or backend skip. The four `examples/fstar*.ts` programs exercise returned closures, general application, generic composition, map fusion and higher-order iteration. Other companions carry checked proofs for the existing algorithms. See [SPEC_FSTAR.md](SPEC_FSTAR.md) for commands and precise model boundaries.
 
-The implementation deliberately starts narrower than the roadmap below: integers/booleans, generic pure arrows, immutable bindings/captures, dense arrays and selected combinators, and self recursion. It preserves existing quantified annotations rather than adding dependent callback syntax. Records, options, tagged unions, mutually recursive groups, imported project modules and all effects remain unsupported.
+The emitter now consumes the shared lowered IR through `transformModuleFstar`, with a small F*-specific mode that preserves expression types, general application and the specification result binder. Dafny and Lean retain their existing lowering. [fstar-source.ts](tools/src/fstar-source.ts) rejects constructs whose behavior extraction would erase, including mutation of captured state and reference-identity comparisons. Local updates become fresh values; loops become recursive continuations with invariant preconditions, enclosing postconditions and checked termination measures. Classes use explicit record state and result/state pairs.
 
-[fstar-source.ts](tools/src/fstar-source.ts) checks source features erased by extraction, and [fstar-emit.ts](tools/src/fstar-emit.ts) consumes narrowed Typed IR directly. This keeps general application and the specification result binder intact without changing the existing final IR. Small proved map/filter helpers are emitted in each module, so no runtime assets need separate packaging. Calls emit each pure, total operand once; evaluation order has no observable effect in this subset. A later effectful implementation would need explicit sequencing.
+The packaged [LS.Runtime.fst](tools/fstar/LS.Runtime.fst) supplies proved adapters for finite sequences, UTF-16 strings, arrays, arithmetic, maps and sets. Arrays use `FStar.Sequence`; string keys use a proved list encoding because finite-map keys require decidable equality. Specifications and higher-order arrows use F* `Ghost`/`GTot`, allowing mathematical sequence and finite-set operations. This is a verification model; TypeScript still runs the program.
 
-Two shared frontend fixes preserve returned function signatures during extraction and resolve expression-valued call results. [proof-files.ts](tools/src/proof-files.ts) factors the existing additions-only comparison and three-way merge out of Dafny's command runner; both backends use the same recovery semantics. [fstar-commands.ts](tools/src/fstar-commands.ts) handles module naming, fresh isolated verification, strict option handling, and process timeouts. The pinned CI job runs positive/negative verification tests and checks example artifact drift.
+Explicit source `extern`, `impure`, `havoc`, `autohavoc` and `assume` annotations remain visible trust boundaries. Impure evaluations receive call-site and iteration traces to avoid identifying distinct results. Unicode case conversion is a deterministic uninterpreted library abstraction with no assumed result properties. No proof additions may introduce new assumptions or admissions.
 
-The higher-order benefits demonstrated so far are composition and returned-closure contracts. These are an implementation milestone, not evidence that F* universally outperforms Dafny or that the stronger dependent-callback/traversal gates below are complete.
+[proof-files.ts](tools/src/proof-files.ts) shares additions-only comparison and recovery-aware three-way merging with Dafny. [fstar-commands.ts](tools/src/fstar-commands.ts) verifies the runtime explicitly in an isolated directory before checking the working proof against that fresh checked dependency. Merely importing an unchecked F* module can load it laxly, so checking only the client is insufficient. The pinned CI job runs positive and negative tests, verifies every example, and checks artifact drift.
+
+The demonstrated higher-order benefits are direct composition of function postconditions and returned-closure contracts. Supporting the existing imperative examples establishes useful coverage; it does not establish that F* universally reduces proof work compared with Dafny. The Map/Set and counting proofs still need explicit quantifier guidance and mathematical helper lemmas.
 
 ## Baseline code, before this prototype
 
@@ -152,58 +154,24 @@ This is a concrete reason to investigate F*: a verified library of domain-aware 
 
 F* still sends higher-order reasoning through an encoding to a first-order SMT solver. Quantifiers, unfolding, nonlinear arithmetic, and proof stability remain concerns; there is no evidence here that it will consistently outperform Dafny. See [how F* uses Z3](https://fstar-lang.org/tutorial/book/under_the_hood/uth_smt.html).
 
-Pointwise equality of mathematical functions also differs from JavaScript function reference identity. Reject function `===`/`!==` in the initial fragment. Proof-level extensionality can be introduced separately, with explicit library assumptions where applicable.
+Pointwise equality of mathematical functions also differs from JavaScript function reference identity. Function `===`/`!==` is rejected. Proof-level extensionality can be introduced separately, with explicit library assumptions where applicable.
 
-Mutable captures, aliasing, exceptions, nondeterministic callbacks, and async code require a state/effect model. An F* arrow is not such a model. Keep these out of the initial backend. Current F* includes Pulse for imperative verification; older instructions about Low* and “Dijkstra monads for free” need care because the [April 2026 release](https://github.com/FStarLang/FStar/releases/tag/v2026.04.17) removed those components. Supporting effectful callbacks is a separate project.
+Mutable captures, aliasing, exceptions, nondeterministic callbacks, and async scheduling require a state/effect model. An F* arrow is not such a model. These remain outside the backend; the implemented local updates use value semantics. Current F* includes Pulse for imperative verification; older instructions about Low* and “Dijkstra monads for free” need care because the [April 2026 release](https://github.com/FStarLang/FStar/releases/tag/v2026.04.17) removed those components. Supporting effectful callbacks is a separate project.
 
 ## Architecture and remaining roadmap
 
-This section records the broader design. The shipped subset is enumerated above and in SPEC_FSTAR; entries such as options, records, tagged unions, a separate lowering IR, and a reusable array library are subsequent work.
-
-### Start with a pure functional subset
-
-Use the existing extraction, resolution, and narrowing passes, followed by an explicit F* capability check and functional lowering:
+The implemented pipeline is:
 
 ```text
-TS → extract → resolve → narrow → capability check
-   → fstar-lower → fstar-emit → F* verification
+TS → extract → source capability check → resolve → narrow → autohavoc
+   → transformModuleFstar → fstar-emit → isolated runtime + proof verification
 ```
 
-The current `autohavoc` path must not silently admit unsupported code: reject autohavoc/havoc in this subset, including synthesized havoc. Similarly reject impure externs and `assume`. A later deterministic extern feature must expose its axioms as a declared trust boundary, as the current backend does.
+`transformModuleFstar` reuses the shared value-model rewrites while retaining a native postcondition result binder and expression-valued application. In particular, F* must not inherit Dafny's substitution of a function call for `\result` in companion lemmas. The optional expression type metadata is attached only on this path. The emitter orders declarations by dependency and checks self recursion; mutual recursion is still rejected.
 
-| TS/model construct | Initial F* representation |
-| --- | --- |
-| Mathematical integer `number`, `bigint`, `nat` | `int`, `int`, `nat`, retaining origin information for operation semantics |
-| Boolean, optional value | `bool`, `option a` |
-| Dense arrays without observable mutation | `list a`, behind a small `LS.Array` library |
-| Records, tagged unions, tuples | Records, inductive types, products |
-| Pure function parameter/result | Explicit `Tot` arrows; later dependent callback contracts |
-| Immutable closure | Lexically scoped `fun`; capture analysis must also exclude mutation through captured objects |
-| Immutable local bindings, `if`, `switch` | `let`, `if`, `match` |
-| `requires`, `ensures`, `decreases` | Checked `Pure`/refinement signatures and termination measures |
+The runtime preserves sequence order, UTF-16 indexing, left-fold direction, signed division/remainder and the existing idealized number model. Sorting requires a total preorder and proves membership, length and multiplicity preservation. Arrays and mutable collections use values rather than shared heap references. Source trust annotations are retained explicitly; unsupported callback effects cannot be hidden behind a pure F* arrow.
 
-Start with integer arithmetic and numeric/boolean array examples. Division, floating-point behavior, string operations, map/set equality, classes, and mutable local loops need individual support decisions; reject operations without a faithful chosen model. Tagged unions with literal tags need not imply support for arbitrary string operations. The existing idealized number model and its limitations still apply; see [DESIGN_NUMBERS.md](DESIGN_NUMBERS.md).
-
-Lists are a proof representation of ordered finite arrays, not a proposed production data structure. TypeScript continues to run. Do not extract F* to JavaScript or treat verified F* as proof of an unverified TS-to-F* translation. The compiler, model assumptions, F* verifier, and solver remain in the trust boundary.
-
-For the first array adapters, preserve element order and fold direction; prove map length/element correspondence, filter soundness/order, and fold recurrence. Support unary element callbacks and explicitly initialized reduce first. Reject unsupported index/array callback parameters, `thisArg`, sparse arrays, and mutation during iteration rather than silently dropping arguments or effects. Bounds-sensitive indexing needs a precondition or the existing optional-index interpretation; it cannot inherit an arbitrary F* default value.
-
-### Compiler changes
-
-| File/work area | Required work |
-| --- | --- |
-| `tools/src/lsc.ts`, shared backend type | Add explicit `fstar` dispatch for gen/check/regen and batch selection. Keep Dafny the default; validate unsupported commands/options. |
-| `tools/src/resolve.ts`, `typedir.ts`, `types.ts` | Resolve expression-valued function calls and returned function types consistently; check effects/captures; subsequently carry callback contracts. Audit function-valued record fields separately from builtin method calls. |
-| New `tools/src/fstar-lower.ts` | Consume narrowed Typed IR. Preserve expression-valued application, function result types, and spec result binders; order declarations and handle recursive groups. Reuse extracted neutral helpers rather than copying all Dafny/Lean rewrites. |
-| Shared `ir.ts`/`transform.ts` as needed | Generalize application if the emitters share this IR. Update walkers, substitution, free-variable analysis, and existing emitters together. Do not merely widen the backend union and inherit all `backend !== "dafny"` branches. |
-| New `tools/src/fstar-emit.ts` | Print F* syntax, explicit effects, type arguments, refinement contracts, escaped names, and module dependencies. Separate boolean expressions from proposition syntax. |
-| New `tools/src/fstar-commands.ts` | Own artifacts, regeneration, binary discovery, verification, diagnostics, and exit status. Factor reusable merge logic out of `dafny-commands.ts` without changing Dafny recovery behavior. |
-| `tools/src/builtins.ts`, F* support library | Reuse builtin IDs and HOF arities; add capability coverage and proved adapters rather than spelling-based special cases. |
-| Tests, CI, packaging, docs | Include F* library sources in the npm package, pin the verifier/solver, add positive and negative fixtures, and document proof ownership. |
-
-A particularly important detail: current `transformModule` substitutes a function application for `\result` in pure-function postconditions to build Dafny companion lemmas. F* function signatures need a fresh result binder instead. Consume `TFunction.ensures` before that rewrite, or refactor the rewrite into the Dafny path.
-
-General application must preserve JS evaluation order and evaluate the callee and arguments once. Use temporary bindings where necessary; preserve lexical scope when renaming lambda binders. Do not assume F*'s curried syntax makes `makeAdder(1)(2)` work without changes to resolution and lowering. Declaration order also matters: F* requires dependencies to be in scope, unlike Dafny's forward-reference model.
+Further work should focus on three measurable improvements: carry input-dependent callback contracts in the typed IR; prove and lower domain-aware recursive combinators such as `map_below`; and design proof insertion points that enforce preservation of program behavior more strongly than an additions-only textual check. Shared heap effects, async scheduling, imported checked project modules and module-state mutation require separate designs.
 
 ### Proof artifacts and regeneration
 
@@ -235,7 +203,7 @@ node tools/dist/lsc.js check --backend=fstar examples/fstarClosures.ts
 node tools/dist/lsc.js regen --backend=fstar examples/fstarClosures.ts
 ```
 
-The command runner invokes `fstar.exe` (or `FSTAR_EXE`) with an argument array, copying the working module into a fresh directory and forcing verification. Missing binaries fail. The initial backend rejects `.fsti` companions and does not reuse project caches or dependencies; it relies on the installed standard library. Any future project caching must bind source, dependencies, options, and toolchain versions. A successful `gen` or cached parse must never be reported as a verification success.
+The command runner invokes `fstar.exe` (or `FSTAR_EXE`) with an argument array, copying the working module into a fresh directory and forcing verification. Missing binaries fail. The backend rejects `.fsti` companions and does not reuse project caches or unchecked dependencies; it checks the packaged runtime explicitly and relies on the installed standard library. Any future project caching must bind source, dependencies, options, and toolchain versions. A successful `gen` or cached parse must never be reported as a verification success.
 
 Reject `--lax`, query-admission options, untracked axioms, and proof admissions in checked project code; use `--report_assumes error` for the initial no-extern subset. Bundled foundational libraries remain part of the chosen trust boundary. Solver tuning is distinct from admission, and source-level option directives need scrutiny as well as CLI flags.
 
@@ -243,7 +211,7 @@ Implement `--time-limit` as an actual process deadline unless a pinned F* option
 
 ## Feasibility experiments and implementation gates
 
-These experiments ran in a temporary directory; existing source and proof artifacts were not changed. The F* binary was unpacked there without changing PATH, shell startup files, or the OPAM switch. The installed Homebrew `z3` was not used for F*.
+These initial feasibility experiments ran in a temporary directory, before backend implementation; existing source and proof artifacts were not changed by those probes. The F* binary was unpacked there without changing PATH, shell startup files, or the OPAM switch. The installed Homebrew `z3` was not used for F*.
 
 | Experiment | Observed result |
 | --- | --- |
@@ -257,13 +225,13 @@ These experiments ran in a temporary directory; existing source and proof artifa
 | F*: recursive tree walker through ordinary `FStar.List.Tot.map` | Rejected: cannot prove the recursive argument is smaller |
 | F*: tree walker through `map_below` | Verified, including `--report_assumes error` |
 
-These are small feasibility probes, not a generated-backend implementation, semantic-equivalence proof, or performance comparison.
+These historical probes motivated the implementation. They are not a semantic-equivalence proof or performance comparison; the implemented coverage is described above.
 
 1. **Pure vertical slice.** Generate and verify the existing numeric HOF examples plus `apply`, `compose`, `twice`, and returned closures. Preserve existing annotations and compare generated results with TS on representative inputs. Test immutable capture and shadowing; reject mutable captures and effectful callbacks with clear diagnostics.
 2. **Compositional contracts.** Add callback contract metadata and its annotation syntax. Verify a callback with a restricted input domain, a dependent output relation, and a caller that uses both. Include a failing caller that violates the domain and a callback that violates the guarantee. Verify a fold whose callback preserves an accumulator invariant.
 3. **Recursive combinators.** Generate a tree traversal without modifying the TS algorithm. Prove the adapter's map equivalence and termination obligations. Compare proof additions against current Dafny comprehensions and a reasonable improved Dafny encoding, including direct function postconditions.
 4. **Workflow gate.** Test proof preservation across clean regeneration, merge conflicts, failed verification, missing binaries, false specs, admissions, and missing interface implementations. Keep all existing Dafny and Lean checks passing. Measure proof size, manual steps, diagnostics, and repeated verification stability with pinned versions.
-5. **Separate later work.** Functionalize local mutable loops or introduce an explicit state/Pulse model only after the pure backend earns its maintenance cost. Do not count broader TS syntax support as an automatic consequence of selecting F*.
+5. **Broader coverage.** Local mutable loops and explicit class state are now functionalized. Aliasing, shared heap effects and scheduling remain separate work. Broader syntax coverage does not by itself establish better higher-order proof ergonomics.
 
 Proceed beyond the prototype if the callback-domain, composition, and traversal cases show a repeatable improvement in proof work. If the gains mostly come from general application support or better Dafny postcondition emission, land those shared/backend fixes first and reconsider the third backend.
 

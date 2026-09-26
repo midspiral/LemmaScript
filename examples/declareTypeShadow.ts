@@ -12,7 +12,7 @@
  * `//@ declare-type ModelMessage { role, content }`.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 // `when: Date` stands in for an SDK type LemmaScript doesn't model (like
 // mastra's `SharedV2ProviderOptions`). If the union variants leak into the
