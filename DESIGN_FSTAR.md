@@ -2,19 +2,19 @@
 
 **Status:** experimental backend implemented across the example suite; dependent callback domains and recursive combinator adapters remain proposed.
 **Date:** September 26, 2026 (feasibility experiments September 25).
-**Baseline:** LemmaScript 0.6.4, commit `097f18f`; Dafny 4.11.0; F* 2026.09.20 with its bundled Z3 4.13.3.
+**Pre-implementation baseline:** LemmaScript 0.6.4, commit `097f18f`; Dafny 4.11.0; F* 2026.09.20 with its bundled Z3 4.13.3.
 
 ## Recommendation
 
-An F* backend is worth a bounded prototype if the objective is **modular proofs about user-defined higher-order functions**: callbacks with input-dependent contracts, functions returning functions, generic combinator laws, and recursive traversals whose callbacks operate on smaller subtrees. Dependent function types give these contracts a natural representation, while retaining SMT assistance. F*'s combination of dependent types and automated verification is described in its [language introduction](https://fstar-lang.org/tutorial/book/intro.html).
+The experimental F* backend supports **modular proofs about user-defined higher-order functions**, including functions returning functions, compositional postconditions and generic combinator laws. Callbacks with input-dependent contracts and recursive traversals whose callbacks operate on smaller subtrees remain proposed extensions. Dependent function types give these contracts a natural representation, while retaining SMT assistance. F*'s combination of dependent types and automated verification is described in its [language introduction](https://fstar-lang.org/tutorial/book/intro.html).
 
-The case is weaker if the objective is simply supporting more uses of `map`, `filter`, or `reduce`. LemmaScript already handles those with Dafny, and several current restrictions belong to the shared frontend or lowering. Fixing those benefits both existing backends. Keep Dafny as the default while measuring whether F* reduces proof work on a few representative higher-order programs. The existing Lean backend is also a relevant baseline: dependent types are not unique to F*, and LemmaScript already pays for Lean/Loom/Velvet integration.
+The case is weaker if the objective is simply supporting more uses of `map`, `filter`, or `reduce`. LemmaScript already handles those with Dafny, and several current restrictions belong to the shared frontend or lowering. Fixing those can benefit all backends. Keep Dafny as the default while measuring whether F* reduces proof work on a few representative higher-order programs. The existing Lean backend is also a relevant baseline: dependent types are not unique to F*, and LemmaScript already pays for Lean/Loom/Velvet integration.
 
 The main uncertainty is proof ergonomics and engineering cost, rather than whether Dafny can express higher-order reasoning at all. Dafny has first-class functions, lambdas, and total, partial, and heap-reading arrow types (`->`, `-->`, `~>`). Its methods are not first-class function values. See the [Dafny reference on arrow types](https://dafny.org/latest/DafnyRef/DafnyRef).
 
 ## Implemented backend
 
-`gen`, `gen-check`, `check`, and proof-preserving `regen --backend=fstar` work across the top-level example suite. `./regen-fstar.sh` builds the compiler, preserves proof additions, verifies each example, and fails on any failure or backend skip. The four `examples/fstar*.ts` programs exercise returned closures, general application, generic composition, map fusion and higher-order iteration. Other companions carry checked proofs for the existing algorithms. See [SPEC_FSTAR.md](SPEC_FSTAR.md) for commands and precise model boundaries.
+`gen`, `gen-check`, `check`, and proof-preserving `regen --backend=fstar` work across all 75 top-level examples. `./regen-fstar.sh` builds the compiler, preserves proof additions, verifies each example, and fails on any failure or backend skip. The four `examples/fstar*.ts` programs exercise returned closures, general application, generic composition, map fusion and higher-order iteration. Companions live in [examples/fstar/](examples/fstar/README.md), with readable source-based filenames; ten working proofs contain additions to their generated baselines. See [SPEC_FSTAR.md](SPEC_FSTAR.md) for commands and precise model boundaries.
 
 The emitter now consumes the shared lowered IR through `transformModuleFstar`, with a small F*-specific mode that preserves expression types, general application and the specification result binder. Dafny and Lean retain their existing lowering. [fstar-source.ts](tools/src/fstar-source.ts) rejects constructs whose behavior extraction would erase, including mutation of captured state and reference-identity comparisons. Local updates become fresh values; loops become recursive continuations with invariant preconditions, enclosing postconditions and checked termination measures. Classes use explicit record state and result/state pairs.
 
@@ -28,7 +28,7 @@ The demonstrated higher-order benefits are direct composition of function postco
 
 ## Baseline code, before this prototype
 
-The relevant path is `extract → resolve → narrow → autohavoc → transform → peephole → emit`. The first three stages are reusable; the later stages contain backend decisions.
+This section records the pre-implementation baseline above. Its pipeline was `extract → resolve → narrow → autohavoc → transform → peephole → emit`. The first three stages were reusable; the later stages contained backend decisions. The table describes the changes that were needed, rather than the current F* implementation.
 
 | Area | Observation | Consequence for F* |
 | --- | --- | --- |
@@ -38,7 +38,7 @@ The relevant path is `extract → resolve → narrow → autohavoc → transform
 | [transform.ts](tools/src/transform.ts) | `flattenLambdaBody` handles immutable lets, conditionals, matches, and returns. Remaining statement bodies survive. Calls other than variables or field calls are rejected. | Pure block lambdas already work in many cases. Loops and assignments need further lowering; returned-function application needs a general `apply` node. |
 | [dafny-emit.ts](tools/src/dafny-emit.ts) | Function types always become total `->` arrows. `.map` uses an inlined sequence comprehension; `.filter`, `.every`, and `.reduce` use standard-library functions. | Current callback types cannot describe a domain-restricted function. The `.map` specialization is deliberate: it exposes the smaller element to termination checking. |
 | [dafny-emit.ts](tools/src/dafny-emit.ts), `case "def"` | Pure-function postconditions become companion `_ensures` lemmas; they are not emitted on the function itself. | This is an emitter/workflow choice, not a Dafny limitation. Hand-added function `ensures` already allow caller composition, as documented in [AGENTS.md](AGENTS.md). |
-| [builtins.ts](tools/src/builtins.ts), [lsc.ts](tools/src/lsc.ts) | Builtins have HOF shape metadata; CLI dispatch and backend types only admit `dafny` and `lean`. | Reuse builtin identities, but add real capability checks and explicit F* dispatch. The current CLI falls through to Lean after the Dafny branch. |
+| [builtins.ts](tools/src/builtins.ts), [lsc.ts](tools/src/lsc.ts) | Builtins had HOF shape metadata; CLI dispatch and backend types only admitted `dafny` and `lean`. | Reuse builtin identities, but add real capability checks and explicit F* dispatch. The baseline CLI fell through to Lean after the Dafny branch. |
 
 The existing examples are useful starting points: [hof.ts](examples/hof.ts) covers array callbacks and an immutable capture, [lambdaFlatten.ts](examples/lambdaFlatten.ts) and [switchLambda.ts](examples/switchLambda.ts) cover block-to-expression lowering, and [filterMap.ts](examples/filterMap.ts) covers optional callback results. [SPEC.md §3.7](SPEC.md#37-higher-order-functions-and-lambdas) explains these translations.
 
@@ -52,7 +52,7 @@ export function twice(f: (x: number) => number, x: number): number {
 }
 ```
 
-A temporary probe through the current source CLI and Dafny verified this with **2 verified, 0 errors**, without proof additions. That is a baseline an F* prototype should improve upon in larger examples, rather than evidence of a missing Dafny capability.
+A temporary probe through the baseline source CLI and Dafny verified this with **2 verified, 0 errors**, without proof additions. That is a baseline for evaluating F* on larger examples, rather than evidence of a missing Dafny capability.
 
 ## Where F* could improve the experience
 
@@ -69,19 +69,19 @@ let twice (f:step) (x:int) : Tot (y:int{y >= x}) =
 
 Every call to `f` exposes its guarantee through its type. A caller supplying `fun x -> x - 1` fails to meet the callback type. A domain restriction can likewise be represented as `x:int{x >= 0} -> Tot int`; this function is total on its specified domain, not on all integers. F* checks termination separately from purity. See [total computation types](https://fstar-lang.org/tutorial/book/part4/part4_computation_types_and_tot.html).
 
-The first compiler prototype can preserve existing annotations without inventing callback syntax. For example, the TS `twice` above can become the following checked F* definition:
+The implemented compiler preserves existing annotations without adding callback syntax. Omitting generated name prefixes, the TS `twice` above becomes:
 
 ```fstar
-let twice (f:int -> Tot int) (x:int)
-  : Pure int
+let twice (f:int -> GTot int) (x:int)
+  : Ghost int
     (requires (forall (y:int). f y >= y))
     (ensures (fun r -> r >= x)) =
   f (f x)
 ```
 
-`Pure` carries the function's pre/postcondition at its definition, so callers receive the verified postcondition directly. This representation and refined arguments/results are closely related; see [F*'s primitive effect refinements](https://fstar-lang.org/tutorial/book/part4/part4_pure.html). A standalone caller of this definition verified in the experiments below.
+`Ghost` carries the function's pre/postcondition at its definition, so callers receive the verified postcondition directly. `Ghost`/`GTot` accommodate the mathematical sequence and collection libraries used by the verification model; TypeScript remains executable. The earlier standalone experiments used `Pure`/`Tot`, which also carry compositional contracts; see [F*'s primitive effect refinements](https://fstar-lang.org/tutorial/book/part4/part4_pure.html).
 
-Reusable, explicitly domain-restricted callback contracts should be a later shared language feature. Add structured contract metadata containing named input binders, a result binder, pre/postcondition ASTs, and an effect/totality requirement. Preserve it through resolution, aliases, and application. Decide its TS annotation syntax after the prototype; `//@ type` currently parses TS-shaped types and cannot simply accept arbitrary F* refinements. A TS type `(x: number) => number` alone establishes neither purity nor a mathematical callback contract.
+Reusable, explicitly domain-restricted callback contracts remain a proposed shared language feature. They need structured contract metadata containing named input binders, a result binder, pre/postcondition ASTs, and an effect/totality requirement, preserved through resolution, aliases, and application. Their TS annotation syntax is still undecided; `//@ type` currently parses TS-shaped types and cannot simply accept arbitrary F* refinements. A TS type `(x: number) => number` alone establishes neither purity nor a mathematical callback contract.
 
 Verified callers must discharge callback contracts and purity requirements; an unverified TS caller remains an explicit boundary assumption. Ordinary runtime shape checks cannot establish a universally quantified callback guarantee.
 
@@ -107,7 +107,7 @@ let rec map_fusion (#a:Type) (#b:Type) (#c:Type)
   | _::tl -> map_fusion f g tl
 ```
 
-This makes map fusion, filter composition, and fold invariant preservation reasonable experiments. The induction still has to be supplied. F*'s [polymorphism chapter](https://fstar-lang.org/tutorial/book/part1/part1_polymorphism.html) covers the type arguments and higher-order application used here.
+The working [fstarArrays.fst](examples/fstar/fstarArrays.fst) now proves map fusion for the generated sequence model using a handwritten induction. Filter composition and fold invariant preservation remain further experiments. F*'s [polymorphism chapter](https://fstar-lang.org/tutorial/book/part1/part1_polymorphism.html) covers the type arguments and higher-order application used here.
 
 ### Recursive callbacks need stronger combinators
 
@@ -187,7 +187,7 @@ Companions use the source basename inside a sibling `fstar/` directory. Internal
 
 `gen` replaces only the baseline and seeds a missing working file. `check` enforces additions-only and verifies the working module. `regen` merges against the correct old generation, preserves proof additions, and retains recovery state on failure. Carry over the documented Dafny conflict and failed-verification anchor rules. Never recreate a working proof by deleting it.
 
-F* often needs a ghost lemma invocation or assertion before the expression whose type is being checked. This is why a pair is the initial choice. A Lean-like split into immutable definitions and separate proofs is attractive for external theorems, but it does not by itself discharge refinements inside generated definitions. It would need a designed, acyclic mechanism for proof hooks.
+F* often needs a ghost lemma invocation or assertion before the expression whose type is being checked. This is why the backend currently uses a pair, even when automatic verification leaves the two files identical. Moving companions into `fstar/` improves the layout but retains this duplication. A Lean-like split into immutable definitions and separate proofs is attractive for external theorems, but it does not by itself discharge refinements inside generated definitions. It would need a designed, acyclic mechanism for proof hooks.
 
 Proof additions may supply ghost definitions, checked assertions, and lemma calls; they must preserve the program and declared contracts. An additions-only text check is an editing discipline, not a proof that arbitrary inserted F* expressions preserve behavior. Constrained proof insertion points and checking their ghost-only nature are a hardening task before broader adoption.
 
@@ -205,9 +205,9 @@ node tools/dist/lsc.js regen --backend=fstar examples/fstarClosures.ts
 
 The command runner invokes `fstar.exe` (or `FSTAR_EXE`) with an argument array, copying the working module into a fresh directory and forcing verification. Missing binaries fail. The backend rejects `.fsti` companions and does not reuse project caches or unchecked dependencies; it checks the packaged runtime explicitly and relies on the installed standard library. Any future project caching must bind source, dependencies, options, and toolchain versions. A successful `gen` or cached parse must never be reported as a verification success.
 
-Reject `--lax`, query-admission options, untracked axioms, and proof admissions in checked project code; use `--report_assumes error` for the initial no-extern subset. Bundled foundational libraries remain part of the chosen trust boundary. Solver tuning is distinct from admission, and source-level option directives need scrutiny as well as CLI flags.
+The runner rejects verification-bypass flags, new proof assumptions, admissions and source option directives; it permits only the resource flags listed in [SPEC_FSTAR.md](SPEC_FSTAR.md#verification-and-trust-boundary). Verification uses `--report_assumes error`, except that generated source `assume` statements require `warn` so their explicit trust is reported. Generated extern declarations remain part of the source model. Bundled foundational libraries remain part of the chosen trust boundary.
 
-Implement `--time-limit` as an actual process deadline unless a pinned F* option with the same semantics is selected. F*'s `--z3rlimit` is a resource budget, not a seconds timeout. Check exit status and final diagnostics: the initial negative probe even printed `Verified module: Bad` despite exiting 1 with an error.
+`--time-limit` is a process deadline applied separately to runtime verification and working-proof verification. F*'s `--z3rlimit` is a resource budget, not a seconds timeout. Nonzero exit status fails verification even if diagnostics include `Verified module`: the initial negative probe printed `Verified module: Bad` despite exiting 1 with an error.
 
 ## Feasibility experiments and implementation gates
 
@@ -215,9 +215,9 @@ These initial feasibility experiments ran in a temporary directory, before backe
 
 | Experiment | Observed result |
 | --- | --- |
-| Current `lsc` source CLI: TS `twice` with quantified callback precondition | Dafny: 2 verified, 0 errors |
-| Current `lsc`: `makeAdder(1)(2)` | Generation fails: `Unsupported call expression: call` |
-| Current `lsc`: `.map` callback with a local accumulation loop | Generation fails: `Unsupported: multi-statement lambda in Dafny` |
+| Baseline Dafny CLI: TS `twice` with quantified callback precondition | 2 verified, 0 errors |
+| Baseline Dafny CLI: `makeAdder(1)(2)` | Generation failed: `Unsupported call expression: call` |
+| Baseline Dafny CLI: `.map` callback with a local accumulation loop | Generation failed: `Unsupported: multi-statement lambda in Dafny` |
 | F*: refined `twice`, returned immutable closure, domain-restricted callback | Verified |
 | F*: `Pure` version of `twice` and a caller using its guarantee | Verified, including `--report_assumes error` |
 | F*: generic map-fusion lemma | Verified |
@@ -227,11 +227,11 @@ These initial feasibility experiments ran in a temporary directory, before backe
 
 These historical probes motivated the implementation. They are not a semantic-equivalence proof or performance comparison; the implemented coverage is described above.
 
-1. **Pure vertical slice.** Generate and verify the existing numeric HOF examples plus `apply`, `compose`, `twice`, and returned closures. Preserve existing annotations and compare generated results with TS on representative inputs. Test immutable capture and shadowing; reject mutable captures and effectful callbacks with clear diagnostics.
-2. **Compositional contracts.** Add callback contract metadata and its annotation syntax. Verify a callback with a restricted input domain, a dependent output relation, and a caller that uses both. Include a failing caller that violates the domain and a callback that violates the guarantee. Verify a fold whose callback preserves an accumulator invariant.
-3. **Recursive combinators.** Generate a tree traversal without modifying the TS algorithm. Prove the adapter's map equivalence and termination obligations. Compare proof additions against current Dafny comprehensions and a reasonable improved Dafny encoding, including direct function postconditions.
-4. **Workflow gate.** Test proof preservation across clean regeneration, merge conflicts, failed verification, missing binaries, false specs, admissions, and missing interface implementations. Keep all existing Dafny and Lean checks passing. Measure proof size, manual steps, diagnostics, and repeated verification stability with pinned versions.
-5. **Broader coverage.** Local mutable loops and explicit class state are now functionalized. Aliasing, shared heap effects and scheduling remain separate work. Broader syntax coverage does not by itself establish better higher-order proof ergonomics.
+1. **Pure vertical slice — implemented.** Numeric HOFs, composition, immutable captures, shadowing and returned closures have positive and negative verification tests. Existing annotations are preserved; mutable captures are rejected. Differential comparison with TS execution remains future work.
+2. **Dependent callback contracts — proposed.** Direct function and returned-closure postconditions compose today. Named callback types with restricted input domains and dependent output relations still need shared metadata and annotation syntax, along with failing-caller and failing-callback tests.
+3. **Recursive combinators — proposed.** Generate a tree traversal through a domain-aware adapter without modifying the TS algorithm. Prove the adapter's map equivalence and termination obligations. Compare proof additions against Dafny comprehensions and an improved Dafny encoding with direct function postconditions.
+4. **Proof workflow — implemented, ergonomics still to measure.** F* and shared artifact tests cover proof preservation, regeneration/recovery, migration, verifier failures, false specs and proof-policy rejection. CI checks the existing backends and all F* examples. Comparative proof size, manual steps and verification stability still need a systematic benchmark.
+5. **Broader value-model coverage — implemented.** Local mutable loops and explicit class state are functionalized, and all 75 examples verify. Aliasing, shared heap effects and scheduling remain separate work. Broader syntax coverage does not by itself establish better higher-order proof ergonomics.
 
 Proceed beyond the prototype if the callback-domain, composition, and traversal cases show a repeatable improvement in proof work. If the gains mostly come from general application support or better Dafny postcondition emission, land those shared/backend fixes first and reconsider the third backend.
 
@@ -310,6 +310,6 @@ Expect a nonzero exit and a failed obligation equivalent to `x - 1 >= x`. This c
 
 ### 5. Verify the generated LemmaScript examples
 
-Return to the LemmaScript checkout, run `npm run build`, then `node tools/dist/lsc.js check --backend=fstar examples/fstarClosures.ts`. Repeat for `fstarComposition.ts`, `fstarArrays.ts`, and `fstarIteration.ts`. These exercise the implemented subset; the standalone domain-restricted callback and tree examples above go beyond it. After edits under `tools/`, rebuild before using the compiled CLI.
+Return to the LemmaScript checkout, run `npm run build`, then `node tools/dist/lsc.js check --backend=fstar examples/fstarClosures.ts`. Repeat for `fstarComposition.ts`, `fstarArrays.ts`, and `fstarIteration.ts`, or run `./regen-fstar.sh` to build, regenerate and verify all examples. Companions live in `examples/fstar/`; verification through `lsc` handles their internal module filenames. The standalone domain-restricted callback and tree examples above go beyond the implemented subset. After edits under `tools/`, rebuild before using the compiled CLI.
 
 If setup fails, first check that `command -v fstar.exe` selects the intended installation, that `uname -m` is `arm64`, and that `--locate_z3 4.13.3` locates the bundled solver. For a source build or OPAM installation, follow the current [upstream installation instructions](https://github.com/FStarLang/FStar/blob/master/INSTALL.md); compiler constraints and solver requirements vary by release. Pin the same working release in CI before comparing proof behavior.

@@ -1,6 +1,7 @@
 # F* backend (experimental)
 
 The F* backend verifies LemmaScript's mathematical value model, including higher-order functions, local mutation, loops, records, tagged unions, classes, arrays, strings, maps and sets. Function `requires` and `ensures` become checked F* `Ghost` signatures; function values use `GTot` arrows, so callers can use returned-closure guarantees directly. TypeScript remains the executable program. The F* model is for verification, not code extraction.
+
 ## Running it
 
 Install F* using its [official installer](https://github.com/FStarLang/FStar/blob/master/INSTALL.md); the tested release and CI pin are [v2026.09.20](https://github.com/FStarLang/FStar/releases/tag/v2026.09.20), with bundled Z3 4.13.3. If already installed, check discovery with `fstar.exe --version`. Set `FSTAR_EXE` to an absolute executable path if it is not on PATH.
@@ -29,7 +30,7 @@ Put `//@ backend fstar` at the top of a source to select only F*, or `//@ backen
 | [fstarArrays.ts](examples/fstarArrays.ts) | A closure capturing a generic array; map preserves length and filtering cannot increase it. Its working `.fst` also proves map fusion by induction, as a hand-written proof addition. |
 | [fstarIteration.ts](examples/fstarIteration.ts) | A decreasing recursive iterator preserves a callback guarantee; returning and applying the iterator retains its postcondition. |
 
-The other examples exercise the shared language fragment; the working F* companions include proofs of binary search, sorting, permutation invariance, stack traversal and collection algorithms. Source contracts and explicit trust annotations are preserved.
+All 75 top-level examples generate and verify with F*. The other examples exercise the shared language fragment; the working [F* companions](examples/fstar/README.md) include proofs of binary search, sorting, permutation invariance, stack traversal and collection algorithms. Source contracts and explicit trust annotations are preserved.
 
 The four examples above use general application that the current Dafny/Lean lowering rejects. They demonstrate the implemented F* path, not an inherent inability of Dafny or Lean to reason about these programs. See [DESIGN_FSTAR.md](DESIGN_FSTAR.md) for the comparison and subsequent milestones.
 
@@ -59,6 +60,8 @@ For `examples/fstarClosures.ts`, generation creates `examples/fstar/fstarClosure
 Commands automatically move companions from the previous `LS.M<stem>_<digest>.fst` layout, preserving their contents and any baseline, recovery or interface files. If both layouts contain artifacts for a source, the command stops before changing either set; reconcile them before rerunning. The internal module name survives checkout relocation with the same layout, but changing the config root or moving/renaming the TS source may change it.
 
 The `.fst.gen` is generated and must never be hand-edited. The working `.fst` contains generated lines plus hand-written proofs; `check` enforces an additions-only diff and verifies that working file. After changing TS, use `regen` to preserve additions through a three-way merge. `.fst.base` and `.fst.merged` are recovery artifacts: a conflict restores the proof and keeps the old anchor, while a clean merge followed by verification failure advances the anchor to the generation actually merged. A successful regen clears the anchor, including with `--no-verify`. Do not delete the proof or recovery state to make regeneration pass.
+
+Both companions are tracked: `.fst.gen` supplies the previous generation for merging, while `.fst` retains proof additions. They are identical when automatic verification needs no additions. A separate generated-program/handwritten-proof format is future design work; the current layout still uses this pair.
 
 Proof additions must preserve program behavior: add checked lemmas, assertions and ghost reasoning. As with the Dafny workflow, an additions-only textual diff alone cannot establish that arbitrary inserted code is a semantics-preserving proof. This remains a reviewed trust boundary.
 
