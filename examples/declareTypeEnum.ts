@@ -12,7 +12,7 @@
  * shadows them — `tsc` needs them present, LemmaScript uses the shadow.)
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 type Role = "user" | "assistant" | "toolResult";
 interface Msg { role: Role }

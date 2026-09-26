@@ -20,6 +20,9 @@ import { emitLeanFile, resetLeanModule } from "./lean-emit.js";
 import { emitDafnyFile, emittedNameMap } from "./dafny-emit.js";
 import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-commands.js";
 import { leanGen, leanCheck } from "./lean-commands.js";
+import { emitFstarFile } from "./fstar-emit.js";
+import { checkFstarSource } from "./fstar-source.js";
+import { fstarPaths, migrateFstarArtifacts, fstarFlags, fstarGen, fstarCheckDiff, fstarVerify, fstarRegen } from "./fstar-commands.js";
 import { runInfo, runTypedInfo, type TypedInfoDafny } from "./info-command.js";
 import {
   findUp,
@@ -36,6 +39,8 @@ function lscVersion(): string {
   const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
   return pkg.version as string;
 }
+
+type Backend = "lean" | "dafny" | "fstar";
 
 function main() {
   const args = process.argv.slice(2);
@@ -87,11 +92,11 @@ function main() {
   }
 
   const backendIdx = args.findIndex(a => a.startsWith("--backend="));
-  let backend: "lean" | "dafny" = "dafny";
+  let backend: Backend = "dafny";
   if (backendIdx >= 0) {
     const val = args[backendIdx].split("=")[1];
-    if (val !== "lean" && val !== "dafny") {
-      console.error(`Unknown backend: ${val}. Use --backend=lean or --backend=dafny`);
+    if (val !== "lean" && val !== "dafny" && val !== "fstar") {
+      console.error(`Unknown backend: ${val}. Use --backend=lean, --backend=dafny, or --backend=fstar`);
       process.exit(1);
     }
     backend = val;
@@ -168,7 +173,7 @@ function main() {
 
   const [cmd, filePath] = args;
   if (!cmd) {
-    console.error("Usage: lsc <gen|check|regen|extract|info> [--backend=lean|dafny] [--config=path] <file.ts>");
+    console.error("Usage: lsc <gen|check|regen|extract|info> [--backend=lean|dafny|fstar] [--config=path] <file.ts>");
     console.error("       lsc config [--config=path] [<file.ts>]");
     console.error("       lsc info --typed <file.ts>   (machine-readable Typed IR contract to stdout)");
     console.error("       lsc <gen|gen-check|check> [--backend=…] [--slow]   (no file: batch over LemmaScript-files.txt)");
@@ -244,7 +249,7 @@ function runConfig(filePath: string | undefined, configPath?: string): void {
 // Fail-fast: the first failing entry exits.
 function runBatch(
   cmd: string,
-  backend: "lean" | "dafny",
+  backend: Backend,
   slow: boolean,
   timeLimit?: number,
   extraFlags?: string,
@@ -291,7 +296,7 @@ function guardRelocatedDafnyProof(
 function runFile(
   cmd: string,
   filePath: string,
-  backend: "lean" | "dafny",
+  backend: Backend,
   timeLimit: number | undefined,
   extraFlags: string | undefined,
   noVerify = false,
@@ -317,8 +322,8 @@ function runFile(
 
   // Check //@ backend directive — skip if backend doesn't match.
   // `extract` and `info` are backend-neutral and always run.
-  const backendDirective = fullText.match(/\/\/@ backend (\w+)/);
-  if (cmd !== "extract" && cmd !== "info" && backendDirective && backendDirective[1] !== backend) {
+  const backendDirective = fullText.match(/^\/\/@ backend ([a-z]+(?:\s*,\s*[a-z]+)*)\s*$/m);
+  if (cmd !== "extract" && cmd !== "info" && backendDirective && !backendDirective[1].split(/\s*,\s*/).includes(backend)) {
     console.log(`Skipped: ${path.basename(filePath)} (//@ backend ${backendDirective[1]}, current: ${backend})`);
     return;
   }
@@ -342,6 +347,25 @@ function runFile(
   if (cmd === "info" && !typedInfo) {
     const outPath = path.join(path.dirname(absPath), `${path.basename(filePath, ".ts")}.ts.json`);
     runInfo(raw, outPath);
+    return;
+  }
+
+  if (backend === "fstar" && cmd !== "info") {
+    if (!["gen", "gen-check", "check", "regen"].includes(cmd)) throw new Error(`Unknown command: ${cmd}`);
+    fstarFlags(extraFlags); // validate before writing any artifacts
+    checkFstarSource(sourceFile, raw);
+    const typed = autoHavocModule(narrowModule(resolveModule(raw)));
+    const root = path.dirname(configFile ?? tsConfigFilePath ?? absPath);
+    const files = fstarPaths(absPath, root);
+    const text = emitFstarFile(typed, files.moduleName);
+    migrateFstarArtifacts(absPath, files);
+    if (cmd === "regen") {
+      fstarRegen(files.gen, files.proof, files.base, text, timeLimit, extraFlags, noVerify);
+      return;
+    }
+    fstarGen(files.gen, files.proof, text);
+    if (cmd !== "gen" && !fstarCheckDiff(files.gen, files.proof)) process.exit(1);
+    if (cmd === "check" && !fstarVerify(files.proof, timeLimit, extraFlags)) process.exit(1);
     return;
   }
 

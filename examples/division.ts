@@ -14,7 +14,7 @@
  * real-division semantics.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 // Bare `/` on two integer literals is real division: 3 / 2 is 1.5, not 1.
 // If the result were integer division (1), `1 * 2 === 3` would be false.

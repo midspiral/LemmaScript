@@ -2659,7 +2659,9 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       || sourceReturnText.includes(" | null ") || sourceReturnText.includes(" | undefined ")
       || sourceReturnText.includes(" | null|") || sourceReturnText.includes(" | undefined|");
     const sym = retType.getSymbol();
-    if (sym?.getName() === "__type" && retType.isObject() && !retType.isArray()) {
+    // Callable object types must retain their arrow signature. extractRecord
+    // cannot turn a returned function into an anonymous result record.
+    if (sym?.getName() === "__type" && retType.isObject() && !retType.isArray() && retType.getCallSignatures().length === 0) {
       innerType = retType;
       if (sourceHadNullish) wrapOptional = true;
     } else if (retType.isUnion()) {
@@ -2669,7 +2671,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       if (nullish.length >= 1 && others.length === 1) {
         const onlyOther = others[0];
         const otherSym = onlyOther.getSymbol();
-        if (otherSym?.getName() === "__type" && onlyOther.isObject() && !onlyOther.isArray()) {
+        if (otherSym?.getName() === "__type" && onlyOther.isObject() && !onlyOther.isArray() && onlyOther.getCallSignatures().length === 0) {
           innerType = onlyOther;
           wrapOptional = true;
         }

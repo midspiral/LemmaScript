@@ -1,4 +1,4 @@
-//@ backend dafny
+//@ backend dafny,fstar
 
 /**
  * Preorder tree traversal — iterative stack-based implementation

@@ -1,6 +1,6 @@
 # LemmaScript (Tech Preview)
 
-A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations. The toolchain generates verifiable code from your TypeScript — either in Dafny or Lean 4 (with Velvet/Loom).
+A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations. The toolchain generates verifiable code from your TypeScript in Dafny, Lean 4 (with Velvet/Loom), or an experimental F* backend.
 
 See [SPEC.md](SPEC.md), [DESIGN.md](DESIGN.md), and [GETTING_STARTED.md](GETTING_STARTED.md).
 
@@ -86,6 +86,18 @@ lsc gen --backend=lean src/myModule.ts
 lake build
 ```
 
+### F* backend (experimental)
+
+The F* backend supports higher-order functions and returned closures alongside the existing examples with loops, records, arrays, strings, maps and sets. Install [F*](https://github.com/FStarLang/FStar/blob/master/INSTALL.md), then from this checkout run:
+
+```sh
+npm run build
+node tools/dist/lsc.js check --backend=fstar examples/fstarClosures.ts
+./regen-fstar.sh  # regenerate and verify all examples, preserving proofs
+```
+
+Sources marked `//@ backend fstar` are skipped by the other backends. Companions live beside each source: `examples/fstarClosures.ts` produces `examples/fstarClosures.fst.gen` and `.fst`. Generated baselines and working proofs follow the additions-only `gen`/`check`/`regen` workflow. See [SPEC_FSTAR.md](SPEC_FSTAR.md) for the supported model and examples, and [DESIGN_FSTAR.md](DESIGN_FSTAR.md) for the rationale and remaining work. Tested with F* 2026.09.20; Dafny remains the default.
+
 ## Continuous Integration
 
 LemmaScript ships a **reusable GitHub Actions workflow** that regenerates your artifacts, verifies them, and fails the build if any committed generated file is out of date. Call it from your own repo's workflow:
@@ -163,4 +175,3 @@ For the full surface, see [SPEC.md](SPEC.md).
 | [**.spec.lean**](examples/majority.spec.lean) | No | Ghost definitions, helper lemmas |
 | [**.def.lean**](examples/majority.def.lean) | Yes | Velvet method definitions |
 | [**.proof.lean**](examples/majority.proof.lean) | No | `prove_correct` with proof tactics |
-

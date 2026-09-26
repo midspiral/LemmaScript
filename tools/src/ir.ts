@@ -9,7 +9,7 @@ import type { Ty } from "./typedir.js";
 
 // ── Expressions ──────────────────────────────────────────────
 
-export type Expr =
+export type Expr = (
   | { kind: "var"; name: string }
   | { kind: "num"; value: number }
   | { kind: "bigint"; value: string }   // exact integer literal, canonical decimal — emitted verbatim
@@ -40,6 +40,7 @@ export type Expr =
   | { kind: "let"; name: string; value: Expr; body: Expr }
   | { kind: "havoc"; type: Ty }
   | { kind: "default"; type: Ty }                              // default value of T (Lean: `(default : T)` via Inhabited). Only produced by the return-in-loop→break rewrite, which is Lean-gated since Dafny keeps native in-loop returns; hence no Dafny producer today.
+) & { ty?: Ty }; // Optional source type retained by the F* lowering.
 
 /** A match-arm pattern. Backend-neutral: `.some x`, `.syn seq`, `.none` are held
  *  structurally and rendered to each backend's constructor syntax by its emitter

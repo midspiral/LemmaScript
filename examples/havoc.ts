@@ -2,7 +2,7 @@
  * Havoc example — verify logic around havoced expressions.
  * The regex result is havoced; the set membership check is verified.
  */
-//@ backend dafny
+//@ backend dafny,fstar
 
 export function countMatches(
   items: string[],

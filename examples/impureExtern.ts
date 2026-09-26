@@ -6,7 +6,7 @@
  * Each roll is arbitrary and independently constrained to [1, 6].
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 import { rollDie } from "./support/impureDie.js";
 

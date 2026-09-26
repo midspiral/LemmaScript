@@ -179,6 +179,7 @@ export type Backend = "lean" | "dafny";
 export interface TransformOptions {
   backend: Backend;
   monadic: boolean;
+  nativeContracts?: boolean;
 }
 
 export const LEAN_OPTIONS: TransformOptions = {
@@ -447,6 +448,11 @@ function buildNestedFieldUpdate(recv: TExpr, newVal: Expr): { root: string; valu
 }
 
 function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
+  const result = lowerExprInner(e, binds);
+  return _opts.nativeContracts ? { ...result, ty: e.ty } : result;
+}
+
+function lowerExprInner(e: TExpr, binds: Stmt[] | null): Expr {
   // Monadic lifting: extract embedded method calls to let-binds.
   // `callKind: "method"` means a global var-fn call (classifyCall returns
   // "method" only for `fn.kind === "var"`). Receiver method calls have
@@ -790,7 +796,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const method = e.ty.kind !== "optional" ? "getDirect" : "get";
         return { kind: "methodCall", obj: transformExpr(e.obj), objTy: e.obj.ty, method, args: [idx], monadic: false };
       }
-      const wrappedIdx = isArray(e.obj.ty) && !isNat(e.idx.ty) ? { kind: "toNat" as const, expr: idx } : idx;
+      const wrappedIdx = !_opts.nativeContracts && isArray(e.obj.ty) && !isNat(e.idx.ty) ? { kind: "toNat" as const, expr: idx } : idx;
       return { kind: "index", arr: transformExpr(e.obj), idx: wrappedIdx };
     }
 
@@ -873,7 +879,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           // Array index args must be nat in Lean: `with`'s index (0), includes/indexOf `from` (1)
           // — registry `intArgPositions`.
           const isArrIdxArg = spec?.intArgPositions !== undefined && spec.intArgPositions.includes(i);
-          if (isArrIdxArg && !isNat(a.ty)) return { kind: "toNat" as const, expr: lowered };
+          if (isArrIdxArg && !isNat(a.ty) && !_opts.nativeContracts) return { kind: "toNat" as const, expr: lowered };
           return lowered;
         });
         // arr.concat(...args): each array arg is spread, each value arg appended.
@@ -908,6 +914,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           return { kind: "var", name };
         }
         return result;
+      }
+      if (e.fn.kind !== "var" && _opts.nativeContracts) {
+        return { kind: "app", fn: "__fstarApply", args: [lowerExpr(e.fn, binds), ...e.args.map(a => lowerExpr(a, binds))] };
       }
       if (e.fn.kind !== "var")
         throw new Error(`Unsupported call expression: ${e.fn.kind}`);
@@ -2449,6 +2458,13 @@ export function transformModuleDafny(mod: TModule): { typesFile: Module | null; 
   }
 }
 
+/** Shared value/collection lowering, retaining F* result binders and types. */
+export function transformModuleFstar(mod: TModule): { typesFile: Module | null; defFile: Module } {
+  const prev = _opts;
+  _opts = { ...DAFNY_OPTIONS, nativeContracts: true };
+  try { return transformModule(mod); } finally { _opts = prev; }
+}
+
 export function transformModule(mod: TModule, specImport?: string, moduleBaseOverride?: string): { typesFile: Module | null; defFile: Module } {
   _forofCounters.clear();
   _liftCounter = 0;
@@ -2474,7 +2490,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
     if (body) {
       // For pure-function lemmas, replace \result with the function call.
       const fnCall: Expr = { kind: "app", fn: fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) };
-      const ensures = fn.ensures.map(e => replaceVar(transformExpr(e), "\\result", fnCall));
+      const ensures = fn.ensures.map(e => _opts.nativeContracts ? transformExpr(e) : replaceVar(transformExpr(e), "\\result", fnCall));
       pureDefs.push({
         kind: "def",
         name: fn.name,
@@ -2522,7 +2538,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
       params: ext.params.map(p => ({ name: p.name, type: p.ty })),
       returnType: ext.returnTy,
       requires: ext.requires.map(transformExpr),
-      ensures: ext.ensures.map(e => ext.impure
+      ensures: ext.ensures.map(e => ext.impure || _opts.nativeContracts
         ? transformExpr(e)
         : replaceVar(transformExpr(e), "\\result", fnCall)),
       impure: ext.impure,

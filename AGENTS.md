@@ -1,20 +1,21 @@
 # AGENTS.md
 
-Guidance for AI coding agents working on LemmaScript itself or on projects that use it. Human-oriented docs live in [README.md](README.md), [SPEC.md](SPEC.md), [SPEC_DAFNY.md](SPEC_DAFNY.md), [SPEC_LEAN.md](SPEC_LEAN.md), [DESIGN.md](DESIGN.md), [TOOLS.md](TOOLS.md). This file collects the things that are easy to get wrong if you only read those.
+Guidance for AI coding agents working on LemmaScript itself or on projects that use it. Human-oriented docs live in [README.md](README.md), [SPEC.md](SPEC.md), [SPEC_DAFNY.md](SPEC_DAFNY.md), [SPEC_LEAN.md](SPEC_LEAN.md), [SPEC_FSTAR.md](SPEC_FSTAR.md), [DESIGN.md](DESIGN.md), [TOOLS.md](TOOLS.md). This file collects the things that are easy to get wrong if you only read those.
 
 ## What LemmaScript is
 
-A verification toolchain for TypeScript. The user writes ordinary TS with `//@ ` annotations. `lsc` generates either:
+A verification toolchain for TypeScript. The user writes ordinary TS with `//@ ` annotations. `lsc` generates:
 - **Dafny** — one `.dfy.gen` (always regeneratable) + one `.dfy` (the source of truth where proof additions accumulate). Diff must be additions-only.
 - **Lean 4 / Velvet / Loom** — four files: `.types.lean` + `.def.lean` are generated; `.spec.lean` + `.proof.lean` are hand-written.
+- **F* (experimental)** — a generated `foo.fst.gen` and an additions-only working `foo.fst` beside `foo.ts`. Higher-order functions and the shared mathematical value model; see [SPEC_FSTAR.md](SPEC_FSTAR.md).
 
 Whatever you do, the TS file is the source of truth for *the program*. The hand-written verification files are the source of truth for *the proof*. Don't conflate them.
 
 ## Toolchain commands
 
 ```sh
-npx lsc gen   --backend=<dafny|lean> path/to/foo.ts   # generate artifacts
-npx lsc check --backend=<dafny|lean> path/to/foo.ts   # gen + verify
+npx lsc gen   --backend=<dafny|lean|fstar> path/to/foo.ts   # generate artifacts
+npx lsc check --backend=<dafny|lean|fstar> path/to/foo.ts   # gen + verify
 npx lsc regen --backend=dafny        path/to/foo.ts   # three-way merge after TS changes
 npx lsc config                       path/to/foo.ts   # show effective options and Dafny artifact directory
 ```
@@ -75,7 +76,7 @@ Only after that successful check is the current `.dfy.gen` an established replac
 These are the ones that bite repeatedly:
 
 - **`//@ assume` is not a proof shortcut.** It emits `assume P;` in Dafny, telling the verifier to trust `P` unconditionally. It is appropriate to constrain a `//@ havoc`'d value (whose true behavior is outside the LS fragment) — and that's about it. Don't reach for it to paper over a proof obligation you don't feel like discharging. If you find yourself adding `//@ assume` to make verification pass on code you wrote, restructure the algorithm or prove the lemma. (Same goes for `//@ assume false` to silence a `throw new Error(...)` path — instead, characterize the valid-input domain in `//@ requires`.)
-- **`//@ havoc` is Dafny-only.** It marks the RHS of a declaration or assignment as nondeterministic. The Lean backend will reject files that use it. Pair it with `//@ assume` immediately after if you need to constrain the resulting value (`|cleaned| <= |text|`, for example).
+- **`//@ havoc` works with Dafny and F*.** It marks the RHS of a declaration or assignment as nondeterministic. The Lean backend will reject files that use it. Pair it with `//@ assume` immediately after if you need to constrain the resulting value (`|cleaned| <= |text|`, for example).
 - **`//@ extern` is the deterministic cousin of `//@ havoc`.** Use it when callers should reason *parametric over* a function whose body is out of model (regex, IO, parser). The axiom is deterministic and extensional — proofs that depend on `f(x) == f(x)` go through. Add `//@ impure` to an extern (or to a cross-file source declaration) when each call needs an independent result; this emits a body-less Dafny method and does not model shared heap effects.
 - **`//@ ` annotations don't support `\old(...)`.** For mutating methods, `this.field` in `ensures` is the post-state; pre-state references must be added as `old(this.field)` in `.dfy` proof additions (see SPEC.md §2.8).
 - **Empty Dafny lemma body means *proven*.** `lemma foo() ensures P {}` is auto-discharged by Z3 — it is not "skipped" or "unproven." Only `assume` / `havoc` / weak specs side-step the verifier.
@@ -110,6 +111,16 @@ import opened Std.Arithmetic.DivMod     // LemmaMulStrictInequality(x,y,z): x<y 
 `lake build` runs the full chain. `loom_solve` is the default tactic for discharging Velvet VCs, but **it does not automatically apply step lemmas to recursive helpers** — for those, you need an explicit chain (e.g., `loomAbstractionSimp` + the step lemma name) rather than a bare `loom_solve`.
 
 `.spec.lean` is for ghost definitions and helper lemmas; `.proof.lean` is for `prove_correct` plus the tactic script. Keep them separate; don't push everything into `.proof.lean`.
+
+## F* verification workflow
+
+Use `lsc check --backend=fstar foo.ts` (or `node tools/dist/lsc.js` after building this checkout). `fstar.exe` must be on PATH, or `FSTAR_EXE` must name an absolute executable path. `//@ backend fstar` skips a source when running other backends; `//@ backend dafny,fstar` permits both. `./regen-fstar.sh` regenerates and verifies every example without skips.
+
+Never edit `.fst.gen`; add proofs only to the working `.fst`, preserving every generated line. Use `regen --backend=fstar` after TS changes. The Dafny recovery/anchor rules above also apply to `.fst.base` and `.fst.merged`. `proof-dir` remains Dafny-only. Admissions, source option directives, `.fsti` companions, and unchecked project dependencies are rejected. `--time-limit` is a process deadline; only the resource flags listed in SPEC_FSTAR are allowed.
+
+Companions live beside the TS source, with the same basename. Verify through `lsc`: it handles the internal module filename in a temporary directory. Commands migrate companions and recovery state from the previous `fstar/` subdirectory or `LS.M<stem>_<digest>.fst` filenames automatically, but stop if multiple layouts contain proof state rather than overwrite a proof set.
+
+The backend functionalizes local mutation and loops; captured-state mutation and `await` remain unsupported. Source externs, havoc and assumptions remain explicit trust boundaries. Do not add `assume` or statement-level `skip` to make a proof pass. Returned-function application works, but domain-restricted callback types and recursive tree combinator adapters remain future work. The runtime is verified explicitly before each example, and proof additions may use `opaque_to_smt` to control unfolding without admitting a body.
 
 ## Brownfield (existing TS codebases)
 

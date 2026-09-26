@@ -3,7 +3,7 @@
 # (this checkout) — so case studies and CI validate the current tree. The batch
 # loop lives in `lsc` itself (runBatch in src/lsc.ts, reading
 # LemmaScript-files.txt); installed-package consumers get the same loop as `lsc check`.
-# Usage: ./check.sh <lean|dafny|dafny-slow> [file.ts ...]
+# Usage: ./check.sh <lean|dafny|dafny-slow|fstar> [file.ts ...]
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -25,12 +25,16 @@ case "$backend" in
     if [ $# -gt 0 ]; then for f in "$@"; do $LSC check --backend=dafny "$f"; done
     else $LSC check --backend=dafny --slow; fi
     ;;
+  fstar)
+    if [ $# -gt 0 ]; then for f in "$@"; do $LSC check --backend=fstar "$f"; done
+    else $LSC check --backend=fstar; fi
+    ;;
   all)
     "$0" lean "$@"
     "$0" dafny "$@"
     ;;
   *)
-    echo "Usage: check.sh [lean|dafny|dafny-slow] [file.ts ...]"
+    echo "Usage: check.sh [lean|dafny|dafny-slow|fstar] [file.ts ...]"
     exit 1
     ;;
 esac

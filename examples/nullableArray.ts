@@ -37,7 +37,7 @@
  *       `seq<Option<seq<Part>>>`.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 interface Part {
   type: string;

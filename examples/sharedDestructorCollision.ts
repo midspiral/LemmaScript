@@ -11,7 +11,7 @@
  * accessible on the union in TS, so nothing references the old destructor.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 interface LabelEntry { type: "label"; targetId: string }
 interface LeafEntry { type: "leaf"; targetId: string | undefined }
