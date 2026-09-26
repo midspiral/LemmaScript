@@ -4,14 +4,16 @@
 **Date:** September 2026
 
 Backend-specific details:
+
 - [SPEC_LEAN.md](SPEC_LEAN.md) — Lean backend (Velvet/Loom, four-file scheme, proof workflow)
 - [SPEC_DAFNY.md](SPEC_DAFNY.md) — Dafny backend (two-file scheme, regen workflow)
+- [SPEC_FSTAR.md](SPEC_FSTAR.md) — experimental pure F* backend (higher-order functions, additions-only proofs); supports a subset of this specification
 
 ---
 
 ## 1. Overview
 
-LemmaScript is a verification toolchain for TypeScript. The user writes TypeScript with `//@ ` specification annotations. The toolchain generates formal verification artifacts; a backend prover (Lean or Dafny) checks them.
+LemmaScript is a verification toolchain for TypeScript. The user writes TypeScript with `//@ ` specification annotations. The toolchain generates formal verification artifacts; a backend prover (Lean, Dafny, or F*) checks them.
 
 The toolchain has two components:
 1. **`lsc` CLI** (Node.js) — parses TS, generates verification artifacts for the selected backend
@@ -1301,10 +1303,10 @@ Both backends generate `match` for the body and ensures. Both verify automatical
 ## 7. `lsc` CLI
 
 ```
-lsc gen [--backend=lean|dafny] <file.ts>      — generate verification artifacts
-lsc gen-check [--backend=dafny] <file.ts>     — gen + additions-only check, no verify (Dafny only)
-lsc check [--backend=lean|dafny] <file.ts>    — gen + verify
-lsc regen --backend=dafny <file.ts>           — regenerate with three-way merge (Dafny only)
+lsc gen [--backend=lean|dafny|fstar] <file.ts>   — generate verification artifacts
+lsc gen-check [--backend=dafny|fstar] <file.ts> — gen + additions-only check, no verify
+lsc check [--backend=lean|dafny|fstar] <file.ts> — gen + verify
+lsc regen --backend=dafny|fstar <file.ts>      — regenerate with three-way merge
 lsc extract <file.ts>                          — print Raw IR JSON (debugging)
 lsc info <file.ts>                             — write a JSON summary of verified functions (backend-neutral)
 lsc info --typed <file.ts>                     — print the machine-readable Typed IR contract (stdout)
@@ -1316,10 +1318,10 @@ lsc version                                    — print the lemmascript package
 Default backend is Dafny. `extract` and `info` are backend-neutral and always run, regardless of any `//@ backend` directive. With no `<file.ts>`, `gen`, `gen-check`, and `check` batch over the files listed in `LemmaScript-files.txt`.
 
 **Flags:**
-- `--backend=lean|dafny` — select the backend (default Dafny).
+- `--backend=lean|dafny|fstar` — select the backend (default Dafny).
 - `--config=<path>` — use a specific `lemmascript.json` instead of nearest-ancestor discovery.
-- `--time-limit=<seconds>` — per-VC verification time limit (Dafny: `--verification-time-limit`).
-- `--extra-flags=<string>` — extra flags forwarded verbatim to the backend prover.
+- `--time-limit=<seconds>` — Dafny: per-VC limit (`--verification-time-limit`); F*: process deadline.
+- `--extra-flags=<string>` — extra prover flags; F* restricts these to resource tuning (see SPEC_FSTAR).
 - `--slow` — in batch mode, verify entries whose manifest timeout exceeds 60s (otherwise those get `gen-check`, unless `--time-limit` is supplied).
 
 In batch mode, `--time-limit` and `--extra-flags` independently override the
@@ -1331,15 +1333,17 @@ For Dafny `check`, an explicit timeout enables verification even above 60s witho
 
 - **Lean:** writes `foo.types.lean` + `foo.def.lean`
 - **Dafny:** writes `foo.dfy.gen`, seeds `foo.dfy` if missing; `proof-dir` may relocate both
+- **F*:** writes `<module>.fst.gen`, seeds `<module>.fst` if missing, beside the source
 
 ### 7.2 `check`
 
 - **Lean:** gen + `lake build` (checks `.def.lean` + `.proof.lean` + `.spec.lean`)
 - **Dafny:** gen + additions-only check + `dafny verify`
+- **F*:** gen + additions-only check + isolated `fstar.exe` verification
 
-### 7.3 `regen` (Dafny only)
+### 7.3 `regen` (Dafny and F*)
 
-Three-way merge when generated code changes. See [SPEC_DAFNY.md](SPEC_DAFNY.md).
+Three-way merge when generated code changes. See [SPEC_DAFNY.md](SPEC_DAFNY.md) and [SPEC_FSTAR.md](SPEC_FSTAR.md).
 
 ### 7.4 `info`
 
