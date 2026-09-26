@@ -96,7 +96,7 @@ node tools/dist/lsc.js check --backend=fstar examples/fstarClosures.ts
 ./regen-fstar.sh  # regenerate and verify all examples, preserving proofs
 ```
 
-Sources marked `//@ backend fstar` are skipped by the other backends. Companions live in a `fstar/` subdirectory beside each source: `examples/fstarClosures.ts` produces `examples/fstar/fstarClosures.fst.gen` and `.fst`. Generated baselines and working proofs follow the additions-only `gen`/`check`/`regen` workflow. See [SPEC_FSTAR.md](SPEC_FSTAR.md) for the supported model and examples, and [DESIGN_FSTAR.md](DESIGN_FSTAR.md) for the rationale and remaining work. Tested with F* 2026.09.20; Dafny remains the default.
+Sources marked `//@ backend fstar` are skipped by the other backends. Companions live beside each source: `examples/fstarClosures.ts` produces `examples/fstarClosures.fst.gen` and `.fst`. Generated baselines and working proofs follow the additions-only `gen`/`check`/`regen` workflow. See [SPEC_FSTAR.md](SPEC_FSTAR.md) for the supported model and examples, and [DESIGN_FSTAR.md](DESIGN_FSTAR.md) for the rationale and remaining work. Tested with F* 2026.09.20; Dafny remains the default.
 
 ## Continuous Integration
 

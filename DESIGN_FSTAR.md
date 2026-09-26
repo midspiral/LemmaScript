@@ -14,7 +14,7 @@ The main uncertainty is proof ergonomics and engineering cost, rather than wheth
 
 ## Implemented backend
 
-`gen`, `gen-check`, `check`, and proof-preserving `regen --backend=fstar` work across all 76 top-level examples. `./regen-fstar.sh` builds the compiler, preserves proof additions, verifies each example, and fails on any failure or backend skip. The five `examples/fstar*.ts` programs exercise returned closures, general application, generic composition, map fusion, higher-order iteration and compiler correctness. Companions live in [examples/fstar/](examples/fstar/README.md), with readable source-based filenames; eleven working proofs contain additions to their generated baselines. See [SPEC_FSTAR.md](SPEC_FSTAR.md) for commands and precise model boundaries.
+`gen`, `gen-check`, `check`, and proof-preserving `regen --backend=fstar` work across all 76 top-level examples. `./regen-fstar.sh` builds the compiler, preserves proof additions, verifies each example, and fails on any failure or backend skip. The five `examples/fstar*.ts` programs exercise returned closures, general application, generic composition, map fusion, higher-order iteration and compiler correctness. Companions live beside their TypeScript sources, with readable source-based filenames; eleven working proofs contain additions to their generated baselines. See [SPEC_FSTAR.md](SPEC_FSTAR.md) for commands and precise model boundaries.
 
 The emitter now consumes the shared lowered IR through `transformModuleFstar`, with a small F*-specific mode that preserves expression types, general application and the specification result binder. Dafny and Lean retain their existing lowering. [fstar-source.ts](tools/src/fstar-source.ts) rejects constructs whose behavior extraction would erase, including mutation of captured state and reference-identity comparisons. Local updates become fresh values; loops become recursive continuations with invariant preconditions, enclosing postconditions and checked termination measures. Classes use explicit record state and result/state pairs.
 
@@ -109,7 +109,7 @@ let rec map_fusion (#a:Type) (#b:Type) (#c:Type)
   | _::tl -> map_fusion f g tl
 ```
 
-The working [fstarArrays.fst](examples/fstar/fstarArrays.fst) now proves map fusion for the generated sequence model using a handwritten induction. Filter composition and fold invariant preservation remain further experiments. F*'s [polymorphism chapter](https://fstar-lang.org/tutorial/book/part1/part1_polymorphism.html) covers the type arguments and higher-order application used here.
+The working [fstarArrays.fst](examples/fstarArrays.fst) now proves map fusion for the generated sequence model using a handwritten induction. Filter composition and fold invariant preservation remain further experiments. F*'s [polymorphism chapter](https://fstar-lang.org/tutorial/book/part1/part1_polymorphism.html) covers the type arguments and higher-order application used here.
 
 ### Recursive callbacks need stronger combinators
 
@@ -181,15 +181,15 @@ The prototype uses the familiar Dafny-style pair. TS remains the source of truth
 
 | Artifact | Ownership |
 | --- | --- |
-| `examples/fstar/fstarClosures.fst.gen` | Generated baseline; always regeneratable |
-| `examples/fstar/fstarClosures.fst` | Generated program plus hand-written proof additions; verified by F* |
-| `examples/fstar/fstarClosures.fst.base`, `.fst.merged` | Temporary merge/recovery state |
+| `examples/fstarClosures.fst.gen` | Generated baseline; always regeneratable |
+| `examples/fstarClosures.fst` | Generated program plus hand-written proof additions; verified by F* |
+| `examples/fstarClosures.fst.base`, `.fst.merged` | Temporary merge/recovery state |
 
-Companions use the source basename inside a sibling `fstar/` directory. Internal module names combine an escaped basename and a digest of the path relative to the config/tsconfig directory, falling back to the source directory. This resolves case/punctuation collisions and survives checkout relocation with the same layout. The verifier copies each working proof to a temporary filename matching its module declaration, keeping opaque filenames out of the repository. Commands migrate the old module-named companions together with their baselines and recovery state, refusing to combine two existing sets. The existing `proof-dir` option remains Dafny-only.
+Companions use the source basename beside the TypeScript file, matching the Dafny layout. Internal module names combine an escaped basename and a digest of the path relative to the config/tsconfig directory, falling back to the source directory. This resolves case/punctuation collisions and survives checkout relocation with the same layout. The verifier copies each working proof to a temporary filename matching its module declaration, keeping opaque filenames out of the repository. Commands migrate companions from either the old `fstar/` subdirectory or module-named files together with their baselines and recovery state, refusing to combine existing sets. The existing `proof-dir` option remains Dafny-only.
 
 `gen` replaces only the baseline and seeds a missing working file. `check` enforces additions-only and verifies the working module. `regen` merges against the correct old generation, preserves proof additions, and retains recovery state on failure. Carry over the documented Dafny conflict and failed-verification anchor rules. Never recreate a working proof by deleting it.
 
-F* often needs a ghost lemma invocation or assertion before the expression whose type is being checked. This is why the backend currently uses a pair, even when automatic verification leaves the two files identical. Moving companions into `fstar/` improves the layout but retains this duplication. A Lean-like split into immutable definitions and separate proofs is attractive for external theorems, but it does not by itself discharge refinements inside generated definitions. It would need a designed, acyclic mechanism for proof hooks.
+F* often needs a ghost lemma invocation or assertion before the expression whose type is being checked. This is why the backend currently uses a pair, even when automatic verification leaves the two files identical. A Lean-like split into immutable definitions and separate proofs is attractive for external theorems, but it does not by itself discharge refinements inside generated definitions. It would need a designed, acyclic mechanism for proof hooks.
 
 Proof additions may supply ghost definitions, checked assertions, and lemma calls; they must preserve the program and declared contracts. An additions-only text check is an editing discipline, not a proof that arbitrary inserted F* expressions preserve behavior. Constrained proof insertion points and checking their ghost-only nature are a hardening task before broader adoption.
 
@@ -312,6 +312,6 @@ Expect a nonzero exit and a failed obligation equivalent to `x - 1 >= x`. This c
 
 ### 5. Verify the generated LemmaScript examples
 
-Return to the LemmaScript checkout, run `npm run build`, then `node tools/dist/lsc.js check --backend=fstar examples/fstarClosures.ts`. Repeat for `fstarComposition.ts`, `fstarArrays.ts`, and `fstarIteration.ts`, or run `./regen-fstar.sh` to build, regenerate and verify all examples. Companions live in `examples/fstar/`; verification through `lsc` handles their internal module filenames. The standalone domain-restricted callback and tree examples above go beyond the implemented subset. After edits under `tools/`, rebuild before using the compiled CLI.
+Return to the LemmaScript checkout, run `npm run build`, then `node tools/dist/lsc.js check --backend=fstar examples/fstarClosures.ts`. Repeat for `fstarComposition.ts`, `fstarArrays.ts`, and `fstarIteration.ts`, or run `./regen-fstar.sh` to build, regenerate and verify all examples. Companions live beside their sources; verification through `lsc` handles their internal module filenames. The standalone domain-restricted callback and tree examples above go beyond the implemented subset. After edits under `tools/`, rebuild before using the compiled CLI.
 
 If setup fails, first check that `command -v fstar.exe` selects the intended installation, that `uname -m` is `arm64`, and that `--locate_z3 4.13.3` locates the bundled solver. For a source build or OPAM installation, follow the current [upstream installation instructions](https://github.com/FStarLang/FStar/blob/master/INSTALL.md); compiler constraints and solver requirements vary by release. Pin the same working release in CI before comparing proof behavior.

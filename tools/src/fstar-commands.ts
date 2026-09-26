@@ -14,19 +14,23 @@ export function fstarPaths(source: string, root: string) {
   const basename = path.basename(source, ".ts");
   const stem = basename.replace(/[^A-Za-z0-9]/g, "_");
   const moduleName = `LS.M${stem}_${digest}`;
-  const proof = path.join(path.dirname(source), "fstar", `${basename}.fst`);
+  const proof = path.join(path.dirname(source), `${basename}.fst`);
   return { moduleName, proof, gen: proof + ".gen", base: proof + ".base" };
 }
 
-/** Move the old module-named companions together, including recovery state. */
+/** Move companions from either previous layout, including recovery state. */
 export function migrateFstarArtifacts(source: string, files: ReturnType<typeof fstarPaths>): void {
-  const legacy = path.join(path.dirname(source), `${files.moduleName}.fst`);
   const suffixes = ["", ".gen", ".base", ".merged", "i"];
-  const present = suffixes.filter(suffix => existsSync(legacy + suffix));
-  if (!present.length) return;
-  if (suffixes.some(suffix => existsSync(files.proof + suffix))) {
-    throw new Error(`F*: both legacy and relocated proof artifacts exist: ${legacy} and ${files.proof}. Reconcile them before rerunning; no files were moved.`);
+  const previous = [
+    path.join(path.dirname(source), "fstar", path.basename(files.proof)),
+    path.join(path.dirname(source), `${files.moduleName}.fst`),
+  ].filter(base => suffixes.some(suffix => existsSync(base + suffix)));
+  if (!previous.length) return;
+  if (previous.length > 1 || suffixes.some(suffix => existsSync(files.proof + suffix))) {
+    throw new Error(`F*: conflicting proof artifact sets exist: ${[...previous, files.proof].join(", ")}. Reconcile them before rerunning; no files were moved.`);
   }
+  const legacy = previous[0];
+  const present = suffixes.filter(suffix => existsSync(legacy + suffix));
   mkdirSync(path.dirname(files.proof), { recursive: true });
   for (const suffix of present) {
     renameSync(legacy + suffix, files.proof + suffix);

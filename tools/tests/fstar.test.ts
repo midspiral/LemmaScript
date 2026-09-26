@@ -55,44 +55,61 @@ test("module names survive checkout relocation and distinguish duplicate stems",
   assert.equal(fstarPaths("/one/src/a-b.ts", "/one").moduleName, fstarPaths("/two/src/a-b.ts", "/two").moduleName);
   assert.notEqual(fstarPaths("/one/src/a-b.ts", "/one").moduleName, fstarPaths("/one/src/a_b.ts", "/one").moduleName);
   assert.notEqual(fstarPaths("/one/x/foo.ts", "/one").moduleName, fstarPaths("/one/y/foo.ts", "/one").moduleName);
-  assert.equal(fstarPaths("/one/src/a-b.ts", "/one").proof, "/one/src/fstar/a-b.fst");
-  assert.equal(fstarPaths("/one/src/a_b.ts", "/one").proof, "/one/src/fstar/a_b.fst");
+  assert.equal(fstarPaths("/one/src/a-b.ts", "/one").proof, "/one/src/a-b.fst");
+  assert.equal(fstarPaths("/one/src/a_b.ts", "/one").proof, "/one/src/a_b.fst");
 });
 
-test("artifact migration preserves proofs, baselines, recovery state and interfaces", () => temporary(dir => {
-  const source = join(dir, "a-b.ts");
-  const files = fstarPaths(source, dir);
-  const legacy = join(dir, `${files.moduleName}.fst`);
-  const artifacts = new Map([
-    ["", "working proof"], [".gen", "generated baseline"], [".base", "merge anchor"],
-    [".merged", "unresolved conflict"], ["i", "interface that must still be rejected"],
-  ]);
-  for (const [suffix, text] of artifacts) writeFileSync(legacy + suffix, text);
-  migrateFstarArtifacts(source, files);
-  for (const [suffix, text] of artifacts) {
-    assert.equal(existsSync(legacy + suffix), false);
-    assert.equal(readFileSync(files.proof + suffix, "utf8"), text);
-  }
-  migrateFstarArtifacts(source, files); // already migrated
-  for (const [suffix, text] of artifacts) assert.equal(readFileSync(files.proof + suffix, "utf8"), text);
-}));
-
-test("artifact migration refuses to mix old and new proof state", () => {
-  for (const suffix of ["", ".gen", ".base", ".merged", "i"]) temporary(dir => {
-    const source = join(dir, "a.ts");
+for (const layout of ["module", "directory"] as const) {
+  test(`artifact migration from ${layout} layout preserves proofs and recovery state`, () => temporary(dir => {
+    const source = join(dir, "a-b.ts");
     const files = fstarPaths(source, dir);
-    const legacy = join(dir, `${files.moduleName}.fst`);
-    writeFileSync(legacy, "old proof");
-    writeFileSync(legacy + ".gen", "old baseline");
+    const legacy = layout === "module" ? join(dir, `${files.moduleName}.fst`) : join(dir, "fstar", "a-b.fst");
     mkdirSync(join(dir, "fstar"));
-    writeFileSync(files.proof + suffix, "new proof state");
-    assert.throws(() => migrateFstarArtifacts(source, files), /both legacy and relocated proof artifacts exist/);
-    assert.equal(readFileSync(legacy, "utf8"), "old proof");
-    assert.equal(readFileSync(legacy + ".gen", "utf8"), "old baseline");
-    assert.equal(readFileSync(files.proof + suffix, "utf8"), "new proof state");
-    assert.deepEqual(readdirSync(join(dir, "fstar")), ["a.fst" + suffix]);
+    const artifacts = new Map([
+      ["", "working proof"], [".gen", "generated baseline"], [".base", "merge anchor"],
+      [".merged", "unresolved conflict"], ["i", "interface that must still be rejected"],
+    ]);
+    for (const [suffix, text] of artifacts) writeFileSync(legacy + suffix, text);
+    migrateFstarArtifacts(source, files);
+    for (const [suffix, text] of artifacts) {
+      assert.equal(existsSync(legacy + suffix), false);
+      assert.equal(readFileSync(files.proof + suffix, "utf8"), text);
+    }
+    migrateFstarArtifacts(source, files); // already migrated
+    for (const [suffix, text] of artifacts) assert.equal(readFileSync(files.proof + suffix, "utf8"), text);
+  }));
+
+  test(`artifact migration from ${layout} layout refuses to mix proof state`, () => {
+    for (const suffix of ["", ".gen", ".base", ".merged", "i"]) temporary(dir => {
+      const source = join(dir, "a.ts");
+      const files = fstarPaths(source, dir);
+      const legacy = layout === "module" ? join(dir, `${files.moduleName}.fst`) : join(dir, "fstar", "a.fst");
+      mkdirSync(join(dir, "fstar"));
+      writeFileSync(legacy, "old proof");
+      writeFileSync(legacy + ".gen", "old baseline");
+      writeFileSync(files.proof + suffix, "new proof state");
+      assert.throws(() => migrateFstarArtifacts(source, files), /conflicting proof artifact sets exist/);
+      assert.equal(readFileSync(legacy, "utf8"), "old proof");
+      assert.equal(readFileSync(legacy + ".gen", "utf8"), "old baseline");
+      assert.equal(readFileSync(files.proof + suffix, "utf8"), "new proof state");
+      assert.deepEqual(readdirSync(dir).filter(name => name.startsWith("a.fst")), ["a.fst" + suffix]);
+    });
   });
-});
+}
+
+test("artifact migration refuses to choose between two previous layouts", () => temporary(dir => {
+  const source = join(dir, "a.ts");
+  const files = fstarPaths(source, dir);
+  const moduleFile = join(dir, `${files.moduleName}.fst`);
+  const directoryFile = join(dir, "fstar", "a.fst");
+  mkdirSync(join(dir, "fstar"));
+  writeFileSync(moduleFile, "module proof");
+  writeFileSync(directoryFile, "directory proof");
+  assert.throws(() => migrateFstarArtifacts(source, files), /conflicting proof artifact sets exist/);
+  assert.equal(readFileSync(moduleFile, "utf8"), "module proof");
+  assert.equal(readFileSync(directoryFile, "utf8"), "directory proof");
+  assert.equal(existsSync(files.proof), false);
+}));
 
 for (const file of ["fstarClosures.ts", "fstarComposition.ts", "fstarArrays.ts", "fstarIteration.ts"]) {
   test(`generated example verifies: ${file}`, realFstar, () => {
@@ -365,26 +382,29 @@ test("regen preserves checked proof additions and rejects generated edits", real
   writeFileSync(f.proof, readFileSync(f.proof, "utf8").replace("v_x + (2)", "v_x - (2)"));
   assert.equal(fstarCheckDiff(f.gen, f.proof), false);
 }));
-test("CLI regen migrates legacy companions before merging source changes", () => temporary(dir => {
-  const source = join(dir, "a-b.ts");
-  const files = fstarPaths(source, dir);
-  const legacy = join(dir, `${files.moduleName}.fst`);
-  const program = (n: number) => `export function add(x:number):number { return x+${n}; }
-    export function unchanged(x:number):number { const y=x+1; return y+1; }`;
-  const baseline = compile(program(1), files.moduleName).replace("Program source: input.ts", "Program source: a-b.ts");
-  const addition = "\nlet retained_proof () : Lemma (1 + 1 == 2) = ()\n";
-  writeFileSync(source, program(2));
-  writeFileSync(legacy + ".gen", baseline);
-  writeFileSync(legacy, baseline + addition);
-  const result = runCli(dir, ["regen", "--backend=fstar", "--no-verify", source]);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(existsSync(legacy), false);
-  assert.equal(existsSync(legacy + ".gen"), false);
-  assert.equal(existsSync(files.base), false);
-  const generated = readFileSync(files.gen, "utf8");
-  assert.match(generated, /v_x \+ \(2\)/);
-  assert.equal(readFileSync(files.proof, "utf8"), generated + addition);
-}));
+for (const layout of ["module", "directory"] as const) {
+  test(`CLI regen migrates ${layout} companions before merging source changes`, () => temporary(dir => {
+    const source = join(dir, "a-b.ts");
+    const files = fstarPaths(source, dir);
+    const legacy = layout === "module" ? join(dir, `${files.moduleName}.fst`) : join(dir, "fstar", "a-b.fst");
+    mkdirSync(join(dir, "fstar"));
+    const program = (n: number) => `export function add(x:number):number { return x+${n}; }
+      export function unchanged(x:number):number { const y=x+1; return y+1; }`;
+    const baseline = compile(program(1), files.moduleName).replace("Program source: input.ts", "Program source: a-b.ts");
+    const addition = "\nlet retained_proof () : Lemma (1 + 1 == 2) = ()\n";
+    writeFileSync(source, program(2));
+    writeFileSync(legacy + ".gen", baseline);
+    writeFileSync(legacy, baseline + addition);
+    const result = runCli(dir, ["regen", "--backend=fstar", "--no-verify", source]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(legacy), false);
+    assert.equal(existsSync(legacy + ".gen"), false);
+    assert.equal(existsSync(files.base), false);
+    const generated = readFileSync(files.gen, "utf8");
+    assert.match(generated, /v_x \+ \(2\)/);
+    assert.equal(readFileSync(files.proof, "utf8"), generated + addition);
+  }));
+}
 test("CLI honors backend selection and fails before writing on unsupported input", () => temporary(dir => {
   const file = join(dir, "a.ts");
   writeFileSync(file, "//@ backend fstar\nexport function f(x:number):number { return x; }\n");
