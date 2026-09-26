@@ -94,6 +94,7 @@ at the current directory. Use `--config=<path>` to pin a particular file.
 ```json
 {
   "extern-default": "impure",
+  "string-semantics": "unicode-scalar",
   "safe-slice": true,
   "proof-dir": "proofs"
 }

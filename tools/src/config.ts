@@ -31,6 +31,13 @@ export const OPTION_SPECS = {
     fileOverride: false,
     description: "Directory for Dafny artifacts, relative to lemmascript.json.",
   },
+  "string-semantics": {
+    type: "enum",
+    values: ["unicode-scalar", "javascript-utf16"],
+    default: "unicode-scalar",
+    fileOverride: false,
+    description: "Which model of JavaScript strings a Dafny proof is made under (DESIGN_STRINGS.md).",
+  },
 } as const;
 
 type OptionSpecs = typeof OPTION_SPECS;
@@ -208,9 +215,10 @@ export function parseFileOptions(sourceText: string, source: string): ExplicitOp
 
 /** Apply defaults and all cross-option rules after explicit layers are merged. */
 export function resolveOptions(explicit: ExplicitOptions, source: string): LscOptions {
-  // There are no cross-option constraints in the initial registry. Keep this
-  // as the single resolution gate: future dependent defaults (UTF-16 → local
-  // Dafny library) and incompatibilities belong here, before any consumer runs.
+  // There are no cross-option constraints in the registry: `string-semantics`
+  // selects the Dafny helper source by itself (DESIGN_STRINGS.md §4). Keep this
+  // as the single resolution gate for future dependent defaults and
+  // incompatibilities, before any consumer runs.
   void source;
   return Object.freeze({ ...DEFAULT_OPTIONS, ...explicit });
 }

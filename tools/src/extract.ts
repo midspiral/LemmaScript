@@ -382,23 +382,23 @@ function extractExpr(node: Expression): RawExpr {
     // Always push the head, even when empty: a leading string literal anchors the
     // whole chain as string-typed so each interpolated value is stringified (not
     // added numerically — `${a}${b}` is concatenation, not `a + b`).
-    parts.push({ kind: "str", value: node.getHead().getLiteralText() });
+    parts.push(stringLiteral(node.getHead().getLiteralText(), node));
     for (const span of node.getTemplateSpans()) {
       parts.push(extractExpr(span.getExpression()));
       const text = span.getLiteral().getLiteralText();
-      if (text) parts.push({ kind: "str", value: text });
+      if (text) parts.push(stringLiteral(text, span));
     }
     return parts.reduce((left, right) => ({ kind: "binop", op: "+", left, right }));
   }
 
   // No-substitution template literal: `hello` → "hello"
   if (Node.isNoSubstitutionTemplateLiteral(node)) {
-    return { kind: "str", value: node.getLiteralText() };
+    return stringLiteral(node.getLiteralText(), node);
   }
 
   // String literal
   if (Node.isStringLiteral(node)) {
-    return { kind: "str", value: node.getLiteralValue() };
+    return stringLiteral(node.getLiteralValue(), node);
   }
 
   // Boolean literals: true, false
@@ -821,6 +821,40 @@ function hasExternModeAnnotation(node: Node, keyword: "pure" | "impure", parentS
   const statement = parentStmt ?? enclosingVariableStatement(node);
   return !!statement && statement.getLeadingCommentRanges()
     .some(r => r.getText().trim() === `//@ ${keyword}`);
+}
+
+/** The first lone surrogate code unit in `value`, or -1. */
+function findLoneSurrogate(value: string): number {
+  for (let i = 0; i < value.length; i++) {
+    const unit = value.charCodeAt(i);
+    if (unit >= 0xD800 && unit <= 0xDBFF) {
+      const next = value.charCodeAt(i + 1);
+      if (next >= 0xDC00 && next <= 0xDFFF) { i++; continue; }
+      return unit;
+    }
+    if (unit >= 0xDC00 && unit <= 0xDFFF) return unit;
+  }
+  return -1;
+}
+
+/** A source string literal, admitted only if the selected string profile can
+ *  represent it (DESIGN_STRINGS.md §3). Under `unicode-scalar` a lone surrogate
+ *  has no Dafny value — and Node's UTF-8 writer would silently replace it on
+ *  the way out — so it is refused here with the source line instead. */
+function stringLiteral(value: string, node: Node): RawExpr {
+  if (_extractOptions["string-semantics"] === "unicode-scalar") {
+    const lone = findLoneSurrogate(value);
+    if (lone >= 0) {
+      const file = node.getSourceFile();
+      const { line } = file.getLineAndColumnAtPos(node.getStart());
+      throw new Error(
+        `${file.getFilePath()}:${line}: string literal contains an unpaired surrogate ` +
+        `U+${lone.toString(16).toUpperCase()}, which "string-semantics": "unicode-scalar" cannot ` +
+        `represent; set "javascript-utf16" in lemmascript.json (DESIGN_STRINGS.md §3)`,
+      );
+    }
+  }
+  return { kind: "str", value };
 }
 
 function externIsImpure(node: Node, name: string, parentStmt?: Node): boolean {

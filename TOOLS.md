@@ -61,7 +61,11 @@ Type names: `Expr`, `Stmt`, `Module`, `MatchArm`, `StmtMatchArm`, and `Decl` = `
 `lemmascript.json` discovery, JSON and `//@ option` validation, defaults, and
 cross-option checks. `lsc.ts` merges explicit project values with eligible
 top-of-file overrides and resolves once per source file. It passes the result
-to extraction/emission; those phases never read config files. `proof-dir` is
+to extraction/emission; those phases never read config files.
+`string-semantics` is consumed by the Dafny emitter (literal escaping, char-sensitive
+preambles, helper source, and the `// lsc options:` header token) and by extraction
+(surrogate literals under the default); `dafnyVerify` derives the char-mode flags from
+that token, never from the config. `proof-dir` is
 consumed only by `lsc.ts`, which maps the complete Dafny companion set before
 calling the unchanged Dafny command helpers. `TransformOptions` remains
 backend-intrinsic pipeline configuration and is deliberately separate.

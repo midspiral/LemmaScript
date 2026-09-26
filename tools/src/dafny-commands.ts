@@ -68,16 +68,55 @@ export function dafnyCheckDiff(genPath: string, dfyPath: string): boolean {
   return true;
 }
 
+const OPTIONS_HEADER = /^\/\/ lsc options:(.*)$/m;
+const STRING_SEMANTICS = ["unicode-scalar", "javascript-utf16"];
+
+/**
+ * Verifier arguments implied by a generated file's `// lsc options:` header
+ * (DESIGN_STRINGS.md §5–6). Read from the artifact rather than the config, so a
+ * standalone `.dfy` verifies under the model it was generated for. The char
+ * mode is always pinned — a default is not a pin. Only `--unicode-char:false`
+ * is deprecated in Dafny 4.11, and `--allow-deprecation` waives exactly that
+ * warning; the blanket warning waiver would also un-fatal vacuity and
+ * missing-{:axiom} warnings, which a verifier must keep fatal.
+ */
+export function dafnyVerifyArgs(content: string, timeLimit?: number, extraFlags?: string): { args: string[]; error?: string } {
+  let stringSemantics = "unicode-scalar";
+  const header = content.match(OPTIONS_HEADER);
+  for (const token of (header?.[1] ?? "").trim().split(/\s+/).filter(Boolean)) {
+    const eq = token.indexOf("=");
+    const key = eq < 0 ? token : token.slice(0, eq);
+    const value = eq < 0 ? "" : token.slice(eq + 1);
+    if (key !== "string-semantics") continue;
+    if (!STRING_SEMANTICS.includes(value)) {
+      return { args: [], error: `ERROR: unknown string-semantics '${value}' in the generated header; this lsc knows ${STRING_SEMANTICS.join(", ")} (DESIGN_STRINGS.md).` };
+    }
+    stringSemantics = value;
+  }
+  const utf16 = stringSemantics === "javascript-utf16";
+  const usesStandardLibrary = content.includes("Std.");
+  if (utf16 && usesStandardLibrary) {
+    return { args: [], error:
+      "ERROR: this proof combines \"string-semantics\": \"javascript-utf16\" with Dafny's standard library. " +
+      "Dafny 4.11 cannot load its Unicode-scalar standard library under --unicode-char:false. " +
+      "Remove the Std.* import from the proof additions, or set \"unicode-scalar\" in lemmascript.json." };
+  }
+  const args: string[] = ["verify"];
+  if (usesStandardLibrary) args.push("--standard-libraries");
+  if (timeLimit) args.push("--verification-time-limit", String(timeLimit));
+  if (extraFlags) {
+    for (const tok of extraFlags.split(/\s+/)) if (tok) args.push(tok);
+  }
+  args.push(utf16 ? "--unicode-char:false" : "--unicode-char:true");
+  if (utf16) args.push("--allow-deprecation");
+  return { args };
+}
+
 export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number, extraFlags?: string): boolean {
   console.log("Running dafny verify...");
   try {
-    const content = readFileSync(dfyPath, "utf-8");
-    const args: string[] = ["verify"];
-    if (content.includes("Std.")) args.push("--standard-libraries");
-    if (timeLimit) args.push("--verification-time-limit", String(timeLimit));
-    if (extraFlags) {
-      for (const tok of extraFlags.split(/\s+/)) if (tok) args.push(tok);
-    }
+    const { args, error } = dafnyVerifyArgs(readFileSync(dfyPath, "utf-8"), timeLimit, extraFlags);
+    if (error) { console.error(error); return false; }
     args.push(dfyPath);
     execFileSync("dafny", args, { cwd: dir, stdio: "inherit" });
     return true;

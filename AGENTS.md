@@ -103,7 +103,7 @@ import opened Std.Arithmetic.DivMod     // LemmaMulStrictInequality(x,y,z): x<y 
                                         // LemmaModMultiplesBasic(m,p): m>=0 && p>0 ==> (m*p)%p == 0
 ```
 
-`lsc`'s `dafnyVerify` (`tools/dist/dafny-commands.js`) **auto-adds `--standard-libraries` whenever the `.dfy` text contains the substring `Std.`** — so an `import opened` is all you need; no CLI flag or config change, and `lsc check` picks it up. The imports go in as an *inserted* block (additions-only — don't touch the generated header). Euclidean identities (`x == x/p*p + x%p`, `0 <= x%p < p`) and small distributivity (`(k+1)*p == k*p + p`) *are* reliable inline; reserve the library for the cancellation and monotonicity goals.
+`lsc`'s `dafnyVerify` (`tools/dist/dafny-commands.js`) **auto-adds `--standard-libraries` whenever the `.dfy` text contains the substring `Std.`** — so an `import opened` is all you need; no CLI flag or config change, and `lsc check` picks it up. (Exception: a project with `"string-semantics": "javascript-utf16"` cannot use `Std.*` — Dafny's standard library does not load under `--unicode-char:false`; `lsc check` refuses the combination with a message naming the key.) The imports go in as an *inserted* block (additions-only — don't touch the generated header). Euclidean identities (`x == x/p*p + x%p`, `0 <= x%p < p`) and small distributivity (`(k+1)*p == k*p + p`) *are* reliable inline; reserve the library for the cancellation and monotonicity goals.
 
 ## Lean verification workflow
 

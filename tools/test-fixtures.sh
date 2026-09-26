@@ -42,6 +42,8 @@ trap 'rm -rf "$fixture_dir"' EXIT
 cp tools/fixtures/deterministic-extern-equality.ts "$fixture_dir/deterministic.ts"
 cp tools/fixtures/impure-extern-equality.ts "$fixture_dir/impure.ts"
 cp examples/safeSlice.ts "$fixture_dir/legacy-safe-slice.ts"
+cp -R tools/fixtures/utf16-project "$fixture_dir/utf16-project"
+cp tools/fixtures/unpaired-surrogate.ts "$fixture_dir/unpaired.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/impure.ts"
 if ! grep -Fq 'method {:axiom} rollDie' "$fixture_dir/impure.dfy.gen"; then
@@ -172,3 +174,46 @@ expect_failure \
   "proof-dir silently bypassed a sibling hand-written proof" \
   npx tsx tools/src/lsc.ts gen --backend=dafny "$config_fixture/src/legacy.ts"
 expect_absent "$config_fixture/proofs/src/legacy.dfy"
+
+# ── String profile (DESIGN_STRINGS.md) ──────────────────────────────────────
+# Under "string-semantics": "javascript-utf16" a JavaScript string is a UTF-16
+# code-unit sequence: astral characters occupy two Dafny chars and lone
+# surrogates stay representable. The header token is what dafnyVerify maps to
+# --unicode-char:false --allow-deprecation.
+utf16="$fixture_dir/utf16-project/src/utf16.ts"
+utf16_gen="$fixture_dir/utf16-project/src/utf16.dfy.gen"
+if ! npx tsx tools/src/lsc.ts config "$utf16" | grep -Fq '"string-semantics": "javascript-utf16"'; then
+  echo "ERROR: lsc config did not report string-semantics=javascript-utf16"
+  exit 1
+fi
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$utf16"
+grep -Fq '// lsc options: string-semantics=javascript-utf16' "$utf16_gen"
+grep -Fq '"\uD83D\uDE00"' "$utf16_gen"
+grep -Fq '"\uD83D"' "$utf16_gen"
+if grep -Fq 'Std.Collections' "$utf16_gen"; then
+  echo "ERROR: javascript-utf16 emitted a Dafny standard-library call"
+  exit 1
+fi
+
+expect_failure \
+  "Dafny standard library was combined with javascript-utf16 strings" \
+  npx tsx -e 'import { dafnyVerify } from "./tools/src/dafny-commands.ts"; process.exit(dafnyVerify("tools/fixtures/string-with-standard-library.dfy", ".") ? 0 : 1)'
+
+expect_failure \
+  "javascript-utf16 was accepted by the Lean backend" \
+  npx tsx tools/src/lsc.ts gen --backend=lean "$fixture_dir/utf16-project/src/lean-rejected.ts"
+expect_absent "$fixture_dir/utf16-project/src/lean-rejected.def.lean"
+
+# The default profile cannot represent a lone surrogate: refused at extraction
+# with the source line, not silently replaced by the UTF-8 file writer.
+expect_failure \
+  "unicode-scalar accepted an unpaired surrogate literal" \
+  npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/unpaired.ts"
+expect_absent "$fixture_dir/unpaired.dfy.gen"
+
+# The default profile leaves generated text exactly as before: no header token.
+npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/legacy-safe-slice.ts"
+if grep -Fq '// lsc options:' "$fixture_dir/legacy-safe-slice.dfy.gen"; then
+  echo "ERROR: unicode-scalar stamped an options header"
+  exit 1
+fi

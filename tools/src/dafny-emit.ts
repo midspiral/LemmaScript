@@ -39,7 +39,7 @@ function tyToDafny(ty: Ty): string {
     case "int": return "int";
     case "real": return "real";
     case "bool": return "bool";
-    case "string": return "string";
+    case "string": _usesStrings = true; return "string";
     case "void": return "()";
     case "array": return `seq<${tyToDafny(ty.elem)}>`;
     case "tuple": return `(${ty.elems.map(tyToDafny).join(", ")})`;
@@ -219,6 +219,26 @@ const OP_MAP: Record<string, string> = {
   "arrayConcat": "+",
 };
 
+/** Render a JavaScript string without losing its UTF-16 representation.
+ *
+ * JavaScript iteration by index exposes UTF-16 code units, including unpaired
+ * surrogates. Node's UTF-8 file writer would replace an unpaired surrogate if
+ * we emitted it literally, so every non-printable/non-ASCII unit is written as
+ * a Dafny `\\uXXXX` escape. Under `--unicode-char:false`, each escape denotes
+ * exactly one Dafny char and therefore exactly one JavaScript code unit.
+ */
+function escapeDafnyUTF16String(value: string): string {
+  let out = "";
+  for (let i = 0; i < value.length; i++) {
+    const unit = value.charCodeAt(i);
+    if (unit === 0x22) out += '\\"';
+    else if (unit === 0x5c) out += "\\\\";
+    else if (0x20 <= unit && unit <= 0x7e) out += String.fromCharCode(unit);
+    else out += `\\u${unit.toString(16).toUpperCase().padStart(4, "0")}`;
+  }
+  return out;
+}
+
 function mapOp(op: string): string { return OP_MAP[op] ?? op; }
 
 // ── Expression emission ─────────────────────────────────────
@@ -257,7 +277,13 @@ function emitExpr(e: Expr): string {
     // Already canonical decimal; Dafny's `int` is mathematical, so no `n` suffix.
     case "bigint": return e.value;
     case "bool": return e.value ? "true" : "false";
-    case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+    case "str":
+      _usesStrings = true;
+      // Under the default profile the literal is written exactly as before;
+      // only the UTF-16 profile needs code-unit escapes (DESIGN_STRINGS.md §3).
+      return isUtf16()
+        ? `"${escapeDafnyUTF16String(e.value)}"`
+        : `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 
     case "constructor": {
       // Option constructors (Some/None) may appear in inferred positions
@@ -350,10 +376,18 @@ function emitExpr(e: Expr): string {
           const comp = `seq(|${s}|, ${idx} requires 0 <= ${idx} < |${s}| => ${core})`;
           return bind ? `(var ${s} := ${obj}; ${comp})` : comp;
         }
-        if (e.method === "filter") return `Std.Collections.Seq.Filter(${args[0]}, ${obj})`;
+        if (e.method === "filter") {
+          if (!isUtf16()) return `Std.Collections.Seq.Filter(${args[0]}, ${obj})`;
+          needPreamble("SeqFilter");
+          return `SeqFilter(${args[0]}, ${obj})`;
+        }
         // filterMap (synthesized in resolve): drop Nones and unwrap to seq<T>.
         if (e.method === "filterSome") { needPreamble("SeqFilterSome"); needPreamble("OptionType"); return `SeqFilterSome(${obj})`; }
-        if (e.method === "every")  return `Std.Collections.Seq.All(${obj}, ${args[0]})`;
+        if (e.method === "every") {
+          if (!isUtf16()) return `Std.Collections.Seq.All(${obj}, ${args[0]})`;
+          needPreamble("SeqAll");
+          return `SeqAll(${obj}, ${args[0]})`;
+        }
         if (e.method === "find") {
           needPreamble("OptionType");
           needPreamble("SeqFind");
@@ -395,9 +429,13 @@ function emitExpr(e: Expr): string {
           }
           return `(exists ${p} :: ${p} in ${obj} && ${body})`;
         }
-        // `.reduce(f, init)` → Std's FoldLeft(f, init, xs) (same arg order).
+        // `.reduce(f, init)` → FoldLeft(f, init, xs) (same arg order): Std's under
+        // unicode-scalar, the local helper under javascript-utf16, whose char mode
+        // cannot load the precompiled standard library.
         if (e.method === "reduce" && args.length === 2) {
-          return `Std.Collections.Seq.FoldLeft(${args[0]}, ${args[1]}, ${obj})`;
+          if (!isUtf16()) return `Std.Collections.Seq.FoldLeft(${args[0]}, ${args[1]}, ${obj})`;
+          needPreamble("SeqFoldLeft");
+          return `SeqFoldLeft(${args[0]}, ${args[1]}, ${obj})`;
         }
       }
       // String methods
@@ -958,6 +996,15 @@ function needPreamble(key: string) { _neededPreambles.add(key); }
  *  config plus file directives before emission. */
 let _useSafeSlice = false;
 
+// The string profile this file is emitted under (DESIGN_STRINGS.md) and whether
+// any generated declaration used `string`. Together they decide the
+// `// lsc options:` header token that `dafnyVerify` maps to Dafny's char mode.
+// Kept tied to emission, rather than a textual scan of the finished Dafny, so
+// comments and proof additions cannot select the source-language model.
+let _stringSemantics: LscOptions["string-semantics"] = DEFAULT_OPTIONS["string-semantics"];
+let _usesStrings = false;
+function isUtf16(): boolean { return _stringSemantics === "javascript-utf16"; }
+
 const POW2 = `function Pow2(n: int): int
   requires n >= 0
   decreases n
@@ -1032,6 +1079,28 @@ const SEQ_FILTER_SOME = `function SeqFilterSome<T>(xs: seq<Option<T>>): seq<T>
 {
   if |xs| == 0 then []
   else (if xs[0].Some? then [xs[0].value] else []) + SeqFilterSome(xs[1..])
+}`;
+
+const SEQ_FILTER = `function SeqFilter<T(!new)>(p: T -> bool, xs: seq<T>): seq<T>
+  ensures |SeqFilter(p, xs)| <= |xs|
+  ensures forall x :: x in SeqFilter(p, xs) <==> x in xs && p(x)
+  decreases |xs|
+{
+  if |xs| == 0 then []
+  else (if p(xs[0]) then [xs[0]] else []) + SeqFilter(p, xs[1..])
+}`;
+
+const SEQ_ALL = `predicate SeqAll<T>(xs: seq<T>, p: T -> bool)
+  decreases |xs|
+{
+  |xs| == 0 || (p(xs[0]) && SeqAll(xs[1..], p))
+}`;
+
+const SEQ_FOLD_LEFT = `function SeqFoldLeft<T, A>(f: (A, T) -> A, init: A, xs: seq<T>): A
+  decreases |xs|
+{
+  if |xs| == 0 then init
+  else SeqFoldLeft(f, f(init, xs[0]), xs[1..])
 }`;
 
 const SEQ_FIND_INDEX = `function SeqFindIndex<T>(s: seq<T>, p: T -> bool): int
@@ -1213,15 +1282,16 @@ const SEQ_SORT_BY = `function {:axiom} SeqSortBy<T(==,!new)>(s: seq<T>, cmp: (T,
 // U+0020, and NOT U+0085 (NEL, which is Cc). See
 // https://tc39.es/ecma262/#sec-white-space and
 // https://tc39.es/ecma262/#sec-line-terminators.
-// `\\U{..}` are Dafny char escapes (not JS: the string
-// is emitted verbatim), so the enumeration below is Dafny source, not decoded.
+// `\\uXXXX` is Dafny's escape form under --unicode-char:false and `\\U{XXXX}`
+// under :true (each rejects the other); STRING_TRIM_SCALAR derives the latter.
+// The enumeration below is emitted Dafny source, not a decoded JS string.
 const STRING_TRIM = `predicate IsJSWhitespace(c: char)
 {
-  c == '\\U{0009}' || c == '\\U{000A}' || c == '\\U{000B}' || c == '\\U{000C}' || c == '\\U{000D}' ||
-  c == '\\U{0020}' || c == '\\U{00A0}' || c == '\\U{1680}' ||
-  ('\\U{2000}' <= c <= '\\U{200A}') ||
-  c == '\\U{2028}' || c == '\\U{2029}' || c == '\\U{202F}' || c == '\\U{205F}' ||
-  c == '\\U{3000}' || c == '\\U{FEFF}'
+  c == '\\u0009' || c == '\\u000A' || c == '\\u000B' || c == '\\u000C' || c == '\\u000D' ||
+  c == '\\u0020' || c == '\\u00A0' || c == '\\u1680' ||
+  ('\\u2000' <= c <= '\\u200A') ||
+  c == '\\u2028' || c == '\\u2029' || c == '\\u202F' || c == '\\u205F' ||
+  c == '\\u3000' || c == '\\uFEFF'
 }
 
 function StringTrimLeft(s: string): string
@@ -1249,6 +1319,10 @@ function StringTrim(s: string): string
   StringTrimRight(StringTrimLeft(s))
 }`;
 
+// The same predicate and trims under `--unicode-char:true`, which the
+// `unicode-scalar` profile verifies under: byte-identical to what was always emitted.
+const STRING_TRIM_SCALAR = STRING_TRIM.replace(/\\u([0-9A-F]{4})/g, "\\U{$1}");
+
 const STRING_TO_LOWER = `function StringToLower(s: string): string
   ensures |StringToLower(s)| == |s|
   decreases |s|
@@ -1271,17 +1345,24 @@ const STRING_TO_UPPER = `function StringToUpper(s: string): string
     [upper] + StringToUpper(s[1..])
 }`;
 
-// `String.fromCharCode(n)` — the inverse of `s.charCodeAt(i)`'s `(s[i] as int)`.
-// Dafny's `char` is a Unicode scalar value, so the argument must miss the
-// surrogate range; that is the `requires`, discharged at each call site. The two
-// `ensures` give callers the round-trip law without unfolding the body.
+// `String.fromCharCode(n)` — the inverse of `s.charCodeAt(i)`'s `(s[i] as int)`
+// in the UTF-16 code-unit model selected by dafny-commands.ts. LemmaScript
+// currently admits the direct 16-bit range; JavaScript's wider ToUint16 coercion
+// remains outside the verified subset.
 const STRING_FROM_CHAR_CODE = `function StringFromCharCode(n: int): string
-  requires 0 <= n < 0xD800 || 0xE000 <= n < 0x110000
+  requires 0 <= n < 0x10000
   ensures |StringFromCharCode(n)| == 1
   ensures (StringFromCharCode(n)[0] as int) == n
 {
   [n as char]
 }`;
+
+// `unicode-scalar` keeps the scalar range that was always required: a surrogate
+// is refused by precondition rather than admitted as a code unit.
+const STRING_FROM_CHAR_CODE_SCALAR = STRING_FROM_CHAR_CODE.replace(
+  "requires 0 <= n < 0x10000",
+  "requires 0 <= n < 0xD800 || 0xE000 <= n < 0x110000",
+);
 
 // `s.repeat(n)` — n copies of s, concatenated. The per-index ensures is stated
 // for the single-character receiver (the common case: padding with one digit).
@@ -1389,7 +1470,7 @@ const SET_TO_SEQ = `method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
 }`;
 
 /** Preamble code keyed by name. Emitted in this order when needed. */
-const PREAMBLE_CODE: [string, string][] = [
+const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["OptionType", "datatype Option<T> = None | Some(value: T)"],
   // Opaque carrier for `unknown`-typed values. `(==)` for compare/map-key/match;
   // `(0)` (auto-init ⇒ nonempty) so `havoc` (`:= *`) is well-formed.
@@ -1407,6 +1488,9 @@ const PREAMBLE_CODE: [string, string][] = [
   ["SeqIndexOf", SEQ_INDEX_OF],
   ["SeqFindIndex", SEQ_FIND_INDEX],
   ["SeqFindLastIndex", SEQ_FIND_LAST_INDEX],
+  ["SeqFilter", SEQ_FILTER],
+  ["SeqAll", SEQ_ALL],
+  ["SeqFoldLeft", SEQ_FOLD_LEFT],
   ["SeqFilterSome", SEQ_FILTER_SOME],
   ["SeqFind", SEQ_FIND],
   ["SeqFindLast", SEQ_FIND_LAST],
@@ -1417,10 +1501,10 @@ const PREAMBLE_CODE: [string, string][] = [
   ["StringSplit", STRING_SPLIT],
   ["SeqSort", SEQ_SORT],
   ["SeqSortBy", SEQ_SORT_BY],
-  ["StringTrim", STRING_TRIM],
+  ["StringTrim", () => isUtf16() ? STRING_TRIM : STRING_TRIM_SCALAR],
   ["StringToLower", STRING_TO_LOWER],
   ["StringToUpper", STRING_TO_UPPER],
-  ["StringFromCharCode", STRING_FROM_CHAR_CODE],
+  ["StringFromCharCode", () => isUtf16() ? STRING_FROM_CHAR_CODE : STRING_FROM_CHAR_CODE_SCALAR],
   ["StringRepeat", STRING_REPEAT],
   ["NatToString", NAT_TO_STRING],
   ["IntToString", INT_TO_STRING],
@@ -1538,6 +1622,8 @@ function translatePattern(p: MatchPattern): string {
 
 export function emitDafnyFile(file: Module, tsFileName?: string, options: LscOptions = DEFAULT_OPTIONS): string {
   _useSafeSlice = options["safe-slice"];
+  _stringSemantics = options["string-semantics"];
+  _usesStrings = false;
   resetDafnyNameCache();
   buildRecordCtorMap(file.decls);
   _neededPreambles.clear();
@@ -1598,8 +1684,12 @@ export function emitDafnyFile(file: Module, tsFileName?: string, options: LscOpt
   // Build output with needed preambles
   const lines: string[] = [];
   if (tsFileName) lines.push(`// Generated by lsc from ${tsFileName}`);
+  // Non-default options that materially affected this file (DESIGN_CONFIG.md §5).
+  // `dafnyVerify` maps the token to Dafny's char mode; the default is documented
+  // in SPEC_DAFNY.md §4 rather than stamped, so existing artifacts do not change.
+  if (_usesStrings && isUtf16()) lines.push("// lsc options: string-semantics=javascript-utf16");
   for (const [key, code] of PREAMBLE_CODE) {
-    if (_neededPreambles.has(key)) { lines.push(""); lines.push(code); }
+    if (_neededPreambles.has(key)) { lines.push(""); lines.push(typeof code === "function" ? code() : code); }
   }
   lines.push(...declLines);
   return lines.join("\n") + "\n";

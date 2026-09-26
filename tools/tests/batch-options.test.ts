@@ -104,7 +104,7 @@ for (const { name, entry, flags, expected } of cases) {
   test(name, posixOnly, () => {
     const result = runCli([entry], ["check", ...flags]);
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(result.calls, [["verify", ...expected, join(result.dir, "a.dfy")]]);
+    assert.deepEqual(result.calls, [["verify", ...expected, "--unicode-char:true", join(result.dir, "a.dfy")]]);
   });
 }
 
@@ -112,8 +112,8 @@ test("batch overrides apply to every entry, including entries without defaults",
   const result = runCli(["a.ts 300 --isolate-assertions", "b.ts"], ["check", "--time-limit=120", "--extra-flags=--cores=2"]);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.calls, [
-    ["verify", "--verification-time-limit", "120", "--cores=2", join(result.dir, "a.dfy")],
-    ["verify", "--verification-time-limit", "120", "--cores=2", join(result.dir, "b.dfy")],
+    ["verify", "--verification-time-limit", "120", "--cores=2", "--unicode-char:true", join(result.dir, "a.dfy")],
+    ["verify", "--verification-time-limit", "120", "--cores=2", "--unicode-char:true", join(result.dir, "b.dfy")],
   ]);
 });
 
@@ -124,7 +124,7 @@ for (const flags of [[], ["--extra-flags=--cores=2"]]) {
     assert.match(result.stdout, /a\.ts \(timeout 61s > 60s, gen-check only\)/);
     assert.ok(result.files.includes("a.dfy.gen"));
     assert.deepEqual(result.calls, [[
-      "verify", "--verification-time-limit", "11", ...(flags.length ? ["--cores=2"] : []), join(result.dir, "b.dfy"),
+      "verify", "--verification-time-limit", "11", ...(flags.length ? ["--cores=2"] : []), "--unicode-char:true", join(result.dir, "b.dfy"),
     ]]);
   });
 }
@@ -132,7 +132,7 @@ for (const flags of [[], ["--extra-flags=--cores=2"]]) {
 test("an explicit file keeps its existing CLI behavior", posixOnly, () => {
   const result = runCli(["a.ts 11 --isolate-assertions"], ["check", "a.ts", "--time-limit=120", "--extra-flags=--cores=2"]);
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(result.calls, [["verify", "--verification-time-limit", "120", "--cores=2", join(result.dir, "a.dfy")]]);
+  assert.deepEqual(result.calls, [["verify", "--verification-time-limit", "120", "--cores=2", "--unicode-char:true", join(result.dir, "a.dfy")]]);
 });
 
 for (const cmd of ["gen", "gen-check"]) {

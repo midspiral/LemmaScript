@@ -410,6 +410,13 @@ function runFile(
   }
 
   // ── Lean backend ──────────────────────────────────────────
+  // Dafny-only profile: Lean's `String` is a sequence of Unicode scalars and
+  // LemmaScript has no UTF-16 encoding for it (DESIGN_STRINGS.md §4). Refuse
+  // rather than emit scalar Lean for a code-unit claim.
+  if (options["string-semantics"] === "javascript-utf16") {
+    console.error('ERROR: "string-semantics": "javascript-utf16" is not available for --backend=lean; use --backend=dafny or set "unicode-scalar" in lemmascript.json.');
+    process.exit(1);
+  }
   const leanBase = leanModuleOverride ?? base;
   const specPath = path.join(dir, `${leanBase}.spec.lean`);
   const specImport = existsSync(specPath) ? `«${leanBase}.spec»` : undefined;

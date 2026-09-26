@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 
-import { parseFileOptions } from "../src/config.ts";
+import { parseFileOptions, resolveOptions, validateOptions } from "../src/config.ts";
 
 test("parses a genuine leading option comment", () => {
   assert.deepEqual(
@@ -145,7 +145,7 @@ for (const [directive, message] of [
   ["option", "expected //@ option <key> <value>"],
   ["option safe-slice", "expected //@ option <key> <value>"],
   ["option safe-slice true extra", "expected //@ option <key> <value>"],
-  ["option missing true", "unknown option 'missing' (known options: extern-default, safe-slice, proof-dir)"],
+  ["option missing true", "unknown option 'missing' (known options: extern-default, safe-slice, proof-dir, string-semantics)"],
   ["option safe-slice yes", "option 'safe-slice' must be true or false"],
   ["option extern-default invalid", "option 'extern-default' must be one of: pure, impure"],
   ["option proof-dir proofs", "option 'proof-dir' is config-only"],
@@ -170,3 +170,22 @@ for (const directives of [
     );
   });
 }
+
+test("string-semantics is an enum whose default is today's Unicode-scalar model", () => {
+  assert.equal(resolveOptions({}, "lemmascript.json")["string-semantics"], "unicode-scalar");
+  assert.deepEqual(
+    validateOptions({ "string-semantics": "javascript-utf16" }, "lemmascript.json"),
+    { "string-semantics": "javascript-utf16" },
+  );
+  assert.throws(
+    () => validateOptions({ "string-semantics": "utf16" }, "lemmascript.json"),
+    /must be one of: unicode-scalar, javascript-utf16/,
+  );
+});
+
+test("string-semantics is config-only: a file cannot reinterpret a callee's strings", () => {
+  assert.throws(
+    () => parseFileOptions("//@ option string-semantics javascript-utf16\n", "example.ts"),
+    /config-only/,
+  );
+});
