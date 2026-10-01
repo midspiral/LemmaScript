@@ -11,7 +11,7 @@
  * `collectLoopAnnotations` in extract.ts.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 export function nestedSum(n: number): number {
   //@ verify

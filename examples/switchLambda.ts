@@ -6,7 +6,7 @@
  * pi's `convertToLlm`, whose `.map` callback switches on the message role.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 interface UserMsg { role: "user"; text: string }
 interface SysMsg { role: "system"; code: number }

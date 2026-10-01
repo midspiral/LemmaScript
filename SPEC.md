@@ -4,14 +4,16 @@
 **Date:** September 2026
 
 Backend-specific details:
+
 - [SPEC_LEAN.md](SPEC_LEAN.md) — Lean backend (Velvet/Loom, four-file scheme, proof workflow)
 - [SPEC_DAFNY.md](SPEC_DAFNY.md) — Dafny backend (two-file scheme, regen workflow)
+- [SPEC_FSTAR.md](SPEC_FSTAR.md) — pure F* backend (higher-order functions, additions-only proofs); supports a subset of this specification
 
 ---
 
 ## 1. Overview
 
-LemmaScript is a verification toolchain for TypeScript. The user writes TypeScript with `//@ ` specification annotations. The toolchain generates formal verification artifacts; a backend prover (Lean or Dafny) checks them.
+LemmaScript is a verification toolchain for TypeScript. The user writes TypeScript with `//@ ` specification annotations. The toolchain generates formal verification artifacts; a backend prover (Lean, Dafny, or F*) checks them.
 
 The toolchain has two components:
 1. **`lsc` CLI** (Node.js) — parses TS, generates verification artifacts for the selected backend
@@ -202,6 +204,8 @@ function isEmptyResult(result: string): boolean {
 **Behavior:** If any function in the file has `//@ verify`, `lsc` switches to selective mode and only extracts functions marked with `//@ verify`. Functions without it are silently skipped. Type declarations, interface declarations, and module-level `const` declarations are always extracted (they may be needed by verified functions).
 
 If no function in the file has `//@ verify`, all functions are extracted as before. This keeps existing LemmaScript projects (where every function is in-fragment) working without changes.
+
+Function declarations inside function-only TypeScript namespaces participate in the same selection. They are flattened to unique names, and static qualified source calls resolve through their declaration symbols. Nested namespaces are supported. Namespaces containing only type aliases/interfaces are ignored, including ambient ones; colliding function names, namespace state, and ambient value declarations are rejected.
 
 ### 2.7 Backend Restriction: `//@ backend`
 
@@ -642,6 +646,8 @@ Lambda bodies can be expressions (`(x) => x + 1`) or statement blocks (`(x) => {
 
 Flat object destructuring in a lambda parameter is supported, including aliases (`({ id, hidden: isHidden }) => ...`). It remains one callback parameter and lowers to immutable field bindings inside the lambda. Array patterns, nested object patterns, defaults, and rest properties are rejected during extraction with an explicit unsupported-pattern error.
 
+Property-free callable interfaces in function signatures, such as `interface Predicate<A> { (a: A): boolean }`, lower to arrows using their instantiated signature, including inherited signatures. This supports one non-generic call signature with required parameters; overloads, fields, index signatures, constructors, `this`/optional/rest parameters, and recursive callable interfaces are outside this lowering. Unannotated parameters of returned lambdas take their types from the declared callable return signature, including nested returns and conditional branches. This return context is separate from array-callback inference, which preserves the collection's model types and aliases.
+
 **filterMap.** `xs.map(x => ... | undefined).filter((x): x is T => x !== undefined)` drops the `undefined`s *and* unwraps to `seq<T>` — lowered to the proven `SeqFilterSome` preamble (a plain `Map(.value, Filter(.Some?, ...))` wouldn't verify, since `.value` is partial).
 
 **`.map` (Dafny).** Lowered to a `seq` comprehension with the element access inlined (`var x := arr[i]; e`), not `Seq.Map`. `Seq.Map` hides the element behind a closure, so a recursive rebuild walker (`Node(kids.map(walk))`) fails Dafny's termination check — the obligation gets quantified over the lambda's parameter instead of anchored at `kids[i]`. Applying a lambda inside the comprehension fails the same way, hence the inlining.
@@ -724,6 +730,8 @@ The narrow pass (`narrow.ts`) detects these on the typed IR and rewrites them in
 Following TS, the equality/truthiness/`&&`/`||`/`==>` patterns fire only for pure access paths (`x`, `obj.field`, `a.b.c.d`); method-call results must be bound first (`const v = m.get(k); if (v !== undefined) ...`). The `obj?.<chain>` and `x ?? d` forms are exceptions: extract emits dedicated single-evaluation IR nodes (`optChain`, `nullish`), so any expression on the left is allowed.
 
 **Discriminated-union narrowing.** `if (e.kind === "lit") use(e.val)`, `if ('field' in x) use(x.field)`, and `if (x.kind !== "v") return; rest` all lower to `match` constructs that destructure variant-specific fields. Switch on a discriminator works similarly. Detection lives in `narrow.ts` alongside optional-narrowing rules (rewrites to a `tagMatch` IR node); the lowering to backend `match` lives in `transform.ts`.
+
+**Tagged-union widening.** A declared tagged union can flow into a wider declared union with the same discriminator when every source variant and field is preserved. The compiler binds the source once, matches its tag, and reconstructs the destination with the same payload; this also handles payloads inside generic tagged unions and callback results with identical parameter types. Explicit type arguments on same-module function calls instantiate parameter and result types without expanding aliases. See [`resultTypedErrors.ts`](examples/resultTypedErrors.ts), where separate quantity and price errors flow through `Result` into one error union. General untagged unions, recursive widening, and callback parameter conversions remain unsupported.
 
 **Synthesized array-union narrowing.** A plain union `U | T[]` (no shared discriminant) is synthesized at the boundary into a tagged datatype `ArrayBranch(arr: T[]) | NonArrayBranch(val: U)`. `Array.isArray(x)` narrows to the array branch (in `if` / `?:` / `==>`); when the non-array branch `U` is `string`, `typeof x === "string"` narrows to it in `?:` conditionals — the dual discriminator. Inside the matched branch, bare references to `x` use the variant's payload. The `typeof` form fires only when `U` is actually `string`; for any other `U` the runtime `"string"` test can't match that branch, so `lsc` does not narrow (and `typeof` stays unsupported).
 
@@ -1313,10 +1321,10 @@ Both backends generate `match` for the body and ensures. Both verify automatical
 ## 7. `lsc` CLI
 
 ```
-lsc gen [--backend=lean|dafny] <file.ts>      — generate verification artifacts
-lsc gen-check [--backend=dafny] <file.ts>     — gen + additions-only check, no verify (Dafny only)
-lsc check [--backend=lean|dafny] <file.ts>    — gen + verify
-lsc regen --backend=dafny <file.ts>           — regenerate with three-way merge (Dafny only)
+lsc gen [--backend=lean|dafny|fstar] <file.ts>   — generate verification artifacts
+lsc gen-check [--backend=dafny|fstar] <file.ts> — gen + additions-only check, no verify
+lsc check [--backend=lean|dafny|fstar] <file.ts> — gen + verify
+lsc regen --backend=dafny|fstar <file.ts>      — regenerate with three-way merge
 lsc extract <file.ts>                          — print Raw IR JSON (debugging)
 lsc info <file.ts>                             — write a JSON summary of verified functions (backend-neutral)
 lsc info --typed <file.ts>                     — print the machine-readable Typed IR contract (stdout)
@@ -1328,10 +1336,10 @@ lsc version                                    — print the lemmascript package
 Default backend is Dafny. `extract` and `info` are backend-neutral and always run, regardless of any `//@ backend` directive. With no `<file.ts>`, `gen`, `gen-check`, and `check` batch over the files listed in `LemmaScript-files.txt`.
 
 **Flags:**
-- `--backend=lean|dafny` — select the backend (default Dafny).
+- `--backend=lean|dafny|fstar` — select the backend (default Dafny).
 - `--config=<path>` — use a specific `lemmascript.json` instead of nearest-ancestor discovery.
-- `--time-limit=<seconds>` — per-VC verification time limit (Dafny: `--verification-time-limit`).
-- `--extra-flags=<string>` — extra flags forwarded verbatim to the backend prover.
+- `--time-limit=<seconds>` — Dafny: per-VC limit (`--verification-time-limit`); F*: process deadline.
+- `--extra-flags=<string>` — extra prover flags; F* restricts these to resource tuning (see SPEC_FSTAR).
 - `--slow` — in batch mode, verify entries whose manifest timeout exceeds 60s (otherwise those get `gen-check`, unless `--time-limit` is supplied).
 
 In batch mode, `--time-limit` and `--extra-flags` independently override the
@@ -1343,15 +1351,17 @@ For Dafny `check`, an explicit timeout enables verification even above 60s witho
 
 - **Lean:** writes `foo.types.lean` + `foo.def.lean`
 - **Dafny:** writes `foo.dfy.gen`, seeds `foo.dfy` if missing; `proof-dir` may relocate both
+- **F*:** writes `foo.fst.gen`, seeds `foo.fst` if missing, beside the source
 
 ### 7.2 `check`
 
 - **Lean:** gen + `lake build` (checks `.def.lean` + `.proof.lean` + `.spec.lean`)
 - **Dafny:** gen + additions-only check + `dafny verify`
+- **F*:** gen + additions-only check + isolated `fstar.exe` verification
 
-### 7.3 `regen` (Dafny only)
+### 7.3 `regen` (Dafny and F*)
 
-Three-way merge when generated code changes. See [SPEC_DAFNY.md](SPEC_DAFNY.md).
+Three-way merge when generated code changes. See [SPEC_DAFNY.md](SPEC_DAFNY.md) and [SPEC_FSTAR.md](SPEC_FSTAR.md).
 
 ### 7.4 `info`
 

@@ -72,6 +72,17 @@ test("additions-only failure does not advance an unaccepted anchor", posixOnly, 
   assert.equal(readFileSync(f.proof, "utf8"), generation(99));
 }));
 
+for (const noVerify of [false, true]) {
+  test(`string model guard preserves the merge anchor (noVerify=${noVerify})`, posixOnly, () => fixture(f => {
+    const header = "// lsc options: string-semantics=javascript-utf16\n";
+    writeFileSync(f.proof, header + generation(0) + addition);
+    fails(() => dafnyRegen(f.gen, f.proof, f.base, generation(1), f.dir, undefined, undefined, noVerify));
+    assert.equal(readFileSync(f.base, "utf8"), generation(0));
+    assert.equal(readFileSync(f.proof, "utf8"), header + generation(1) + addition);
+    assert.equal(readFileSync(f.gen, "utf8"), generation(1));
+  }));
+}
+
 test("a failed first verification can be followed by a clean generation", posixOnly, () => fixture(f => {
   rmSync(f.proof);
   fails(() => dafnyRegen(f.gen, f.proof, f.base, generation(1), f.dir));

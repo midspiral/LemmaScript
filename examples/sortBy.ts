@@ -7,7 +7,7 @@
  * result is a same-length, same-multiset permutation, sorted ascending by key.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 interface Rec {
   k: number;

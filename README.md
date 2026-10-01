@@ -1,6 +1,6 @@
 # LemmaScript (Tech Preview)
 
-A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations. The toolchain generates verifiable code from your TypeScript — either in Dafny or Lean 4 (with Velvet/Loom).
+A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations. The toolchain generates verifiable code from your TypeScript in Dafny, Lean 4 (with Velvet/Loom), or the F* backend.
 
 See [SPEC.md](SPEC.md), [DESIGN.md](DESIGN.md), and [GETTING_STARTED.md](GETTING_STARTED.md).
 
@@ -10,7 +10,7 @@ See our [blog post](https://midspiral.com/blog/lemmascript-a-verification-toolch
 
 ## Examples and Case Studies
 
-Each example and case study is verified in Lean 4 and/or Dafny from the same annotated TypeScript source.
+Each example and case study is verified in one or more of Lean 4, Dafny, and F* from annotated TypeScript source.
 
 See the internal [examples](examples).
 
@@ -85,6 +85,26 @@ The Dafny backend generates two files per TS source: `foo.dfy.gen` (always regen
 lsc gen --backend=lean src/myModule.ts
 lake build
 ```
+
+### F* backend
+
+The F* backend supports higher-order functions and returned closures alongside the existing examples with loops, records, arrays, strings, maps and sets. Install [F*](https://github.com/FStarLang/FStar/blob/master/INSTALL.md), then from this checkout run:
+
+```sh
+npm run build
+node tools/dist/lsc.js check --backend=fstar examples/fstarClosures.ts
+./regen-fstar.sh  # regenerate and verify all examples, preserving proofs
+```
+
+Sources marked `//@ backend fstar` are skipped by the other backends. Companions live beside each source: `examples/fstarClosures.ts` produces `examples/fstarClosures.fst.gen` and `.fst`. Generated baselines and working proofs follow the additions-only `gen`/`check`/`regen` workflow. See [SPEC_FSTAR.md](SPEC_FSTAR.md) for the supported model and examples, and [DESIGN_FSTAR.md](DESIGN_FSTAR.md) for the rationale and remaining work. Tested with F* 2026.09.20; Dafny remains the default.
+
+[accessPolicy.ts](examples/accessPolicy.ts) composes returned predicates into an access policy: members or invited guests may enter, but suspension overrides either permission. Its closure contracts and client guarantees verify with both `--backend=dafny` and `--backend=fstar`, without proof additions.
+
+[resultPipeline.ts](examples/resultPipeline.ts) uses generic `Result` values, `map`, and `flatMap` to validate an order and compute its total. Both backends prove that the first error wins, success requires valid quantity and price, and the total is their product; no proof additions are needed.
+
+[resultTypedErrors.ts](examples/resultTypedErrors.ts) gives the two validators distinct tagged error types and combines them into `QuantityError | PriceError`, preserving the error tag and original quantity or price. F* verifies without proof additions; Dafny uses two calls to the validators' proved lemmas.
+
+[compiler.ts](examples/compiler.ts) compiles expression trees into closures, preserving interpretation through constant folding and lexical bindings for every pure environment and continuation. Both Dafny and F* prove compiler correctness and verify clients with the compiler body hidden, including a nested-shadowing example.
 
 ## Continuous Integration
 
@@ -163,4 +183,3 @@ For the full surface, see [SPEC.md](SPEC.md).
 | [**.spec.lean**](examples/majority.spec.lean) | No | Ghost definitions, helper lemmas |
 | [**.def.lean**](examples/majority.def.lean) | Yes | Velvet method definitions |
 | [**.proof.lean**](examples/majority.proof.lean) | No | `prove_correct` with proof tactics |
-

@@ -12,6 +12,9 @@ const loader = createRequire(import.meta.url).resolve("tsx");
 const utf16 = "//@ option string-semantics javascript-utf16\n//@ option dafny-library local\n";
 const header = "// lsc options: string-semantics=javascript-utf16\n";
 const posixOnly = { skip: process.platform === "win32" };
+const dafny = spawnSync("dafny", ["--version"], { encoding: "utf8", timeout: 10_000 });
+const installed = !dafny.error && dafny.status === 0;
+if (process.env.LSC_REQUIRE_DAFNY && !installed) throw new Error("String profile integration tests require Dafny");
 
 function fixture(source: string, useFakeVerifier: boolean, run: (f: {
   dir: string; proof: string; gen: string; marker: string;
@@ -82,7 +85,7 @@ test("ordinary UTF-16 proof additions still reach the verifier", posixOnly, () =
   });
 });
 
-test("numeric-returning surrogate operations verify through the frontend in UTF-16 mode", () => {
+test("numeric-returning surrogate operations verify through the frontend in UTF-16 mode", { skip: !installed }, () => {
   const source = "//@ backend dafny\n" + utf16 + `export function surrogateCode(): number {
   //@ verify
   //@ ensures \\result === 0xD800

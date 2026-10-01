@@ -11,7 +11,7 @@
  *   p => { if (p.type !== 'tool-call') return true; const tc = p; return ... }
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 interface Part {
   type: string;

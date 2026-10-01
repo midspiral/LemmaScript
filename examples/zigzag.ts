@@ -13,7 +13,7 @@
  * value is non-negative.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 // Fold a signed integer onto a non-negative "zigzag" code.
 function encode(n: number): number {

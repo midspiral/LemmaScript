@@ -7,7 +7,7 @@
  * a raw string where a datatype constructor is required.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 type Lang = "en" | "ru";
 type Color = "red" | "blue";

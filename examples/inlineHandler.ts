@@ -14,7 +14,7 @@
  * As in autohavoc.ts, the opaque request I/O is havoc'd and the only obligation
  * left is that the safePath guard dominates the readSafe sink.
  */
-//@ backend dafny
+//@ backend dafny,fstar
 
 function safePath(path: string): boolean {
   //@ verify

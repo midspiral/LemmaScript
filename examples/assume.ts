@@ -3,7 +3,7 @@
  * the verifier takes as given. Canonical use: constrain a //@ havoc'd
  * value inline in TS rather than post-hoc in the generated .dfy file.
  */
-//@ backend dafny
+//@ backend dafny,fstar
 
 export function shortenString(text: string): number {
   //@ verify

@@ -16,7 +16,7 @@
  * `content`, so it verifies.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 interface TextContent { kind: "text"; text: string }
 interface ImageContent { kind: "image"; url: string }

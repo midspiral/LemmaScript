@@ -22,7 +22,7 @@
  * this can only make a proof fail, never spuriously pass. The trust boundary is
  * the declared sink: a real filesystem call must go through readFileSafe.
  */
-//@ backend dafny
+//@ backend dafny,fstar
 
 function validPath(path: string): boolean {
   //@ verify

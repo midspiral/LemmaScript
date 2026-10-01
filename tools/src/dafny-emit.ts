@@ -5,6 +5,7 @@
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
 import { exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
+import { typeApplication } from "./types.js";
 import { freshName, freshNameWhere, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
 import { DEFAULT_OPTIONS, resolveOptions, type LscOptions } from "./config.js";
@@ -46,7 +47,10 @@ function tyToDafny(ty: Ty): string {
     case "map": return `map<${tyToDafny(ty.key)}, ${tyToDafny(ty.value)}>`;
     case "set": return `set<${tyToDafny(ty.elem)}>`;
     case "optional": { needPreamble("OptionType"); return `Option<${tyToDafny(ty.inner)}>`; }
-    case "user": return escapeName(ty.name);
+    case "user": {
+      const app = typeApplication(ty.name);
+      return app ? `${escapeName(app.name)}<${app.args.map(tyToDafny).join(", ")}>` : escapeName(ty.name);
+    }
     case "fn": return `(${ty.params.map(tyToDafny).join(", ")}) -> ${tyToDafny(ty.result)}`;
     // Out-of-subset (`any`/`unknown`); opaque so real ops on it fail loudly
     // rather than silently verify as `int`. Mirrors the Lean backend's `_`.
@@ -871,7 +875,10 @@ function emitDecl(d: Decl): string {
     }
 
     case "type-alias": {
-      return `type ${escapeName(d.name)} = ${tyToDafny(d.target)}`;
+      // Aliases may use parameters left of an arrow. Keep them invariant
+      // without Dafny's default cardinality-preservation restriction.
+      const tp = d.typeParams?.length ? `<${d.typeParams.map(p => `!${p}`).join(", ")}>` : "";
+      return `type ${escapeName(d.name)}${tp} = ${tyToDafny(d.target)}`;
     }
 
     case "opaque-type": {

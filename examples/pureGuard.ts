@@ -13,7 +13,7 @@
  * `Option<string>`, which Dafny rejects. Declining is not a safe fallback.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 interface Post {
   title?: string;

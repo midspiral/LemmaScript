@@ -33,7 +33,7 @@ jobs:
 
       - uses: ./.github/actions/setup-dafny
 
-      - name: Reject implicit declaration skips
+      - name: Tools and Dafny regression tests
         run: ./tools/test-fixtures.sh
 
       - name: Regenerate Lean from TypeScript
@@ -60,6 +60,40 @@ jobs:
           untracked=$(git ls-files --others --exclude-standard -- '*.dfy.gen')
           if [ -n "$untracked" ]; then
             echo "ERROR: Untracked .dfy.gen files:"
+            echo "$untracked"
+            exit 1
+          fi
+
+  fstar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Install pinned F* and bundled Z3
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/FStarLang/FStar/v2026.09.20/.scripts/install-fstar.sh -o "$RUNNER_TEMP/install-fstar.sh"
+          bash "$RUNNER_TEMP/install-fstar.sh" --release --version v2026.09.20 --dest "$RUNNER_TEMP/fstar" --no-link
+          echo "$RUNNER_TEMP/fstar/bin" >> "$GITHUB_PATH"
+
+      - name: F* regression tests (including rejected contracts)
+        env:
+          LSC_REQUIRE_FSTAR: '1'
+        run: npm test
+
+      - name: Verify F* examples and check artifact drift
+        run: |
+          ./regen-fstar.sh --time-limit=120
+          git diff --exit-code -- '*.fst' '*.fst.gen'
+          untracked=$(git ls-files --others --exclude-standard -- '*.fst' '*.fst.gen')
+          if [ -n "$untracked" ]; then
+            echo "ERROR: Untracked F* artifacts:"
             echo "$untracked"
             exit 1
           fi

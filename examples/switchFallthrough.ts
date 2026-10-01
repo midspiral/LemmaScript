@@ -12,7 +12,7 @@
  *   a nested loop would be kept. See the switch handling in extract.ts.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 type Tag = "a" | "b" | "c" | "skip";
 interface Item { tag: Tag }

@@ -1,4 +1,4 @@
-//@ backend dafny
+//@ backend dafny,fstar
 // Shifts and masks by a literal fold to exact arithmetic. The literal is read
 // as a compiler-side BigInt, so both the shift factor and the mask modulus stay
 // exact past 2^53 — a `Math.pow`/32-bit-`&` fold would emit `1.18e+21` for the

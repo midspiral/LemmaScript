@@ -74,6 +74,53 @@ export function parseTsType(tsType: string): Ty {
   return tyFromTypeNode(alias.getTypeNodeOrThrow());
 }
 
+/** Read a named type application without expanding its aliases. */
+export function typeApplication(name: string): { name: string; args: Ty[] } | undefined {
+  if (!name.includes("<")) return undefined;
+  const sf = synthFile();
+  sf.replaceWithText(`type __t = ${name};`);
+  const node = sf.getTypeAliasOrThrow("__t").getTypeNodeOrThrow();
+  if (!Node.isTypeReference(node)) return undefined;
+  return { name: node.getTypeName().getText(), args: node.getTypeArguments().map(tyFromTypeNode) };
+}
+
+/** Instantiate declared field types using the containing value's type arguments. */
+export function substituteTypeParams(ty: Ty, bindings: ReadonlyMap<string, Ty>): Ty {
+  const sub = (t: Ty): Ty => substituteTypeParams(t, bindings);
+  switch (ty.kind) {
+    case "user": {
+      const bound = bindings.get(ty.name);
+      if (bound) return bound;
+      const app = typeApplication(ty.name);
+      if (!app) return ty;
+      const args = app.args.map(sub);
+      if (args.every((arg, i) => tyEqual(arg, app.args[i]))) return ty;
+      return { kind: "user", name: `${app.name}<${args.map(typeToTsText).join(", ")}>` };
+    }
+    case "array": case "set": return { ...ty, elem: sub(ty.elem) };
+    case "optional": return { ...ty, inner: sub(ty.inner) };
+    case "tuple": return { ...ty, elems: ty.elems.map(sub) };
+    case "map": return { ...ty, key: sub(ty.key), value: sub(ty.value) };
+    case "fn": return { ...ty, params: ty.params.map(sub), result: sub(ty.result) };
+    default: return ty;
+  }
+}
+
+function typeToTsText(ty: Ty): string {
+  switch (ty.kind) {
+    case "int": return ty.big ? "bigint" : "number";
+    case "bool": return "boolean";
+    case "user": return ty.name;
+    case "array": return `Array<${typeToTsText(ty.elem)}>`;
+    case "set": return `Set<${typeToTsText(ty.elem)}>`;
+    case "optional": return `(${typeToTsText(ty.inner)} | undefined)`;
+    case "tuple": return `[${ty.elems.map(typeToTsText).join(", ")}]`;
+    case "map": return `Map<${typeToTsText(ty.key)}, ${typeToTsText(ty.value)}>`;
+    case "fn": return `(${ty.params.map((p, i) => `p${i}: ${typeToTsText(p)}`).join(", ")}) => ${typeToTsText(ty.result)}`;
+    default: return ty.kind;
+  }
+}
+
 function tyFromTypeNode(tn: TypeNode): Ty {
   if (Node.isParenthesizedTypeNode(tn)) return tyFromTypeNode(tn.getTypeNode());
   // `readonly T[]` / `readonly [A, B]` — the modifier is a TypeOperator wrapping
@@ -209,4 +256,3 @@ export function tyToCanonical(ty: Ty): string {
     case "fn":     return `(${ty.params.map(tyToCanonical).join(", ")}) -> ${tyToCanonical(ty.result)}`;
   }
 }
-
