@@ -38,7 +38,7 @@ Logging is on by default. A project turns it off with a config-only entry in the
 
 `run-log` is config-only, not a `//@ option`: a file that could switch off its own logging would let an agent hide the failures the log exists to count.
 
-The log lives in `.lemmascript/` in the directory that holds the selected `lemmascript.json`. Without a config file, it goes in the git repository root, or in the current working directory outside a repository; in that last case the run history depends on where `lsc` is run from, so add a `lemmascript.json` to anchor it. When `lsc` creates the directory, it writes `.lemmascript/.gitignore` containing `*`, so git ignores the whole directory without any change to the project's own `.gitignore`.
+The log lives in `.lemmascript/` in the directory that holds the selected `lemmascript.json`. Without a config file, it goes beside the nearest `LemmaScript-files.txt` (so a project's manifest anchors the log even when the project sits inside a larger repository), else in the git repository root, else in the current working directory; in that last case the run history depends on where `lsc` is run from, so add a `lemmascript.json` or `LemmaScript-files.txt` to anchor it. When `lsc` creates the directory, it writes `.lemmascript/.gitignore` containing `*`, so git ignores the whole directory without any change to the project's own `.gitignore`.
 
 ```
 .lemmascript/

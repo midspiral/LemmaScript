@@ -1429,8 +1429,9 @@ between files; unlike the string model, they do not change the meaning of contra
 ### 7.7 Run log
 
 Every Dafny `check` and `regen` appends one JSON record to `.lemmascript/runs.jsonl`, in the
-directory of the selected `lemmascript.json` (else the source's git root, else the current
-directory), and stores the source as `.lemmascript/blobs/<hash>.ts`. The directory contains a
+directory of the selected `lemmascript.json` (else of the nearest `LemmaScript-files.txt`, else
+the source's git root, else the current directory), and stores the source as
+`.lemmascript/blobs/<hash>.ts`. The directory contains a
 `.gitignore` of `*`, so it never appears in `git status`. A record names the file, the command,
 the stage where the run stopped (`ok`, `verify`, `resolve`, `diff`, `conflict`), the members that
 passed and failed, hashes of the `.ts` and `.dfy`, and `partial: true` when the run did not
