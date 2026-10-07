@@ -107,9 +107,10 @@ operations. Enabling `"string-semantics": "javascript-utf16"` requires explicitl
 `"dafny-library": "local"`; an omitted or explicit `stdlib` choice is an error.
 
 `run-log` (default `true`) records every Dafny `check` and `regen` in `.lemmascript/`
-beside `lemmascript.json` (without one, at the git repository root, or else in the current
-directory): one line per run in `runs.jsonl` (the stage it stopped at and
-which members passed or failed) plus a snapshot of the source. The directory ignores
+beside `lemmascript.json` (without one, beside the nearest `LemmaScript-files.txt`, else at
+the git repository root, or else in the current directory): one line per run in
+`runs.jsonl` (the stage it stopped at and which members passed or failed) plus a snapshot
+of the source. The directory ignores
 itself in git, and logging never changes `lsc` output or exit codes. Set it to `false` to
 turn logging off for the project, or `LSC_RUN_LOG=false` for a single run.
 
