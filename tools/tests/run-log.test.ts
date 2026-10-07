@@ -195,6 +195,21 @@ test("the log lives beside lemmascript.json, else at the git root, else in cwd",
   }
 });
 
+test("LemmaScript-files.txt takes precedence over the git root, and lemmascript.json over both", () => {
+  const root = tempDir();
+  try {
+    mkdirSync(join(root, "repo", ".git"), { recursive: true });
+    mkdirSync(join(root, "repo", "app", "src"), { recursive: true });
+    const source = join(root, "repo", "app", "src", "a.ts");
+    writeFileSync(source, "");
+    writeFileSync(join(root, "repo", "app", "LemmaScript-files.txt"), "src/a.ts\n");
+    assert.equal(resolveLogDir(source, null), join(root, "repo", "app"));
+    assert.equal(resolveLogDir(source, join(root, "repo", "lemmascript.json")), join(root, "repo"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // The log directory, snapshots and records.
 
 test("ensureLogDir creates a self-ignoring directory and keeps an edited .gitignore", () => {

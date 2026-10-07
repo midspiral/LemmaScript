@@ -63,9 +63,11 @@ export function runLogEnabled(option: boolean, value: string | undefined): boole
   throw new Error(`LSC_RUN_LOG must be true or false (got ${JSON.stringify(value)})`);
 }
 
-/** The selected lemmascript.json's directory, else the source's git root, else cwd. */
+/** The selected lemmascript.json's directory, else LemmaScript-files.txt's, else the source's git root, else cwd. */
 export function resolveLogDir(sourcePath: string, configFile: string | null): string {
   if (configFile) return path.dirname(path.resolve(configFile));
+  const manifest = findUp("LemmaScript-files.txt", sourcePath);
+  if (manifest) return path.dirname(manifest);
   const git = findUp(".git", sourcePath);
   return git ? path.dirname(git) : process.cwd();
 }
