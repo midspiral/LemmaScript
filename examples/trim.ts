@@ -1,4 +1,4 @@
-//@ backend dafny
+//@ backend dafny,fstar
 /**
  * trim — String.prototype.trim() strips the full ECMAScript WhiteSpace ∪
  * LineTerminator set: ASCII \t \n \v \f \r and space, plus Unicode NBSP,

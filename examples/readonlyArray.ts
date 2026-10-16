@@ -1,4 +1,4 @@
-//@ backend dafny
+//@ backend dafny,fstar
 // Regression: `readonly` array parameter types must translate to `seq`,
 // identically to their mutable forms. Both spellings are covered:
 //   - `readonly T[]`     — a `readonly` TypeOperator wrapping an ArrayType

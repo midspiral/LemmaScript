@@ -174,7 +174,7 @@ function mapTStmt(s: TStmt, f: (e: TExpr) => TExpr | null): TStmt {
 
 // ── Backend configuration ───────────────────────────────────
 
-export type Backend = "lean" | "dafny";
+export type Backend = "lean" | "dafny" | "fstar";
 
 export interface TransformOptions {
   backend: Backend;
@@ -188,6 +188,11 @@ export const LEAN_OPTIONS: TransformOptions = {
 
 export const DAFNY_OPTIONS: TransformOptions = {
   backend: "dafny",
+  monadic: false,
+};
+
+export const FSTAR_OPTIONS: TransformOptions = {
+  backend: "fstar",
   monadic: false,
 };
 
@@ -447,6 +452,11 @@ function buildNestedFieldUpdate(recv: TExpr, newVal: Expr): { root: string; valu
 }
 
 function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
+  const result = lowerExprInner(e, binds);
+  return _opts.backend === "fstar" ? { ...result, ty: e.ty } : result;
+}
+
+function lowerExprInner(e: TExpr, binds: Stmt[] | null): Expr {
   // Monadic lifting: extract embedded method calls to let-binds.
   // `callKind: "method"` means a global var-fn call (classifyCall returns
   // "method" only for `fn.kind === "var"`). Receiver method calls have
@@ -675,9 +685,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.op === "+" && (e.left.ty.kind === "string" || e.right.ty.kind === "string")) {
         const strify = (o: TExpr): Expr => {
           if (o.ty.kind !== "int" && o.ty.kind !== "nat") return lowerExpr(o, binds);
-          // Lean `toString` handles any Int; Dafny needs IntToString for signed
+          // Lean `toString` handles any Int; Dafny/F* use IntToString for signed
           // ints (NatToString is nat-only).
-          const fn = _opts.backend !== "dafny" ? "ToString" : o.ty.kind === "nat" ? "NatToString" : "IntToString";
+          const fn = _opts.backend === "lean" ? "ToString" : o.ty.kind === "nat" ? "NatToString" : "IntToString";
           return { kind: "app", fn, args: [lowerExpr(o, binds)] };
         };
         return { kind: "binop", op: "arrayConcat", left: strify(e.left), right: strify(e.right) };
@@ -693,8 +703,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         return { kind: "app", fn: "JSTruncDiv", args: [lowerExpr(e.left, binds), lowerExpr(e.right, binds)] };
       }
       // JS string ordering is lexicographic vs Dafny's seq prefix order, so route
-      // through JSStringLt. Dafny-only: Lean's native `<` is already lexicographic.
-      if (_opts.backend === "dafny" && ["<", "<=", ">", ">="].includes(e.op) && e.left.ty.kind === "string") {
+      // through JSStringLt for Dafny/F*. Lean's native `<` is lexicographic.
+      if ((_opts.backend === "dafny" || _opts.backend === "fstar") && ["<", "<=", ">", ">="].includes(e.op) && e.left.ty.kind === "string") {
         const l = lowerExpr(e.left, binds), r = lowerExpr(e.right, binds);
         const lt = (x: Expr, y: Expr): Expr => ({ kind: "app", fn: "JSStringLt", args: [x, y] });
         const not = (x: Expr): Expr => ({ kind: "unop", op: "¬", expr: x });
@@ -790,11 +800,17 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const method = e.ty.kind !== "optional" ? "getDirect" : "get";
         return { kind: "methodCall", obj: transformExpr(e.obj), objTy: e.obj.ty, method, args: [idx], monadic: false };
       }
-      const wrappedIdx = isArray(e.obj.ty) && !isNat(e.idx.ty) ? { kind: "toNat" as const, expr: idx } : idx;
+      const wrappedIdx = _opts.backend !== "fstar" && isArray(e.obj.ty) && !isNat(e.idx.ty) ? { kind: "toNat" as const, expr: idx } : idx;
       return { kind: "index", arr: transformExpr(e.obj), idx: wrappedIdx };
     }
 
     case "call": {
+      // Tagged-union widening binds the source once before matching it.
+      if (e.valueBinding && e.fn.kind === "lambda" && e.fn.params.length === 1 && e.args.length === 1 &&
+          e.fn.body.length === 1 && e.fn.body[0].kind === "return") {
+        return { kind: "let", name: e.fn.params[0].name, value: lowerExpr(e.args[0], binds),
+          body: lowerExpr(e.fn.body[0].value, binds) };
+      }
       // Array.isArray(x) on a synth array-union (discriminant "__isArray__")
       // → constructor predicate `x.ArrayBranch?`. Used in spec ensures and
       // anywhere `Array.isArray` escapes the narrowing rule (narrow rewrites
@@ -837,7 +853,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       }
       // Math.floor(x):
       //   - a / b on integral operands → integer floor division, kept in
-      //     integer arithmetic (JSFloorDiv on Dafny; native Int/Nat `/` floors
+      //     integer arithmetic (JSFloorDiv on Dafny/F*; native Int/Nat `/` floors
       //     on Lean). Checked first: after resolve, `a / b` is typed `real`, so
       //     the real branch below would otherwise drag it into real arithmetic.
       //   - real arg → FloorReal (Dafny's .Floor)
@@ -846,9 +862,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const arg = e.args[0];
         if (arg.kind === "binop" && arg.op === "/" && isIntegral(arg.left.ty) && isIntegral(arg.right.ty)) {
           const l = lowerExpr(arg.left, binds), r = lowerExpr(arg.right, binds);
-          return _opts.backend === "dafny"
-            ? { kind: "app", fn: "JSFloorDiv", args: [l, r] }
-            : { kind: "binop", op: "/", left: l, right: r };
+          return _opts.backend === "lean"
+            ? { kind: "binop", op: "/", left: l, right: r }
+            : { kind: "app", fn: "JSFloorDiv", args: [l, r] };
         }
         if (arg.ty.kind === "real")
           return { kind: "app", fn: "FloorReal", args: [lowerExpr(arg, binds)] };
@@ -873,7 +889,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           // Array index args must be nat in Lean: `with`'s index (0), includes/indexOf `from` (1)
           // — registry `intArgPositions`.
           const isArrIdxArg = spec?.intArgPositions !== undefined && spec.intArgPositions.includes(i);
-          if (isArrIdxArg && !isNat(a.ty)) return { kind: "toNat" as const, expr: lowered };
+          if (isArrIdxArg && !isNat(a.ty) && _opts.backend !== "fstar") return { kind: "toNat" as const, expr: lowered };
           return lowered;
         });
         // arr.concat(...args): each array arg is spread, each value arg appended.
@@ -908,6 +924,13 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           return { kind: "var", name };
         }
         return result;
+      }
+      if (e.fn.kind !== "var" && (_opts.backend === "fstar" || _opts.backend === "dafny" && e.fn.ty.kind === "fn")) {
+        // Applying a returned/selected function uses the same named-call IR as
+        // a source local, evaluating the callee once before its arguments.
+        const callee = freshName("_callee");
+        return { kind: "let", name: callee, value: lowerExpr(e.fn, binds),
+          body: { kind: "app", fn: callee, args: e.args.map(a => lowerExpr(a, binds)) } };
       }
       if (e.fn.kind !== "var")
         throw new Error(`Unsupported call expression: ${e.fn.kind}`);
@@ -1847,7 +1870,7 @@ function buildMatchArms<T>(
   varName: string | undefined, typeName: string, typeDecls: TypeDeclInfo[],
   transformBody: (body: TStmt[], varName: string | undefined, fields: { name: string; tsType: string }[], ctorName?: string) => T | null
 ): { pattern: MatchPattern; body: T }[] | null {
-  const decl = declOf(typeDecls, typeName);
+  const decl = declOf(typeDecls, tyBaseName(typeName));
   if (!decl || (decl.kind !== "string-union" && decl.kind !== "discriminated-union")) {
     throw new Error(`match type ${typeName} is not a declared union`);
   }
@@ -2353,6 +2376,7 @@ function transformTypeDecl(d: TypeDeclInfo): Decl {
   } else if (d.kind === "alias") {
     return {
       kind: "type-alias", name: d.name,
+      typeParams: d.typeParams,
       target: d.aliasOfTy!,
     };
   } else if (d.kind === "opaque") {
@@ -2404,6 +2428,17 @@ function replaceVar(e: Expr, name: string, replacement: Expr, narrowing?: boolea
   const rec = (expr: Expr) => replaceVar(expr, name, replacement, narrowing);
   return mapExpr(e, x => {
     if (x.kind === "var" && x.name === name) return replacement;
+    // Named applications keep their callee outside the child expressions.
+    // A returned-function postcondition must substitute the callee as well.
+    // Bind an expression-valued replacement so backends can apply it without
+    // leaving a free result identifier in the generated lemma.
+    if (x.kind === "app" && x.fn === name) {
+      const args = x.args.map(rec);
+      if (replacement.kind === "var") return { ...x, fn: replacement.name, args };
+      const binder = freshName("_callee");
+      return { kind: "let", name: binder, value: replacement,
+        body: { ...x, fn: binder, args } };
+    }
     // Record spread: wrap direct variable uses in field values with Some when narrowing
     if (narrowing && x.kind === "record" && x.spread) {
       return {
@@ -2449,6 +2484,17 @@ export function transformModuleDafny(mod: TModule): { typesFile: Module | null; 
   }
 }
 
+/** Shared value/collection lowering, retaining F* result binders and types. */
+export function transformModuleFstar(mod: TModule): { typesFile: Module | null; defFile: Module } {
+  const prev = _opts;
+  _opts = FSTAR_OPTIONS;
+  try {
+    return transformModule(mod);
+  } finally {
+    _opts = prev;
+  }
+}
+
 export function transformModule(mod: TModule, specImport?: string, moduleBaseOverride?: string): { typesFile: Module | null; defFile: Module } {
   _forofCounters.clear();
   _liftCounter = 0;
@@ -2474,7 +2520,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
     if (body) {
       // For pure-function lemmas, replace \result with the function call.
       const fnCall: Expr = { kind: "app", fn: fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) };
-      const ensures = fn.ensures.map(e => replaceVar(transformExpr(e), "\\result", fnCall));
+      const ensures = fn.ensures.map(e => _opts.backend === "fstar" ? transformExpr(e) : replaceVar(transformExpr(e), "\\result", fnCall));
       pureDefs.push({
         kind: "def",
         name: fn.name,
@@ -2522,7 +2568,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
       params: ext.params.map(p => ({ name: p.name, type: p.ty })),
       returnType: ext.returnTy,
       requires: ext.requires.map(transformExpr),
-      ensures: ext.ensures.map(e => ext.impure
+      ensures: ext.ensures.map(e => ext.impure || _opts.backend === "fstar"
         ? transformExpr(e)
         : replaceVar(transformExpr(e), "\\result", fnCall)),
       impure: ext.impure,
@@ -2637,10 +2683,9 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   };
   const knownTypeNames = new Set<string>(typeDecls.map(d => (d as { name: string }).name));
   const allTypeParams = new Set<string>();
-  // Exclude type params from the *source* decls — the transformed IR drops
-  // them for aliases (`type Step<S, A> = …`), and a generic alias's params
-  // must not be mistaken for imported types. Params may carry a `//@ type`
-  // decoration ("S(==)"); references collect as the bare name, so strip it.
+  // Declaration type params must not be mistaken for imported types.
+  // Params may carry a `//@ type` decoration ("S(==)"); references collect
+  // as the bare name, so strip it.
   const addTp = (tp: string): void => { allTypeParams.add(tp.replace(/\(.*$/, "").trim()); };
   for (const d of mod.typeDecls) d.typeParams?.forEach(addTp);
   for (const d of typeDecls) {

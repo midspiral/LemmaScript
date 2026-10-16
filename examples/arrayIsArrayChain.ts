@@ -13,7 +13,7 @@
  * `current.content` (a path) in the body.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 interface Part {
   type: string;

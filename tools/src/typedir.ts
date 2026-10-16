@@ -91,6 +91,8 @@ export type TExpr =
   | { kind: "unop"; op: string; expr: TExpr; ty: Ty }
   | { kind: "call"; fn: TExpr; args: TExpr[]; ty: Ty; callKind: CallKind;
       builtinId?: BuiltinId;
+      /** Compiler-created unary lambda application that binds a widened value once. */
+      valueBinding?: true;
       /** Resolved parameter types for a named callee. Kept so nominal
        *  backends can realize TypeScript structural argument conversions. */
       paramTys?: Ty[] }

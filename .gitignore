@@ -5,4 +5,10 @@
 node_modules/
 dist/
 
+# Verification recovery and F* caches
+*.dfy.base
+*.fst.base
+*.fst.merged
+*.checked
+*.checked.lax
 

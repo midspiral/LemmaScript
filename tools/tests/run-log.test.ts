@@ -117,11 +117,11 @@ const generation = (n: number): string => `method M() {\n  var value := ${n};\n}
 const addition = "\nlemma AddedProof() {}\n";
 
 /** Run dafnyRegen with process.exit turned into a throw, then return the recorded run. */
-function regenRecord(root: string, proof: string, next: string, opts: { base?: string; noVerify?: boolean } = {}): any {
+function regenRecord(root: string, proof: string | undefined, next: string, opts: { base?: string; noVerify?: boolean } = {}): any {
   const f = { gen: join(root, "x.dfy.gen"), proof: join(root, "x.dfy"), base: join(root, "x.dfy.base"), source: join(root, "x.ts") };
   writeFileSync(f.source, "");
   writeFileSync(f.gen, generation(0));
-  writeFileSync(f.proof, proof);
+  if (proof !== undefined) writeFileSync(f.proof, proof);
   if (opts.base) writeFileSync(f.base, opts.base);
   const log = new RunLog({ logDir: root, cmd: "regen", sourcePath: f.source, lscVersion: "0" });
   const originalExit = process.exit;
@@ -502,6 +502,21 @@ test("an additions-only failure is recorded as diff", () => {
   }
 });
 
+test("a proof string-model override is recorded as diff", () => {
+  const root = tempDir();
+  try {
+    const generated = generation(0);
+    const proof = "// lsc options: string-semantics=javascript-utf16\n" + generated;
+    assert.equal(checkDiffWithLog(root, generated, proof), false);
+    const [r] = records(root);
+    assert.equal(r.stage, "diff");
+    assert.equal(r.exit, 1);
+    assert.equal(r.partial, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a passing additions-only check leaves the run open for verification to record", () => {
   const root = tempDir();
   try {
@@ -542,3 +557,24 @@ test("a clean regen --no-verify is recorded as ok but partial", posixOnly, () =>
     assert.equal(r.exit, 0);
     assert.equal(r.partial, true);
   }));
+
+for (const noVerify of [false, true]) {
+  test(`a regen string-model override is recorded without advancing the anchor (noVerify=${noVerify})`, posixOnly, () =>
+    withFakeDafny({ exit: 0 }, root => {
+      const proof = "// lsc options: string-semantics=javascript-utf16\n" + generation(0) + addition;
+      const r = regenRecord(root, proof, generation(1), { noVerify });
+      assert.equal(r.stage, "diff");
+      assert.equal(r.exit, 1);
+      assert.equal(readFileSync(join(root, "x.dfy.base"), "utf8"), generation(0));
+    }));
+
+  test(`a first regen records its outcome once (noVerify=${noVerify})`, posixOnly, () =>
+    withFakeDafny({ log: "Results for M (correctness)\n  Overall outcome: Correct\n", exit: 0 }, root => {
+      const r = regenRecord(root, undefined, generation(1), { noVerify });
+      assert.equal(r.stage, "ok");
+      assert.equal(r.exit, 0);
+      assert.equal(r.partial, noVerify);
+      assert.deepEqual(r.passed, noVerify ? [] : ["M"]);
+      assert.equal(readFileSync(join(root, "x.dfy"), "utf8"), generation(1));
+    }));
+}

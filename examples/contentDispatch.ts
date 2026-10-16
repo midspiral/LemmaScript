@@ -11,7 +11,7 @@
  * `sanitizeOrphanedToolPairs` (PR #16201) where `m.content: string | Part[]`.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 interface Part {
   type: string;

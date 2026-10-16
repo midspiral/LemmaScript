@@ -15,7 +15,7 @@
  * auction rule and the narrowing that implements it.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 type Bid = { key: string; amount: number };
 

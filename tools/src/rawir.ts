@@ -42,7 +42,7 @@ export type RawExpr =
   | { kind: "bool"; value: boolean }
   | { kind: "binop"; op: string; left: RawExpr; right: RawExpr }
   | { kind: "unop"; op: string; expr: RawExpr }
-  | { kind: "call"; fn: RawExpr; args: RawExpr[] }
+  | { kind: "call"; fn: RawExpr; args: RawExpr[]; typeArgs?: string[] }
   | { kind: "index"; obj: RawExpr; idx: RawExpr }
   | { kind: "field"; obj: RawExpr; field: string }
   | { kind: "record"; spread: RawExpr | null; fields: { name: string; value: RawExpr }[] }
@@ -190,6 +190,7 @@ export interface RawFunction {
   name: string;
   exported: boolean;      // part of the module's export surface (inline `export`, `export { }`, or re-export)
   typeParams: string[];   // unbounded generic type parameters (e.g. ["T"])
+  typeArgNames?: string[]; // source order, including parameters erased by primitive constraints
   params: RawParam[];
   tsParams: RawTsParam[]; // original TS signature grouping (params = flatten of this); see RawTsParam
 

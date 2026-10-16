@@ -1,4 +1,4 @@
-//@ backend dafny
+//@ backend dafny,fstar
 //@ option string-semantics javascript-utf16
 //@ option dafny-library local
 

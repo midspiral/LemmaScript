@@ -1,4 +1,4 @@
-//@ backend dafny
+//@ backend dafny,fstar
 
 // ═══════════════════════════════════════════════════════════════
 // Types
@@ -182,7 +182,8 @@ export function eqIgnoreCase(a: string, b: string): boolean {
 
 // ── Sequence helpers ─────────────────────────────────────────
 
-export function seqContains<T>(s: T[], x: T): boolean {
+// Primitive inputs keep TypeScript equality aligned with the value model.
+export function seqContains<T extends number | string>(s: T[], x: T): boolean {
   //@ type T (==)
   let i = 0
   while (i < s.length) {
@@ -193,7 +194,7 @@ export function seqContains<T>(s: T[], x: T): boolean {
   return false
 }
 
-export function indexOf<T>(s: T[], x: T): number {
+export function indexOf<T extends number | string>(s: T[], x: T): number {
   //@ type T (==)
   //@ ensures \result >= -1 && \result < s.length
   let i = 0
@@ -205,7 +206,7 @@ export function indexOf<T>(s: T[], x: T): number {
   return -1
 }
 
-export function removeFirst<T>(s: T[], x: T): T[] {
+export function removeFirst<T extends number | string>(s: T[], x: T): T[] {
   //@ type T (==)
   //@ ensures \result.length <= s.length
   if (s.length === 0) return []

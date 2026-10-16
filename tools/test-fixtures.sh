@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 export LSC_RUN_LOG=false
 
 # Run executable tests before the Dafny fixture checks.
-npx tsx --test tools/tests/*.test.ts
+npm test
 
 expect_failure() {
   local message="$1"

@@ -8,7 +8,7 @@
  * not verify, since `.value` is partial. Mirrors pi's `convertToLlm` tail.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 interface In { keep: boolean; n: number }
 interface Out { n: number }

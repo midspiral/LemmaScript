@@ -9,7 +9,7 @@
  * then reasons against that axiom.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 //@ extern
 export function step<S, A>(s: S, a: A): S {

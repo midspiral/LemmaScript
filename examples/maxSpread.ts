@@ -1,4 +1,4 @@
-//@ backend dafny
+//@ backend dafny,fstar
 
 // Verifies Math.max / Math.min with spread args. The spread is desugared at
 // extract time to a MaxOfSeq / MinOfSeq call over an arrayConcat tree.

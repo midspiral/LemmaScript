@@ -5,7 +5,7 @@
  * is emitted. Bread-and-butter for any DTO/union-transformer mapping.
  */
 
-//@ backend dafny
+//@ backend dafny,fstar
 
 interface In { tag: string; n: number }
 interface Out { label: string; doubled: number }

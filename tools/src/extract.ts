@@ -12,6 +12,7 @@ import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawG
 import { normalizeBigIntLiteral } from "./rawir.js";
 import { setUserNames, freshName } from "./names.js";
 import { DEFAULT_OPTIONS, type LscOptions } from "./config.js";
+import { isNamespaceReference, sourceFunctions } from "./source-functions.js";
 
 // ── Expression extraction ────────────────────────────────────
 
@@ -49,6 +50,7 @@ const _externs = new Map<string, import("./rawir.js").RawExtern>();
  *  types would emit decls that no emitted declaration mentions. */
 const _externSigTypes: { type: Type; node: Node }[] = [];
 let _currentSourceFile: SourceFile | null = null;
+let _namespaceFunctions = new Map<Node, string>();
 /** True only while extracting a function body. Module-level constants that
  *  reference cross-file callees (e.g., `BusEvent.define(...)` inside a
  *  module-level record) would otherwise pollute the output with externs
@@ -424,6 +426,10 @@ function extractExpr(node: Expression): RawExpr {
   // Non-`?` continuation of an existing optChain extends the chain (no new
   // short-circuit, just keep evaluating after the prior `?` succeeded).
   if (Node.isPropertyAccessExpression(node)) {
+    const namespaceFunction = _namespaceFunctions.size && isNamespaceReference(node.getExpression())
+      ? node.getSymbol()?.getDeclarations().map(d => _namespaceFunctions.get(d)).find(name => name !== undefined)
+      : undefined;
+    if (namespaceFunction) return { kind: "var", name: namespaceFunction };
     const obj = extractExpr(node.getExpression());
     const field = node.getName();
     if (node.hasQuestionDotToken()) {
@@ -490,7 +496,8 @@ function extractExpr(node: Expression): RawExpr {
     if (fn.kind === "optChain") {
       return { ...fn, chain: [...fn.chain, { kind: "call", args }] };
     }
-    return { kind: "call", fn, args };
+    const typeArgs = node.getTypeArguments().map(t => _eraseGenerics(t.getText()));
+    return { kind: "call", fn, args, ...(typeArgs.length ? { typeArgs } : {}) };
   }
 
   // Binary expression: a + b, a === b, etc.
@@ -542,7 +549,9 @@ function extractExpr(node: Expression): RawExpr {
     const destructureBindings: RawStmt[] = [];
     const params = node.getParameters().map((p, paramIndex) => {
       const typeNode = p.getTypeNode();
-      const tsType = typeNode ? typeNode.getText() : undefined;
+      const tsType = typeNode
+        ? callableInterfaceText(typeNode.getType()) ?? typeNode.getText()
+        : undefined;
       const nameNode = p.getNameNode();
       if (Node.isIdentifier(nameNode)) return { name: nameNode.getText(), tsType };
       if (Node.isArrayBindingPattern(nameNode)) {
@@ -953,7 +962,7 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
       // needs `name: T` syntax; bare `T` is read as a param name with `any`.
       const params = sig.getParameters().map((p, i) => `_p${i}: ${typeToString(p.getTypeAtLocation(decl))}`);
       const ret = typeToString(sig.getReturnType());
-      return { name, kind: "alias", aliasOf: `(${params.join(", ")}) => ${ret}` };
+      return { name, typeParams: tpField, kind: "alias", aliasOf: `(${params.join(", ")}) => ${ret}` };
     }
   }
   // Array-type alias: `type Board = number[]` → alias to the seq type, not a
@@ -1067,7 +1076,32 @@ function declaredTypeTextIfBetter(propDecl: Node | undefined, tsType: string): s
   return text;
 }
 
-function typeToString(type: Type): string {
+/** A property-free, monomorphic call signature has the same value model as
+ * an arrow. Read the instantiated signature, including imported and inherited
+ * interfaces. This normalizes callable types, not unannotated lambda parameters.
+ * Overloads, generic calls, and callable objects with fields need a richer IR.
+ */
+function callableInterfaceText(type: Type, seen = new Set<ts.Type>()): string | undefined {
+  if (!type.getSymbol()?.getDeclarations().some(Node.isInterfaceDeclaration)
+    || type.getProperties().length || type.getConstructSignatures().length
+    || type.getStringIndexType() || type.getNumberIndexType()) return undefined;
+  const signatures = type.getCallSignatures();
+  if (signatures.length !== 1 || signatures[0].getTypeParameters().length) return undefined;
+  if (seen.has(type.compilerType)) throw new Error("Recursive callable interfaces are not supported");
+  const sig = signatures[0];
+  const declaration = sig.getDeclaration();
+  if (!Node.isCallSignatureDeclaration(declaration)
+    || declaration.getParameters().some(p => p.isRestParameter() || p.hasQuestionToken() || p.getName() === "this")) return undefined;
+  const next = new Set([...seen, type.compilerType]);
+  const text = (t: Type) => {
+    const printed = typeToString(t, next);
+    return _inFunctionExtraction ? _eraseGenerics(printed) : printed;
+  };
+  const params = sig.getParameters().map((p, i) => `_p${i}: ${text(p.getTypeAtLocation(declaration))}`);
+  return `((${params.join(", ")}) => ${text(sig.getReturnType())})`;
+}
+
+function typeToString(type: Type, callableSeen = new Set<ts.Type>()): string {
   if (type.isUndefined()) return "undefined";
   if (type.isNumber() || type.isNumberLiteral()) return "number";
   if (type.isBigInt() || type.isBigIntLiteral()) return "bigint";
@@ -1076,11 +1110,13 @@ function typeToString(type: Type): string {
   // literals back so the union dedupes to a single `boolean` rather than being
   // mistaken for an unmodelable multi-member union.
   if (type.isBoolean() || type.isBooleanLiteral()) return "boolean";
+  const callable = callableInterfaceText(type, callableSeen);
+  if (callable) return callable;
   // Named type alias (e.g. Priority = "low" | "medium" | "high") — use the alias name
   if (type.getAliasSymbol()) {
     const name = type.getAliasSymbol()!.getName();
     const args = type.getAliasTypeArguments();
-    if (args.length > 0) return `${name}<${args.map(t => typeToString(t)).join(", ")}>`;
+    if (args.length > 0) return `${name}<${args.map(t => typeToString(t, callableSeen)).join(", ")}>`;
     return name;
   }
   if (type.isUnion()) {
@@ -1097,8 +1133,8 @@ function typeToString(type: Type): string {
       const otherMember = arrayMember === m0 ? m1 : m0;
       if (arrayMember && otherMember && !otherMember.isArray()
           && !otherMember.isUndefined() && !otherMember.isNull()) {
-        const elemName = typeToString(arrayMember.getArrayElementTypeOrThrow());
-        const otherName = typeToString(otherMember);
+        const elemName = typeToString(arrayMember.getArrayElementTypeOrThrow(), callableSeen);
+        const otherName = typeToString(otherMember, callableSeen);
         const synthName = _synthName(elemName, otherName);
         if (!_synthArrayUnions.some(d => d.name === synthName)) {
           _synthArrayUnions.push({
@@ -1114,7 +1150,7 @@ function typeToString(type: Type): string {
         return synthName;
       }
     }
-    const parts = [...new Set(unionTypes.map(typeToString))];
+    const parts = [...new Set(unionTypes.map(t => typeToString(t, callableSeen)))];
     // `undefined`/`null` are optional markers; a single real member with them
     // is an Option, left as `X | undefined` for the optional lowering.
     const real = parts.filter(p => p !== "undefined" && p !== "null");
@@ -1125,11 +1161,11 @@ function typeToString(type: Type): string {
     return real.length === parts.length ? opaque : `${opaque} | undefined`;
   }
   if (type.isTuple()) {
-    return `[${type.getTupleElements().map(t => typeToString(t)).join(", ")}]`;
+    return `[${type.getTupleElements().map(t => typeToString(t, callableSeen)).join(", ")}]`;
   }
   if (type.isArray()) {
     const elem = type.getArrayElementTypeOrThrow();
-    return `${typeToString(elem)}[]`;
+    return `${typeToString(elem, callableSeen)}[]`;
   }
   const symbol = type.getSymbol() ?? type.getAliasSymbol();
   if (symbol) {
@@ -1142,7 +1178,7 @@ function typeToString(type: Type): string {
     }
     const typeArgs = type.getTypeArguments();
     if (typeArgs.length > 0) {
-      return `${name}<${typeArgs.map(t => typeToString(t)).join(", ")}>`;
+      return `${name}<${typeArgs.map(t => typeToString(t, callableSeen)).join(", ")}>`;
     }
     return name;
   }
@@ -1984,6 +2020,7 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
     name: (fn as any).getName?.() ?? "<anonymous>",
     exported: false,  // set in extractModule against the source file's export surface
     typeParams,
+    ...(fn.getTypeParameters?.().length ? { typeArgNames: fn.getTypeParameters().map(tp => tp.getName()) } : {}),
     // Original TS parameter grouping, before the flatten below loses it. `defaults` carries
     // each bound name's default initializer text (omitted when none) for TS-targeting consumers.
     tsParams: fn.getParameters().map(p => {
@@ -2027,7 +2064,10 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
       // (e.g., `eof = false` infers `boolean` from the default value).
       const tn = p.getTypeNode();
       let tsType: string;
-      if (tn && Node.isUnionTypeNode(tn)) {
+      const callable = callableInterfaceText(p.getType());
+      if (callable) {
+        tsType = _eraseGenerics(callable);
+      } else if (tn && Node.isUnionTypeNode(tn)) {
         tsType = _eraseGenerics(_tsTypeFromUnionNode(tn));
       } else if (tn) {
         tsType = _eraseGenerics(tn.getText());
@@ -2054,6 +2094,8 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
         return "void";  // Promise<void>
       }
       const node = fn.getReturnTypeNode();
+      const callable = callableInterfaceText(fn.getReturnType());
+      if (callable) return _eraseGenerics(callable);
       // A type predicate (`x is T` / `asserts x is T`) is a `boolean` at
       // runtime; the narrowing it performs is a TS-only refinement with no
       // counterpart in the model. Without this, `getText()` yields "x is T"
@@ -2082,7 +2124,14 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
 export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFAULT_OPTIONS,
   validateDependency: (source: SourceFile) => void = () => {}): RawModule {
   _extractOptions = options;
+
+  const functionDeclarations = sourceFunctions(sourceFile);
+  _namespaceFunctions = new Map(functionDeclarations
+    .filter(fn => Node.isModuleBlock(fn.getParent()))
+    .flatMap(fn => [fn, ...fn.getOverloads()].map(decl => [decl, fn.getName()!] as const)));
+
   _validateDependency = validateDependency;
+
   // Seed the fresh-name check (names.ts) before anything mints: every
   // Identifier token in the module, a deliberate over-approximation.
   setUserNames(new Set(sourceFile.getDescendantsOfKind(SyntaxKind.Identifier).map(i => i.getText())));
@@ -2238,7 +2287,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
 
   // Collect all function-like declarations: function declarations + const arrow functions
   const allFns: { name: string; node: FunctionDeclaration; parentStmt?: Node }[] = [];
-  for (const fn of sourceFile.getFunctions()) {
+  for (const fn of functionDeclarations) {
     allFns.push({ name: fn.getName() ?? "<anonymous>", node: fn });
   }
   // const f = (...) => expr  OR  const f = (...) => { ... }
@@ -2699,7 +2748,9 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       || sourceReturnText.includes(" | null ") || sourceReturnText.includes(" | undefined ")
       || sourceReturnText.includes(" | null|") || sourceReturnText.includes(" | undefined|");
     const sym = retType.getSymbol();
-    if (sym?.getName() === "__type" && retType.isObject() && !retType.isArray()) {
+    // Callable object types must retain their arrow signature. extractRecord
+    // cannot turn a returned function into an anonymous result record.
+    if (sym?.getName() === "__type" && retType.isObject() && !retType.isArray() && retType.getCallSignatures().length === 0) {
       innerType = retType;
       if (sourceHadNullish) wrapOptional = true;
     } else if (retType.isUnion()) {
@@ -2709,7 +2760,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       if (nullish.length >= 1 && others.length === 1) {
         const onlyOther = others[0];
         const otherSym = onlyOther.getSymbol();
-        if (otherSym?.getName() === "__type" && onlyOther.isObject() && !onlyOther.isArray()) {
+        if (otherSym?.getName() === "__type" && onlyOther.isObject() && !onlyOther.isArray() && onlyOther.getCallSignatures().length === 0) {
           innerType = onlyOther;
           wrapOptional = true;
         }

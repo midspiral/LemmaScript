@@ -15,7 +15,7 @@ In this document a **catch** is a fact about the history, not a bug: a member th
 
 ## Requirements
 
-1. **Mechanical first.** A catch exists only if the log shows a failure followed by a pass. 
+1. **Mechanical first.** A catch exists only if the log shows a failure followed by a pass.
 2. **Always on.** Every `lsc check`, `lsc regen`, and `lsc claimcheck` on a file is recorded, whoever runs it: an agent, a person, or CI. No wrapper, skill rule, or hook is needed for logging.
 3. **No change to what the user sees.** Logging does not alter `lsc` output, exit codes, or generated files. Dafny's output still streams to the terminal while it runs.
 4. **Invisible to git.** The log directory ignores itself, so it never shows up in `git status` and needs no `.gitignore` edit.
