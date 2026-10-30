@@ -47,6 +47,9 @@ cp tools/fixtures/deterministic-extern-equality.ts "$fixture_dir/deterministic.t
 cp tools/fixtures/impure-extern-equality.ts "$fixture_dir/impure.ts"
 cp tools/fixtures/negated-array-ternary.ts "$fixture_dir/negated-array-ternary.ts"
 cp tools/fixtures/string-search-positions.ts "$fixture_dir/string-search-positions.ts"
+cp tools/fixtures/some-callback-parameters.ts "$fixture_dir/some-callback-parameters.ts"
+cp tools/fixtures/some-callback-parameters.dfy "$fixture_dir/some-callback-parameters.dfy"
+cp tools/fixtures/some-callback-false-postcondition.ts "$fixture_dir/some-callback-false-postcondition.ts"
 cp examples/safeSlice.ts "$fixture_dir/legacy-safe-slice.ts"
 cp -R tools/fixtures/utf16-project "$fixture_dir/utf16-project"
 cp tools/fixtures/optional-binder-collisions.ts "$fixture_dir/optional-binder-collisions.ts"
@@ -62,6 +65,14 @@ fi
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/deterministic.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/negated-array-ternary.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/string-search-positions.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/some-callback-parameters.ts"
+expect_failure \
+  "Dafny verified a false postcondition using an outer callback parameter" \
+  npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/some-callback-false-postcondition.ts"
+if [ ! -f "$fixture_dir/some-callback-false-postcondition.dfy.gen" ]; then
+  echo "ERROR: indexed callback was rejected instead of emitted for verification"
+  exit 1
+fi
 expect_failure \
   "Dafny equated two calls to an impure extern" \
   npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/impure.ts"

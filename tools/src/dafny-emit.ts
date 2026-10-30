@@ -420,6 +420,25 @@ function emitExpr(e: Expr): string {
         // predicate (e.g. a function reference).
         if (e.method === "some") {
           const lam = e.args[0];
+          // Indexed callbacks range over positions, not just values. Bind the
+          // receiver once outside the callback's scope so its parameter names
+          // cannot capture it, and pass all three JavaScript callback arguments.
+          if (lam.kind === "lambda" && lam.params.length > 1) {
+            if (lam.params.length > 3) {
+              throw new Error("Dafny array.some callbacks support at most the element, index, and array parameters.");
+            }
+            const taken = (n: string): boolean => usesName(e.obj, n) || usesName(lam, n) ||
+              lam.params.some(pp => pp.name === n) || usesNameInStmts(lam.body, n);
+            const seq = escapeName(freshNameWhere("s_some", taken));
+            const idx = escapeName(freshNameWhere("i_some", n => taken(n) || escapeName(n) === seq));
+            const values = [`${seq}[${idx}]`, idx, seq];
+            const bindings = lam.params.map((pp, i) => `var ${escapeName(pp.name)} := ${values[i]}; `).join("");
+            if (lam.body.length === 1 && lam.body[0].kind === "return") {
+              const predicate = `${bindings}${emitExpr(lam.body[0].value)}`;
+              return `(var ${seq}: ${tyToDafny(e.objTy)} := ${obj}; exists ${idx} {:trigger ${seq}[${idx}]} :: 0 <= ${idx} < |${seq}| && (${predicate}))`;
+            }
+            throw new Error("Unsupported: multi-statement lambda in Dafny");
+          }
           let p: string, body: string;
           if (lam.kind === "lambda" && lam.body.length === 1 && lam.body[0].kind === "return") {
             const cb = comprehensionBinder(lam, lam.body[0].value, e.obj);
