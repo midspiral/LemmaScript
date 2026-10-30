@@ -51,6 +51,8 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `autohavoc` | File-level, or before a `//@ verify` function | Abstract every unmodellable expression to a nondeterministic value, so verification rests only on declared contracts (see §2.12). Dafny only. |
 | `skip` | Before a statement or top-level value declaration | Omit it from the verification model (for side-effect-only code or an intentionally unsupported declaration). |
 
+`lsc` rejects a `//@` comment it does not read: a malformed one, an unknown keyword, or a `requires`, `ensures`, `contract`, `invariant`, `decreases`, `done_with` or `type` placed where nothing takes it. Placement is not checked inside declarations left out on purpose (unselected, `extern` or `skip`), and TypeScript's own `//@ts-…` comments are left alone.
+
 ### 2.2 Spec Expression Grammar
 
 At top level, `//@ skip` may precede a function, class, or `const` declaration;

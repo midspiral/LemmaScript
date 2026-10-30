@@ -130,13 +130,14 @@ function parseDirectiveValue(key: keyof OptionSpecs, text: string, source: strin
 }
 
 /**
- * Find comment lines, marking those that occur before any code.
+ * Find comment lines and the comment on each, marking those that occur before
+ * any code.
  *
  * Use the parsed syntax tree to skip strings, regexes, and template text.
  * Without those boundaries, the scanner can read /[/*]/ as a block comment
  * or treat a template's closing backtick as the start of another template.
  */
-function* fileCommentLines(sourceText: string): Generator<{ text: string; index: number; inLeadingRegion: boolean }> {
+export function* fileCommentLines(sourceText: string): Generator<{ text: string; comment: string; index: number; inLeadingRegion: boolean }> {
   // Normalize once so a leading BOM also works before a shebang.
   sourceText = sourceText.replace(/^\uFEFF/, "");
   const lines = sourceText.split(/\r\n|[\n\r\u2028\u2029]/);
@@ -163,8 +164,9 @@ function* fileCommentLines(sourceText: string): Generator<{ text: string; index:
     if (token === ts.SyntaxKind.SingleLineCommentTrivia || token === ts.SyntaxKind.MultiLineCommentTrivia) {
       const firstLine = sourceFile.getLineAndCharacterOfPosition(scanner.getTokenStart()).line;
       const lastLine = sourceFile.getLineAndCharacterOfPosition(scanner.getTokenEnd() - 1).line;
+      const comment = scanner.getTokenText();
       for (let index = firstLine; index <= lastLine; index++) {
-        yield { text: lines[index], index, inLeadingRegion };
+        yield { text: lines[index], comment, index, inLeadingRegion };
       }
     } else if (token !== ts.SyntaxKind.WhitespaceTrivia && token !== ts.SyntaxKind.NewLineTrivia &&
                token !== ts.SyntaxKind.ShebangTrivia) {
@@ -173,6 +175,22 @@ function* fileCommentLines(sourceText: string): Generator<{ text: string; index:
       if (end !== undefined) scanner.resetTokenState(end);
     }
   }
+}
+
+const OPTION_DIRECTIVE = /^[ \t]*\/\/@[ \t]+option(?:[ \t]+(.*?))?[ \t]*$/;
+const ALIAS_DIRECTIVE = /^[ \t]*\/\/@[ \t]+([A-Za-z][A-Za-z0-9-]*)[ \t]*$/;
+
+/** The option a legacy alias such as `//@ safe-slice` sets, if `line` is one. */
+function aliasedOption(line: string): keyof OptionSpecs | undefined {
+  const alias = line.match(ALIAS_DIRECTIVE)?.[1];
+  if (alias === undefined) return undefined;
+  return KNOWN_KEYS.find(key => "directiveAliases" in OPTION_SPECS[key] &&
+    (OPTION_SPECS[key].directiveAliases as readonly string[]).includes(alias));
+}
+
+/** Whether `parseFileOptions` reads `line` as an option directive or a legacy alias. */
+export function isOptionDirective(line: string): boolean {
+  return OPTION_DIRECTIVE.test(line) || aliasedOption(line) !== undefined;
 }
 
 /** Parse top-of-file `//@ option key value` directives and legacy aliases. */
@@ -191,7 +209,7 @@ export function parseFileOptions(sourceText: string, source: string): ExplicitOp
 
   const parseLine = (lineText: string, index: number, inLeadingRegion: boolean): void => {
     const line = index + 1;
-    const optionMatch = lineText.match(/^[ \t]*\/\/@[ \t]+option(?:[ \t]+(.*?))?[ \t]*$/);
+    const optionMatch = lineText.match(OPTION_DIRECTIVE);
     if (optionMatch) {
       if (!inLeadingRegion) fail(`${source}:${line}`, "//@ option directives must appear before the first source statement");
       const parts = (optionMatch[1] ?? "").trim().split(/\s+/).filter(Boolean);
@@ -206,19 +224,10 @@ export function parseFileOptions(sourceText: string, source: string): ExplicitOp
       return;
     }
 
-    const aliasMatch = lineText.match(/^[ \t]*\/\/@[ \t]+([A-Za-z][A-Za-z0-9-]*)[ \t]*$/);
-    if (!aliasMatch) return;
-    const alias = aliasMatch[1];
-    for (const key of KNOWN_KEYS) {
-      const aliases = "directiveAliases" in OPTION_SPECS[key]
-        ? OPTION_SPECS[key].directiveAliases as readonly string[]
-        : [];
-      if (!aliases.includes(alias)) continue;
-      // Legacy aliases retain their pre-config placement behavior. New generic
-      // option directives are deliberately restricted to the file preamble.
-      setOption(key, true as LscOptions[typeof key], line);
-      return;
-    }
+    // Legacy aliases retain their pre-config placement behavior. New generic
+    // option directives are deliberately restricted to the file preamble.
+    const key = aliasedOption(lineText);
+    if (key) setOption(key, true as LscOptions[typeof key], line);
   };
 
   for (const { text, index, inLeadingRegion } of fileCommentLines(sourceText)) {

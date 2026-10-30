@@ -72,7 +72,6 @@ export function topologicalSort(
   let sorted: string[] = [];
   let qHead = 0;
   while (qHead < queue.length) {
-    //@ type qHead nat
     //@ invariant qHead <= queue.length
     //@ invariant sorted.length === qHead
     //@ invariant sorted.length <= nodeIds.length
