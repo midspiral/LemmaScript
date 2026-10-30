@@ -52,6 +52,22 @@ cp -R tools/fixtures/utf16-project "$fixture_dir/utf16-project"
 cp tools/fixtures/optional-binder-collisions.ts "$fixture_dir/optional-binder-collisions.ts"
 cp tools/fixtures/unpaired-surrogate.ts "$fixture_dir/unpaired.ts"
 cp tools/fixtures/optional-guard-order.ts "$fixture_dir/optional-guard-order.ts"
+cp tools/fixtures/selective-extraction.ts "$fixture_dir/selective-extraction.ts"
+cp tools/fixtures/selective-class.ts "$fixture_dir/selective-class.ts"
+
+# Selection precedes lowering: unused unsupported constants/class fields must
+# not block generation, while every needed constant remains available to prove.
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/selective-extraction.ts"
+npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/selective-class.ts"
+# Mutating class methods use the usual hand-written modifies proof addition.
+node --input-type=module - "$fixture_dir/selective-class.dfy" <<'JS'
+import { readFileSync, writeFileSync } from "node:fs";
+const file = process.argv[2];
+writeFileSync(file, readFileSync(file, "utf8").replace(
+  "  method increment() returns (res: int)\n", "$&    modifies this\n"));
+JS
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/selective-class.ts"
+npx tsx tools/src/lsc.ts gen --backend=lean "$fixture_dir/selective-extraction.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/impure.ts"
 if ! grep -Fq 'method {:axiom} rollDie' "$fixture_dir/impure.dfy.gen"; then

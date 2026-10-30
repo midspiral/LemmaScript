@@ -1,3 +1,4 @@
+//@ verify
 const UNSUPPORTED_PATTERN = /x/;
 
 export function fine(n: number): number {

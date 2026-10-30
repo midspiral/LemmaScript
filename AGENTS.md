@@ -127,7 +127,7 @@ Omit `simplifying_assumptions` when no hypothesis rewriting is needed; its list 
 
 When verifying a small slice of a larger TS project:
 
-- Add `//@ verify` to the function bodies you want verified. As soon as *any* function in the file has it, `lsc` switches to opt-in mode and silently skips the rest. Type and `const` declarations are always extracted.
+- Add `//@ verify` to the function bodies you want verified. A marked function, method, or module-level `const` switches `lsc` to opt-in mode. Constants are lowered only when explicitly marked (before the declaration) or transitively referenced by selected code or proof annotations; unrelated initializers cannot block verification. Class methods retain referenced fields (the full shape if `this` is used as a whole), and needed types are retained.
 - For functions outside the LS fragment that you still want callers to reason about, use `//@ extern` (deterministic axiom) or `//@ havoc` (nondeterministic).
 - **In-place means in-place.** When the user asks for in-place verification of an existing function, add annotations only. Don't refactor the production code, don't restructure control flow, don't rename things. The point is that the verified function and the shipping function are byte-for-byte the same.
 

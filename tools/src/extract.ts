@@ -12,6 +12,7 @@ import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawG
 import { normalizeBigIntLiteral } from "./rawir.js";
 import { setUserNames, freshName } from "./names.js";
 import { DEFAULT_OPTIONS, type LscOptions } from "./config.js";
+import { expressionValueReferences, functionValueReferences } from "./value-references.js";
 
 // ── Expression extraction ────────────────────────────────────
 
@@ -49,11 +50,9 @@ const _externs = new Map<string, import("./rawir.js").RawExtern>();
  *  types would emit decls that no emitted declaration mentions. */
 const _externSigTypes: { type: Type; node: Node }[] = [];
 let _currentSourceFile: SourceFile | null = null;
-/** True only while extracting a function body. Module-level constants that
- *  reference cross-file callees (e.g., `BusEvent.define(...)` inside a
- *  module-level record) would otherwise pollute the output with externs
- *  that no verified function actually calls — and whose TS return types
- *  often don't translate to valid Dafny. */
+/** Register cross-file calls while extracting function bodies or constants
+ *  selected by brownfield dependencies. Legacy whole-file constant extraction
+ *  leaves this off to avoid registering unused namespace/initialization code. */
 let _inFunctionExtraction = false;
 /** Effective options for the current extraction. Reset at extractModule entry. */
 let _extractOptions: LscOptions = DEFAULT_OPTIONS;
@@ -2200,39 +2199,18 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     }
   }
 
-  // Extract module-level const declarations
-  const constants: RawConst[] = [];
+  // Index constants without inspecting their types or lowering initializers.
+  // Selection must happen first: unused brownfield code may be out of model.
+  const constDecls = new Map<string, VariableDeclaration>();
+  const verifiedConsts = new Set<string>();
   for (const stmt of sourceFile.getStatements()) {
-    if (Node.isVariableStatement(stmt)) {
-      if (hasLeadingDirective(stmt, "skip")) continue;
-      for (const decl of stmt.getDeclarationList().getDeclarations()) {
-        if (stmt.getDeclarationList().getFlags() & 2 /* const */) {
-          const init = decl.getInitializer();
-          // Skip huge string constants — they crash the verifier and have no verification value
-          const initType = decl.getType();
-          const isHugeString = (initType.isString() || initType.isStringLiteral()) && (init as Expression).getText().length > 200;
-          // Skip anonymous-object consts (e.g., `const Util = { dotMatch(s, p) { ... } }`).
-          // ts-morph names these `__type` / `__object`; Dafny has no model for
-          // object-namespace-with-methods. The methods themselves should be
-          // extracted via the function path if marked `//@ verify`.
-          const declTsType = typeToString(decl.getType());
-          const isAnonObject = declTsType.startsWith("__");
-          if (init && !isHugeString && !isAnonObject && !Node.isArrowFunction(init)) {
-            try {
-              constants.push({
-                name: decl.getName(),
-                tsType: declTsType,
-                value: extractExpr(init as Expression),
-              });
-            } catch (e) {
-              const reason = e instanceof Error ? e.message : String(e);
-              throw new Error(
-                `Failed to extract const '${decl.getName()}' at ${sourceFile.getBaseName()}:${decl.getStartLineNumber()}: ${reason}`,
-              );
-            }
-          }
-        }
-      }
+    if (!Node.isVariableStatement(stmt) || stmt.getDeclarationKind() !== "const"
+        || hasLeadingDirective(stmt, "skip")) continue;
+    for (const decl of stmt.getDeclarations()) {
+      const init = decl.getInitializer();
+      if (init && Node.isArrowFunction(init)) continue;
+      constDecls.set(decl.getName(), decl);
+      if (hasLeadingDirective(stmt, "verify")) verifiedConsts.add(decl.getName());
     }
   }
 
@@ -2359,7 +2337,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       !hasLeadingDirective(method, "skip") && hasLineDirective(method.getFullText(), "verify"),
     ),
   );
-  const hasVerifyDirective = nonExternFns.some(hasVerify) || hasVerifiedClassMethod;
+  const hasVerifyDirective = nonExternFns.some(hasVerify) || hasVerifiedClassMethod || verifiedConsts.size > 0;
   const fnsToExtract = hasVerifyDirective ? nonExternFns.filter(hasVerify) : nonExternFns;
 
   // `//@ autohavoc` — enable the auto-havoc abstraction (see autohavoc.ts).
@@ -2390,6 +2368,86 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     raw.exported = exportedNames.has(f.name);
     raw.autohavoc = hasAutohavoc(f);
     return raw;
+  });
+
+  // Extract selected methods before selecting constants and types, so their
+  // bodies and specs contribute dependencies just like top-level functions.
+  const classes: RawClass[] = [];
+  const classMethodNodes: { node: FunctionDeclaration }[] = [];
+  for (const cls of sourceFile.getClasses()) {
+    if (hasLeadingDirective(cls, "skip")) continue;
+    const methods: RawFunction[] = [];
+    for (const method of cls.getMethods()) {
+      if (hasLeadingDirective(method, "skip") || !hasLineDirective(method.getFullText(), "verify")) continue;
+      const node = method as unknown as FunctionDeclaration;
+      methods.push(extractFunction(node));
+      classMethodNodes.push({ node });
+    }
+    if (methods.length === 0) continue;
+    const refs = methods.map(functionValueReferences);
+    // Keep the full shape when `this` escapes (including an alias of `this`).
+    // Otherwise reads/writes and specs select fields; property names from
+    // other receivers are conservatively included too.
+    const fields = cls.getProperties()
+      .filter(prop => refs.some(r => r.wholeThis || r.fields.has(prop.getName()))
+        || hasLeadingDirective(prop, "verify"))
+      .map(prop => ({ name: prop.getName(), tsType: typeToString(prop.getType()) }));
+    classes.push({ name: cls.getName() ?? "Anonymous", fields, methods });
+  }
+  const allFunctions = [...functions, ...classes.flatMap(cls => cls.methods)];
+  const allFunctionNodes = [...fnsToExtract, ...classMethodNodes];
+
+  const neededConsts = new Set(verifiedConsts);
+  if (hasVerifyDirective) {
+    for (const fn of allFunctions) {
+      for (const name of functionValueReferences(fn).names) neededConsts.add(name);
+    }
+    // Same-file extern contracts are emitted too; their bodies stay opaque.
+    for (const f of allFns) {
+      if (hasSkip(f) || !hasExtern(f)) continue;
+      const ext = _externs.get(externName(f) ?? f.name);
+      if (!ext) continue;
+      const refs = functionValueReferences({ ...ext, decreases: null, body: [] });
+      for (const name of refs.names) neededConsts.add(name);
+    }
+  } else {
+    for (const name of constDecls.keys()) neededConsts.add(name);
+  }
+  const extractedConsts = new Map<string, RawConst>();
+  _typeParamMap = new Map();
+  // Set iteration visits newly-added dependencies as well, terminating even
+  // for cycles. Emit in source order below, independent of discovery order.
+  for (const name of neededConsts) {
+    const decl = constDecls.get(name);
+    if (!decl) continue;
+    const init = decl.getInitializer();
+    if (!init) continue;
+    const prevInFn = _inFunctionExtraction;
+    try {
+      const initType = decl.getType();
+      const tsType = typeToString(initType);
+      // Preserve legacy whole-file exclusions. A selected constant must be
+      // modeled or fail explicitly, even if it is a large string/object.
+      if (!hasVerifyDirective && (tsType.startsWith("__")
+          || ((initType.isString() || initType.isStringLiteral()) && init.getText().length > 200))) continue;
+      _inFunctionExtraction = hasVerifyDirective;
+      const value = extractExpr(init);
+      extractedConsts.set(name, { name, tsType, value });
+      if (hasVerifyDirective) {
+        for (const dependency of expressionValueReferences(value).names) neededConsts.add(dependency);
+      }
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      throw new Error(
+        `Failed to extract const '${name}' at ${sourceFile.getBaseName()}:${decl.getStartLineNumber()}: ${reason}`,
+      );
+    } finally {
+      _inFunctionExtraction = prevInFn;
+    }
+  }
+  const constants = [...constDecls.keys()].flatMap(name => {
+    const constant = extractedConsts.get(name);
+    return constant ? [constant] : [];
   });
 
   // Resolve type references in function signatures via ts-morph's type
@@ -2453,14 +2511,17 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       return;
     }
   }
-  for (const f of fnsToExtract) {
+  for (const f of allFunctionNodes) {
     for (const p of f.node.getParameters()) resolveTypeNodeRefs(p.getTypeNode());
     resolveTypeNodeRefs(f.node.getReturnTypeNode());
+  }
+  if (hasVerifyDirective) {
+    for (const c of constants) resolveTypeNodeRefs(constDecls.get(c.name)!.getTypeNode());
   }
 
   // Resolve union param types: A | B → intersection of fields
   const typeDeclMap = new Map(typeDecls.map(d => [d.name, d]));
-  for (const fn of functions) {
+  for (const fn of allFunctions) {
     for (const p of fn.params) {
       if (!p.tsType.includes(" | ")) continue;
       const arms = p.tsType.split(" | ").map(a => a.trim());
@@ -2489,7 +2550,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     }
   }
 
-  // In brownfield mode, filter consts to only those referenced by verified functions.
+  // In brownfield mode, retain the types needed by selected declarations.
   if (hasVerifyDirective) {
     const referencedNames = new Set<string>();
     function collectNames(stmts: RawStmt[]) {
@@ -2524,7 +2585,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     // spec references stay exact-match (so a body `let xs: Hunk[]` doesn't pull
     // `Hunk` into the filter early and reorder output that resolveType re-adds).
     const sigTypes = new Set<string>();
-    for (const fn of functions) {
+    for (const fn of allFunctions) {
       for (const p of fn.params) { referencedNames.add(p.tsType); sigTypes.add(p.tsType); }
       referencedNames.add(fn.returnType); sigTypes.add(fn.returnType);
       collectNames(fn.body);
@@ -2535,27 +2596,11 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
         }
       }
     }
-    // A constant's initializer can reference other constants
-    // (`const ZERO_NINE = ZERO + nthDigit(-1)`). Close over those initializers
-    // before filtering — mirroring the transitive type filter below — or a
-    // constant reachable only from another constant is dropped and the backend
-    // sees an undefined name.
-    // Snapshot first: what the closure adds are VALUE references, and a value
-    // and a type can share a name (`const Action = Schema.Literals(…)` next to
-    // `type Action = Schema.Schema.Type<typeof Action>`). Keeping the constant
-    // alive must not also drag in the unrelated type alias, so the type filter
-    // below runs off the pre-closure set.
-    const typeReferencedNames = new Set(referencedNames);
-    for (let grew = true; grew; ) {
-      grew = false;
-      for (const c of constants) {
-        if (!referencedNames.has(c.name)) continue;
-        const before = referencedNames.size;
-        collectNamesExpr(c.value);
-        if (referencedNames.size !== before) grew = true;
-      }
+    // Value names from constant initializers must not select same-named types
+    // (e.g. a schema value and its inferred type alias). Their TYPES do matter.
+    for (const tsType of [...constants.map(c => c.tsType), ...classes.flatMap(c => c.fields.map(f => f.tsType))]) {
+      for (const m of tsType.matchAll(/\b([a-zA-Z_]\w*)\b/g)) referencedNames.add(m[1]);
     }
-    constants.splice(0, constants.length, ...constants.filter(c => referencedNames.has(c.name)));
     // Filter types to only those referenced by verified functions (transitive)
     const neededTypes = new Set<string>();
     function markType(name: string) {
@@ -2563,13 +2608,15 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       const d = typeDecls.find(t => t.name === name);
       if (!d) return;
       neededTypes.add(name);
+      if (d.aliasOf)
+        for (const m of d.aliasOf.matchAll(/\b([a-zA-Z_]\w*)\b/g)) markType(m[1]);
       for (const f of d.fields ?? [])
-        for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) markType(m[1]);
+        for (const m of f.tsType.matchAll(/\b([a-zA-Z_]\w*)\b/g)) markType(m[1]);
       for (const v of d.variants ?? [])
         for (const f of v.fields)
-          for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) markType(m[1]);
+          for (const m of f.tsType.matchAll(/\b([a-zA-Z_]\w*)\b/g)) markType(m[1]);
     }
-    for (const name of typeReferencedNames) markType(name);
+    for (const name of referencedNames) markType(name);
     // Signature types also mark their base after stripping array/optional
     // WRAPPERS (`Out[]`/`Msg | undefined` → `Out`/`Msg`), so a function returning
     // a local `Out[]` keeps `Out`. Wrappers only — never dig into generic args
@@ -2644,9 +2691,9 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       }
     }
   }
-  for (let i = 0; i < fnsToExtract.length; i++) {
-    const f = fnsToExtract[i];
-    const fn = functions[i];
+  for (let i = 0; i < allFunctionNodes.length; i++) {
+    const f = allFunctionNodes[i];
+    const fn = allFunctions[i];
     // Skip params whose TS type was overridden by `//@ type <param> <Override>`
     // — the verification works against the override, so cross-file resolving
     // the original type pulls in unused datatypes (often with unsupported
@@ -2657,12 +2704,18 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       resolveType(p.getType(), p);
     }
   }
+  if (hasVerifyDirective) {
+    for (const c of constants) {
+      const decl = constDecls.get(c.name)!;
+      resolveType(decl.getType(), decl);
+    }
+  }
   // Extern signature types: see _externSigTypes.
   for (const r of _externSigTypes) resolveType(r.type, r.node);
   // Resolve anonymous object return types into synthetic named types
-  for (let i = 0; i < fnsToExtract.length; i++) {
-    const f = fnsToExtract[i];
-    const fn = functions[i];
+  for (let i = 0; i < allFunctionNodes.length; i++) {
+    const f = allFunctionNodes[i];
+    const fn = allFunctions[i];
     const retType = f.node.getReturnType();
     // Prefer alias symbol (named type aliases) over underlying object symbol (__type)
     const aliasSym = retType.getAliasSymbol();
@@ -2734,24 +2787,6 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
         resolveType(prop.getTypeAtLocation(f.node), f.node);
       }
     }
-  }
-
-  // Extract classes with //@ verify methods
-  const classes: RawClass[] = [];
-  for (const cls of sourceFile.getClasses()) {
-    if (hasLeadingDirective(cls, "skip")) continue;
-    const methods: RawFunction[] = [];
-    for (const method of cls.getMethods()) {
-      if (hasLeadingDirective(method, "skip")) continue;
-      if (!method.getFullText().includes('//@ verify')) continue;
-      methods.push(extractFunction(method as any));
-    }
-    if (methods.length === 0) continue;
-    const fields: { name: string; tsType: string }[] = [];
-    for (const prop of cls.getProperties()) {
-      fields.push({ name: prop.getName(), tsType: typeToString(prop.getType()) });
-    }
-    classes.push({ name: cls.getName() ?? "Anonymous", fields, methods });
   }
 
   // Clear the synth-union accumulator so typeToString reverts to plain

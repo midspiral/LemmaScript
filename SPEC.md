@@ -30,7 +30,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `backend` | Top of file | Restrict file to a specific backend (see §2.6) |
 | `option <key> <value>` | Top of file | Override an eligible `lemmascript.json` option for this file (see §7.6) |
 | `safe-slice` | Top of file | Legacy alias for `option safe-slice true` (see §2.7) |
-| `verify` | Before first statement of function/method body | Mark function for verification (see §2.5) |
+| `verify` | Before first statement of function/method body, or before a module-level `const` | Select declaration for verification (see §2.6) |
 | `requires` | Before first statement of function body | Precondition |
 | `ensures` | Before first statement of function body | Postcondition (`\result` refers to return value) |
 | `contract` | Before first statement of function body | Natural-language description of intent — prover-ignored; surfaced by `lsc extract` for vetting against the formal `requires`/`ensures` (see §2.13) |
@@ -199,9 +199,9 @@ function isEmptyResult(result: string): boolean {
 }
 ```
 
-**Behavior:** If any function in the file has `//@ verify`, `lsc` switches to selective mode and only extracts functions marked with `//@ verify`. Functions without it are silently skipped. Type declarations, interface declarations, and module-level `const` declarations are always extracted (they may be needed by verified functions).
+**Behavior:** A marked function, method, or module-level `const` activates selective mode. Only marked function bodies are extracted. Constants are selected **before their initializers are lowered**: keep those explicitly marked with a leading `//@ verify`, plus transitive dependencies of selected bodies and proof annotations (including loop and ghost annotations). Locally shadowed names do not select module constants. Unrelated unsupported initializers are ignored; unsupported selected dependencies remain errors. Types needed by selected declarations are retained, as are explicit `declare-type` declarations.
 
-If no function in the file has `//@ verify`, all functions are extracted as before. This keeps existing LemmaScript projects (where every function is in-fragment) working without changes.
+If no declaration in the file has `//@ verify`, whole-file extraction behaves as before. This keeps existing LemmaScript projects (where every function is in-fragment) working without changes.
 
 ### 2.7 Backend Restriction: `//@ backend`
 
@@ -217,7 +217,7 @@ The `safe-slice` option selects JS-clamping semantics for two-arg `arr.slice(lo,
 
 ### 2.8 Classes
 
-Class methods can be verified with `//@ verify`. The class fields become Dafny class fields, and `this.field` references work directly.
+Class methods can be verified with `//@ verify`. Fields referenced by selected methods or their proof annotations become Dafny class fields, and `this.field` references work directly. Using `this` as a whole (for example, assigning it to an alias) retains the full field shape; unselected methods are not lowered.
 
 ```typescript
 export class Counter {
