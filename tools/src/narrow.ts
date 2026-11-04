@@ -49,6 +49,10 @@ import {
 // ── Walkers ──────────────────────────────────────────────────
 
 function walkExpr(e: TExpr, ctx: CondCtx): TExpr {
+  if (isLogical(e)) {
+    const r = walkSpine(e, e.op, ctx);
+    return ruleAndOptional(r, ctx) ?? r;
+  }
   const r = recurseExpr(e, ctx);
   return ruleNullish(r, ctx) ?? ruleNullishIndex(r) ?? ruleOptChainIndex(r) ?? ruleOptChain(r, ctx) ?? ruleImplOptional(r, ctx) ?? ruleImplArrayIsArray(r, ctx) ?? ruleConditionalArrayIsArray(r, ctx) ?? ruleConditionalAndArrayIsArray(r, ctx) ?? ruleConditionalAndOptional(r, ctx) ?? ruleConditionalOptionalSimple(r, ctx) ?? ruleConditionalInMap(r, ctx) ?? ruleConditionalOptionalTruthy(r, ctx) ?? r;
 }
@@ -59,7 +63,7 @@ function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
     case "var": case "num": case "bigint": case "str": case "bool":
     case "havoc":
       return e;
-    case "binop": return { ...e, left: re(e.left), right: re(e.right) };
+    case "binop": return { ...e, left: e.op === "==>" ? walkCond(e.left, ctx) : re(e.left), right: re(e.right) };
     case "unop": return { ...e, expr: re(e.expr) };
     case "call": return { ...e, fn: re(e.fn), args: e.args.map(re) };
     case "index": return { ...e, obj: re(e.obj), idx: re(e.idx) };
@@ -68,7 +72,7 @@ function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
       fields: e.fields.map(f => ({ ...f, value: re(f.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(re) };
     case "lambda": return { ...e, body: walkStmts(e.body, ctx) };
-    case "conditional": return { ...e, cond: re(e.cond), then: re(e.then), else: re(e.else) };
+    case "conditional": return { ...e, cond: walkCond(e.cond, ctx), then: re(e.then), else: re(e.else) };
     case "optChain": return { ...e, obj: re(e.obj),
       chain: e.chain.map(s => s.kind === "call" ? { ...s, args: s.args.map(re) }
         : s.kind === "index" ? { ...s, idx: re(s.idx) }
@@ -81,6 +85,30 @@ function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
       cases: e.cases.map(c => ({ ...c, body: re(c.body) })),
       fallthrough: e.fallthrough ? re(e.fallthrough) : null };
   }
+}
+
+type Logical = TExpr & { kind: "binop"; op: "&&" | "||" };
+
+function isLogical(e: TExpr): e is Logical {
+  return e.kind === "binop" && (e.op === "&&" || e.op === "||");
+}
+
+/** Walk a `&&`/`||` chain without firing rules on its own `op` nodes: the
+ *  chain is analyzed whole (by `ruleAndOptional`, or by the positional
+ *  drivers when it is a condition), so an inner `x !== undefined && a` must
+ *  stay visible as a conjunct. Operands of the other operator walk normally. */
+function walkSpine(e: TExpr, op: string, ctx: CondCtx): TExpr {
+  if (e.kind === "binop" && e.op === op) {
+    return { ...e, left: walkSpine(e.left, op, ctx), right: walkSpine(e.right, op, ctx) };
+  }
+  return walkExpr(e, ctx);
+}
+
+/** Walk a condition consumed by a positional driver (if, ternary, guard
+ *  statement, implication premise). The driver reads the raw chain, so the
+ *  value-position rule must not rewrite it first. */
+function walkCond(e: TExpr, ctx: CondCtx): TExpr {
+  return isLogical(e) ? walkSpine(e, e.op, ctx) : walkExpr(e, ctx);
 }
 
 function walkStmt(s: TStmt, ctx: CondCtx): TStmt {
@@ -134,8 +162,8 @@ function recurseStmt(s: TStmt, ctx: CondCtx): TStmt {
     case "assign": return { ...s, value: re(s.value) };
     case "return": return { ...s, value: re(s.value) };
     case "break": case "continue": case "throw": return s;
-    case "expr": return { ...s, expr: re(s.expr) };
-    case "if": return { ...s, cond: re(s.cond), then: rs(s.then), else: rs(s.else) };
+    case "expr": return { ...s, expr: walkCond(s.expr, ctx) };
+    case "if": return { ...s, cond: walkCond(s.cond, ctx), then: rs(s.then), else: rs(s.else) };
     case "while": return { ...s, cond: re(s.cond),
       invariants: s.invariants.map(re),
       decreases: s.decreases ? re(s.decreases) : null,
@@ -528,6 +556,23 @@ function containsMethodCall(e: TExpr): boolean {
       e.cases.some(c => containsMethodCall(c.body)) ||
       (e.fallthrough ? containsMethodCall(e.fallthrough) : false);
   }
+}
+
+/** Driver (expression): `x !== undefined && rest` as a boolean value
+ *  (return, initializer, argument, contract body).
+ *  → `someMatch x { Some(_x_val) => rest, None => false }`.
+ *  TS narrows `x` across the rest of the chain (resolve types it that way);
+ *  without the match, `rest` would read the optional itself. Skips `rest`
+ *  with method calls, for the same binder-scope reason as
+ *  `ruleConditionalAndOptional`. */
+function ruleAndOptional(e: TExpr, ctx: CondCtx): TExpr | null {
+  if (e.kind !== "binop" || e.op !== "&&" || e.ty.kind !== "bool") return null;
+  const extracted = leadingPresent(e);
+  if (!extracted) return null;
+  const { check, restCond } = extracted;
+  if (containsMethodCall(restCond)) return null;
+  const none: TExpr = { kind: "bool", value: false, ty: { kind: "bool" } };
+  return presentMatchExpr(check, walkExpr(restCond, ctx), none, e.ty, ctx);
 }
 
 /** Driver (expression): `x !== undefined && rest ? a : b` — presence fact in
