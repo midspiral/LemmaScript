@@ -11,6 +11,8 @@ export interface FieldInfo {
   name: string;
   tsType: string;
   type?: Ty;     // pre-computed Ty — populated by resolveModule, avoids re-parsing tsType
+  /** Declared with `?` (`f?: T`): the key itself may be absent, not just the value. */
+  optionalKey?: boolean;
 }
 
 export interface VariantInfo {

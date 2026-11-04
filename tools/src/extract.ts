@@ -6,7 +6,7 @@
  */
 
 import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
-import type { TypeDeclInfo, VariantInfo } from "./types.js";
+import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
 import { normalizeBigIntLiteral } from "./rawir.js";
@@ -1005,19 +1005,20 @@ function extractInterface(decl: InterfaceDeclaration, extraDecls?: TypeDeclInfo[
 function extractRecord(name: string, type: Type, locationNode: Node, overrides?: Map<string, string>, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
   const props = type.getProperties();
   if (props.length === 0) return null;
-  const fields: { name: string; tsType: string }[] = [];
+  const fields: FieldInfo[] = [];
   for (const prop of props) {
+    const propDecl = prop.getDeclarations()[0];
+    const optionalKey = propDecl && (propDecl as any).hasQuestionToken?.() ? { optionalKey: true } : {};
     const override = overrides?.get(prop.getName());
-    if (override) { fields.push({ name: prop.getName(), tsType: override }); continue; }
+    if (override) { fields.push({ name: prop.getName(), tsType: override, ...optionalKey }); continue; }
 
     const propType = prop.getTypeAtLocation(locationNode);
     let tsType = typeToString(propType);
-    const propDecl = prop.getDeclarations()[0];
     tsType = declaredTypeTextIfBetter(propDecl, tsType);
     // Optional property: `foo?: T` reports as `T` (ts-morph strips the
     // `| undefined` from a question-token type). Add it back so the field
     // resolves to `Optional<T>`.
-    if (propDecl && (propDecl as any).hasQuestionToken?.()) {
+    if (optionalKey.optionalKey) {
       // Normalize checker output that puts `undefined` first, then ensure
       // exactly one trailing `| undefined`.
       if (tsType.startsWith("undefined | ")) tsType = `${tsType.slice("undefined | ".length)} | undefined`;
@@ -1048,7 +1049,7 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
       }
     }
 
-    fields.push({ name: prop.getName(), tsType });
+    fields.push({ name: prop.getName(), tsType, ...optionalKey });
   }
   return { name, kind: "record", fields };
 }
