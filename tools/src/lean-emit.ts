@@ -518,7 +518,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "if":
-      return `if ${emitExpr(e.cond)} then ${emitExpr(e.then)} else ${emitExpr(e.else)}`;
+      return `if ${emitCond(e.cond)} then ${emitExpr(e.then)} else ${emitExpr(e.else)}`;
 
     case "match": {
       // Always parenthesize inline matches — Lean parses alternatives greedily,
@@ -604,11 +604,11 @@ function emitStmt(s: Stmt, indent: number): string {
     case "continue": return `${pad}continue`;
 
     case "if": {
-      let out = `${pad}if ${emitExpr(s.cond)} then\n${emitStmts(s.then, indent + 1)}`;
+      let out = `${pad}if ${emitCond(s.cond)} then\n${emitStmts(s.then, indent + 1)}`;
       if (s.else.length > 0) {
         if (s.else.length === 1 && s.else[0].kind === "if") {
           const ei = s.else[0];
-          out += `\n${pad}else if ${emitExpr(ei.cond)} then\n${emitStmts(ei.then, indent + 1)}`;
+          out += `\n${pad}else if ${emitCond(ei.cond)} then\n${emitStmts(ei.then, indent + 1)}`;
           if (ei.else.length > 0) out += `\n${pad}else\n${emitStmts(ei.else, indent + 1)}`;
         } else {
           out += `\n${pad}else\n${emitStmts(s.else, indent + 1)}`;
@@ -659,7 +659,7 @@ function emitStmt(s: Stmt, indent: number): string {
 
     case "while": {
       // Guard is computational (Bool); invariants / done_with are Prop.
-      const lines = [`${pad}while ${emitExpr(s.cond)}`];
+      const lines = [`${pad}while ${emitCond(s.cond)}`];
       const prevBoolCtx = _boolCtx;
       _boolCtx = false;
       for (const inv of s.invariants) lines.push(`${pad}  invariant invariant_${++_invariantIndex}: (${emitExpr(inv)} : Prop)`);
@@ -860,12 +860,22 @@ function emitDecl(d: Decl): string {
   }
 }
 
+/** Emit an `if`/`while` condition. A condition is elaborated as a `Prop`, so
+ *  an inline match mixing comparisons with `true`/`false` arms has no
+ *  `Decidable` instance; ascribing `Bool` decides each arm instead. (A match
+ *  whose arms are all literals, like a variant test, needs no ascription.) */
+function emitCond(e: Expr): string {
+  return e.kind === "match" && e.arms.some(a => a.body.kind !== "bool")
+    ? `(${emitExpr(e)} : Bool)`
+    : emitExpr(e);
+}
+
 /** Emit a pure expression with indented if/match blocks. */
 function emitPureExpr(e: Expr, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (e.kind) {
     case "if":
-      return `${pad}if ${emitExpr(e.cond)} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
+      return `${pad}if ${emitCond(e.cond)} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
     case "match": {
       const lines = [`${pad}match ${emitExpr(e.scrutinee)} with`];
       for (const arm of e.arms) {

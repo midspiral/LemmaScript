@@ -53,6 +53,7 @@ cp tools/fixtures/optional-binder-collisions.ts "$fixture_dir/optional-binder-co
 cp tools/fixtures/unpaired-surrogate.ts "$fixture_dir/unpaired.ts"
 cp tools/fixtures/optional-guard-order.ts "$fixture_dir/optional-guard-order.ts"
 cp tools/fixtures/optional-comparison-order.ts "$fixture_dir/optional-comparison-order.ts"
+cp tools/fixtures/optional-and-value.ts "$fixture_dir/optional-and-value.ts"
 cp tools/fixtures/spread-null-override.ts "$fixture_dir/spread-null-override.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/impure.ts"
@@ -69,6 +70,7 @@ expect_failure \
   npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/impure.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-guard-order.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-comparison-order.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-and-value.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/spread-null-override.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/legacy-safe-slice.ts"
