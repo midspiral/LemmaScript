@@ -36,14 +36,13 @@
 
 import type { TModule, TFunction, TStmt, TExpr } from "./typedir.js";
 import { isTerminatorKind } from "./typedir.js";
-import { builtinSpec } from "./builtins.js";
 import {
   type CondCtx, type PresentFact, type NoneDetector,
   presentFact, leadingPresent, leadingIsArray, flattenOr, noneDetector,
   bindPresentFact, freshPathBinder, binderHintForMapAccess, freshOcBinder,
   applyChain, restoreDiscriminantFlag, arrayBoundsCond, exprEqual,
   isArrayFact, typeofStringFact, variantFact, negVariantFact,
-  presentMatchStmts, presentMatchExpr,
+  presentMatchStmts, presentMatchExpr, containsMethodCall, readsPath,
 } from "./condition-facts.js";
 
 // ── Walkers ──────────────────────────────────────────────────
@@ -521,76 +520,59 @@ function ruleLetCondAndOptional(s: TStmt, ctx: CondCtx): TStmt[] | null {
   ];
 }
 
-/** Does this expression contain a method call that would be lifted to a
- *  var binding outside its containing expression by transform? Such calls
- *  are unsafe inside a match arm — the lifted binding would reference a
- *  name only valid in the arm. Builtins whose registry entry is `pure`
- *  (they lower to pure Dafny expressions: `x in arr`, `x in m`, `s.Keys`,
- *  …) are exempt even though they carry `callKind: "method"`. */
-function containsMethodCall(e: TExpr): boolean {
-  if (e.kind === "call" && e.callKind === "method" &&
-      !(e.builtinId !== undefined && builtinSpec(e.builtinId).pure)) {
-    return true;
-  }
-  switch (e.kind) {
-    case "var": case "num": case "bigint": case "str": case "bool":
-    case "havoc":
-      return false;
-    case "binop": return containsMethodCall(e.left) || containsMethodCall(e.right);
-    case "unop": return containsMethodCall(e.expr);
-    case "call": return containsMethodCall(e.fn) || e.args.some(containsMethodCall);
-    case "index": return containsMethodCall(e.obj) || containsMethodCall(e.idx);
-    case "field": return containsMethodCall(e.obj);
-    case "record":
-      return (e.spread ? containsMethodCall(e.spread) : false) ||
-        e.fields.some(f => containsMethodCall(f.value));
-    case "arrayLiteral": return e.elems.some(containsMethodCall);
-    case "lambda": return false;  // body is its own scope
-    case "conditional":
-      return containsMethodCall(e.cond) || containsMethodCall(e.then) || containsMethodCall(e.else);
-    case "optChain": return containsMethodCall(e.obj);
-    case "nullish": return containsMethodCall(e.left) || containsMethodCall(e.right);
-    case "forall": case "exists": return containsMethodCall(e.body);
-    case "someMatch": return containsMethodCall(e.scrutinee) ||
-      containsMethodCall(e.someBody) || containsMethodCall(e.noneBody);
-    case "tagMatch": return containsMethodCall(e.scrutinee) ||
-      e.cases.some(c => containsMethodCall(c.body)) ||
-      (e.fallthrough ? containsMethodCall(e.fallthrough) : false);
-  }
-}
-
 /** Driver (expression): `x !== undefined && rest` / `x === undefined || rest`
  *  as a boolean value (return, initializer, argument, contract body).
  *  → `someMatch x { Some(_x_val) => rest, None => false }` (`&&`), or
  *    `someMatch x { Some(_x_val) => rest, None => true }` (`||`).
- *  TS narrows `x` across the rest of the chain (resolve types it that way);
- *  without the match, `rest` would read the optional itself. Skips `rest`
- *  with method calls, for the same binder-scope reason as
- *  `ruleConditionalAndOptional`. */
+ *  Fires where resolve typed a checked optional as narrowed in the chain:
+ *  for `&&`, when another conjunct reads one of its checked paths (the
+ *  leading check still binds first, so `box.v` is read under `box`); for
+ *  `||`, when another disjunct reads the path other than as a comparison
+ *  operand (see `resolveOrRight`). Without the match, the chain would read
+ *  the optional itself; a chain that reads none keeps its plain lowering. Skips `rest` with method
+ *  calls, for the same binder-scope reason as `ruleConditionalAndOptional`. */
 function ruleLogicalOptional(e: TExpr, ctx: CondCtx): TExpr | null {
   if (!isLogical(e) || e.ty.kind !== "bool") return null;
-  const extracted = e.op === "&&" ? leadingPresent(e) : leadingAbsent(e);
+  const isOr = e.op === "||";
+  const extracted = isOr ? leadingAbsent(e) : leadingPresent(e);
   if (!extracted) return null;
   const { check, restCond } = extracted;
+  if (!isOr && !readsCheckedPath(e)) return null;
   if (containsMethodCall(restCond)) return null;
-  const none: TExpr = { kind: "bool", value: e.op === "||", ty: { kind: "bool" } };
+  const none: TExpr = { kind: "bool", value: isOr, ty: { kind: "bool" } };
   return presentMatchExpr(check, walkExpr(restCond, ctx), none, e.ty, ctx);
 }
 
-/** The first absence check (`x === undefined`, `!x`) in a `||` chain, plus
- *  the remaining disjuncts in source order. Its Some arm is where the fact
- *  is false, so it is reified as the positive fact. */
+/** Does some conjunct of an `&&` chain read a path that another conjunct
+ *  checks for presence? */
+function readsCheckedPath(e: TExpr): boolean {
+  const conjuncts = flattenAnd(e);
+  return conjuncts.some((c, i) => {
+    const f = presentFact(c);
+    return !!f && !f.negated && conjuncts.some((o, j) => j !== i && readsPath(o, f.scrutinee));
+  });
+}
+
+function flattenAnd(e: TExpr): TExpr[] {
+  if (e.kind === "binop" && e.op === "&&") return [...flattenAnd(e.left), ...flattenAnd(e.right)];
+  return [e];
+}
+
+/** The first absence check (`x === undefined`, `!x`) in a `||` chain whose
+ *  optional the other disjuncts read other than as a comparison operand,
+ *  plus those disjuncts in source order. Its Some arm is where the check is
+ *  false, so it is reified as the positive fact. */
 function leadingAbsent(cond: TExpr): { check: PresentFact; restCond: TExpr } | null {
   const leaves = flattenOr(cond);
   if (leaves.length < 2) return null;
-  const facts = leaves.map(presentFact);
-  const i = facts.findIndex(f => f?.negated);
-  if (i < 0) return null;
-  const rest = leaves.filter((_, j) => j !== i);
-  return {
-    check: facts[i]!,
-    restCond: rest.reduce((a, b): TExpr => ({ kind: "binop", op: "||", left: a, right: b, ty: { kind: "bool" } })),
-  };
+  const or = (es: TExpr[]) => es.reduce((a, b): TExpr => ({ kind: "binop", op: "||", left: a, right: b, ty: { kind: "bool" } }));
+  for (let i = 0; i < leaves.length; i++) {
+    const f = presentFact(leaves[i]);
+    if (!f?.negated) continue;
+    const restCond = or(leaves.filter((_, j) => j !== i));
+    if (readsPath(restCond, f.scrutinee, true)) return { check: f, restCond };
+  }
+  return null;
 }
 
 /** Fallback (statement): an `if` / guard-statement condition that no

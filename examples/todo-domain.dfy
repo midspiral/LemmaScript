@@ -446,7 +446,7 @@ method listNameExists(m: Model, name: string, excludeList: Option<ListId>) retur
     invariant (i <= |m.lists|)
   {
     var lid := m.lists[i];
-    if (match excludeList { case Some(i_excludeList_val) => (lid != i_excludeList_val) case None => true }) {
+    if ((match excludeList { case Some(i_) => false case None => true }) || (match excludeList { case Some(i_value) => (i_value != lid) case None => true })) {
       if (lid in m.listNames) {
         var i_existingName_val := m.listNames[lid];
         var i_t4 := eqIgnoreCase(i_existingName_val, name);
@@ -470,7 +470,7 @@ method taskTitleExistsInList(m: Model, listId: ListId, title: string, excludeTas
       invariant (i <= |i_lane_val|)
     {
       var tid := i_lane_val[i];
-      if (match excludeTask { case Some(i_excludeTask_val) => (tid != i_excludeTask_val) case None => true }) {
+      if ((match excludeTask { case Some(i_) => false case None => true }) || (match excludeTask { case Some(i_value) => (i_value != tid) case None => true })) {
         if (tid in m.taskData) {
           var i_task_val := m.taskData[tid];
           var i_t5 := eqIgnoreCase(i_task_val.title, title);
@@ -496,7 +496,7 @@ method tagNameExists(m: Model, name: string, excludeTag: Option<TagId>) returns 
   {
     var tid := i_tid_keys[i_tid_idx];
     var tag := m.tags[tid];
-    if (match excludeTag { case Some(i_excludeTag_val) => (tid != i_excludeTag_val) case None => true }) {
+    if ((match excludeTag { case Some(i_) => false case None => true }) || (match excludeTag { case Some(i_value) => (i_value != tid) case None => true })) {
       var i_t6 := eqIgnoreCase(tag.name, name);
       if i_t6 {
         return true;

@@ -21,18 +21,10 @@ function fixture() {
   return narrowModule(resolveModule(extractModule(source)));
 }
 
-// Each fixture function has an unguarded `x op opt` contract line. The
-// optional-comparison rule binds the matched value on the left, so it must
-// become `v op' x` with the operator mirrored; `opt op x` keeps it.
+// The matched value is bound on the left, so `x op opt` must become `v op' x`
+// with the operator mirrored; `opt op x` keeps it.
 const expected: [string, string][] = [
   ["belowOrUnset", ">"], ["atMostOrUnset", ">="], ["aboveOrUnset", "<"], ["atLeastOrUnset", "<="], ["optionalOnLeft", ">"],
-];
-
-// The bodies guard the comparison with `opt === null ||`, which narrows `opt`,
-// so they read the binder directly with the source operator.
-const bodies: [string, string][] = [
-  ["belowOrUnset", "x < i_opt_val"], ["atMostOrUnset", "x <= i_opt_val"], ["aboveOrUnset", "x > i_opt_val"],
-  ["atLeastOrUnset", "x >= i_opt_val"], ["optionalOnLeft", "i_opt_val > x"],
 ];
 
 const LEAN_OP: Record<string, string> = { ">=": "≥", "<=": "≤" };
@@ -40,7 +32,7 @@ const LEAN_OP: Record<string, string> = { ">=": "≥", "<=": "≤" };
 function bodyOf(text: string, header: string): string {
   const start = text.indexOf(header);
   assert.ok(start >= 0, `missing ${header}`);
-  const next = text.slice(start + 1).search(/\n(?:function|lemma|def|method) /);
+  const next = text.slice(start + 1).search(/\n(?:function|lemma|def) /);
   return next < 0 ? text.slice(start) : text.slice(start, start + 1 + next);
 }
 
@@ -57,18 +49,16 @@ test("Dafny mirrors the operator when the optional is on the right", () => {
   const { typesFile, defFile } = transformModuleDafny(fixture());
   const text = emitDafnyFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
   for (const [name, op] of expected) {
-    assert.ok(bodyOf(text, `lemma ${name}_ensures(`).includes(`(i_value ${op} x)`), name);
-  }
-  for (const [name, cmp] of bodies) {
-    assert.ok(bodyOf(text, `function ${name}(`).includes(`(${cmp})`), name);
+    assert.ok(bodyOf(text, `function ${name}(`).includes(`(i_value ${op} x)`), name);
   }
 });
 
 test("Lean mirrors the operator when the optional is on the right", () => {
   resetLeanModule();
-  const { defFile } = transformModuleLean(fixture());
-  const text = emitLeanFile(defFile);
+  const { typesFile } = transformModuleLean(fixture());
+  assert.ok(typesFile);
+  const text = emitLeanFile(typesFile);
   for (const [name, op] of expected) {
-    assert.ok(bodyOf(text, `method ${name} `).includes(`_value ${LEAN_OP[op] ?? op} x`), name);
+    assert.ok(bodyOf(text, `def ${name} `).includes(`_value ${LEAN_OP[op] ?? op} x`), name);
   }
 });

@@ -14,7 +14,7 @@ import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
 import { recognizeBuiltin, builtinSpec } from "./builtins.js";
 import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName } from "./typedecls.js";
-import { type PresentFact, presentFact, variantFact } from "./condition-facts.js";
+import { type PresentFact, presentFact, variantFact, containsMethodCall, readsPath } from "./condition-facts.js";
 
 // ── Environment ──────────────────────────────────────────────
 
@@ -312,15 +312,31 @@ function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
 }
 
 /** The `||` counterpart (De Morgan): the right operand runs only when every
- *  left disjunct is false, so an absence check there (`x === undefined`,
- *  `!x`) narrows `x` to present across the right operand. */
-function collectOrChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
+ *  left disjunct is false, so each absence check there (`x === undefined`,
+ *  `!x`) means `x` is present across the right operand. */
+function orChainAbsences(cond: TExpr): PresentFact[] {
   if (cond.kind === "binop" && cond.op === "||") {
-    const leftCtx = collectOrChainNarrowings(cond.left, ctx);
-    return collectOrChainNarrowings(cond.right, leftCtx);
+    return [...orChainAbsences(cond.left), ...orChainAbsences(cond.right)];
   }
   const f = presentFact(cond);
-  return f && f.negated ? withPresent(ctx, f) : ctx;
+  return f && f.negated ? [f] : [];
+}
+
+/** Resolve the right operand of `||`, narrowed by those of the left's
+ *  absence checks whose optional the right reads other than as a comparison
+ *  operand (`x === undefined || x + 1 > y`). Comparisons alone already lower
+ *  through the optional-comparison rule, so they keep their plain typing (and
+ *  output). Narrow's `||` rule binds exactly these checks; it cannot bind
+ *  around a method call (see `containsMethodCall`), so neither narrows then. */
+function resolveOrRight(left: TExpr, rawRight: RawExpr, ctx: Ctx): TExpr {
+  const absences = orChainAbsences(left);
+  const savedBinder = mergeBinder;
+  const plain = resolveExpr(rawRight, ctx);
+  if (absences.length === 0 || containsMethodCall(left) || containsMethodCall(plain)) return plain;
+  const needed = absences.filter(f => readsPath(plain, f.scrutinee, true));
+  if (needed.length === 0) return plain;
+  mergeBinder = savedBinder;  // the plain resolution is discarded
+  return resolveExpr(rawRight, needed.reduce(withPresent, ctx));
 }
 
 /** Extend a Ctx with a presence fact: a bare var extends the env; a pure
@@ -821,10 +837,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let rawRight = e.right;
       if (e.op === "&&" || e.op === "==>") {
         rightCtx = collectAndChainNarrowings(left, ctx);
-      } else if (e.op === "||") {
-        rightCtx = collectOrChainNarrowings(left, ctx);
       }
-      let right = resolveExpr(rawRight, rightCtx);
+      let right = e.op === "||" ? resolveOrRight(left, rawRight, ctx) : resolveExpr(rawRight, rightCtx);
       if (e.op === "===" || e.op === "!==") {
         left = coerceStr(left, right.ty);
         right = coerceStr(right, left.ty);

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { Project, ScriptTarget } from "ts-morph";
 import {
   belowSet, nullable, arithmetic, both, field, inContract,
-  unsetOrAbove, zeroOrAbove, orEarlyReturn, orTernary, andIfElse, lowest,
+  unsetOrAbove, zeroOrAbove, orEarlyReturn, orTernary, andIfElse, lowest, countAbove,
 } from "../fixtures/optional-and-value.ts";
 import { extractModule } from "../src/extract.ts";
 import { resolveModule } from "../src/resolve.ts";
@@ -31,6 +31,7 @@ function bodyOf(text: string, header: string): string {
 
 // The narrowed value is read through the match binder, never as the optional:
 // after `x !== undefined &&` and after `x === undefined ||` (or `!x ||`).
+// (`lowest` only compares its optional, so it keeps the comparison lowering.)
 const expected: [string, string, string][] = [
   ["belowSet", "x < i_opt_val", "x < _opt_val"],
   ["nullable", "x < i_opt_val", "x < _opt_val"],
@@ -60,6 +61,7 @@ test("a presence check guards the rest of an && value at runtime", () => {
   assert.equal(orTernary(6), 1);
   assert.equal(andIfElse(5, 5), 1);
   assert.deepEqual([lowest([]), lowest([3, 1, 2])], [null, 1]);
+  assert.deepEqual([countAbove([1, 5, 9]), countAbove([1, 5, 9], 4)], [3, 2]);
 });
 
 test("Lean decides a match used as an if condition as a Bool", () => {
@@ -67,7 +69,7 @@ test("Lean decides a match used as an if condition as a Bool", () => {
   const { typesFile, defFile } = transformModuleLean(fixture());
   assert.ok(typesFile);
   assert.ok(bodyOf(emitLeanFile(typesFile), "def orTernary ").includes("| .none => true) : Bool) then"));
-  assert.ok(bodyOf(emitLeanFile(defFile), "method lowest ").includes("| .none => true) : Bool) then"));
+  assert.ok(bodyOf(emitLeanFile(defFile), "method countAbove ").includes("| .none => true) : Bool) then"));
 });
 
 test("Dafny binds the narrowed optional in an && value", () => {

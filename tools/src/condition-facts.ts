@@ -24,6 +24,7 @@ import type { TExpr, TStmt, Ty } from "./typedir.js";
 import { freshName, freshNameWhere, isUserName } from "./names.js";
 import type { TypeDecls } from "./typedecls.js";
 import { unionDeclOfTy, discriminantOf } from "./typedecls.js";
+import { builtinSpec } from "./builtins.js";
 
 /** Explicit context: declarations, optChain counter, and scope-local binders. */
 export interface CondCtx {
@@ -401,6 +402,82 @@ export function negVariantFact(cond: TExpr, ctx: CondCtx): VariantFact | null {
     }
   }
   return null;
+}
+
+// ── Expression scans ────────────────────────────────────────
+
+/** Does this expression contain a method call that would be lifted to a
+ *  var binding outside its containing expression by transform? Such calls
+ *  are unsafe inside a match arm — the lifted binding would reference a
+ *  name only valid in the arm. Builtins whose registry entry is `pure`
+ *  (they lower to pure Dafny expressions: `x in arr`, `x in m`, `s.Keys`,
+ *  …) are exempt even though they carry `callKind: "method"`. */
+export function containsMethodCall(e: TExpr): boolean {
+  if (e.kind === "call" && e.callKind === "method" &&
+      !(e.builtinId !== undefined && builtinSpec(e.builtinId).pure)) {
+    return true;
+  }
+  switch (e.kind) {
+    case "var": case "num": case "bigint": case "str": case "bool":
+    case "havoc":
+      return false;
+    case "binop": return containsMethodCall(e.left) || containsMethodCall(e.right);
+    case "unop": return containsMethodCall(e.expr);
+    case "call": return containsMethodCall(e.fn) || e.args.some(containsMethodCall);
+    case "index": return containsMethodCall(e.obj) || containsMethodCall(e.idx);
+    case "field": return containsMethodCall(e.obj);
+    case "record":
+      return (e.spread ? containsMethodCall(e.spread) : false) ||
+        e.fields.some(f => containsMethodCall(f.value));
+    case "arrayLiteral": return e.elems.some(containsMethodCall);
+    case "lambda": return false;  // body is its own scope
+    case "conditional":
+      return containsMethodCall(e.cond) || containsMethodCall(e.then) || containsMethodCall(e.else);
+    case "optChain": return containsMethodCall(e.obj);
+    case "nullish": return containsMethodCall(e.left) || containsMethodCall(e.right);
+    case "forall": case "exists": return containsMethodCall(e.body);
+    case "someMatch": return containsMethodCall(e.scrutinee) ||
+      containsMethodCall(e.someBody) || containsMethodCall(e.noneBody);
+    case "tagMatch": return containsMethodCall(e.scrutinee) ||
+      e.cases.some(c => containsMethodCall(c.body)) ||
+      (e.fallthrough ? containsMethodCall(e.fallthrough) : false);
+  }
+}
+
+const COMPARISON_OPS = ["===", "!==", "<", "<=", ">", ">="];
+
+/** Is `path` read anywhere in `e`? With `skipComparisons`, a read that is a
+ *  direct operand of a comparison does not count: transform's
+ *  optional-comparison rule already unwraps such an optional operand, so it
+ *  needs no narrowing. */
+export function readsPath(e: TExpr, path: TExpr, skipComparisons = false): boolean {
+  if (exprEqual(e, path)) return true;
+  const r = (x: TExpr) => readsPath(x, path, skipComparisons);
+  switch (e.kind) {
+    case "var": case "num": case "bigint": case "str": case "bool":
+    case "havoc":
+      return false;
+    case "binop":
+      if (skipComparisons && COMPARISON_OPS.includes(e.op)) {
+        return [e.left, e.right].some(side => !exprEqual(side, path) && r(side));
+      }
+      return r(e.left) || r(e.right);
+    case "unop": return r(e.expr);
+    case "call": return r(e.fn) || e.args.some(r);
+    case "index": return r(e.obj) || r(e.idx);
+    case "field": return r(e.obj);
+    case "record": return (e.spread ? r(e.spread) : false) || e.fields.some(f => r(f.value));
+    case "arrayLiteral": return e.elems.some(r);
+    case "lambda": return false;  // body is its own scope
+    case "conditional": return r(e.cond) || r(e.then) || r(e.else);
+    case "optChain": return r(e.obj) ||
+      e.chain.some(s => s.kind === "call" ? s.args.some(r) : s.kind === "index" ? r(s.idx) : false);
+    case "nullish": return r(e.left) || r(e.right);
+    case "forall": case "exists": return r(e.body);
+    case "someMatch": return r(e.scrutinee) || r(e.someBody) || r(e.noneBody);
+    case "tagMatch": return r(e.scrutinee) || e.cases.some(c => r(c.body)) ||
+      (e.fallthrough ? r(e.fallthrough) : false);
+  }
 }
 
 // ── Materializers ───────────────────────────────────────────

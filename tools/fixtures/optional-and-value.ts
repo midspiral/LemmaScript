@@ -92,3 +92,18 @@ export function lowest(xs: number[]): number | null {
   }
   return m;
 }
+
+export function countAbove(xs: number[], floor?: number): number {
+  //@ ensures 0 <= \result && \result <= xs.length
+  //@ ensures floor === undefined ==> \result === xs.length
+  //@ type i nat
+  let n = 0;
+  for (let i = 0; i < xs.length; i++) {
+    //@ invariant 0 <= i && i <= xs.length
+    //@ invariant 0 <= n && n <= i
+    //@ invariant floor === undefined ==> n === i
+    //@ decreases xs.length - i
+    if (floor === undefined || xs[i]! - floor > 0) n = n + 1;
+  }
+  return n;
+}
