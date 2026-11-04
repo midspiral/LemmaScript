@@ -51,10 +51,10 @@ import {
 function walkExpr(e: TExpr, ctx: CondCtx): TExpr {
   if (isLogical(e)) {
     const r = walkSpine(e, e.op, ctx);
-    return ruleAndOptional(r, ctx) ?? r;
+    return ruleLogicalOptional(r, ctx) ?? r;
   }
   const r = recurseExpr(e, ctx);
-  return ruleNullish(r, ctx) ?? ruleNullishIndex(r) ?? ruleOptChainIndex(r) ?? ruleOptChain(r, ctx) ?? ruleImplOptional(r, ctx) ?? ruleImplArrayIsArray(r, ctx) ?? ruleConditionalArrayIsArray(r, ctx) ?? ruleConditionalAndArrayIsArray(r, ctx) ?? ruleConditionalAndOptional(r, ctx) ?? ruleConditionalOptionalSimple(r, ctx) ?? ruleConditionalInMap(r, ctx) ?? ruleConditionalOptionalTruthy(r, ctx) ?? r;
+  return ruleNullish(r, ctx) ?? ruleNullishIndex(r) ?? ruleOptChainIndex(r) ?? ruleOptChain(r, ctx) ?? ruleImplOptional(r, ctx) ?? ruleImplArrayIsArray(r, ctx) ?? ruleConditionalArrayIsArray(r, ctx) ?? ruleConditionalAndArrayIsArray(r, ctx) ?? ruleConditionalAndOptional(r, ctx) ?? ruleConditionalOptionalSimple(r, ctx) ?? ruleConditionalInMap(r, ctx) ?? ruleConditionalOptionalTruthy(r, ctx) ?? ruleExprCondFallback(r, ctx) ?? r;
 }
 
 function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
@@ -94,7 +94,7 @@ function isLogical(e: TExpr): e is Logical {
 }
 
 /** Walk a `&&`/`||` chain without firing rules on its own `op` nodes: the
- *  chain is analyzed whole (by `ruleAndOptional`, or by the positional
+ *  chain is analyzed whole (by `ruleLogicalOptional`, or by the positional
  *  drivers when it is a condition), so an inner `x !== undefined && a` must
  *  stay visible as a conjunct. Operands of the other operator walk normally. */
 function walkSpine(e: TExpr, op: string, ctx: CondCtx): TExpr {
@@ -106,7 +106,8 @@ function walkSpine(e: TExpr, op: string, ctx: CondCtx): TExpr {
 
 /** Walk a condition consumed by a positional driver (if, ternary, guard
  *  statement, implication premise). The driver reads the raw chain, so the
- *  value-position rule must not rewrite it first. */
+ *  value-position rule must not rewrite it first; when no driver takes the
+ *  chain, the `*CondFallback` rules apply it afterwards. */
 function walkCond(e: TExpr, ctx: CondCtx): TExpr {
   return isLogical(e) ? walkSpine(e, e.op, ctx) : walkExpr(e, ctx);
 }
@@ -121,7 +122,7 @@ function walkStmt(s: TStmt, ctx: CondCtx): TStmt {
   // array rule fires; independent narrows commute, so the order is harmless.)
   // && rules fire before the simple rule because they produce nested ifs whose
   // inner shape doesn't match the simple rule directly.
-  return ruleIfAndOptional(r, ctx) ?? ruleIfAndArrayIsArray(r, ctx) ?? ruleIfOptionalSimple(r, ctx) ?? ruleExprStmtAndOptional(r, ctx) ?? ruleOptionalIndexBinding(r) ?? r;
+  return ruleIfAndOptional(r, ctx) ?? ruleIfAndArrayIsArray(r, ctx) ?? ruleIfOptionalSimple(r, ctx) ?? ruleExprStmtAndOptional(r, ctx) ?? ruleOptionalIndexBinding(r) ?? ruleStmtCondFallback(r, ctx) ?? r;
 }
 
 function walkStmts(stmts: TStmt[], ctx: CondCtx): TStmt[] {
@@ -558,21 +559,67 @@ function containsMethodCall(e: TExpr): boolean {
   }
 }
 
-/** Driver (expression): `x !== undefined && rest` as a boolean value
- *  (return, initializer, argument, contract body).
- *  → `someMatch x { Some(_x_val) => rest, None => false }`.
+/** Driver (expression): `x !== undefined && rest` / `x === undefined || rest`
+ *  as a boolean value (return, initializer, argument, contract body).
+ *  → `someMatch x { Some(_x_val) => rest, None => false }` (`&&`), or
+ *    `someMatch x { Some(_x_val) => rest, None => true }` (`||`).
  *  TS narrows `x` across the rest of the chain (resolve types it that way);
  *  without the match, `rest` would read the optional itself. Skips `rest`
  *  with method calls, for the same binder-scope reason as
  *  `ruleConditionalAndOptional`. */
-function ruleAndOptional(e: TExpr, ctx: CondCtx): TExpr | null {
-  if (e.kind !== "binop" || e.op !== "&&" || e.ty.kind !== "bool") return null;
-  const extracted = leadingPresent(e);
+function ruleLogicalOptional(e: TExpr, ctx: CondCtx): TExpr | null {
+  if (!isLogical(e) || e.ty.kind !== "bool") return null;
+  const extracted = e.op === "&&" ? leadingPresent(e) : leadingAbsent(e);
   if (!extracted) return null;
   const { check, restCond } = extracted;
   if (containsMethodCall(restCond)) return null;
-  const none: TExpr = { kind: "bool", value: false, ty: { kind: "bool" } };
+  const none: TExpr = { kind: "bool", value: e.op === "||", ty: { kind: "bool" } };
   return presentMatchExpr(check, walkExpr(restCond, ctx), none, e.ty, ctx);
+}
+
+/** The first absence check (`x === undefined`, `!x`) in a `||` chain, plus
+ *  the remaining disjuncts in source order. Its Some arm is where the fact
+ *  is false, so it is reified as the positive fact. */
+function leadingAbsent(cond: TExpr): { check: PresentFact; restCond: TExpr } | null {
+  const leaves = flattenOr(cond);
+  if (leaves.length < 2) return null;
+  const facts = leaves.map(presentFact);
+  const i = facts.findIndex(f => f?.negated);
+  if (i < 0) return null;
+  const rest = leaves.filter((_, j) => j !== i);
+  return {
+    check: facts[i]!,
+    restCond: rest.reduce((a, b): TExpr => ({ kind: "binop", op: "||", left: a, right: b, ty: { kind: "bool" } })),
+  };
+}
+
+/** Fallback (statement): an `if` / guard-statement condition that no
+ *  positional driver took (an `if` with an else, a non-terminating `||`
+ *  guard) is lowered as a value, so the narrowed reads in it stay bound. */
+function ruleStmtCondFallback(s: TStmt, ctx: CondCtx): TStmt | null {
+  if (s.kind === "if") {
+    const cond = ruleLogicalOptional(s.cond, ctx);
+    return cond ? { ...s, cond } : null;
+  }
+  if (s.kind === "expr") {
+    const expr = ruleLogicalOptional(s.expr, ctx);
+    return expr ? { ...s, expr } : null;
+  }
+  return null;
+}
+
+/** Fallback (expression): the same for a ternary condition or an
+ *  implication premise that no driver took. */
+function ruleExprCondFallback(e: TExpr, ctx: CondCtx): TExpr | null {
+  if (e.kind === "conditional") {
+    const cond = ruleLogicalOptional(e.cond, ctx);
+    return cond ? { ...e, cond } : null;
+  }
+  if (e.kind === "binop" && e.op === "==>") {
+    const left = ruleLogicalOptional(e.left, ctx);
+    return left ? { ...e, left } : null;
+  }
+  return null;
 }
 
 /** Driver (expression): `x !== undefined && rest ? a : b` — presence fact in

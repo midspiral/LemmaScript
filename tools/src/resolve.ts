@@ -14,7 +14,7 @@ import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
 import { recognizeBuiltin, builtinSpec } from "./builtins.js";
 import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName } from "./typedecls.js";
-import { presentFact, variantFact } from "./condition-facts.js";
+import { type PresentFact, presentFact, variantFact } from "./condition-facts.js";
 
 // ── Environment ──────────────────────────────────────────────
 
@@ -298,16 +298,7 @@ function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
     return collectAndChainNarrowings(cond.right, leftCtx);
   }
   const f = presentFact(cond);
-  if (f && !f.negated) {
-    if (f.scrutinee.kind === "var") {
-      return withEnv(ctx, extend(ctx.env, f.scrutinee.name, f.innerTy));
-    }
-    const path = asTExprAccessPath(f.scrutinee);
-    if (path) {
-      return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: f.innerTy }] };
-    }
-    return ctx;
-  }
+  if (f && !f.negated) return withPresent(ctx, f);
   // Positive discriminant check (`x.kind === "bool"`): record the variant so
   // field reads on the path resolve against that variant's field types.
   const vf = variantFact(cond, { decls: ctx.typeDecls, oc: { n: 0 } });
@@ -316,6 +307,31 @@ function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
     if (path) {
       return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: vf.scrutinee.ty, variant: vf.variant }] };
     }
+  }
+  return ctx;
+}
+
+/** The `||` counterpart (De Morgan): the right operand runs only when every
+ *  left disjunct is false, so an absence check there (`x === undefined`,
+ *  `!x`) narrows `x` to present across the right operand. */
+function collectOrChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
+  if (cond.kind === "binop" && cond.op === "||") {
+    const leftCtx = collectOrChainNarrowings(cond.left, ctx);
+    return collectOrChainNarrowings(cond.right, leftCtx);
+  }
+  const f = presentFact(cond);
+  return f && f.negated ? withPresent(ctx, f) : ctx;
+}
+
+/** Extend a Ctx with a presence fact: a bare var extends the env; a pure
+ *  field path extends `narrowedPaths`. */
+function withPresent(ctx: Ctx, f: PresentFact): Ctx {
+  if (f.scrutinee.kind === "var") {
+    return withEnv(ctx, extend(ctx.env, f.scrutinee.name, f.innerTy));
+  }
+  const path = asTExprAccessPath(f.scrutinee);
+  if (path) {
+    return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: f.innerTy }] };
   }
   return ctx;
 }
@@ -798,12 +814,15 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "binop": {
       let left = resolveExpr(e.left, ctx);
-      // && and ==> narrowing: left-side optional checks narrow the right side.
+      // && and ==> narrowing: left-side optional checks narrow the right side;
+      // || narrowing: left-side absence checks do (the right runs only if they fail).
       // (For ==>, the premise is assumed in the conclusion — same principle.)
       let rightCtx = ctx;
       let rawRight = e.right;
       if (e.op === "&&" || e.op === "==>") {
         rightCtx = collectAndChainNarrowings(left, ctx);
+      } else if (e.op === "||") {
+        rightCtx = collectOrChainNarrowings(left, ctx);
       }
       let right = resolveExpr(rawRight, rightCtx);
       if (e.op === "===" || e.op === "!==") {

@@ -38,3 +38,57 @@ export function inContract(x: number, opt?: number): boolean {
   if (opt === undefined) return false;
   return x < opt;
 }
+
+export function unsetOrAbove(x: number, opt?: number): boolean {
+  //@ ensures opt === undefined ==> \result
+  //@ ensures x === 5 && opt === 5 ==> \result
+  //@ ensures x === 6 && opt === 5 ==> !\result
+  return opt === undefined || opt + 1 > x;
+}
+
+export function zeroOrAbove(x: number, opt?: number): boolean {
+  //@ ensures opt === 0 ==> \result
+  //@ ensures x === 6 && opt === 5 ==> !\result
+  return !opt || opt + 1 > x;
+}
+
+export function orEarlyReturn(x: number, opt?: number): number {
+  //@ ensures opt === undefined ==> \result === 1
+  //@ ensures x === 6 && opt === 5 ==> \result === 0
+  if (opt === undefined || opt + 1 > x) return 1;
+  return 0;
+}
+
+export function orTernary(x: number, opt?: number): number {
+  //@ ensures opt === undefined ==> \result === 1
+  //@ ensures x === 6 && opt === 5 ==> \result === 0
+  return opt === undefined || opt + 1 > x ? 1 : 0;
+}
+
+export function andIfElse(x: number, opt?: number): number {
+  //@ ensures opt === undefined ==> \result === 0
+  //@ ensures x === 5 && opt === 5 ==> \result === 1
+  if (opt !== undefined && opt + 1 > x) {
+    return 1;
+  } else {
+    return 0;
+  }
+}
+
+export function lowest(xs: number[]): number | null {
+  //@ ensures xs.length === 0 ==> \result === null
+  //@ ensures xs.length > 0 ==> \result !== null
+  //@ ensures forall(k: nat, k < xs.length && \result !== null ==> \result <= xs[k])
+  //@ type i nat
+  let m: number | null = null;
+  for (let i = 0; i < xs.length; i++) {
+    //@ invariant 0 <= i && i <= xs.length
+    //@ invariant i === 0 ==> m === null
+    //@ invariant i > 0 ==> m !== null
+    //@ invariant forall(k: nat, k < i && m !== null ==> m <= xs[k])
+    //@ decreases xs.length - i
+    const x = xs[i]!;
+    if (m === null || x < m) m = x;
+  }
+  return m;
+}
