@@ -302,6 +302,9 @@ const OP_MAP: Record<string, string> = {
   "==": "=", "!=": "≠", "<==>": "↔",
 };
 
+/** Relational operators with their operands swapped (`a < b` ≡ `b > a`). */
+const MIRROR_OP: Record<string, string> = { "<": ">", "<=": ">=", ">": "<", ">=": "<=" };
+
 /** Bool-valued operators (for code-level conditions needing Decidable). */
 const BOOL_OP_MAP: Record<string, string> = {
   ...OP_MAP, "===": "==", "!==": "!=",
@@ -555,7 +558,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const valExpr: Expr = valSide.kind === "str" && innerTy.kind === "user"
           ? { kind: "constructor", name: valSide.value, type: innerTy.name, args: [] }
           : lowerExpr(valSide, binds);
-        const cmpOp = BOOL_OP_MAP[e.op] ?? e.op;
+        // The bound value goes on the left, so mirror the operator when the
+        // optional was on the right: `x < opt` → `Some(v) => v > x`.
+        const op = e.left.ty.kind === "optional" ? e.op : MIRROR_OP[e.op] ?? e.op;
+        const cmpOp = BOOL_OP_MAP[op] ?? op;
         const noneVal = e.op === "!==" ? true : false;
         const bound = matchBinder("value");
         return {
