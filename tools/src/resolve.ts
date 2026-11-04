@@ -704,8 +704,9 @@ let mergeBinder = 0;
 
 /** Expand `{ ...base, ...override }` into a faithful field-wise merge. Driven by
  *  the result record type's fields: an override field wins when present, else the
- *  base's field shows through. Optional fields decide presence at runtime
- *  (`Some?`); an `Option`-typed override is the whole merge guarded by its tag. */
+ *  base's field shows through. `f?:` fields decide presence at runtime (`Some?`);
+ *  required fields (including `T | null`) are always copied from the override.
+ *  An `Option`-typed override is the whole merge guarded by its tag. */
 function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
   const tbase = resolveExpr(base, ctx);
   const tover = resolveExpr(override, ctx);
@@ -730,8 +731,9 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
     fields: fields.map(f => {
       const ft = f.type!;
       const ovf: TExpr = { kind: "field", obj: ov, field: f.name, ty: ft };
-      if (ft.kind !== "optional") return { name: f.name, value: ovf };  // required: override always provides
-      // optional: override field wins iff present, else base's field
+      // A required key is always copied, even when its value is null/undefined.
+      if (ft.kind !== "optional" || !f.optionalKey) return { name: f.name, value: ovf };
+      // `f?:` key: override field wins iff present, else base's field
       const bvf: TExpr = { kind: "field", obj: bv, field: f.name, ty: ft };
       const binder = freshName(`_m${mergeBinder++}`);
       // someBody is the unwrapped present value; transform re-wraps each arm in
