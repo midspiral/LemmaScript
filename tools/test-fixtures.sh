@@ -53,6 +53,7 @@ cp tools/fixtures/optional-binder-collisions.ts "$fixture_dir/optional-binder-co
 cp tools/fixtures/unpaired-surrogate.ts "$fixture_dir/unpaired.ts"
 cp tools/fixtures/optional-guard-order.ts "$fixture_dir/optional-guard-order.ts"
 cp tools/fixtures/optional-comparison-order.ts "$fixture_dir/optional-comparison-order.ts"
+cp tools/fixtures/destructuring-default.ts "$fixture_dir/destructuring-default.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/impure.ts"
 if ! grep -Fq 'method {:axiom} rollDie' "$fixture_dir/impure.dfy.gen"; then
@@ -68,6 +69,7 @@ expect_failure \
   npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/impure.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-guard-order.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-comparison-order.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/destructuring-default.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/legacy-safe-slice.ts"
 if ! grep -Fq 'function SafeSlice' "$fixture_dir/legacy-safe-slice.dfy.gen"; then

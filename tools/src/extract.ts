@@ -63,6 +63,23 @@ let _validateDependency: (source: SourceFile) => void = () => {};
  *  when the initializer isn't a bare variable (single-eval temp). */
 let _destrCounter = 0;
 
+/** A destructuring default (`const { a = d } = o`, `const [a = d] = xs`) applies
+ *  only when the source value is `undefined`. Option can't tell `null` from
+ *  `undefined`, so a default on a source that may be `null` is rejected. */
+function destructuringDefault(el: Node, sourceTy: Type | undefined): RawExpr | null {
+  const init = Node.isBindingElement(el) ? el.getInitializer() : undefined;
+  if (!init) return null;
+  const parts = sourceTy?.isUnion() ? sourceTy.getUnionTypes() : sourceTy ? [sourceTy] : [];
+  if (parts.some(t => t.isNull())) {
+    throw new Error(`default value in destructuring a value that may be null is not yet supported: ${el.getText()}`);
+  }
+  return extractExpr(init);
+}
+
+function hasUndefined(t: Type | undefined): boolean {
+  return !!t && (t.isUndefined() || (t.isUnion() && t.getUnionTypes().some(u => u.isUndefined())));
+}
+
 /** Register the call's callee as a cross-file extern if applicable, then
  *  walk the source declaration's body for nested cross-file calls (so the
  *  lifted `requires`/`ensures` see all the symbols they reference). Idempotent
@@ -1455,11 +1472,21 @@ function extractStmts(stmts: Node[]): RawStmt[] {
               const name = inner.getText();
               const isRest = !!el.getDotDotDotToken();
               const elTs = _eraseGenerics(typeToString(el.getType()));
-              const init: RawExpr = isRest
+              let init: RawExpr = isRest
                 ? { kind: "call",
                     fn: { kind: "field", obj: initVar, field: "slice" },
                     args: [{ kind: "num", value: i }] }
                 : { kind: "index", obj: initVar, idx: { kind: "num", value: i } };
+              const arrTy = initializer.getType();
+              const srcTy = arrTy.getTupleElements()[i] ?? arrTy.getArrayElementType() ?? arrTy.getNumberIndexType();
+              const dflt = isRest ? null : destructuringDefault(el, srcTy);
+              if (dflt) {
+                // `[a = d] = xs`: d when xs[i] is out of bounds or undefined.
+                const present: RawExpr = hasUndefined(srcTy) ? { kind: "nullish", left: init, right: dflt } : init;
+                init = { kind: "conditional",
+                  cond: { kind: "binop", op: "<", left: { kind: "num", value: i }, right: { kind: "field", obj: initVar, field: "length" } },
+                  then: present, else: dflt };
+              }
               result.push({ kind: "let", name, mutable: s.getDeclarationKind() === "let", tsType: elTs, init, line });
             }
             continue;
@@ -1495,12 +1522,16 @@ function extractStmts(stmts: Node[]): RawStmt[] {
                 const propNode = el.getPropertyNameNode();
                 const fieldName = propNode ? propNode.getText() : localName;
                 const elTs = _eraseGenerics(typeToString(el.getType()));
+                const fieldInit: RawExpr = { kind: "field", obj: initVar, field: fieldName };
+                const srcTy = initializer.getType().getProperty(fieldName)?.getTypeAtLocation(d);
+                const dflt = destructuringDefault(el, srcTy);
                 result.push({
                   kind: "let",
                   name: localName,
                   mutable: s.getDeclarationKind() === "let",
                   tsType: elTs,
-                  init: { kind: "field", obj: initVar, field: fieldName },
+                  // `{ a = d } = o`: d when o.a is undefined (a field that can't be undefined ignores it).
+                  init: dflt && hasUndefined(srcTy) ? { kind: "nullish", left: fieldInit, right: dflt } : fieldInit,
                   line,
                 });
               }
@@ -2014,6 +2045,9 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
           ? _synthArrayUnions?.find(d => d.name === declTypeName && d.kind === "record")?.fields
           : undefined;
         return nameNode.getElements().map(el => {
+          if (el.getInitializer()) {
+            throw new Error(`default value in parameter destructuring not yet supported: ${el.getText()}`);
+          }
           const name = el.getName();
           const propType = type.getProperty(name)?.getTypeAtLocation(p);
           if (propType) return { name, tsType: typeToString(propType) };
