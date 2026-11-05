@@ -495,7 +495,7 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `arr.map((x) => e)` | `arr.map (fun x => e)` | `seq(\|arr\|, i requires 0 <= i < \|arr\| => var x := arr[i]; e)` (§3.7) |
 | `arr.filter((x) => e)` | `arr.filter (fun x => e)` | `Std.Collections.Seq.Filter((x) => e, arr)` |
 | `arr.every((x) => e)` | `arr.all (fun x => e)` | `Std.Collections.Seq.All(arr, (x) => e)` |
-| `arr.some((x) => e)` | `arr.any (fun x => e)` | `exists x :: x in arr && e` |
+| `arr.some((x) => e)` | `arr.any (fun x => e)` | `exists x :: x in arr && e`; indexed inline callbacks range over positions and bind the element, index, and source array |
 | `arr.includes(x)` | `arr.contains x` | `(x in arr)` |
 | `arr.indexOf(x)` | — | `SeqIndexOf(arr, x)` (preamble) |
 | `arr.find((x) => e)` | `arr.find? (fun x => e)` | `SeqFind(arr, (x) => e)` (preamble) |
