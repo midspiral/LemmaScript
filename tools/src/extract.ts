@@ -541,6 +541,9 @@ function extractExpr(node: Expression): RawExpr {
     // generated backend identifier.
     const destructureBindings: RawStmt[] = [];
     const params = node.getParameters().map((p, paramIndex) => {
+      if (p.isRestParameter()) {
+        throw new Error(`rest parameter in arrow lambda not yet supported: ${p.getText()}`);
+      }
       const typeNode = p.getTypeNode();
       const tsType = typeNode ? typeNode.getText() : undefined;
       const nameNode = p.getNameNode();
