@@ -123,6 +123,10 @@ function resolveTsType(tsType: string, overrides: Map<string, string>, varName?:
 /** Infer a conditional's result type after its branches have been resolved or
  *  contextually coerced. A void branch is the source-level null/undefined arm. */
 function conditionalResultTy(thenTy: Ty, elseTy: Ty): Ty {
+  if ((thenTy.kind === "int" || thenTy.kind === "nat") &&
+      (elseTy.kind === "int" || elseTy.kind === "nat")) {
+    return { ...thenTy, kind: thenTy.kind === "int" || elseTy.kind === "int" ? "int" : "nat" };
+  }
   let ty = thenTy.kind !== "unknown" ? thenTy : elseTy;
   if (thenTy.kind === "void" && elseTy.kind !== "void" && elseTy.kind !== "unknown") {
     ty = { kind: "optional", inner: elseTy };
@@ -842,7 +846,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "unop": {
       const expr = resolveExpr(e.expr, ctx);
-      const ty: Ty = e.op === "!" ? { kind: "bool" } : e.op === "typeof" ? { kind: "string" } : expr.ty;
+      const ty: Ty = e.op === "!" ? { kind: "bool" } : e.op === "typeof" ? { kind: "string" }
+        : e.op === "-" && expr.ty.kind === "nat" ? { ...expr.ty, kind: "int" } : expr.ty;
       return { kind: "unop", op: e.op, expr, ty };
     }
 

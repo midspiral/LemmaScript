@@ -55,6 +55,7 @@ cp tools/fixtures/optional-guard-order.ts "$fixture_dir/optional-guard-order.ts"
 cp tools/fixtures/optional-comparison-order.ts "$fixture_dir/optional-comparison-order.ts"
 cp tools/fixtures/spread-null-override.ts "$fixture_dir/spread-null-override.ts"
 cp tools/fixtures/optional-enum-fields.ts "$fixture_dir/optional-enum-fields.ts"
+cp examples/conditionalCalls.ts "$fixture_dir/conditional-calls.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/impure.ts"
 if ! grep -Fq 'method {:axiom} rollDie' "$fixture_dir/impure.dfy.gen"; then
@@ -72,6 +73,12 @@ npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/opt
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-comparison-order.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/spread-null-override.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-enum-fields.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/conditional-calls.ts"
+sed 's/return enabled ? checkedIncrement(enabled, 0) : -1;/return enabled ? checkedIncrement(!enabled, 0) : -1;/' \
+  examples/conditionalCalls.ts > "$fixture_dir/conditional-calls-mutated.ts"
+expect_failure \
+  "Dafny accepted a call whose precondition contradicts its selected branch" \
+  npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/conditional-calls-mutated.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/legacy-safe-slice.ts"
 if ! grep -Fq 'function SafeSlice' "$fixture_dir/legacy-safe-slice.dfy.gen"; then
