@@ -161,7 +161,7 @@ export type PresetMinutes = 5 | 15 | 30 | 45 | 60;
 
 emits `type PresetMinutes = nat`. Any reference to `PresetMinutes` (parameters, fields, `PresetMinutes[]`) then resolves through the alias.
 
-Interface fields can also be overridden with a trailing annotation on the same line:
+Interface fields and class properties can also be overridden with a trailing annotation on the same line:
 
 ```typescript
 export interface Model {
@@ -169,6 +169,8 @@ export interface Model {
   expenses: Expense[];
 }
 ```
+
+Class properties remain present in the verification model. A trailing `//@ type unknown` makes an irrelevant field opaque without extracting its original type's dependencies; accesses that require that hidden structure still need a suitable model. A named override can refer to a local `//@ declare-type` projection. As with other type overrides, the projection must preserve the observations and mutations used by the selected code.
 
 ### 2.5 Type Declarations: `//@ declare-type`
 
@@ -252,6 +254,8 @@ class Counter {
   }
 }
 ```
+
+Selected methods participate in type and constant dependency discovery, including their signatures, bodies, specifications, and modeled class fields. Unselected methods remain outside verification; all class properties are retained, with the field type overrides from §2.4 available for irrelevant or projected state.
 
 **`modifies this` / `reads this`:** Not generated automatically. Add as proof-level additions in the `.dfy` file. Dafny will report an error if they're missing.
 

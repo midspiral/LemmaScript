@@ -2642,6 +2642,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
     }
   };
   const knownTypeNames = new Set<string>(typeDecls.map(d => (d as { name: string }).name));
+  for (const cls of mod.classes ?? []) knownTypeNames.add(cls.name);
   const allTypeParams = new Set<string>();
   // Exclude type params from the *source* decls — the transformed IR drops
   // them for aliases (`type Step<S, A> = …`), and a generic alias's params

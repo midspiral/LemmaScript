@@ -5,7 +5,7 @@
  * The only strings are //@ annotation expressions (parsed later by specparser).
  */
 
-import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
+import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
@@ -972,8 +972,9 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   return null;
 }
 
-function interfaceFieldTypeOverride(node: Node | undefined): string | undefined {
-  if (!node || !Node.isPropertySignature(node) || !Node.isInterfaceDeclaration(node.getParent())) return undefined;
+function fieldTypeOverride(node: Node | undefined): string | undefined {
+  if (!node || !(Node.isPropertyDeclaration(node) ||
+      (Node.isPropertySignature(node) && Node.isInterfaceDeclaration(node.getParent())))) return undefined;
   const text = node.getTrailingCommentRanges().map(r => r.getText()).join(" ");
   return text.match(/\/\/@ type (\w+)/)?.[1];
 }
@@ -983,7 +984,7 @@ function extractInterface(decl: InterfaceDeclaration, extraDecls?: TypeDeclInfo[
   const overrides = new Map<string, string>();
   for (const member of decl.getMembers()) {
     if (Node.isPropertySignature(member)) {
-      const override = interfaceFieldTypeOverride(member);
+      const override = fieldTypeOverride(member);
       if (override) overrides.set(member.getName(), override);
     }
   }
@@ -1947,7 +1948,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
 // ── Function extraction ──────────────────────────────────────
 
-function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
+function extractFunction(fn: FunctionDeclaration | MethodDeclaration, parentAnnotations?: Annotation[]): RawFunction {
   const prevInFn = _inFunctionExtraction;
   _inFunctionExtraction = true;
   try {
@@ -1956,7 +1957,7 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
     _inFunctionExtraction = prevInFn;
   }
 }
-function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
+function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, parentAnnotations?: Annotation[]): RawFunction {
   // A `<T extends B>` bound is handled one of two ways. When B is a modelable
   // type (a record/nominal), substitute T with B — a body that reads T's fields
   // (e.g. `x.id`) then typechecks against B. When B is a union/intersection we
@@ -2408,6 +2409,30 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     return raw;
   });
 
+  // Class methods participate in the same dependency passes as functions.
+  // Keep their source nodes alongside the raw methods for imported-type lookup.
+  const selected: { node: FunctionDeclaration | MethodDeclaration; fn: RawFunction; owner: string }[] =
+    fnsToExtract.map((f, i) => ({ node: f.node, fn: functions[i], owner: "" }));
+  const classes: RawClass[] = [];
+  const classFields: PropertyDeclaration[] = [];
+  for (const cls of sourceFile.getClasses()) {
+    if (hasLeadingDirective(cls, "skip")) continue;
+    const methodNodes = cls.getMethods().filter(method =>
+      !hasLeadingDirective(method, "skip") && hasLineDirective(method.getFullText(), "verify"));
+    if (methodNodes.length === 0) continue;
+    const name = cls.getName() ?? "Anonymous";
+    const methods = methodNodes.map(node => {
+      const fn = extractFunction(node);
+      selected.push({ node, fn, owner: name });
+      return fn;
+    });
+    const fields = cls.getProperties().map(prop => {
+      classFields.push(prop);
+      return { name: prop.getName(), tsType: fieldTypeOverride(prop) ?? typeToString(prop.getType()) };
+    });
+    classes.push({ name, fields, methods });
+  }
+
   // Resolve type references in function signatures via ts-morph's type
   // checker — walk the TypeNode tree, resolve each TypeReferenceNode to its
   // declaration through symbol resolution, recurse. This is the principled
@@ -2469,14 +2494,14 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       return;
     }
   }
-  for (const f of fnsToExtract) {
+  for (const f of selected) {
     for (const p of f.node.getParameters()) resolveTypeNodeRefs(p.getTypeNode());
     resolveTypeNodeRefs(f.node.getReturnTypeNode());
   }
 
   // Resolve union param types: A | B → intersection of fields
   const typeDeclMap = new Map(typeDecls.map(d => [d.name, d]));
-  for (const fn of functions) {
+  for (const { fn } of selected) {
     for (const p of fn.params) {
       if (!p.tsType.includes(" | ")) continue;
       const arms = p.tsType.split(" | ").map(a => a.trim());
@@ -2505,18 +2530,34 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     }
   }
 
-  // In brownfield mode, filter consts to only those referenced by verified functions.
+  // In brownfield mode, keep dependencies of selected functions and methods.
   if (hasVerifyDirective) {
     const referencedNames = new Set<string>();
+    function collectSpecNames(spec: string | null) {
+      if (!spec) return;
+      for (const m of spec.matchAll(/\b([a-zA-Z_]\w*)\b/g)) referencedNames.add(m[1]);
+    }
     function collectNames(stmts: RawStmt[]) {
       for (const s of stmts) {
         if (s.kind === "let") { if (s.tsType) referencedNames.add(s.tsType); collectNamesExpr(s.init); }
-        if (s.kind === "assign") { collectNamesExpr(s.value); }
+        if (s.kind === "assign") { collectSpecNames(s.target); collectNamesExpr(s.value); }
         if (s.kind === "return") { collectNamesExpr(s.value); }
         if (s.kind === "if") { collectNamesExpr(s.cond); collectNames(s.then); collectNames(s.else); }
-        if (s.kind === "while") { collectNamesExpr(s.cond); collectNames(s.body); }
-        if (s.kind === "forof") { collectNamesExpr(s.iterable); collectNames(s.body); }
+        if (s.kind === "while") {
+          collectNamesExpr(s.cond); collectNames(s.body);
+          s.invariants.forEach(collectSpecNames); collectSpecNames(s.decreases); collectSpecNames(s.doneWith);
+        }
+        if (s.kind === "forof") {
+          collectNamesExpr(s.iterable); collectNames(s.body);
+          s.invariants.forEach(collectSpecNames); collectSpecNames(s.doneWith);
+        }
+        if (s.kind === "switch") {
+          collectNamesExpr(s.expr); s.cases.forEach(c => collectNames(c.body)); collectNames(s.defaultBody);
+        }
         if (s.kind === "expr") { collectNamesExpr(s.expr); }
+        if (s.kind === "assert") collectSpecNames(s.expr);
+        if (s.kind === "ghostLet") { collectSpecNames(s.tsType); collectSpecNames(s.init); }
+        if (s.kind === "ghostAssign") { collectSpecNames(s.target); collectSpecNames(s.value); }
       }
     }
     function collectNamesExpr(e: RawExpr) {
@@ -2534,22 +2575,18 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       if (e.kind === "nonNull") { collectNamesExpr(e.expr); }
       if (e.kind === "optChain") { collectNamesExpr(e.obj); for (const c of e.chain) { if (c.kind === "call") c.args.forEach(collectNamesExpr); if (c.kind === "index") collectNamesExpr(c.idx); } }
       if (e.kind === "lambda") { if (Array.isArray(e.body)) collectNames(e.body); else collectNamesExpr(e.body); }
-      if (e.kind === "forall" || e.kind === "exists") { collectNamesExpr(e.body); }
+      if (e.kind === "forall" || e.kind === "exists") { collectSpecNames(e.varType); collectNamesExpr(e.body); }
     }
     // Signature types (params + return) get base-name stripping below; body /
     // spec references stay exact-match (so a body `let xs: Hunk[]` doesn't pull
     // `Hunk` into the filter early and reorder output that resolveType re-adds).
     const sigTypes = new Set<string>();
-    for (const fn of functions) {
+    for (const { fn } of selected) {
       for (const p of fn.params) { referencedNames.add(p.tsType); sigTypes.add(p.tsType); }
       referencedNames.add(fn.returnType); sigTypes.add(fn.returnType);
       collectNames(fn.body);
       // Also scan spec annotations for identifier references
-      for (const spec of [...fn.requires, ...fn.ensures]) {
-        for (const m of spec.matchAll(/\b([a-zA-Z_]\w*)\b/g)) {
-          referencedNames.add(m[1]);
-        }
-      }
+      for (const spec of [...fn.requires, ...fn.ensures, fn.decreases]) collectSpecNames(spec);
     }
     // A constant's initializer can reference other constants
     // (`const ZERO_NINE = ZERO + nthDigit(-1)`). Close over those initializers
@@ -2594,11 +2631,16 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       const base = name.replace(/\s*\|\s*(undefined|null)\s*$/, "").replace(/(\[\])+$/, "").trim();
       if (base !== name && /^[A-Za-z_]\w*$/.test(base)) markType(base);
     }
+    // Fields can carry nested generic arguments and lowercase type aliases.
+    // Only inspect the modeled type: an override hides the original field type.
+    for (const cls of classes) for (const field of cls.fields) {
+      for (const m of field.tsType.matchAll(/\b([A-Za-z_]\w*)\b/g)) markType(m[1]);
+    }
     typeDecls.splice(0, typeDecls.length, ...typeDecls.filter(d => neededTypes.has(d.name) || declaredNames.has(d.name)));
   }
 
   // Resolve imported types: extract types referenced in function signatures but not in this file
-  const knownTypes = new Set(typeDecls.map(d => d.name));
+  const knownTypes = new Set([...typeDecls.map(d => d.name), ...classes.map(c => c.name)]);
   const builtins = new Set(["Map", "Set", "Array", "String", "Number", "Boolean", "Promise", "Date", "RegExp", "Error"]);
   const visitedTypes = new Set<unknown>();
   function resolveType(t: Type, locationNode: Node) {
@@ -2663,7 +2705,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       if (info?.kind === "record") {
         for (const field of info.fields ?? []) {
           const prop = t.getProperty(field.name);
-          if (!prop || field.tsType === interfaceFieldTypeOverride(prop.getDeclarations()[0])) continue;
+          if (!prop || field.tsType === fieldTypeOverride(prop.getDeclarations()[0])) continue;
           resolveType(prop.getTypeAtLocation(locationNode), locationNode);
         }
       }
@@ -2677,9 +2719,8 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       }
     }
   }
-  for (let i = 0; i < fnsToExtract.length; i++) {
-    const f = fnsToExtract[i];
-    const fn = functions[i];
+  for (const f of selected) {
+    const fn = f.fn;
     // Skip params whose TS type was overridden by `//@ type <param> <Override>`
     // — the verification works against the override, so cross-file resolving
     // the original type pulls in unused datatypes (often with unsupported
@@ -2689,13 +2730,16 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       if (overriddenNames.has(p.getName())) continue;
       resolveType(p.getType(), p);
     }
+    if (f.owner && !overriddenNames.has("\\result")) resolveType(f.node.getReturnType(), f.node);
+  }
+  for (const prop of classFields) {
+    if (!fieldTypeOverride(prop)) resolveType(prop.getType(), prop);
   }
   // Extern signature types: see _externSigTypes.
   for (const r of _externSigTypes) resolveType(r.type, r.node);
   // Resolve anonymous object return types into synthetic named types
-  for (let i = 0; i < fnsToExtract.length; i++) {
-    const f = fnsToExtract[i];
-    const fn = functions[i];
+  for (const f of selected) {
+    const fn = f.fn;
     const retType = f.node.getReturnType();
     // Prefer alias symbol (named type aliases) over underlying object symbol (__type)
     const aliasSym = retType.getAliasSymbol();
@@ -2732,7 +2776,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       || sourceReturnText.includes(" | null ") || sourceReturnText.includes(" | undefined ")
       || sourceReturnText.includes(" | null|") || sourceReturnText.includes(" | undefined|");
     const sym = retType.getSymbol();
-    if (sym?.getName() === "__type" && retType.isObject() && !retType.isArray()) {
+    if ((sym?.getName() === "__type" || sym?.getName() === "__object") && retType.isObject() && !retType.isArray()) {
       innerType = retType;
       if (sourceHadNullish) wrapOptional = true;
     } else if (retType.isUnion()) {
@@ -2742,7 +2786,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       if (nullish.length >= 1 && others.length === 1) {
         const onlyOther = others[0];
         const otherSym = onlyOther.getSymbol();
-        if (otherSym?.getName() === "__type" && onlyOther.isObject() && !onlyOther.isArray()) {
+        if ((otherSym?.getName() === "__type" || otherSym?.getName() === "__object") && onlyOther.isObject() && !onlyOther.isArray()) {
           innerType = onlyOther;
           wrapOptional = true;
         }
@@ -2755,7 +2799,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
         fn.returnType = wrapOptional ? `${resolved} | undefined` : resolved;
         continue;
       }
-      const synName = fn.name.charAt(0).toUpperCase() + fn.name.slice(1) + "Result";
+      const synName = f.owner + fn.name.charAt(0).toUpperCase() + fn.name.slice(1) + "Result";
       if (!knownTypes.has(synName)) {
         const extra: TypeDeclInfo[] = [];
         const info = extractRecord(synName, innerType, f.node, undefined, extra);
@@ -2767,24 +2811,6 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
         resolveType(prop.getTypeAtLocation(f.node), f.node);
       }
     }
-  }
-
-  // Extract classes with //@ verify methods
-  const classes: RawClass[] = [];
-  for (const cls of sourceFile.getClasses()) {
-    if (hasLeadingDirective(cls, "skip")) continue;
-    const methods: RawFunction[] = [];
-    for (const method of cls.getMethods()) {
-      if (hasLeadingDirective(method, "skip")) continue;
-      if (!method.getFullText().includes('//@ verify')) continue;
-      methods.push(extractFunction(method as any));
-    }
-    if (methods.length === 0) continue;
-    const fields: { name: string; tsType: string }[] = [];
-    for (const prop of cls.getProperties()) {
-      fields.push({ name: prop.getName(), tsType: typeToString(prop.getType()) });
-    }
-    classes.push({ name: cls.getName() ?? "Anonymous", fields, methods });
   }
 
   // Clear the synth-union accumulator so typeToString reverts to plain
