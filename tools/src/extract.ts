@@ -972,14 +972,19 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   return null;
 }
 
+function interfaceFieldTypeOverride(node: Node | undefined): string | undefined {
+  if (!node || !Node.isPropertySignature(node) || !Node.isInterfaceDeclaration(node.getParent())) return undefined;
+  const text = node.getTrailingCommentRanges().map(r => r.getText()).join(" ");
+  return text.match(/\/\/@ type (\w+)/)?.[1];
+}
+
 function extractInterface(decl: InterfaceDeclaration, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
   // Collect field type overrides from trailing //@ type annotations
   const overrides = new Map<string, string>();
   for (const member of decl.getMembers()) {
     if (Node.isPropertySignature(member)) {
-      const text = member.getTrailingCommentRanges().map(r => r.getText()).join(" ");
-      const match = text.match(/\/\/@ type (\w+)/);
-      if (match) overrides.set(member.getName(), match[1]);
+      const override = interfaceFieldTypeOverride(member);
+      if (override) overrides.set(member.getName(), override);
     }
   }
   return extractRecord(decl.getName(), decl.getType(), decl, overrides, extraDecls);
@@ -1086,6 +1091,16 @@ function typeToString(type: Type): string {
   }
   if (type.isUnion()) {
     const unionTypes = type.getUnionTypes();
+    // Mapping union members individually loses a named inner union. Ask the
+    // checker for its non-nullable type before widening literals, preserving
+    // alias metadata and generic substitutions in record fields.
+    const nullish = unionTypes.filter(t => t.isNull() || t.isUndefined());
+    if (nullish.length > 0) {
+      const inner = type.getNonNullableType();
+      if (inner.isUnion() && inner.getAliasSymbol()) {
+        return [typeToString(inner), ...nullish.map(typeToString)].join(" | ");
+      }
+    }
     // `T[] | U` synthesis: exactly two members, one array, the other not
     // array/undefined/null. Detected via ts-morph type predicates (no string
     // parsing). Registers a discriminated-union TypeDeclInfo with variants
@@ -2621,17 +2636,34 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     visitedTypes.add(t.compilerType);
     // Unwrap arrays and generics to find user-defined types
     if (t.isArray()) { resolveType(t.getArrayElementTypeOrThrow(), locationNode); return; }
-    if (t.isUnion()) { for (const u of t.getUnionTypes()) resolveType(u, locationNode); return; }
+    if (t.isUnion()) {
+      // Discover the same named inner type that typeToString preserves. Walking
+      // only individual literals would leave an imported optional enum opaque.
+      const inner = t.getNonNullableType();
+      if (inner.compilerType !== t.compilerType && inner.isUnion() && inner.getAliasSymbol()) {
+        resolveType(inner, locationNode);
+        return;
+      }
+      for (const u of t.getUnionTypes()) resolveType(u, locationNode);
+      return;
+    }
     for (const arg of t.getTypeArguments()) resolveType(arg, locationNode);
     const sym = t.getSymbol() ?? t.getAliasSymbol();
     const name = sym?.getName();
-    if (name && !name.startsWith("__") && !knownTypes.has(name) && !builtins.has(name) && (t.isObject() || t.isIntersection())) {
-      const extra: TypeDeclInfo[] = [];
-      const info = extractRecord(name, t, locationNode, undefined, extra);
-      if (info) {
-        typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(name);
-        // Recursively resolve types referenced in this type's fields
-        for (const prop of t.getProperties()) {
+    if (name && !name.startsWith("__") && !builtins.has(name) && (t.isObject() || t.isIntersection())) {
+      if (declaredNames.has(name)) return;
+      let info = typeDecls.find(d => d.name === name);
+      if (!knownTypes.has(name)) {
+        const extra: TypeDeclInfo[] = [];
+        info = extractRecord(name, t, locationNode, undefined, extra) ?? undefined;
+        if (info) { typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(name); }
+      }
+      // Local records are already known, but their field types can still be
+      // imported. Follow their modeled fields too, respecting field overrides.
+      if (info?.kind === "record") {
+        for (const field of info.fields ?? []) {
+          const prop = t.getProperty(field.name);
+          if (!prop || field.tsType === interfaceFieldTypeOverride(prop.getDeclarations()[0])) continue;
           resolveType(prop.getTypeAtLocation(locationNode), locationNode);
         }
       }
