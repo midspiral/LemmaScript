@@ -57,6 +57,7 @@ cp tools/fixtures/spread-null-override.ts "$fixture_dir/spread-null-override.ts"
 cp tools/fixtures/optional-enum-fields.ts "$fixture_dir/optional-enum-fields.ts"
 cp tools/fixtures/class-dependencies.ts "$fixture_dir/class-dependencies.ts"
 cp tools/fixtures/const-enum.ts "$fixture_dir/const-enum.ts"
+cp examples/conditionalCalls.ts "$fixture_dir/conditional-calls.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/impure.ts"
 if ! grep -Fq 'method {:axiom} rollDie' "$fixture_dir/impure.dfy.gen"; then
@@ -87,6 +88,13 @@ sed 's/return Phase.Active;/return Phase.Idle;/' \
 expect_failure \
   "Dafny accepted the wrong const enum member despite its postcondition" \
   npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/const-enum-mutated.ts"
+
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/conditional-calls.ts"
+sed 's/return enabled ? checkedIncrement(enabled, 0) : -1;/return enabled ? checkedIncrement(!enabled, 0) : -1;/' \
+  examples/conditionalCalls.ts > "$fixture_dir/conditional-calls-mutated.ts"
+expect_failure \
+  "Dafny accepted a call whose precondition contradicts its selected branch" \
+  npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/conditional-calls-mutated.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/legacy-safe-slice.ts"
 if ! grep -Fq 'function SafeSlice' "$fixture_dir/legacy-safe-slice.dfy.gen"; then
