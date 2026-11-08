@@ -5,7 +5,7 @@
  * The only strings are //@ annotation expressions (parsed later by specparser).
  */
 
-import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
+import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
@@ -417,6 +417,22 @@ function extractExpr(node: Expression): RawExpr {
   // this
   if (node.getKind() === SyntaxKind.ThisKeyword) {
     return { kind: "var", name: "this" };
+  }
+
+  // Resolve actual enum members through symbols, so a local value shadowing
+  // an enum name remains a normal property access. Element accesses have no
+  // symbol of their own; look up the literal key on the receiver instead.
+  if (Node.isPropertyAccessExpression(node) || Node.isElementAccessExpression(node)) {
+    const arg = Node.isElementAccessExpression(node) ? node.getArgumentExpression() : undefined;
+    const symbol = Node.isPropertyAccessExpression(node) ? node.getSymbol()
+      : arg && Node.isStringLiteral(arg) ? node.getExpression().getType().getProperty(arg.getLiteralValue()) : undefined;
+    const member = symbol?.getDeclarations().find(Node.isEnumMember);
+    if (member) {
+      const decl = member.getParent();
+      if (!decl.isConstEnum()) throw new Error(`Enum member ${node.getText()} requires a numeric const enum; runtime enum objects are unsupported`);
+      const info = extractConstEnum(decl);
+      return { kind: "num", value: info.constEnumMembers!.find(m => m.name === member.getName())!.value };
+    }
   }
 
   // Property access: x.foo or x?.foo
@@ -872,6 +888,25 @@ function externIsImpure(node: Node, name: string, parentStmt?: Node): boolean {
 
 // ── Type declaration extraction ──────────────────────────────
 
+function constEnumDeclaration(type: Type): EnumDeclaration | undefined {
+  for (const decl of type.getSymbol()?.getDeclarations() ?? []) {
+    const parent = Node.isEnumMember(decl) ? decl.getParent() : decl;
+    if (Node.isEnumDeclaration(parent) && parent.isConstEnum()) return parent;
+  }
+  return undefined;
+}
+
+function extractConstEnum(decl: EnumDeclaration, name = decl.getName()): TypeDeclInfo {
+  const members = decl.getMembers().map(member => {
+    const value = member.getValue();
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+      throw new Error(`Numeric const enum ${decl.getName()}.${member.getName()} must have a safe integer value`);
+    }
+    return { name: member.getName(), value };
+  });
+  return { name, kind: "alias", aliasOf: "number", constEnumMembers: members };
+}
+
 function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
   const name = decl.getName();
   const type = decl.getType();
@@ -883,6 +918,12 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   // (`5 | 15 | 30` → `nat`) and other types LS can't model precisely.
   const override = parseAnnotations(decl).find(a => a.kind === "type");
   if (override) return { name, typeParams: tpField, kind: "alias", aliasOf: override.expr };
+
+  const enumDecl = constEnumDeclaration(type);
+  if (enumDecl) {
+    // A type alias preserves numeric behavior but creates no value binding.
+    return { ...extractConstEnum(enumDecl, name), constEnumMembers: [] };
+  }
 
   if (type.isUnion()) {
     const members = type.getUnionTypes();
@@ -1075,6 +1116,8 @@ function declaredTypeTextIfBetter(propDecl: Node | undefined, tsType: string): s
 }
 
 function typeToString(type: Type): string {
+  const enumDecl = constEnumDeclaration(type);
+  if (enumDecl) { extractConstEnum(enumDecl); return "number"; }
   if (type.isUndefined()) return "undefined";
   if (type.isNumber() || type.isNumberLiteral()) return "number";
   if (type.isBigInt() || type.isBigIntLiteral()) return "bigint";
@@ -2214,6 +2257,28 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       // Synthetic types from inline objects must precede the parent type
       typeDecls.push(...extra);
       if (info) typeDecls.push(info);
+    } else if (Node.isEnumDeclaration(stmt) && stmt.isConstEnum()
+        && !declaredNames.has(stmt.getName()) && !hasLeadingDirective(stmt, "skip")) {
+      typeDecls.push(extractConstEnum(stmt));
+    }
+  }
+
+  // Specifications lack TS expression nodes. Retain enum values under each
+  // local import binding, including renamed exports and barrel re-exports.
+  for (const imp of sourceFile.getImportDeclarations()) {
+    for (const binding of imp.getNamedImports()) {
+      const local = binding.getAliasNode() ?? binding.getNameNode();
+      if (declaredNames.has(local.getText())) continue;
+      const symbol = local.getSymbol();
+      const target = symbol?.getAliasedSymbol() ?? symbol;
+      for (const decl of target?.getDeclarations() ?? []) {
+        if (Node.isEnumDeclaration(decl) && decl.isConstEnum()) {
+          typeDecls.push(extractConstEnum(decl, local.getText()));
+        } else if (Node.isTypeAliasDeclaration(decl) && constEnumDeclaration(decl.getType())) {
+          const info = extractTypeDecl(decl);
+          if (info) typeDecls.push({ ...info, name: local.getText() });
+        }
+      }
     }
   }
 
@@ -2614,7 +2679,12 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     function markType(name: string) {
       if (neededTypes.has(name)) return;
       const d = typeDecls.find(t => t.name === name);
-      if (!d) return;
+      if (!d) {
+        const dot = name.lastIndexOf(".");
+        const parent = typeDecls.find(t => t.name === name.slice(0, dot));
+        if (dot > 0 && parent?.constEnumMembers?.some(m => m.name === name.slice(dot + 1))) markType(parent.name);
+        return;
+      }
       neededTypes.add(name);
       for (const f of d.fields ?? [])
         for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) markType(m[1]);
@@ -2629,7 +2699,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     // (`Omit<FilePathOptions, …>` must not pull in the inner type).
     for (const name of sigTypes) {
       const base = name.replace(/\s*\|\s*(undefined|null)\s*$/, "").replace(/(\[\])+$/, "").trim();
-      if (base !== name && /^[A-Za-z_]\w*$/.test(base)) markType(base);
+      if (base !== name && /^[A-Za-z_]\w*(?:\.\w+)*$/.test(base)) markType(base);
     }
     // Fields can carry nested generic arguments and lowercase type aliases.
     // Only inspect the modeled type: an override hides the original field type.
@@ -2644,6 +2714,9 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   const builtins = new Set(["Map", "Set", "Array", "String", "Number", "Boolean", "Promise", "Date", "RegExp", "Error"]);
   const visitedTypes = new Set<unknown>();
   function resolveType(t: Type, locationNode: Node) {
+    // Enums are primitive values, not records of Number prototype methods.
+    const enumDecl = constEnumDeclaration(t);
+    if (enumDecl) { extractConstEnum(enumDecl); return; }
     // Resolve type aliases (e.g. string unions imported from other files).
     // BEFORE the visited guard: the same interned compilerType can arrive both
     // with and without its alias symbol (getTypeAtLocation drops it), and an
@@ -2741,6 +2814,9 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   for (const f of selected) {
     const fn = f.fn;
     const retType = f.node.getReturnType();
+    // Preserve the source's local enum binding or member type. Restoring the
+    // checker's canonical name here loses renamed imports.
+    if (constEnumDeclaration(retType)) continue;
     // Prefer alias symbol (named type aliases) over underlying object symbol (__type)
     const aliasSym = retType.getAliasSymbol();
     if (aliasSym && !aliasSym.getName().startsWith("__")) {

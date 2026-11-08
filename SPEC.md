@@ -170,7 +170,7 @@ export interface Model {
 }
 ```
 
-Class properties remain present in the verification model. A trailing `//@ type unknown` makes an irrelevant field opaque without extracting its original type's dependencies; accesses that require that hidden structure still need a suitable model. A named override can refer to a local `//@ declare-type` projection. As with other type overrides, the projection must preserve the observations and mutations used by the selected code.
+Class properties remain present in the verification model. A trailing `//@ type unknown` makes an irrelevant field opaque without extracting its original type's dependencies; accesses that require that hidden structure still need a suitable model. A named override can refer to a local `//@ declare-type` projection. Type overrides are trusted: the compiler does not check correspondence with the original TypeScript type. The projection must preserve the observations and mutations used by the selected code, including any relevant aliasing or identity.
 
 ### 2.5 Type Declarations: `//@ declare-type`
 
@@ -1041,6 +1041,8 @@ To use JavaScript's UTF-16 code-unit model, select
 (§7.6). See SPEC_DAFNY.md §4 for the behavior and limitations of each model.
 
 `lsc` reads parameter and variable types from ts-morph. Primitive types are mapped per the table. User-defined types (like `State`, `Event`) are passed through by name — the corresponding backend type is generated from the TS type declaration.
+
+**Numeric const enums.** A local or named-imported `const enum` with safe-integer numeric members lowers to integers in both backends. TypeScript's checker supplies the member values, including implicit numbering, aliases, and computed constant expressions; executable `Phase.Active` / `Phase["Active"]` reads and specification references use those same values. Renamed imports and barrel re-exports preserve their local bindings, and local value bindings shadow enum names. Enum types, member types, and type aliases retain numeric behavior, including falsiness at zero. The integer model widens the enum's domain; it does not assume that every value is a declared member. String, fractional, and unsafe-integer const enums are rejected. Runtime enum objects, namespace-qualified specification references, and dynamic enum indexing are outside this support.
 
 **Tuples.** A tuple type lowers to a native backend tuple (`(A, B)` in Dafny, `A × B` in Lean) only when its element types differ; a *homogeneous* tuple (`[number, number]`) lowers to `seq`/`Array` instead, since a sequence is a superset of what a same-typed tuple offers (dynamic index, `.length`, `.map`). The same homogeneity rule applies to an unannotated array literal: `[1, "a"]` is a tuple, `[1, 2, 3]` a sequence; an explicit expected type wins. Tuple element access **requires a compile-time integer-literal index** — `t[0]`, `t[1]` — because a tuple has a distinct type per slot, so a runtime index has neither a single result type nor a backend projection (`t.0`/`t.1`). A non-literal index into a tuple is a `lsc` error. `const [a, b] = t` destructuring works (it desugars to per-slot access). See [`examples/tuples.ts`](examples/tuples.ts).
 
