@@ -915,6 +915,11 @@ function tryExtractConstEnum(decl: EnumDeclaration, name = decl.getName()): Type
   return { name, kind: "alias", aliasOf: "number", constEnumMembers: members };
 }
 
+function isNumberType(type: Type): boolean {
+  const members = type.isUnion() ? type.getUnionTypes() : [type];
+  return members.every(m => (m.isNumber() || m.isNumberLiteral()) && !m.isEnumLiteral());
+}
+
 function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
   const name = decl.getName();
   const type = decl.getType();
@@ -932,6 +937,10 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
     // A type alias preserves numeric behavior but creates no value binding.
     return { ...enumInfo, name, constEnumMembers: [] };
   }
+
+  // Numeric literal unions are numbers at runtime. Keeping the alias without
+  // its numeric target would make conditions treat its values as objects.
+  if (isNumberType(type)) return { name, typeParams: tpField, kind: "alias", aliasOf: "number" };
 
   if (type.isUnion()) {
     const members = type.getUnionTypes();
@@ -2283,7 +2292,8 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
         if (Node.isEnumDeclaration(decl)) {
           const info = tryExtractConstEnum(decl, local.getText());
           if (info && !typeDecls.some(d => d.name === info.name)) typeDecls.push(info);
-        } else if (Node.isTypeAliasDeclaration(decl) && constEnumInfo(decl.getType())) {
+        } else if (Node.isTypeAliasDeclaration(decl)
+            && (constEnumInfo(decl.getType()) || isNumberType(decl.getType()))) {
           const info = extractTypeDecl(decl);
           if (info) typeDecls.push({ ...info, name: local.getText() });
         }

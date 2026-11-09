@@ -365,6 +365,20 @@ function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new 
   return ty;
 }
 
+/** Numeric aliases keep their names in declarations but use their underlying
+ *  types in expressions. Optional payloads need the same treatment for zero's
+ *  falsiness; collection elements are resolved when read. */
+function numericValueType(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new Set()): Ty {
+  if (ty.kind === "optional") return { ...ty, inner: numericValueType(ty.inner, typeDecls, seen) };
+  if (ty.kind !== "user" || seen.has(ty.name)) return ty;
+  const decl = declOfDotted(typeDecls, ty.name);
+  if (decl?.kind === "alias" && decl.aliasOfTy) {
+    const target = numericValueType(decl.aliasOfTy, typeDecls, new Set([...seen, ty.name]));
+    if (target.kind === "int" || target.kind === "nat" || target.kind === "real") return target;
+  }
+  return ty;
+}
+
 function getDiscriminant(ctx: Ctx, typeName: string): string | undefined {
   return findDecl(ctx, typeName)?.discriminant;
 }
@@ -785,6 +799,11 @@ function resolveConstEnumMember(obj: RawExpr, name: string, ctx: Ctx): TExpr | u
 }
 
 function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
+  const expr = resolveExprInner(e, ctx);
+  return { ...expr, ty: numericValueType(expr.ty, ctx.typeDecls) };
+}
+
+function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
   switch (e.kind) {
     case "var":
       if (e.name === "undefined") return { kind: "var", name: "undefined", ty: { kind: "void" } };
