@@ -340,7 +340,7 @@ function runFile(
   // Find nearest tsconfig.json for import resolution; fall back to bare options
   const tsConfigFilePath = findUp("tsconfig.json", absPath) ?? undefined;
   const project = tsConfigFilePath
-    ? new Project({ tsConfigFilePath })
+    ? new Project({ tsConfigFilePath, skipAddingFilesFromTsConfig: true })
     : new Project({ compilerOptions: { strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"] } });
   const sourceFile = project.addSourceFileAtPath(absPath);
   project.resolveSourceFileDependencies();
