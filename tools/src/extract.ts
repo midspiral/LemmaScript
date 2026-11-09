@@ -427,10 +427,9 @@ function extractExpr(node: Expression): RawExpr {
     const symbol = Node.isPropertyAccessExpression(node) ? node.getSymbol()
       : arg && Node.isStringLiteral(arg) ? node.getExpression().getType().getProperty(arg.getLiteralValue()) : undefined;
     const member = symbol?.getDeclarations().find(Node.isEnumMember);
-    if (member && member.getParent().isConstEnum()) {
-      const decl = member.getParent();
-      const info = extractConstEnum(decl);
-      return { kind: "num", value: info.constEnumMembers!.find(m => m.name === member.getName())!.value };
+    if (member) {
+      const info = tryExtractConstEnum(member.getParent());
+      if (info) return { kind: "num", value: info.constEnumMembers!.find(m => m.name === member.getName())!.value };
     }
   }
 
@@ -887,22 +886,24 @@ function externIsImpure(node: Node, name: string, parentStmt?: Node): boolean {
 
 // ── Type declaration extraction ──────────────────────────────
 
-function constEnumDeclaration(type: Type): EnumDeclaration | undefined {
+function constEnumInfo(type: Type): TypeDeclInfo | undefined {
   for (const decl of type.getSymbol()?.getDeclarations() ?? []) {
     const parent = Node.isEnumMember(decl) ? decl.getParent() : decl;
-    if (Node.isEnumDeclaration(parent) && parent.isConstEnum()) return parent;
+    if (Node.isEnumDeclaration(parent)) return tryExtractConstEnum(parent);
   }
   return undefined;
 }
 
-function extractConstEnum(decl: EnumDeclaration, name = decl.getName()): TypeDeclInfo {
-  const members = decl.getMembers().map(member => {
+// Only lower const enums whose members all have safe-integer numeric values.
+// Other enums keep the ordinary expression and type extraction paths.
+function tryExtractConstEnum(decl: EnumDeclaration, name = decl.getName()): TypeDeclInfo | undefined {
+  if (!decl.isConstEnum()) return undefined;
+  const members: { name: string; value: number }[] = [];
+  for (const member of decl.getMembers()) {
     const value = member.getValue();
-    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-      throw new Error(`Numeric const enum ${decl.getName()}.${member.getName()} must have a safe integer value`);
-    }
-    return { name: member.getName(), value };
-  });
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) return undefined;
+    members.push({ name: member.getName(), value });
+  }
   return { name, kind: "alias", aliasOf: "number", constEnumMembers: members };
 }
 
@@ -918,10 +919,10 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   const override = parseAnnotations(decl).find(a => a.kind === "type");
   if (override) return { name, typeParams: tpField, kind: "alias", aliasOf: override.expr };
 
-  const enumDecl = constEnumDeclaration(type);
-  if (enumDecl) {
+  const enumInfo = constEnumInfo(type);
+  if (enumInfo) {
     // A type alias preserves numeric behavior but creates no value binding.
-    return { ...extractConstEnum(enumDecl, name), constEnumMembers: [] };
+    return { ...enumInfo, name, constEnumMembers: [] };
   }
 
   if (type.isUnion()) {
@@ -1115,8 +1116,7 @@ function declaredTypeTextIfBetter(propDecl: Node | undefined, tsType: string): s
 }
 
 function typeToString(type: Type): string {
-  const enumDecl = constEnumDeclaration(type);
-  if (enumDecl) { extractConstEnum(enumDecl); return "number"; }
+  if (constEnumInfo(type)) return "number";
   if (type.isUndefined()) return "undefined";
   if (type.isNumber() || type.isNumberLiteral()) return "number";
   if (type.isBigInt() || type.isBigIntLiteral()) return "bigint";
@@ -2256,9 +2256,10 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       // Synthetic types from inline objects must precede the parent type
       typeDecls.push(...extra);
       if (info) typeDecls.push(info);
-    } else if (Node.isEnumDeclaration(stmt) && stmt.isConstEnum()
+    } else if (Node.isEnumDeclaration(stmt)
         && !declaredNames.has(stmt.getName()) && !hasLeadingDirective(stmt, "skip")) {
-      typeDecls.push(extractConstEnum(stmt));
+      const info = tryExtractConstEnum(stmt);
+      if (info) typeDecls.push(info);
     }
   }
 
@@ -2271,9 +2272,10 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       const symbol = local.getSymbol();
       const target = symbol?.getAliasedSymbol() ?? symbol;
       for (const decl of target?.getDeclarations() ?? []) {
-        if (Node.isEnumDeclaration(decl) && decl.isConstEnum()) {
-          typeDecls.push(extractConstEnum(decl, local.getText()));
-        } else if (Node.isTypeAliasDeclaration(decl) && constEnumDeclaration(decl.getType())) {
+        if (Node.isEnumDeclaration(decl)) {
+          const info = tryExtractConstEnum(decl, local.getText());
+          if (info) typeDecls.push(info);
+        } else if (Node.isTypeAliasDeclaration(decl) && constEnumInfo(decl.getType())) {
           const info = extractTypeDecl(decl);
           if (info) typeDecls.push({ ...info, name: local.getText() });
         }
@@ -2714,8 +2716,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   const visitedTypes = new Set<unknown>();
   function resolveType(t: Type, locationNode: Node) {
     // Enums are primitive values, not records of Number prototype methods.
-    const enumDecl = constEnumDeclaration(t);
-    if (enumDecl) { extractConstEnum(enumDecl); return; }
+    if (constEnumInfo(t)) return;
     // Resolve type aliases (e.g. string unions imported from other files).
     // BEFORE the visited guard: the same interned compilerType can arrive both
     // with and without its alias symbol (getTypeAtLocation drops it), and an
@@ -2815,7 +2816,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     const retType = f.node.getReturnType();
     // Preserve the source's local enum binding or member type. Restoring the
     // checker's canonical name here loses renamed imports.
-    if (constEnumDeclaration(retType)) continue;
+    if (constEnumInfo(retType)) continue;
     // Prefer alias symbol (named type aliases) over underlying object symbol (__type)
     const aliasSym = retType.getAliasSymbol();
     if (aliasSym && !aliasSym.getName().startsWith("__")) {

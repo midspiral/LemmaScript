@@ -140,14 +140,58 @@ export function active(): Phase.Active {
 });
 
 for (const value of ['"active"', '0.5', '9007199254740992']) {
-  test(`unsupported enum value ${value} is rejected explicitly`, () => {
-    assert.throws(() => extract(`
-const enum Phase { Active = ${value} }
-export function active(): Phase {
+  for (const imported of [false, true]) {
+    const declaration = `export const enum Phase { Idle = 0, Active = ${value} }
+export type Alias = Phase;`;
+    const source = imported ? 'import { State as Phase, Alias } from "./barrel";' : declaration;
+    const dependencies: Record<string, string> = imported ? {
+      "phase.ts": declaration,
+      "barrel.ts": 'export { Phase as State, Alias } from "./phase";',
+    } : {};
+    const description = `${imported ? "imported" : "local"} const enum with value ${value}`;
+
+    test(`unused ${description} does not block unrelated verification`, () => {
+      const dafny = emit(`${source}
+export function one(): number {
   //@ verify
+  //@ ensures \\result === 1
+  return 1;
+}`, dependencies);
+      assert.match(dafny, /function one\(\): int\s*\{\s*1\s*\}/);
+      assert.match(dafny, /one\(\) == 1/);
+      assert.doesNotMatch(dafny, /Phase|Alias|State/);
+    });
+
+    test(`${description} falls through consistently in code, types, and contracts`, () => {
+      const mod = typed(`${source}
+interface Input { phase?: Phase }
+export function active(input: Input): Alias {
+  //@ verify
+  //@ ensures \\result === Phase.Active
   return Phase.Active;
-}`), /const enum.*safe integer/i);
-  });
+}
+export function bracket(): Phase.Active {
+  //@ verify
+  //@ ensures \\result === Phase["Active"]
+  return Phase["Active"];
+}
+export function idle(): number {
+  //@ verify
+  //@ ensures \\result === Phase.Idle
+  return Phase.Idle;
+}`, dependencies);
+      assert.ok(mod.typeDecls.every(d => d.constEnumMembers === undefined));
+      for (const [name, kind] of [["active", "field"], ["bracket", "index"], ["idle", "field"]]) {
+        const fn = mod.functions.find(f => f.name === name)!;
+        const ret = fn.body[0];
+        const spec = fn.ensures[0];
+        assert.ok(ret.kind === "return");
+        assert.ok(spec.kind === "binop");
+        assert.equal(ret.value.kind, kind);
+        assert.deepEqual(spec.right, ret.value);
+      }
+    });
+  }
 }
 
 for (const [read, expected] of [
