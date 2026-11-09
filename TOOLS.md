@@ -9,6 +9,7 @@ TS source (.ts)
   → extract    (ts-morph → Raw IR)
   → resolve    (Raw IR → Typed IR; types and type-narrowing only)
   → narrow     (Typed IR → Typed IR; structural narrowing — `someMatch` rewrites)
+  → async-lower (Dafny async functions → typed continuations)
   → transform  (Typed IR → IR, configured per backend)
   → peephole   (IR → IR, local rewrites that eliminate Some/None ceremony)
   → emit       (IR → Lean text or Dafny text)
@@ -20,8 +21,8 @@ TS source (.ts)
 
 Structured AST from ts-morph. Expressions are nodes, not strings. Has declared type references (`tsType: "Packet"`) but no resolved types. Close to TS syntax.
 
-- `RawExpr`: var, num, str, bool, binop, unop, call, index, field, record, arrayLiteral, lambda, conditional, optChain (`obj?.…`), nullish (`a ?? b`), emptyCollection (`new Map`/`new Set`), nonNull (`e!`); spec-only: result (`\result`), forall, exists, havoc
-- `RawStmt`: let, assign, return, break, continue, expr, if, while, switch, forof, throw; spec-only: ghostLet, ghostAssign, assert
+- `RawExpr`: var, num, str, bool, binop, unop, call, index, field, record, arrayLiteral, lambda, conditional, optChain (`obj?.…`), nullish (`a ?? b`), emptyCollection (`new Map`/`new Set`), nonNull (`e!`), await, promise; spec-only: result (`\result`), forall, exists, havoc
+- `RawStmt`: let, assign, return, break, continue, expr, if, while, switch, forof, try, throw; spec-only: ghostLet, ghostAssign, assert
 - `//@ ` annotations remain as strings (parsed by specparser in the resolve pass)
 
 ### Typed IR (`typedir.ts`)
@@ -50,6 +51,18 @@ Type names: `Expr`, `Stmt`, `Module`, `MatchArm`, `StmtMatchArm`, and `Decl` = `
 **Narrow** (`narrow.ts`): Typed IR → Typed IR. Owns all structural narrowing — both for optional checks and for discriminated unions. Optional patterns rewrite to `someMatch`; discriminant patterns (`x.kind === "v"`, `'k' in x`, `Array.isArray(x)` for synthesized array-unions, `x.kind !== "v") return; ...`) rewrite to `tagMatch`. Also handles `==>` premise narrowing in specs, `left ?? right` (nullish coalescing), `k in m ? m[k] : default` for map-typed `m`, and `obj?.<chain>` for any combination of `?.field`, `?.foo()`, `?.[i]`, and continuations (via the `optChain` IR node). Rules fire for pure access paths (`var(x)`, `field(purePath, name)`); `optChain` and `nullish` are the sole paths for complex scrutinees. The pass owns *where* a condition sits; *what* a condition establishes lives in `condition-facts.ts` (shared with resolve). See [Narrow rules](#narrow-rules) below.
 
 **Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None — substituting the binder for any pure access path scrutinee, or lowering naively when the scrutinee is complex (narrow pre-bound the someBody). No optional-narrowing logic of its own.
+
+**Async lowering** (`async-lower.ts`), invoked at the start of transform, separates
+async functions from ordinary lowering. Each suspension becomes a continuation
+over immutable versions of saved locals; assignments create new versions and
+handlers determine the return/rejection continuation. `async-emit.ts` generates
+the computation, its correctness lemma, and a start method. `async-runtime.ts`
+supplies the verified promise/scheduling kernel. Its `Correct` predicate quantifies
+over every finite execution prefix, and constructor lemmas compose continuation
+proofs. Promise outcomes and FIFO jobs are explicit; only `Resume` runs queued
+work. Shared captures and unknown effects are rejected. Narrowing skips async
+bodies, and autohavoc cannot erase them. The ordinary peephole pass does not
+rewrite the continuation IR carried in `Module.async`.
 
 **Peephole** (`peephole.ts`): IR → IR. Local rewrite rules applied bottom-up to fixed point. Eliminates wrap-then-unwrap ceremony around partial-access expressions like `m.get(k)` (which is internally lowered to `methodCall(map, "get", [k])` and emits as `(if k in m then Some(m[k]) else None)`). See [Peephole rules](#peephole-rules) below.
 
@@ -147,6 +160,7 @@ TS source (.ts)
   → extract    (ts-morph → Raw IR)
   → resolve    (Raw IR → Typed IR)
   → narrow     (Typed IR → Typed IR)
+  → async-lower (async functions → typed continuations)
   → transform  (Typed IR → IR, with DAFNY_OPTIONS)
   → peephole   (IR → IR)
   → dafny-emit (IR → Dafny text)

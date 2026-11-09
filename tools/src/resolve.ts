@@ -805,6 +805,17 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
 function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
   switch (e.kind) {
+    case "await": {
+      const expr = resolveExpr(e.expr, ctx);
+      return { kind: "await", expr, ty: expr.ty.kind === "promise" ? expr.ty.value : expr.ty, line: e.line };
+    }
+    case "promise": {
+      const value = resolveExpr(e.value, ctx);
+      const annotated = parseTsType(e.tsType);
+      const ty: Ty = e.operation === "resolve" ? (value.ty.kind === "promise" ? value.ty : { kind: "promise", value: value.ty })
+        : annotated.kind === "promise" ? annotated : { kind: "promise", value: { kind: "void" } };
+      return { kind: "promise", operation: e.operation, value, ty };
+    }
     case "var":
       if (e.name === "undefined") return { kind: "var", name: "undefined", ty: { kind: "void" } };
       return { kind: "var", name: e.name, ty: lookup(ctx.env, e.name) ?? { kind: "unknown" } };
@@ -1551,8 +1562,14 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       }, ctx.env];
     }
 
+    case "try": {
+      const catchCtx = s.catchName ? withEnv(ctx, extend(ctx.env, s.catchName, { kind: "unknown" })) : ctx;
+      return [{ kind: "try", body: resolveBlock(s.body, ctx), catchName: s.catchName,
+        catchBody: s.catchBody ? resolveBlock(s.catchBody, catchCtx) : undefined,
+        finallyBody: resolveBlock(s.finallyBody, ctx) }, ctx.env];
+    }
     case "throw":
-      return [{ kind: "throw" }, ctx.env];
+      return [{ kind: "throw", ...(s.value ? { value: resolveExpr(s.value, ctx) } : {}) }, ctx.env];
 
     case "switch":
       return [{
@@ -1717,7 +1734,7 @@ function computePureFns(functions: RawFunction[], externDecls: import("./rawir.j
   // Seed: syntactically non-pure functions (skip //@ pure)
   const nonPure = new Set(
     functions.filter(fn => !forcePure.has(fn.name) &&
-      (!isSyntacticallyPure(fn.body) || containsImpureExternCall(fn.body, impureExternNames)))
+      (fn.isAsync || !isSyntacticallyPure(fn.body) || containsImpureExternCall(fn.body, impureExternNames)))
       .map(fn => fn.name)
   );
 
@@ -1775,6 +1792,7 @@ function resolveFunction(
   const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
   const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: expandAlias(resolveTsType(p.tsType, overrides, p.name), typeDecls) }));
   const returnTy = expandAlias(resolveTsType(fn.returnType, overrides, "\\result"), typeDecls);
+  const completionTy = fn.isAsync && returnTy.kind === "promise" ? returnTy.value : returnTy;
 
   let env: Env | null = null;
   // Module-level constants are in scope for every function body. Added before
@@ -1783,9 +1801,9 @@ function resolveFunction(
   if (opts?.thisBinding) env = extend(env, opts.thisBinding.name, opts.thisBinding.ty);
   for (const p of params) env = extend(env, p.name, p.ty);
 
-  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
+  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy: completionTy, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
   const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
-  const ensuresCtx: Ctx = { ...baseCtx, env: extend(env, "\\result", returnTy), allowResult: true, inSpec: true };
+  const ensuresCtx: Ctx = { ...baseCtx, env: extend(env, "\\result", completionTy), allowResult: true, inSpec: true };
 
   // Apply type parameter constraints from //@ type T (==) annotations
   const typeParams = fn.typeParams.map(tp => {
@@ -1804,6 +1822,7 @@ function resolveFunction(
 
   return {
     name: fn.name, typeParams, params, returnTy,
+    isAsync: fn.isAsync, nativeParams: fn.nativeParams, line: fn.line,
     requires: resolvedRequires,
     ensures: resolveSpecs(fn.ensures, ensuresCtxNarrowed),
     decreases: fn.decreases ? resolveSpec(fn.decreases, requiresCtx) : null,
@@ -1912,7 +1931,7 @@ export function resolveModule(raw: RawModule): TModule {
     // get their `ty` set to `map<...>` rather than `user("...")`.
     const valueCtx: Ctx = { ...emptyCtx, returnTy: ty };
     const value = coerceToTargetTy(resolveExpr(c.value, valueCtx), ty, raw.typeDecls);
-    return { name: c.name, ty, value };
+    return { name: c.name, ty, value, ...(c.asyncUnsupported ? { asyncUnsupported: c.asyncUnsupported } : {}) };
   });
   const moduleConstants = new Map<string, Ty>(constants.map(c => [c.name, c.ty]));
 

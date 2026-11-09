@@ -14,6 +14,7 @@ import { freshName, freshNameWhere } from "./names.js";
 
 function tyToLean(ty: Ty): string {
   switch (ty.kind) {
+    case "promise": throw new Error("async: Promise is supported only by the Dafny backend");
     case "nat": return "Nat";
     case "int": return "Int";
     case "real":

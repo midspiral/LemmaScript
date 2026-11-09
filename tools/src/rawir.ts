@@ -35,6 +35,8 @@ export type RawChainStep =
   | { kind: "index"; idx: RawExpr };
 
 export type RawExpr =
+  | { kind: "await"; expr: RawExpr; line: number }
+  | { kind: "promise"; operation: "resolve" | "reject"; value: RawExpr; tsType: string }
   | { kind: "var"; name: string }
   | { kind: "num"; value: number }
   | { kind: "bigint"; value: string }   // BigInt literal (123n) — canonical decimal, no `n`
@@ -144,6 +146,7 @@ export interface RawForOf {
 
 export interface RawThrow {
   kind: "throw";
+  value?: RawExpr;
   line: number;
 }
 
@@ -169,7 +172,8 @@ export interface RawAssert {
   assumed?: boolean;         // true when source was //@ assume — emitted as `assume`, not `assert`
 }
 
-export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawContinue | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf | RawThrow | RawGhostLet | RawGhostAssign | RawAssert;
+export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawContinue | RawExprStmt | RawIf | RawWhile | RawSwitch | RawForOf | RawThrow | RawGhostLet | RawGhostAssign | RawAssert
+  | { kind: "try"; body: RawStmt[]; catchName?: string; catchBody?: RawStmt[]; finallyBody: RawStmt[]; line: number };
 
 // ── Top-level ────────────────────────────────────────────────
 
@@ -187,6 +191,8 @@ export interface RawTsParam {
 }
 
 export interface RawFunction {
+  isAsync?: boolean;
+  nativeParams?: string[];
   name: string;
   exported: boolean;      // part of the module's export surface (inline `export`, `export { }`, or re-export)
   typeParams: string[];   // unbounded generic type parameters (e.g. ["T"])
@@ -215,6 +221,8 @@ export interface RawConst {
   name: string;
   tsType: string;
   value: RawExpr;
+  /** Source information that ordinary extraction erases, but async cannot trust. */
+  asyncUnsupported?: string;
 }
 
 /** Externally-declared function — auto-detected during call extraction when

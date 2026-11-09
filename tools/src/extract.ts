@@ -352,7 +352,30 @@ function _eraseGenerics(tsType: string): string {
   return tsType;
 }
 
+let _extractingAsync = false;
+
 function extractExpr(node: Expression): RawExpr {
+  if (_extractingAsync && (Node.isAsExpression(node) || Node.isTypeAssertion(node) || Node.isNonNullExpression(node)))
+    throw new Error("async: type assertions can hide runtime value and promise kinds and are not supported");
+  if (Node.isAwaitExpression(node)) {
+    return { kind: "await", expr: extractExpr(node.getExpression()), line: node.getStartLineNumber() };
+  }
+  if (Node.isCallExpression(node)) {
+    const callee = node.getExpression();
+    if (Node.isPropertyAccessExpression(callee) && ["resolve", "reject"].includes(callee.getName())) {
+      const receiver = callee.getExpression();
+      const declarations = receiver.getSymbol()?.getDeclarations() ?? [];
+      const native = receiver.getText() === "Promise" && declarations.length > 0
+        && declarations.every(d => /\/lib\.es[^/]*\.d\.ts$/.test(d.getSourceFile().getFilePath()));
+      if (native) {
+        if (node.getArguments().length > 1) throw new Error("async: Promise.resolve/reject expects at most one argument");
+        const arg = node.getArguments()[0];
+        return { kind: "promise", operation: callee.getName() as "resolve" | "reject",
+          value: arg ? extractExpr(arg as Expression) : { kind: "var", name: "undefined" },
+          tsType: typeToString(node.getType()) };
+      }
+    }
+  }
   // Havoc key matching: replace matching calls or new expressions with havoc expression
   if (_havocKey && (Node.isCallExpression(node) || Node.isNewExpression(node))) {
     const fnExpr = node.getExpression();
@@ -750,7 +773,7 @@ function extractExpr(node: Expression): RawExpr {
 // ── Annotation parsing ───────────────────────────────────────
 
 const PREFIX = "//@ ";
-const KEYWORDS = ["requires", "ensures", "contract", "invariant", "decreases", "done_with", "type"] as const;
+const KEYWORDS = ["requires", "ensures", "contract", "invariant", "decreases", "done_with", "type", "native"] as const;
 export type AnnotKind = (typeof KEYWORDS)[number];
 interface Annotation { kind: AnnotKind; expr: string }
 
@@ -1337,6 +1360,8 @@ function renameSpec(s: string, from: string, to: string): string {
 function renameRawExpr(e: RawExpr, from: string, to: string): RawExpr {
   const r = (x: RawExpr) => renameRawExpr(x, from, to);
   switch (e.kind) {
+    case "await": return { ...e, expr: r(e.expr) };
+    case "promise": return { ...e, value: r(e.value) };
     case "var": return e.name === from ? { kind: "var", name: to } : e;
     case "num": case "bigint": case "str": case "bool": case "result": case "havoc": case "emptyCollection": return e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
@@ -1365,6 +1390,9 @@ function renameRawStmt(s: RawStmt, from: string, to: string): RawStmt {
   const r = (x: RawExpr) => renameRawExpr(x, from, to);
   const sp = (x: string) => renameSpec(x, from, to);
   switch (s.kind) {
+    case "try": return { ...s, body: renameRawStmts(s.body, from, to),
+      catchBody: s.catchName === from ? s.catchBody : s.catchBody && renameRawStmts(s.catchBody, from, to),
+      finallyBody: renameRawStmts(s.finallyBody, from, to) };
     case "let": return { ...s, init: r(s.init) };  // name kept: a shadowing binding is a different variable
     case "assign": return { ...s, target: s.target === from ? to : s.target, value: r(s.value) };
     case "return": return { ...s, value: r(s.value) };
@@ -1379,7 +1407,8 @@ function renameRawStmt(s: RawStmt, from: string, to: string): RawStmt {
     case "ghostLet": return { ...s, init: sp(s.init) };
     case "ghostAssign": return { ...s, target: s.target === from ? to : s.target, value: sp(s.value) };
     case "assert": return { ...s, expr: sp(s.expr) };
-    case "break": case "continue": case "throw": return s;
+    case "throw": return { ...s, ...(s.value ? { value: r(s.value) } : {}) };
+    case "break": case "continue": return s;
   }
   function e_forof(f: RawStmt & { kind: "forof" }): RawStmt {
     // for-of names bind in the body; if one shadows `from`, leave the body alone.
@@ -1959,7 +1988,17 @@ function extractStmts(stmts: Node[]): RawStmt[] {
     }
 
     if (Node.isThrowStatement(s)) {
-      result.push({ kind: "throw", line });
+      result.push({ kind: "throw", line, ...(_extractingAsync ? { value: extractExpr(s.getExpression()) } : {}) });
+      continue;
+    }
+
+    if (Node.isTryStatement(s) && _extractingAsync) {
+      const clause = s.getCatchClause();
+      const variable = clause?.getVariableDeclaration();
+      if (variable && !Node.isIdentifier(variable.getNameNode())) throw new Error("async: destructured catch bindings are not supported");
+      result.push({ kind: "try", line, body: extractStmts(s.getTryBlock().getStatements()),
+        ...(clause ? { catchName: variable?.getName(), catchBody: extractStmts(clause.getBlock().getStatements()) } : {}),
+        finallyBody: extractStmts(s.getFinallyBlock()?.getStatements() ?? []) });
       continue;
     }
 
@@ -2009,11 +2048,14 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
 function extractFunction(fn: FunctionDeclaration | MethodDeclaration, parentAnnotations?: Annotation[]): RawFunction {
   const prevInFn = _inFunctionExtraction;
+  const prevAsync = _extractingAsync;
+  _extractingAsync = (fn as { isAsync?: () => boolean }).isAsync?.() ?? false;
   _inFunctionExtraction = true;
   try {
     return extractFunctionInner(fn, parentAnnotations);
   } finally {
     _inFunctionExtraction = prevInFn;
+    _extractingAsync = prevAsync;
   }
 }
 function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, parentAnnotations?: Annotation[]): RawFunction {
@@ -2034,6 +2076,39 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
 
   const body = fn.getBody();
 
+  if (_extractingAsync) {
+    if ((fn.getTypeParameters?.() ?? []).length) throw new Error("async: generic functions are not supported yet");
+    for (const p of fn.getParameters()) {
+      if (!Node.isIdentifier(p.getNameNode()) || p.isRestParameter() || p.getInitializer() || p.hasQuestionToken())
+        throw new Error(`async: parameter '${p.getName()}' must be a required, simple binding`);
+    }
+    for (const decl of fn.getDescendantsOfKind(SyntaxKind.VariableDeclaration)) {
+      if (Node.isCatchClause(decl.getParent())) continue;
+      if (!Node.isIdentifier(decl.getNameNode()) || !decl.getInitializer())
+        throw new Error("async: local declarations require simple bindings and explicit initializers");
+    }
+    if (/\/\/@\s*(havoc|type|skip)\b/.test(fn.getFullText()))
+      throw new Error("async: havoc, skip, and type overrides can erase promise/effect information and are not supported");
+    // The initial continuation IR uses names rather than lexical binding IDs.
+    // Reject distinct bindings with the same name before block flattening can
+    // lose that distinction (including globals referenced after a local block).
+    const bindings = new Map<string, unknown>();
+    for (const id of fn.getDescendantsOfKind(SyntaxKind.Identifier)) {
+      const parent = id.getParent();
+      if (Node.isTypeReference(parent) || Node.isTypeQuery(parent)) continue;
+      if (Node.isPropertyAccessExpression(parent) && parent.getNameNode() === id) continue;
+      const symbol = id.getSymbol();
+      if (!symbol) continue;
+      const name = id.getText();
+      if (name === "undefined" && symbol.getDeclarations().length)
+        throw new Error("async: a shadowed undefined binding is not supported");
+      const previous = bindings.get(name);
+      if (previous && previous !== symbol.compilerSymbol)
+        throw new Error(`async: shadowed binding '${name}' is not supported yet`);
+      bindings.set(name, symbol.compilerSymbol);
+    }
+  }
+
   // Expression-body arrow: wrap in implicit return
   let extractedBody: RawStmt[];
   let annots: Annotation[];
@@ -2049,6 +2124,8 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
   }
 
   const typeAnnotations: { name: string; type: string }[] = [];
+  if (_extractingAsync && annots.some(a => a.kind === "type"))
+    throw new Error("async: type overrides can erase promise/effect information and are not supported");
   for (const a of annots) {
     if (a.kind === "type") {
       const parts = a.expr.split(/\s+/);
@@ -2057,6 +2134,7 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
   }
 
   return {
+    ...(_extractingAsync ? { isAsync: true, nativeParams: annots.filter(a => a.kind === "native").flatMap(a => a.expr.split(/[\s,]+/)) } : {}),
     name: (fn as any).getName?.() ?? "<anonymous>",
     exported: false,  // set in extractModule against the source file's export surface
     typeParams,
@@ -2114,21 +2192,6 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
       return [{ name: p.getName(), tsType }];
     }),
     returnType: (() => {
-      // `async` with no `await`: the `Promise<T>` wrapper is just the calling
-      // convention (the body returns T-typed values), so unwrap to T. Gated on
-      // no `await` — that's the suspension point we can't model, and it only
-      // type-checks inside `async`, so the gate is self-justifying. With `await`
-      // present we leave `Promise<...>` (unmodellable) rather than atomize it.
-      const isAsync = (fn as { isAsync?: () => boolean }).isAsync?.() ?? false;
-      const noAwait = fn.getDescendantsOfKind(SyntaxKind.AwaitExpression).length === 0;
-      if (isAsync && noAwait) {
-        const args = fn.getReturnType().getTypeArguments();
-        if (args.length === 1) {
-          if (args[0].isAny()) return "unknown";
-          return _eraseGenerics(typeToString(args[0]));
-        }
-        return "void";  // Promise<void>
-      }
       const node = fn.getReturnTypeNode();
       // A type predicate (`x is T` / `asserts x is T`) is a `boolean` at
       // runtime; the narrowing it performs is a TS-only refinement with no
@@ -2320,10 +2383,18 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
           const isAnonObject = declTsType.startsWith("__");
           if (init && !isHugeString && !isAnonObject && !Node.isArrowFunction(init)) {
             try {
+              // Ordinary extraction erases assertions and treats `undefined`
+              // by name. Preserve these exclusions for async constant captures.
+              const nodes = [init, ...init.getDescendants()];
+              const asyncUnsupported = nodes.some(n => Node.isAsExpression(n) || Node.isTypeAssertion(n) || Node.isNonNullExpression(n))
+                ? "type assertions in captured constants are not supported"
+                : nodes.some(n => Node.isIdentifier(n) && n.getText() === "undefined" && n.getSymbol()?.getDeclarations().length)
+                  ? "a shadowed undefined binding in a captured constant is not supported" : undefined;
               constants.push({
                 name: decl.getName(),
                 tsType: declTsType,
                 value: extractExpr(init as Expression),
+                ...(asyncUnsupported ? { asyncUnsupported } : {}),
               });
             } catch (e) {
               const reason = e instanceof Error ? e.message : String(e);
@@ -2623,6 +2694,8 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     }
     function collectNames(stmts: RawStmt[]) {
       for (const s of stmts) {
+        if (s.kind === "try") { collectNames(s.body); collectNames(s.catchBody ?? []); collectNames(s.finallyBody); }
+        if (s.kind === "throw" && s.value) collectNamesExpr(s.value);
         if (s.kind === "let") { if (s.tsType) referencedNames.add(s.tsType); collectNamesExpr(s.init); }
         if (s.kind === "assign") { collectSpecNames(s.target); collectNamesExpr(s.value); }
         if (s.kind === "return") { collectNamesExpr(s.value); }
@@ -2645,6 +2718,8 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       }
     }
     function collectNamesExpr(e: RawExpr) {
+      if (e.kind === "await") collectNamesExpr(e.expr);
+      if (e.kind === "promise") collectNamesExpr(e.value);
       if (e.kind === "var") referencedNames.add(e.name);
       if (e.kind === "binop") { collectNamesExpr(e.left); collectNamesExpr(e.right); }
       if (e.kind === "unop") { collectNamesExpr(e.expr); }

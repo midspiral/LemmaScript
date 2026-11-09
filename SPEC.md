@@ -33,6 +33,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `verify` | Before first statement of function/method body | Mark function for verification (see §2.5) |
 | `requires` | Before first statement of function body | Precondition |
 | `ensures` | Before first statement of function body | Postcondition (`\result` refers to return value) |
+| `native p ...` | In an async function's contract | Require these parameters to be unmodified, intrinsic native promises; Dafny only (§4.5) |
 | `contract` | Before first statement of function body | Natural-language description of intent — prover-ignored; surfaced by `lsc extract` for vetting against the formal `requires`/`ensures` (see §2.13) |
 | `invariant` | Before first statement of loop body | Loop invariant |
 | `decreases` | Before first statement of loop or function body | Termination metric |
@@ -950,6 +951,34 @@ method bodies; arbitrary structural assignments and casts are not synthesized.
 
 ---
 
+### 4.5 Async Functions (Dafny)
+
+`ensures` describes fulfillment; `\result` is the fulfilled value. It does not
+promise termination or exclude rejection. No application invariant is required:
+
+```typescript
+async function absolute(p: Promise<bigint>): Promise<bigint> {
+  //@ native p
+  //@ ensures \result >= 0n
+  const x = await p;
+  return x < 0n ? -x : x;
+}
+```
+
+The initial fragment supports direct scalar types, local assignment, branches,
+selected nonrecursive async calls, `Promise.resolve`/`reject`, and `try`/`catch`/
+`finally`. Calls run their prefix immediately; every await suspends. Returning a
+promise adopts its outcome through a fresh result handle, including without await.
+
+`native` is an explicit boundary assumption, not a runtime check or a consequence
+of structural TS typing: native promise operations must be unmodified, and the
+host supplies same-realm intrinsic promises and preserves their identities.
+Shared objects, class methods, callbacks, loops, thenables (including caught
+unknown values used as promises), shadowed bindings, and type/havoc/skip erasure
+are rejected.
+The generated promise kernel and continuation proofs establish safety for all
+finite execution prefixes; progress and shared-state protocols are not yet supported.
+
 ## 5. Pure Function Detection
 
 A function is **pure** if its body contains no `while` statements, no `for...of` statements, and no mutable `let` declarations, and it does not transitively call any non-pure function (determined via call-graph analysis in the resolve phase).
@@ -1475,10 +1504,10 @@ the diff evidence. The diff needs `git`: without it, or without a snapshot, the 
 
 ## 8. Pipeline
 
-Six-phase pipeline:
+Pipeline:
 
 ```
-extract → resolve → narrow → transform → peephole → emit
+extract → resolve → narrow → async-lower → transform → peephole → emit
 ```
 
 Each phase (and the three intermediate representations — Raw IR, Typed IR, IR) is documented in [TOOLS.md](TOOLS.md#pipeline).
@@ -1489,6 +1518,6 @@ Each phase (and the three intermediate representations — Raw IR, Typed IR, IR)
 
 The following TS features are not yet handled by the toolchain:
 
-- `await` / true async — a `Promise<T>`-returning function with an `await` in its body is unmodellable. An `async` function with **no** `await` is supported: its `Promise<T>` return type is unwrapped to `T` (the wrapper is just calling convention), so the body verifies normally.
+- Async shared state, callbacks/reentry, loops, thenables, and the Lean async backend. The Dafny result-oriented subset is described in §4.5; async functions without await also retain their promise handles.
 - **IEEE 754 semantics.** `number` is modeled as a mathematical integer (or, where annotated, an exact `real` — §6.1.3), never as a double, so double-specific behavior is outside the model and *not* covered by a proof: there is no 53-bit precision bound (`2**53 + 1 !== 2**53` is provable in the model, false at runtime), Dafny's `real` is exact rather than rounding (`0.1 + 0.2 == 0.3` verifies), `NaN`/`Infinity`/`-0` have no representation (a possibly-zero divisor is a proof obligation, not `Infinity`), and bitwise operators on `number` get the unbounded lowering of §6.1.1 with no int32 wrap. The pieces that *are* JS-faithful are called out where they occur: real `/` (§6.1.3), `JSRem` for `%`, `JSTruncDiv` for `bigint /`, `JSFloorDiv` for `Math.floor(a / b)`. `**`, `>>>`, and `Math.round`/`trunc`/`sqrt`/`pow` have no lowering at all.
 - Error reporting (mapping prover errors to TS source locations)

@@ -21,6 +21,7 @@ export type Ty =
   | { kind: "real" }
   | { kind: "string"; values?: string[] }   // values: members of an inline string-union (`"a" | "b"`), kept for record-index-by-enum
   | { kind: "void" }
+  | { kind: "promise"; value: Ty }
   | { kind: "array"; elem: Ty }
   | { kind: "tuple"; elems: Ty[] }           // heterogeneous fixed-arity tuple (`[A, B]`); homogeneous tuples lower to `array`
   | { kind: "map"; key: Ty; value: Ty }
@@ -40,6 +41,7 @@ export function isBigInt(ty: Ty): boolean {
 export function tyEqual(a: Ty, b: Ty): boolean {
   if (a.kind !== b.kind) return false;
   switch (a.kind) {
+    case "promise": return tyEqual(a.value, (b as typeof a).value);
     case "array": return tyEqual(a.elem, (b as typeof a).elem);
     case "set":   return tyEqual(a.elem, (b as typeof a).elem);
     case "tuple": {
@@ -82,6 +84,8 @@ export type TChainStep =
 // ── Expressions ──────────────────────────────────────────────
 
 export type TExpr =
+  | { kind: "await"; expr: TExpr; ty: Ty; line: number }
+  | { kind: "promise"; operation: "resolve" | "reject"; value: TExpr; ty: Ty }
   | { kind: "var"; name: string; ty: Ty }
   | { kind: "num"; value: number; ty: Ty }
   | { kind: "bigint"; value: string; ty: Ty }   // exact integer, canonical decimal
@@ -138,7 +142,8 @@ export type TStmt =
       defaultBody: TStmt[] }
   | { kind: "forof"; names: string[]; nameTypes: Ty[]; iterable: TExpr;
       invariants: TExpr[]; doneWith: TExpr | null; body: TStmt[] }
-  | { kind: "throw" }
+  | { kind: "throw"; value?: TExpr }
+  | { kind: "try"; body: TStmt[]; catchName?: string; catchBody?: TStmt[]; finallyBody: TStmt[] }
   | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
   | { kind: "ghostAssign"; target: string; value: TExpr }
   | { kind: "assert"; expr: TExpr; assumed?: boolean }
@@ -163,6 +168,9 @@ export interface TParam {
 }
 
 export interface TFunction {
+  isAsync?: boolean;
+  nativeParams?: string[];
+  line?: number;
   name: string;
   typeParams: string[];
   params: TParam[];
@@ -186,6 +194,7 @@ export interface TConst {
   name: string;
   ty: Ty;
   value: TExpr;
+  asyncUnsupported?: string;
 }
 
 /** Resolved counterpart of RawExtern. */

@@ -16,7 +16,7 @@
 import { execFileSync } from "child_process";
 import { existsSync } from "fs";
 import path from "path";
-import { DAFNY_HELPER_NAMES, ENSURES_LEMMA_SUFFIX } from "./dafny-emit.js";
+import { DAFNY_HELPER_NAMES, DAFNY_ASYNC_HELPER_NAMES, ENSURES_LEMMA_SUFFIX } from "./dafny-emit.js";
 import type { AnnotKind } from "./extract.js";
 import { loadConfigOptions } from "./config.js";
 import { readRecords, resolveLogDir, type VerifyRecord } from "./run-log.js";
@@ -35,6 +35,7 @@ const ANNOTATION_ROLES: Record<AnnotKind, "spec" | "proof"> = {
   decreases: "proof",
   done_with: "proof",
   type: "proof",
+  native: "spec",
 };
 
 /**
@@ -172,6 +173,12 @@ export function memberResults(records: VerifyRecord[]): MemberResult[] {
  * helpers, which are not the user's code.
  */
 export function functionOf(member: string): string | null {
+  const asyncMember = /^LscAsync'*\.(.+)$/.exec(member)?.[1];
+  if (asyncMember) {
+    if (DAFNY_ASYNC_HELPER_NAMES.has(asyncMember)) return null;
+    const source = /^f\d+_(.+)_(?:body|ensures|start|post|requires)$/.exec(asyncMember);
+    if (source) return source[1];
+  }
   if (DAFNY_HELPER_NAMES.has(member)) return null;
   return member.endsWith(ENSURES_LEMMA_SUFFIX) ? member.slice(0, -ENSURES_LEMMA_SUFFIX.length) : member;
 }

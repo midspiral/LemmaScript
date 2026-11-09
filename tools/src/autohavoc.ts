@@ -229,6 +229,7 @@ function collectSinks(e: TExpr): TExpr[] {
 // emitted, in order, immediately before the statement being rewritten.
 
 function rewriteExpr(e: TExpr, hoisted: TStmt[]): TExpr {
+  if (e.kind === "await" || e.kind === "promise") throw new Error("async: autohavoc cannot abstract promise operations");
   if (mustHavoc(e)) {
     // Preserve any contracted call nested inside the discarded value so its
     // precondition is still checked. transform lowers the `expr` discard to
@@ -301,6 +302,7 @@ function rewriteStmt(s: TStmt): TStmt[] {
   const h: TStmt[] = [];
   const rw = (e: TExpr) => rewriteExpr(e, h);
   switch (s.kind) {
+    case "try": throw new Error("async: autohavoc cannot abstract exception handlers");
     case "let": { const init = rw(s.init); return [...h, { ...s, init }]; }
     case "ghostLet": { const init = rw(s.init); return [...h, { ...s, init }]; }
     case "assign": { const value = rw(s.value); return [...h, { ...s, value }]; }
@@ -341,6 +343,18 @@ function bodyHasHavoc(stmts: TStmt[]): boolean {
  *  function opts in, also drop module constants whose initializer is
  *  unmodellable (e.g. `const fs = require("fs")` pulled in by reachability). */
 export function autoHavocModule(mod: TModule): TModule {
+  const asyncNames = new Set(mod.functions.filter(f => f.isAsync).map(f => f.name));
+  const containsAsync = (value: unknown): boolean => {
+    if (!value || typeof value !== "object") return false;
+    const e = value as TExpr;
+    return e.kind === "await" || e.kind === "promise"
+      || e.kind === "call" && e.fn.kind === "var" && asyncNames.has(e.fn.name)
+      || Object.values(value).some(containsAsync);
+  };
+  for (const f of [...mod.functions, ...mod.classes.flatMap(c => c.methods)]) {
+    if (f.autohavoc && (f.isAsync || containsAsync(f.body)))
+      throw new Error(`async ${f.name}: autohavoc cannot abstract suspension or callback effects`);
+  }
   if (!mod.functions.some(f => f.autohavoc)) return mod;
   // Names of calls carrying a `//@ requires` precondition — these must never be
   // silently discarded by havoc (see collectSinks / rewriteExpr).

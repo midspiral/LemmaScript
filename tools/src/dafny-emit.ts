@@ -8,6 +8,8 @@ import type { Ty } from "./typedir.js";
 import { freshName, freshNameWhere, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
 import { DEFAULT_OPTIONS, resolveOptions, type LscOptions } from "./config.js";
+import { emitAsyncModule } from "./async-emit.js";
+import { ASYNC_RUNTIME } from "./async-runtime.js";
 
 /** Appended to a function's name for the lemma that carries its `//@ ensures`. */
 export const ENSURES_LEMMA_SUFFIX = "_ensures";
@@ -38,6 +40,7 @@ function comprehensionBinder(lam: Extract<Expr, { kind: "lambda" }>, value: Expr
 
 function tyToDafny(ty: Ty): string {
   switch (ty.kind) {
+    case "promise": throw new Error("async: Promise requires async lowering; synchronous promise APIs are not supported yet");
     case "nat": return "nat";
     case "int": return "int";
     case "real": return "real";
@@ -1578,6 +1581,7 @@ export function declaredNames(text: string): string[] {
 export const DAFNY_HELPER_NAMES: ReadonlySet<string> = new Set(
   PREAMBLE_CODE.flatMap(([, code]) => declaredNames(typeof code === "function" ? code() : code)),
 );
+export const DAFNY_ASYNC_HELPER_NAMES: ReadonlySet<string> = new Set(declaredNames(ASYNC_RUNTIME));
 
 // ── Constructor and record helpers ───────────────────────────
 
@@ -1754,5 +1758,6 @@ export function emitDafnyFile(file: Module, tsFileName?: string, options: LscOpt
     if (_neededPreambles.has(key)) { lines.push(""); lines.push(typeof code === "function" ? code() : code); }
   }
   lines.push(...declLines);
+  if (file.async) lines.push(emitAsyncModule(file.async, value => emitExpr({ kind: "str", value }), freshDafnyName("LscAsync")));
   return lines.join("\n") + "\n";
 }

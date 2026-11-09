@@ -195,6 +195,7 @@ function tyFromTypeNode(tn: TypeNode): Ty {
     const args = tn.getTypeArguments();
     if (name === "nat" && args.length === 0) return { kind: "nat" };
     if (name === "real" && args.length === 0) return { kind: "real" };
+    if (name === "Promise" && args.length === 1) return { kind: "promise", value: tyFromTypeNode(args[0]) };
     if (name === "int" && args.length === 0) return { kind: "int" };
     if ((name === "Array" || name === "ReadonlyArray") && args.length === 1) return { kind: "array", elem: tyFromTypeNode(args[0]) };
     if (name === "Set" && args.length === 1) return { kind: "set", elem: tyFromTypeNode(args[0]) };
@@ -212,6 +213,7 @@ function tyFromTypeNode(tn: TypeNode): Ty {
  *  Used by `lsc info` for the signature field of `foo.ts.json`. */
 export function tyToCanonical(ty: Ty): string {
   switch (ty.kind) {
+    case "promise": return `Promise<${tyToCanonical(ty.value)}>`;
     case "bool":   return "bool";
     case "nat":    return "nat";
     case "int":    return "int";

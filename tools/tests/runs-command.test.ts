@@ -193,6 +193,11 @@ for (const [member, fn] of [
   ["JSFloorDiv", null],
   ["SetToSeq", null],
   ["sumIsMonotone", "sumIsMonotone"],
+  ["LscAsync.f0_increment_ensures", "increment"],
+  ["LscAsync.f0_increment_body", "increment"],
+  ["LscAsync'.f3_wait_start", "wait"],
+  ["LscAsync.Advance", null],
+  ["LscAsync.SafePrefix", null],
 ] as const) {
   test(`functionOf maps ${member} to ${fn ?? "nothing (a generated helper)"}`, () => {
     assert.equal(functionOf(member), fn);

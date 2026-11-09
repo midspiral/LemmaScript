@@ -21,6 +21,8 @@ interface FnInfo {
   requires: string[];
   ensures: string[];
   decreases: string | null;
+  isAsync?: true;
+  nativeParams?: string[];
 }
 
 function renderSig(fn: RawFunction): string {
@@ -34,6 +36,7 @@ function fnToInfo(fn: RawFunction): FnInfo {
     requires: fn.requires,
     ensures: fn.ensures,
     decreases: fn.decreases,
+    ...(fn.isAsync ? { isAsync: true as const, nativeParams: fn.nativeParams ?? [] } : {}),
   };
 }
 
@@ -94,6 +97,7 @@ function typedFn(fn: TFunction, rawFn: RawFunction | undefined) {
   const rawTsTypes = new Map((rawFn?.params ?? []).map(p => [p.name, p.tsType]));
   return {
     name: fn.name,
+    ...(fn.isAsync ? { isAsync: true, nativeParams: fn.nativeParams ?? [] } : {}),
     exported: rawFn?.exported ?? false,
     typeParams: fn.typeParams,
     params: fn.params.map(p => ({ ...p, tsType: rawTsTypes.get(p.name) })),

@@ -1,6 +1,8 @@
 # DESIGN_ASYNC — Async translation and verification
 
-**Status:** proposed; async compiler support is not implemented.
+**Status:** the initial result-oriented Dafny fragment is implemented; shared
+effects, reentry, and application protocols below remain planned. See
+[SPEC §4.5](SPEC.md#45-async-functions-dafny) for the supported source subset.
 
 Verify ordinary async TypeScript in place. Separate three concerns: translating
 execution, reasoning across suspension, and proving shared protocols.

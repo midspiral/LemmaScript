@@ -56,6 +56,7 @@ function walkExpr(e: TExpr, ctx: CondCtx): TExpr {
 function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
   const re = (x: TExpr) => walkExpr(x, ctx);
   switch (e.kind) {
+    case "await": case "promise": return e;
     case "var": case "num": case "bigint": case "str": case "bool":
     case "havoc":
       return e;
@@ -130,6 +131,7 @@ function recurseStmt(s: TStmt, ctx: CondCtx): TStmt {
   const re = (x: TExpr) => walkExpr(x, ctx);
   const rs = (x: TStmt[]) => walkStmts(x, ctx);
   switch (s.kind) {
+    case "try": return s;
     case "let": return { ...s, init: re(s.init) };
     case "assign": return { ...s, value: re(s.value) };
     case "return": return { ...s, value: re(s.value) };
@@ -499,6 +501,7 @@ function ruleLetCondAndOptional(s: TStmt, ctx: CondCtx): TStmt[] | null {
  *  (they lower to pure Dafny expressions: `x in arr`, `x in m`, `s.Keys`,
  *  …) are exempt even though they carry `callKind: "method"`. */
 function containsMethodCall(e: TExpr): boolean {
+  if (e.kind === "await" || e.kind === "promise") return true;
   if (e.kind === "call" && e.callKind === "method" &&
       !(e.builtinId !== undefined && builtinSpec(e.builtinId).pure)) {
     return true;
@@ -712,6 +715,7 @@ function ruleDiscriminantNegEarlyReturn(stmts: TStmt[], ctx: CondCtx): { stmt: T
 // ── Function / module entry ──────────────────────────────────
 
 function narrowFunction(fn: TFunction, ctx: CondCtx): TFunction {
+  if (fn.isAsync) return fn;
   // Contracts and the body bind their payloads in separate generated scopes.
   // Do not reserve a body's names because of a contract's \result (or another
   // function's paths). Keep the shared counter's traversal order unchanged.

@@ -212,6 +212,7 @@ export interface ExternDecl {
 export type Decl = Inductive | Structure | FnDef | FnDefByMethod | FnMethod | Namespace | ClassDecl | ConstDecl | TypeAlias | OpaqueType | ExternDecl;
 
 export interface Module {
+  async?: import("./async-lower.js").AsyncModule;
   comment: string;
   imports: string[];
   options: EmitOption[];

@@ -8,6 +8,7 @@ export LSC_RUN_LOG=false
 
 # Run executable tests before the Dafny fixture checks.
 npx tsx --test tools/tests/*.test.ts
+node --import tsx tools/test-async.ts
 
 expect_failure() {
   local message="$1"
