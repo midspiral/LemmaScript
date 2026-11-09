@@ -893,8 +893,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         if (!ctx.inSpec) throw new Error("perm(a, b) may only be used in //@ specifications");
         const a = resolveExpr(e.args[0], ctx);
         const b = resolveExpr(e.args[1], ctx);
-        if (a.ty.kind !== "array" || b.ty.kind !== "array")
-          throw new Error(`perm(a, b) requires two array arguments (got ${a.ty.kind} and ${b.ty.kind})`);
+        // Let the backend check argument types, including calls to proof helpers.
         const fn: TExpr = { kind: "var", name: "Perm", ty: { kind: "unknown" } };
         return { kind: "call", fn, args: [a, b], ty: { kind: "bool" }, callKind: "pure" };
       }

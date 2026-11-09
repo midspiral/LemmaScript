@@ -132,6 +132,15 @@ export function active(): Phase {
   });
 }
 
+test("an unknown enum member cannot fall through to builtin call lowering", () => {
+  assert.throws(() => emit(`
+const enum Math { Active = 4 }
+export function active(): Math {
+  //@ ensures Math.floor(4) === 4
+  return Math.Active;
+}`), /Unknown const enum member Math\.floor/);
+});
+
 test("a parameter shadowing the enum name remains an ordinary object", () => {
   const dafny = emit(`
 const enum Phase { Active = 4 }
