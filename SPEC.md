@@ -1118,7 +1118,7 @@ function CeilReal(x: real): int {
 }
 ```
 
-**Cross-file types:** When a verified function references a type imported from another file (e.g., `Module` from `../types`), `lsc` automatically resolves the type via ts-morph and generates the corresponding backend type declaration. Resolution is recursive — types referenced by resolved types are also extracted (e.g., resolving `Claim` also extracts `ClaimStatus`, `EmbeddedDecision`). Both record types and type aliases (string unions, discriminated unions) are resolved. `lsc` discovers the nearest `tsconfig.json` for module resolution. Built-in types (`Map`, `Set`, `Array`, etc.) are excluded.
+**Cross-file types:** When a verified function references a type imported from another file (e.g., `Module` from `../types`), `lsc` automatically resolves the type via ts-morph and generates the corresponding backend type declaration. Resolution is recursive — types referenced by resolved types are also extracted (e.g., resolving `Claim` also extracts `ClaimStatus`, `EmbeddedDecision`). Both record types and type aliases (string unions, discriminated unions) are resolved. `lsc` discovers the nearest `tsconfig.json` for module resolution, but does not load files solely because they appear in its `files` or `include` entries; source dependencies must be imported or explicitly referenced. Built-in types (`Map`, `Set`, `Array`, etc.) are excluded.
 
 ### 6.2 String Literals as Constructors
 

@@ -107,17 +107,6 @@ test("scalar dependencies may choose different collection libraries", () => {
   assert.equal(result.status, 0, result.stderr);
 });
 
-test("checks compiler-selected global callees without an import edge", () => {
-  const result = runCli({
-    "tsconfig.json": '{"compilerOptions":{"strict":true},"include":["*.ts"]}',
-    "source.ts": utf16 + 'export function read(): number { return size("😀"); }\n',
-    "library.ts": library.replace("export ", ""),
-  });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /differs from .*library\.ts/);
-  assert.equal(result.generated, null);
-});
-
 for (const barrel of ["barrel.ts", "barrel.d.ts"]) {
   test(`checks transitive model mismatches through ${barrel}`, () => {
     const result = runCli({
