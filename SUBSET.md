@@ -78,7 +78,10 @@ Plain functions are the core unit. Parameters and the return type are read from 
 
 Generics work: `<T extends Base>` parameters, plus the higher-order array methods `.map`, `.filter`, `.some`, `.every`, `.find`, `.findIndex` with inline arrow functions. Lambdas passed to these get their parameter types inferred. Flat object-destructured lambda parameters are supported; array, nested, defaulted, and rest binding patterns are not.
 
-`async` functions are supported **only when they contain no `await`** — the `Promise<T>` wrapper is just unwrapped to `T`. A real `await` / genuine async is not modelable.
+The Dafny backend supports scalar, result-oriented `async` functions, including
+`await` and exception handlers; promise handles are preserved even without `await`.
+Shared state, callbacks, thenables, and async `autohavoc` are unsupported.
+See [SPEC §4.5](SPEC.md#45-async-functions-dafny) for the native-promise boundary and contract semantics.
 
 ## Collections and their methods
 

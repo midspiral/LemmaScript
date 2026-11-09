@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { Project, ScriptTarget } from "ts-morph";
 import { extractModule } from "../src/extract.ts";
 import { resolveModule } from "../src/resolve.ts";
@@ -32,6 +33,15 @@ test("async without await keeps its promise and allocates a result handle", () =
   assert.match(output, /method f0_value_start/);
   assert.match(output, /result.id == \|s.outcomes\|/);
   assert.match(output, /Finished\(Fulfilled\(BigIntValue\(1\)\)\)/);
+});
+
+test("the inline handler example supports synchronous autohavoc and rejects async erasure", () => {
+  const source = readFileSync(new URL("../../examples/inlineHandler.ts", import.meta.url), "utf8");
+  const output = emit(source);
+  assert.match(output, /method get_entries\(/);
+  assert.match(output, /var contents := readSafe\(filePath\);/);
+  const asyncSource = source.replace('app.get("/entries", (', 'app.get("/entries", async (');
+  assert.throws(() => emit(asyncSource), /async get_entries: autohavoc cannot abstract/);
 });
 
 test("await of undefined still registers a continuation", () => {

@@ -6,10 +6,9 @@
  * the handler below becomes get_entries) and honors its own //@ verify and
  * //@ autohavoc annotations.
  *
- * The handler is fully idiomatic Express: `async (req, res)`. `res` no longer
- * collides with Dafny's `res` out-parameter (the emitter picks a fresh name),
- * and the `async` Promise<T> return wrapper is unwrapped to T — sound here
- * because the body has no `await` (no suspension point to model).
+ * The handler is synchronous. `res` does not collide with Dafny's `res`
+ * out-parameter (the emitter picks a fresh name). Async handlers cannot use
+ * autohavoc: their promise and callback effects must be modeled explicitly.
  *
  * As in autohavoc.ts, the opaque request I/O is havoc'd and the only obligation
  * left is that the safePath guard dominates the readSafe sink.
@@ -29,7 +28,7 @@ function readSafe(path: string): string {
 
 const app: any = {};
 
-app.get("/entries", async (req: any, res: any) => {
+app.get("/entries", (req: any, res: any) => {
   //@ verify
   //@ autohavoc
   const id: string = req.query.id;       // opaque → arbitrary string

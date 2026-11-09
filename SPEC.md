@@ -388,7 +388,7 @@ To verify a function, LemmaScript translates its whole body to the backend. That
 Enable it file-wide (a `//@ autohavoc` line at column 0) or on one function (next to its `//@ verify`). Dafny only (havoc is Dafny-only).
 
 ```typescript
-app.get("/x", async (req, res) => {
+app.get("/x", (req, res) => {
   //@ verify
   //@ autohavoc
   const id: string = req.query.id;                       // out of model → arbitrary string
@@ -399,6 +399,8 @@ app.get("/x", async (req, res) => {
 ```
 
 Here `req.query.id` and the `res.status(...).send(...)` calls are havoc'd away; the one thing verified is that `validPath` guards the contracted `readFileSafe` call.
+
+Async functions cannot use `autohavoc`, even without `await`: promise and callback effects must not be erased. See §4.5 for the supported async subset.
 
 Three properties make this safe and useful:
 
