@@ -52,6 +52,13 @@ cp -R tools/fixtures/utf16-project "$fixture_dir/utf16-project"
 cp tools/fixtures/optional-binder-collisions.ts "$fixture_dir/optional-binder-collisions.ts"
 cp tools/fixtures/unpaired-surrogate.ts "$fixture_dir/unpaired.ts"
 cp tools/fixtures/optional-guard-order.ts "$fixture_dir/optional-guard-order.ts"
+cp tools/fixtures/optional-comparison-order.ts "$fixture_dir/optional-comparison-order.ts"
+cp tools/fixtures/spread-null-override.ts "$fixture_dir/spread-null-override.ts"
+cp tools/fixtures/optional-enum-fields.ts "$fixture_dir/optional-enum-fields.ts"
+cp tools/fixtures/class-dependencies.ts "$fixture_dir/class-dependencies.ts"
+cp tools/fixtures/const-enum.ts "$fixture_dir/const-enum.ts"
+cp tools/fixtures/numeric-union-truthiness.ts "$fixture_dir/numeric-union-truthiness.ts"
+cp examples/conditionalCalls.ts "$fixture_dir/conditional-calls.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/impure.ts"
 if ! grep -Fq 'method {:axiom} rollDie' "$fixture_dir/impure.dfy.gen"; then
@@ -66,6 +73,41 @@ expect_failure \
   "Dafny equated two calls to an impure extern" \
   npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/impure.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-guard-order.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-comparison-order.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/spread-null-override.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-enum-fields.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/class-dependencies.ts"
+sed 's/return this.runner.epoch !== INACTIVE;/return this.runner.epoch === INACTIVE;/' \
+  tools/fixtures/class-dependencies.ts > "$fixture_dir/class-dependencies-mutated.ts"
+expect_failure \
+  "Dafny accepted the inverted class method despite its postcondition" \
+  npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/class-dependencies-mutated.ts"
+
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/const-enum.ts"
+sed 's/return Phase.Active;/return Phase.Idle;/' \
+  tools/fixtures/const-enum.ts > "$fixture_dir/const-enum-mutated.ts"
+expect_failure \
+  "Dafny accepted the wrong const enum member despite its postcondition" \
+  npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/const-enum-mutated.ts"
+
+# Zero invalidates both original contracts. Check them individually so a
+# regression in either truthiness or negation cannot hide behind the other.
+for function_name in zTruth zNot; do
+  expect_failure \
+    "Dafny accepted the false $function_name contract for a numeric union" \
+    npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 \
+      --extra-flags="--filter-symbol=${function_name}_ensures" "$fixture_dir/numeric-union-truthiness.ts"
+done
+sed -e 's/=== 5$/=== (z !== 0 ? 5 : 6)/' -e 's/=== false$/=== (z === 0)/' \
+  tools/fixtures/numeric-union-truthiness.ts > "$fixture_dir/numeric-union-truthiness-correct.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/numeric-union-truthiness-correct.ts"
+
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/conditional-calls.ts"
+sed 's/return enabled ? checkedIncrement(enabled, 0) : -1;/return enabled ? checkedIncrement(!enabled, 0) : -1;/' \
+  examples/conditionalCalls.ts > "$fixture_dir/conditional-calls-mutated.ts"
+expect_failure \
+  "Dafny accepted a call whose precondition contradicts its selected branch" \
+  npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/conditional-calls-mutated.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/legacy-safe-slice.ts"
 if ! grep -Fq 'function SafeSlice' "$fixture_dir/legacy-safe-slice.dfy.gen"; then

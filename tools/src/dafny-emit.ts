@@ -3,7 +3,7 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
+import { decimalNumberLiteral, exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshName, freshNameWhere, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
@@ -276,7 +276,7 @@ function wrapQuantifier(sub: Expr): string {
 function emitExpr(e: Expr): string {
   switch (e.kind) {
     case "var": return e.name === "undefined" ? "None" : escapeName(e.name);
-    case "num": return `${e.value}`;
+    case "num": return decimalNumberLiteral(e.value);
     // Already canonical decimal; Dafny's `int` is mathematical, so no `n` suffix.
     case "bigint": return e.value;
     case "bool": return e.value ? "true" : "false";

@@ -6,7 +6,7 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { anyExpr, usesNameInDecl, patternBinders } from "./ir.js";
+import { anyExpr, decimalNumberLiteral, usesNameInDecl, patternBinders } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshName, freshNameWhere } from "./names.js";
 
@@ -309,7 +309,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
   switch (e.kind) {
     // `undefined` is the IR's spelling of the absent optional (mirrors dafny-emit's None)
     case "var": return e.name === "undefined" ? "none" : escapeName(e.name);
-    case "num": return `${e.value}`;
+    case "num": return decimalNumberLiteral(e.value);
     // Already canonical decimal; Lean's `Int` is mathematical, so no `n` suffix.
     case "bigint": return e.value;
     case "bool": return e.value ? "true" : "false";

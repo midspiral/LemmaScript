@@ -5,7 +5,7 @@
  * Pipeline: extract → resolve → narrow → transform → peephole → emit
  */
 
-import { Project, ScriptTarget, type SourceFile } from "ts-morph";
+import type { SourceFile } from "ts-morph";
 import { existsSync, mkdirSync, readFileSync } from "fs";
 import { execFileSync } from "child_process";
 import { createRequire } from "module";
@@ -23,8 +23,8 @@ import { leanGen, leanCheck } from "./lean-commands.js";
 import { runInfo, runTypedInfo, type TypedInfoDafny } from "./info-command.js";
 import { RunLog, resolveLogDir, runLogEnabled, safely } from "./run-log.js";
 import { runRuns } from "./runs-command.js";
+import { SourceProjects } from "./source-projects.js";
 import {
-  findUp,
   loadConfigOptions,
   parseFileOptions,
   resolveDafnyArtifactDir,
@@ -288,14 +288,15 @@ function runBatch(
     process.exit(1);
   }
   const verifySlow = slow || timeLimit !== undefined;
+  const projects = new SourceProjects();
   for (const e of readEntries()) {
     const timeout = timeLimit ?? e.timeout;
     const flags = extraFlags ?? e.flags;
     if (cmd === "check" && backend === "dafny" && !verifySlow && timeout !== undefined && timeout > 60) {
       console.log(`=== ${path.basename(e.file)} (timeout ${timeout}s > 60s, gen-check only) ===`);
-      runFile("gen-check", e.file, backend, undefined, undefined, false, false, configPath);
+      runFile("gen-check", e.file, backend, undefined, undefined, false, false, configPath, projects);
     } else {
-      runFile(cmd, e.file, backend, timeout, flags, false, false, configPath);
+      runFile(cmd, e.file, backend, timeout, flags, false, false, configPath, projects);
     }
   }
 }
@@ -330,6 +331,7 @@ function runFile(
   noVerify = false,
   typedInfo = false,
   configPath?: string,
+  projects = new SourceProjects(),
 ) {
   const absPath = path.resolve(filePath);
   if (!existsSync(absPath)) {
@@ -337,13 +339,7 @@ function runFile(
     process.exit(1);
   }
 
-  // Find nearest tsconfig.json for import resolution; fall back to bare options
-  const tsConfigFilePath = findUp("tsconfig.json", absPath) ?? undefined;
-  const project = tsConfigFilePath
-    ? new Project({ tsConfigFilePath })
-    : new Project({ compilerOptions: { strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"] } });
-  const sourceFile = project.addSourceFileAtPath(absPath);
-  project.resolveSourceFileDependencies();
+  const sourceFile = projects.load(absPath);
 
   const fullText = sourceFile.getFullText();
   const { options, configFile } = effectiveOptions(absPath, fullText, configPath);

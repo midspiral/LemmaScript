@@ -220,6 +220,24 @@ export interface Module {
 
 // ── Literal queries ──────────────────────────────────────────
 
+/** Expand JavaScript's shortest decimal spelling without exponent syntax. */
+export function decimalNumberLiteral(value: number): string {
+  if (!Number.isFinite(value)) throw new Error(`Cannot emit non-finite numeric literal: ${value}`);
+  const text = String(value);
+  const [mantissa, exponent] = text.split("e");
+  if (exponent === undefined) return text;
+  const negative = mantissa.startsWith("-");
+  const [whole, fraction = ""] = (negative ? mantissa.slice(1) : mantissa).split(".");
+  const digits = whole + fraction;
+  const point = whole.length + Number(exponent);
+  const expanded = point <= 0
+    ? `0.${"0".repeat(-point)}${digits}`
+    : point >= digits.length
+      ? digits + "0".repeat(point - digits.length)
+      : `${digits.slice(0, point)}.${digits.slice(point)}`;
+  return negative ? `-${expanded}` : expanded;
+}
+
 /** The exact value of an integer-literal operand (possibly negated), or null
  *  when `e` isn't one. Answers in compiler-side `bigint` so a backend folding a
  *  literal into arithmetic stays exact: JS bitwise operators truncate to 32 bits
