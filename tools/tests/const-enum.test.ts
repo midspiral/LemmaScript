@@ -34,6 +34,7 @@ function emit(source: string, dependencies: Record<string, string> = {}) {
 test("numeric const enum values agree in executable code and specifications", () => {
   const mod = typed(fixture);
   assert.equal(mod.functions[0].returnTy.kind, "int");
+  assert.equal(mod.typeDecls.filter(d => d.name === "Phase").length, 1);
   const dafny = emit(fixture);
   assert.match(dafny, /type Phase = int/);
   assert.match(dafny, /active\(\) == 4/);
@@ -73,10 +74,11 @@ export function second(): Second.Active {
   //@ ensures \\result === Second.Active
   return Second.Active;
 }`, {
-    "first.ts": "export const enum State { Active = 3 }",
-    "second.ts": "export const enum State { Active = 7 }",
+    "first.ts": 'export const enum State { Idle = 0 }\nexport const enum State { "Active" = Idle + 3 }',
+    "second.ts": 'export const enum State { Idle = 1 }\nexport const enum State { "Active" = Idle + 6 }',
     "barrel.ts": 'export { State } from "./second";',
   });
+  for (const name of ["First", "Second"]) assert.equal(mod.typeDecls.filter(d => d.name === name).length, 1);
   for (const [name, value] of [["first", 3], ["second", 7]] as const) {
     const fn = mod.functions.find(f => f.name === name)!;
     assert.equal(fn.returnTy.kind, "int");
@@ -85,6 +87,50 @@ export function second(): Second.Active {
     if (spec.kind === "binop") assert.deepEqual(spec.right, { kind: "num", value, ty: { kind: "nat" } });
   }
 });
+
+test("quoted enum member names are decoded consistently in code and contracts", () => {
+  const mod = typed(`
+const enum Phase { "Active" = 4, "\\u0044one" = 7, "waiting-for-input" = 5 }
+export function active(): number {
+  //@ verify
+  //@ ensures \\result === Phase.Active
+  return Phase["Active"];
+}
+export function done(): number {
+  //@ verify
+  //@ ensures \\result === Phase["Done"]
+  return Phase.Done;
+}
+export function waiting(): number {
+  //@ verify
+  //@ ensures \\result === Phase["waiting-for-input"]
+  return Phase["waiting-for-input"];
+}`);
+  assert.deepEqual(mod.typeDecls.find(d => d.name === "Phase")!.constEnumMembers, [
+    { name: "Active", value: 4 }, { name: "Done", value: 7 }, { name: "waiting-for-input", value: 5 },
+  ]);
+  for (const [name, value] of [["active", 4], ["done", 7], ["waiting", 5]] as const) {
+    const fn = mod.functions.find(f => f.name === name)!;
+    const ret = fn.body[0];
+    const spec = fn.ensures[0];
+    assert.ok(ret.kind === "return" && ret.value.kind === "num");
+    assert.equal(ret.value.value, value);
+    assert.ok(spec.kind === "binop");
+    assert.deepEqual(spec.right, ret.value);
+  }
+});
+
+for (const reference of ["Phase.Missing", 'Phase["Missing"]']) {
+  test(`unknown supported enum member ${reference} still reports a contract error`, () => {
+    assert.throws(() => typed(`
+const enum Phase { Active = 4 }
+export function active(): Phase {
+  //@ verify
+  //@ ensures \\result === ${reference}
+  return Phase.Active;
+}`), /Unknown const enum member Phase\.Missing/);
+  });
+}
 
 test("a parameter shadowing the enum name remains an ordinary object", () => {
   const dafny = emit(`
@@ -141,6 +187,34 @@ export function active(): Phase.Active {
 
 for (const value of ['"active"', '0.5', '9007199254740992']) {
   for (const imported of [false, true]) {
+    test(`${imported ? "imported" : "local"} merged enum with value ${value} falls through as a whole`, () => {
+      const declaration = `export const enum Phase { Idle = 0 }
+export const enum Phase { Active = ${value} }
+export type Alias = Phase;`;
+      const mod = typed(`${imported ? 'import { State as Phase, Alias } from "./barrel";' : declaration}
+export function active(): Phase.Active {
+  //@ verify
+  //@ ensures \\result === Phase.Active
+  return Phase.Active;
+}
+export function idle(): Alias {
+  //@ verify
+  //@ ensures \\result === Phase.Idle
+  return Phase.Idle;
+}`, imported ? {
+        "phase.ts": declaration,
+        "barrel.ts": 'export { Phase as State, Alias } from "./phase";',
+      } : {});
+      assert.ok(mod.typeDecls.every(d => d.constEnumMembers === undefined));
+      for (const fn of mod.functions) {
+        const ret = fn.body[0];
+        const spec = fn.ensures[0];
+        assert.ok(ret.kind === "return" && ret.value.kind === "field");
+        assert.ok(spec.kind === "binop");
+        assert.deepEqual(spec.right, ret.value);
+      }
+    });
+
     const declaration = `export const enum Phase { Idle = 0, Active = ${value} }
 export type Alias = Phase;`;
     const source = imported ? 'import { State as Phase, Alias } from "./barrel";' : declaration;

@@ -5,7 +5,7 @@
  * The only strings are //@ annotation expressions (parsed later by specparser).
  */
 
-import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
+import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
@@ -429,7 +429,7 @@ function extractExpr(node: Expression): RawExpr {
     const member = symbol?.getDeclarations().find(Node.isEnumMember);
     if (member) {
       const info = tryExtractConstEnum(member.getParent());
-      if (info) return { kind: "num", value: info.constEnumMembers!.find(m => m.name === member.getName())!.value };
+      if (info) return { kind: "num", value: info.constEnumMembers!.find(m => m.name === enumMemberName(member))!.value };
     }
   }
 
@@ -894,15 +894,23 @@ function constEnumInfo(type: Type): TypeDeclInfo | undefined {
   return undefined;
 }
 
-// Only lower const enums whose members all have safe-integer numeric values.
-// Other enums keep the ordinary expression and type extraction paths.
+function enumMemberName(member: EnumMember): string {
+  const name = member.getNameNode();
+  return Node.isStringLiteral(name) ? name.getLiteralValue() : member.getName();
+}
+
+// All merged declarations must have safe-integer numeric const enum members.
+// Otherwise the entire enum keeps ordinary expression and type extraction.
 function tryExtractConstEnum(decl: EnumDeclaration, name = decl.getName()): TypeDeclInfo | undefined {
-  if (!decl.isConstEnum()) return undefined;
+  const declarations = decl.getSymbol()?.getDeclarations().filter(Node.isEnumDeclaration) ?? [decl];
   const members: { name: string; value: number }[] = [];
-  for (const member of decl.getMembers()) {
-    const value = member.getValue();
-    if (typeof value !== "number" || !Number.isSafeInteger(value)) return undefined;
-    members.push({ name: member.getName(), value });
+  for (const declaration of declarations) {
+    if (!declaration.isConstEnum()) return undefined;
+    for (const member of declaration.getMembers()) {
+      const value = member.getValue();
+      if (typeof value !== "number" || !Number.isSafeInteger(value)) return undefined;
+      members.push({ name: enumMemberName(member), value });
+    }
   }
   return { name, kind: "alias", aliasOf: "number", constEnumMembers: members };
 }
@@ -2259,7 +2267,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     } else if (Node.isEnumDeclaration(stmt)
         && !declaredNames.has(stmt.getName()) && !hasLeadingDirective(stmt, "skip")) {
       const info = tryExtractConstEnum(stmt);
-      if (info) typeDecls.push(info);
+      if (info && !typeDecls.some(d => d.name === info.name)) typeDecls.push(info);
     }
   }
 
@@ -2274,7 +2282,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       for (const decl of target?.getDeclarations() ?? []) {
         if (Node.isEnumDeclaration(decl)) {
           const info = tryExtractConstEnum(decl, local.getText());
-          if (info) typeDecls.push(info);
+          if (info && !typeDecls.some(d => d.name === info.name)) typeDecls.push(info);
         } else if (Node.isTypeAliasDeclaration(decl) && constEnumInfo(decl.getType())) {
           const info = extractTypeDecl(decl);
           if (info) typeDecls.push({ ...info, name: local.getText() });

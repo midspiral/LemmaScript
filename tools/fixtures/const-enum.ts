@@ -1,7 +1,10 @@
 export const enum Phase {
   Idle,
   Loading,
-  Active = 4,
+  "Active" = 4,
+}
+
+export const enum Phase {
   Alias = Active,
   Next,
   Flag = 1 << 5,
