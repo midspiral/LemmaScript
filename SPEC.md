@@ -1338,6 +1338,11 @@ lsc version                                    — print the lemmascript package
 
 Default backend is Dafny. `extract` and `info` are backend-neutral and always run, regardless of any `//@ backend` directive. With no `<file.ts>`, `gen`, `gen-check`, and `check` batch over the files listed in `LemmaScript-files.txt`.
 
+Within a batch, files in the same tsconfig's source graph share one fully loaded
+TypeScript project, including ambient declarations and module augmentations.
+Files outside that graph or without a tsconfig use isolated projects. Reuse lasts
+only for that CLI invocation; per-file LemmaScript options are still resolved separately.
+
 **Flags:**
 - `--backend=lean|dafny` — select the backend (default Dafny).
 - `--config=<path>` — use a specific `lemmascript.json` instead of nearest-ancestor discovery.
