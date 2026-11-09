@@ -40,6 +40,9 @@ export interface TypeDeclInfo {
   /** For alias: the underlying type string */
   aliasOf?: string;
   aliasOfTy?: Ty;  // pre-computed Ty for aliasOf
+  /** Numeric const enum: integer semantics; members exist only on value bindings.
+   * A type-only alias has an empty member list. */
+  constEnumMembers?: { name: string; value: number }[];
 }
 
 // ── TS type string → Ty (single source of truth) ───────────

@@ -343,8 +343,13 @@ function findDecl(ctx: Ctx, name: string): TypeDeclInfo | undefined {
 function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new Set()): Ty {
   if (ty.kind === "user") {
     if (seen.has(ty.name)) return ty;
+    const dot = ty.name.lastIndexOf(".");
+    const enumDecl = typeDecls.find(d => d.name === ty.name.slice(0, dot));
+    if (dot > 0 && enumDecl?.constEnumMembers?.some(m => m.name === ty.name.slice(dot + 1))) return { kind: "int" };
     const decl = declOfDotted(typeDecls, ty.name);
     if (decl?.kind === "alias" && decl.aliasOfTy) {
+      // Numeric enums must behave as numbers (not truthy user objects).
+      if (decl.constEnumMembers) return { kind: "int" };
       const target = decl.aliasOfTy;
       if (target.kind === "array" || target.kind === "map" || target.kind === "set" || target.kind === "optional" || target.kind === "user") {
         return expandAlias(target, typeDecls, new Set([...seen, ty.name]));
@@ -770,6 +775,15 @@ function tryRecordIndexByEnum(obj: TExpr, idx: TExpr, ctx: Ctx): TExpr | null {
   return expr;
 }
 
+function resolveConstEnumMember(obj: RawExpr, name: string, ctx: Ctx): TExpr | undefined {
+  if (obj.kind !== "var" || lookup(ctx.env, obj.name)) return undefined;
+  const decl = ctx.typeDecls.find(d => d.name === obj.name);
+  if (!decl?.constEnumMembers) return undefined;
+  const member = decl.constEnumMembers.find(m => m.name === name);
+  if (!member) throw new Error(`Unknown const enum member ${obj.name}.${name}`);
+  return resolveExpr({ kind: "num", value: member.value }, ctx);
+}
+
 function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
   switch (e.kind) {
     case "var":
@@ -949,6 +963,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "index": {
+      if (e.idx.kind === "str") {
+        const member = resolveConstEnumMember(e.obj, e.idx.value, ctx);
+        if (member) return member;
+      }
       const obj = resolveExpr(e.obj, ctx);
       const idx = resolveExpr(e.idx, ctx);
       // Map bracket access: default to Option<V>. But if the enclosing scope has a
@@ -983,6 +1001,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "field": {
+      const member = resolveConstEnumMember(e.obj, e.field, ctx);
+      if (member) return member;
       const obj = resolveExpr(e.obj, ctx);
       let isDiscriminant = false;
       let ty: Ty = { kind: "unknown" };
@@ -1776,10 +1796,10 @@ function resolveFunction(
 }
 
 function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map(), externs: Map<string, ExternSignature> = new Map(), moduleConstants: Map<string, Ty> = new Map()): import("./typedir.js").TClass {
-  const fields = cls.fields.map(f => ({ name: f.name, ty: parseTsType(f.tsType) }));
+  const fields = cls.fields.map(f => ({ name: f.name, ty: expandAlias(parseTsType(f.tsType), typeDecls) }));
   // Create a synthetic record type for 'this' so field access resolves
   const thisType: Ty = { kind: "user", name: cls.name };
-  const thisDecl: TypeDeclInfo = { name: cls.name, kind: "record", fields: cls.fields.map(f => ({ name: f.name, tsType: f.tsType, type: parseTsType(f.tsType) })) };
+  const thisDecl: TypeDeclInfo = { name: cls.name, kind: "record", fields: cls.fields.map((f, i) => ({ name: f.name, tsType: f.tsType, type: fields[i].ty })) };
   const allTypeDecls = [...typeDecls, thisDecl];
 
   const methods = cls.methods.map(fn =>

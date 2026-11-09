@@ -1,0 +1,286 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { Project, ScriptTarget, ModuleResolutionKind } from "ts-morph";
+import { extractModule } from "../src/extract.ts";
+import { resolveModule } from "../src/resolve.ts";
+import { narrowModule } from "../src/narrow.ts";
+import { transformModuleDafny, transformModuleLean } from "../src/transform.ts";
+import { emitDafnyFile } from "../src/dafny-emit.ts";
+import { emitLeanFile, resetLeanModule } from "../src/lean-emit.ts";
+
+const fixture = readFileSync(new URL("../fixtures/const-enum.ts", import.meta.url), "utf8");
+
+function extract(source: string, dependencies: Record<string, string> = {}) {
+  const project = new Project({ useInMemoryFileSystem: true, compilerOptions: {
+    strict: true, target: ScriptTarget.ESNext, moduleResolution: ModuleResolutionKind.NodeJs,
+    lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true,
+  } });
+  for (const [name, contents] of Object.entries(dependencies)) project.createSourceFile(`/${name}`, contents);
+  const file = project.createSourceFile("/main.ts", source);
+  assert.deepEqual(project.getPreEmitDiagnostics().map(d => d.getMessageText()), [], "valid TypeScript");
+  return extractModule(file);
+}
+
+function typed(source: string, dependencies: Record<string, string> = {}) {
+  return narrowModule(resolveModule(extract(source, dependencies)));
+}
+
+function emit(source: string, dependencies: Record<string, string> = {}) {
+  const { typesFile, defFile } = transformModuleDafny(typed(source, dependencies));
+  return emitDafnyFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
+}
+
+test("numeric const enum values agree in executable code and specifications", () => {
+  const mod = typed(fixture);
+  assert.equal(mod.functions[0].returnTy.kind, "int");
+  assert.equal(mod.typeDecls.filter(d => d.name === "Phase").length, 1);
+  const dafny = emit(fixture);
+  assert.match(dafny, /type Phase = int/);
+  assert.match(dafny, /active\(\) == 4/);
+  assert.doesNotMatch(dafny, /Phase\.Active|Phase\.Idle|toExponential/);
+  for (const name of ["active", "bracket"]) {
+    const fn = mod.functions.find(f => f.name === name)!;
+    assert.equal(fn.body[0].kind, "return");
+    if (fn.body[0].kind === "return") {
+      assert.equal(fn.body[0].value.kind, "num");
+      if (fn.body[0].value.kind === "num") assert.equal(fn.body[0].value.value, 4);
+    }
+  }
+});
+
+test("both backends retain numeric truthiness for zero-valued enums", () => {
+  const mod = typed(fixture);
+  assert.equal(mod.functions.find(f => f.name === "isTruthy")!.params[0].ty.kind, "int");
+  assert.match(emit(fixture), /phase != 0/);
+  resetLeanModule();
+  const lean = transformModuleLean(mod);
+  const text = [lean.typesFile, lean.defFile].filter(f => !!f).map(f => emitLeanFile(f!)).join("\n");
+  assert.match(text, /phase : Int/);
+  assert.doesNotMatch(text, /Phase\.Active|Phase\.Idle/);
+});
+
+test("numeric aliases and imported enum bindings preserve their own values", () => {
+  const mod = typed(`
+import { State as First } from "./first";
+import { State as Second } from "./barrel";
+export function first(): First {
+  //@ verify
+  //@ ensures \\result === First.Active
+  return First.Active;
+}
+export function second(): Second.Active {
+  //@ verify
+  //@ ensures \\result === Second.Active
+  return Second.Active;
+}`, {
+    "first.ts": 'export const enum State { Idle = 0 }\nexport const enum State { "Active" = Idle + 3 }',
+    "second.ts": 'export const enum State { Idle = 1 }\nexport const enum State { "Active" = Idle + 6 }',
+    "barrel.ts": 'export { State } from "./second";',
+  });
+  for (const name of ["First", "Second"]) assert.equal(mod.typeDecls.filter(d => d.name === name).length, 1);
+  for (const [name, value] of [["first", 3], ["second", 7]] as const) {
+    const fn = mod.functions.find(f => f.name === name)!;
+    assert.equal(fn.returnTy.kind, "int");
+    const spec = fn.ensures[0];
+    assert.equal(spec.kind, "binop");
+    if (spec.kind === "binop") assert.deepEqual(spec.right, { kind: "num", value, ty: { kind: "nat" } });
+  }
+});
+
+test("quoted enum member names are decoded consistently in code and contracts", () => {
+  const mod = typed(`
+const enum Phase { "Active" = 4, "\\u0044one" = 7, "waiting-for-input" = 5 }
+export function active(): number {
+  //@ verify
+  //@ ensures \\result === Phase.Active
+  return Phase["Active"];
+}
+export function done(): number {
+  //@ verify
+  //@ ensures \\result === Phase["Done"]
+  return Phase.Done;
+}
+export function waiting(): number {
+  //@ verify
+  //@ ensures \\result === Phase["waiting-for-input"]
+  return Phase["waiting-for-input"];
+}`);
+  assert.deepEqual(mod.typeDecls.find(d => d.name === "Phase")!.constEnumMembers, [
+    { name: "Active", value: 4 }, { name: "Done", value: 7 }, { name: "waiting-for-input", value: 5 },
+  ]);
+  for (const [name, value] of [["active", 4], ["done", 7], ["waiting", 5]] as const) {
+    const fn = mod.functions.find(f => f.name === name)!;
+    const ret = fn.body[0];
+    const spec = fn.ensures[0];
+    assert.ok(ret.kind === "return" && ret.value.kind === "num");
+    assert.equal(ret.value.value, value);
+    assert.ok(spec.kind === "binop");
+    assert.deepEqual(spec.right, ret.value);
+  }
+});
+
+for (const reference of ["Phase.Missing", 'Phase["Missing"]']) {
+  test(`unknown supported enum member ${reference} still reports a contract error`, () => {
+    assert.throws(() => typed(`
+const enum Phase { Active = 4 }
+export function active(): Phase {
+  //@ verify
+  //@ ensures \\result === ${reference}
+  return Phase.Active;
+}`), /Unknown const enum member Phase\.Missing/);
+  });
+}
+
+test("a parameter shadowing the enum name remains an ordinary object", () => {
+  const dafny = emit(`
+const enum Phase { Active = 4 }
+interface Input { Active: number }
+export function read(Phase: Input): number {
+  //@ verify
+  //@ ensures \\result === Phase.Active
+  return Phase.Active;
+}`);
+  assert.match(dafny, /Phase.Active/);
+  assert.doesNotMatch(dafny, /read\(Phase\) == 4/);
+});
+
+test("enum types in class and optional record fields lower to integers", () => {
+  const dafny = emit(`
+const enum Phase { Idle, Active = 4 }
+interface Input { phase?: Phase }
+export class State {
+  phase!: Phase;
+  read(input: Input): number {
+    //@ verify
+    return input.phase ?? this.phase;
+  }
+}`);
+  assert.match(dafny, /phase: Option<int>/);
+  assert.match(dafny, /var phase: int/);
+  assert.doesNotMatch(dafny, /toFixed|toExponential/);
+});
+
+test("type aliases of enum values retain numeric behavior", () => {
+  const mod = typed(`
+const enum Phase { Idle, Active = 4 }
+type Alias = Phase;
+export function truthy(value: Alias): boolean {
+  //@ verify
+  //@ ensures \\result === (value !== 0)
+  if (value) return true;
+  return false;
+}`);
+  assert.equal(mod.functions[0].params[0].ty.kind, "int");
+});
+
+test("a member type used only in a signature retains its enum dependency", () => {
+  const mod = typed(`
+const enum Phase { Active = 4 }
+export function active(): Phase.Active {
+  //@ verify
+  //@ ensures \\result === 4
+  return Phase.Active;
+}`);
+  assert.equal(mod.functions[0].returnTy.kind, "int");
+});
+
+for (const value of ['"active"', '0.5', '9007199254740992']) {
+  for (const imported of [false, true]) {
+    test(`${imported ? "imported" : "local"} merged enum with value ${value} falls through as a whole`, () => {
+      const declaration = `export const enum Phase { Idle = 0 }
+export const enum Phase { Active = ${value} }
+export type Alias = Phase;`;
+      const mod = typed(`${imported ? 'import { State as Phase, Alias } from "./barrel";' : declaration}
+export function active(): Phase.Active {
+  //@ verify
+  //@ ensures \\result === Phase.Active
+  return Phase.Active;
+}
+export function idle(): Alias {
+  //@ verify
+  //@ ensures \\result === Phase.Idle
+  return Phase.Idle;
+}`, imported ? {
+        "phase.ts": declaration,
+        "barrel.ts": 'export { Phase as State, Alias } from "./phase";',
+      } : {});
+      assert.ok(mod.typeDecls.every(d => d.constEnumMembers === undefined));
+      for (const fn of mod.functions) {
+        const ret = fn.body[0];
+        const spec = fn.ensures[0];
+        assert.ok(ret.kind === "return" && ret.value.kind === "field");
+        assert.ok(spec.kind === "binop");
+        assert.deepEqual(spec.right, ret.value);
+      }
+    });
+
+    const declaration = `export const enum Phase { Idle = 0, Active = ${value} }
+export type Alias = Phase;`;
+    const source = imported ? 'import { State as Phase, Alias } from "./barrel";' : declaration;
+    const dependencies: Record<string, string> = imported ? {
+      "phase.ts": declaration,
+      "barrel.ts": 'export { Phase as State, Alias } from "./phase";',
+    } : {};
+    const description = `${imported ? "imported" : "local"} const enum with value ${value}`;
+
+    test(`unused ${description} does not block unrelated verification`, () => {
+      const dafny = emit(`${source}
+export function one(): number {
+  //@ verify
+  //@ ensures \\result === 1
+  return 1;
+}`, dependencies);
+      assert.match(dafny, /function one\(\): int\s*\{\s*1\s*\}/);
+      assert.match(dafny, /one\(\) == 1/);
+      assert.doesNotMatch(dafny, /Phase|Alias|State/);
+    });
+
+    test(`${description} falls through consistently in code, types, and contracts`, () => {
+      const mod = typed(`${source}
+interface Input { phase?: Phase }
+export function active(input: Input): Alias {
+  //@ verify
+  //@ ensures \\result === Phase.Active
+  return Phase.Active;
+}
+export function bracket(): Phase.Active {
+  //@ verify
+  //@ ensures \\result === Phase["Active"]
+  return Phase["Active"];
+}
+export function idle(): number {
+  //@ verify
+  //@ ensures \\result === Phase.Idle
+  return Phase.Idle;
+}`, dependencies);
+      assert.ok(mod.typeDecls.every(d => d.constEnumMembers === undefined));
+      for (const [name, kind] of [["active", "field"], ["bracket", "index"], ["idle", "field"]]) {
+        const fn = mod.functions.find(f => f.name === name)!;
+        const ret = fn.body[0];
+        const spec = fn.ensures[0];
+        assert.ok(ret.kind === "return");
+        assert.ok(spec.kind === "binop");
+        assert.equal(ret.value.kind, kind);
+        assert.deepEqual(spec.right, ret.value);
+      }
+    });
+  }
+}
+
+for (const [read, expected] of [
+  ["Phase.Active", { kind: "field", obj: { kind: "var", name: "Phase" }, field: "Active" }],
+  ['Phase["Active"]', { kind: "index", obj: { kind: "var", name: "Phase" }, idx: { kind: "str", value: "Active" } }],
+] as const) {
+  test(`runtime enum member ${read} falls through to ordinary access`, () => {
+    const mod = extract(`
+enum Phase { Active = 4 }
+export function active(): number {
+  //@ verify
+  return ${read};
+}`);
+    const ret = mod.functions[0].body[0];
+    assert.equal(ret.kind, "return");
+    if (ret.kind === "return") assert.deepEqual(ret.value, expected);
+  });
+}

@@ -161,7 +161,7 @@ export type PresetMinutes = 5 | 15 | 30 | 45 | 60;
 
 emits `type PresetMinutes = nat`. Any reference to `PresetMinutes` (parameters, fields, `PresetMinutes[]`) then resolves through the alias.
 
-Interface fields can also be overridden with a trailing annotation on the same line:
+Interface fields and class properties can also be overridden with a trailing annotation on the same line:
 
 ```typescript
 export interface Model {
@@ -169,6 +169,8 @@ export interface Model {
   expenses: Expense[];
 }
 ```
+
+Class properties remain present in the verification model. A trailing `//@ type unknown` makes an irrelevant field opaque without extracting its original type's dependencies; accesses that require that hidden structure still need a suitable model. A named override can refer to a local `//@ declare-type` projection. Type overrides are trusted: the compiler does not check correspondence with the original TypeScript type. The projection must preserve the observations and mutations used by the selected code, including any relevant aliasing or identity.
 
 ### 2.5 Type Declarations: `//@ declare-type`
 
@@ -252,6 +254,8 @@ class Counter {
   }
 }
 ```
+
+Selected methods participate in type and constant dependency discovery, including their signatures, bodies, specifications, and modeled class fields. Unselected methods remain outside verification; all class properties are retained, with the field type overrides from §2.4 available for irrelevant or projected state.
 
 **`modifies this` / `reads this`:** Not generated automatically. Add as proof-level additions in the `.dfy` file. Dafny will report an error if they're missing.
 
@@ -1037,6 +1041,8 @@ To use JavaScript's UTF-16 code-unit model, select
 (§7.6). See SPEC_DAFNY.md §4 for the behavior and limitations of each model.
 
 `lsc` reads parameter and variable types from ts-morph. Primitive types are mapped per the table. User-defined types (like `State`, `Event`) are passed through by name — the corresponding backend type is generated from the TS type declaration.
+
+**Numeric const enums.** Local or named-imported `const enum`s whose members are all safe integers map to `Int`/`int`; references to their members become numeric literals in code and contracts. Enum values are modeled as unrestricted integers. Other enums fall through to ordinary extraction without constant folding.
 
 **Tuples.** A tuple type lowers to a native backend tuple (`(A, B)` in Dafny, `A × B` in Lean) only when its element types differ; a *homogeneous* tuple (`[number, number]`) lowers to `seq`/`Array` instead, since a sequence is a superset of what a same-typed tuple offers (dynamic index, `.length`, `.map`). The same homogeneity rule applies to an unannotated array literal: `[1, "a"]` is a tuple, `[1, 2, 3]` a sequence; an explicit expected type wins. Tuple element access **requires a compile-time integer-literal index** — `t[0]`, `t[1]` — because a tuple has a distinct type per slot, so a runtime index has neither a single result type nor a backend projection (`t.0`/`t.1`). A non-literal index into a tuple is a `lsc` error. `const [a, b] = t` destructuring works (it desugars to per-slot access). See [`examples/tuples.ts`](examples/tuples.ts).
 

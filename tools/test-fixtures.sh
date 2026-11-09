@@ -55,6 +55,8 @@ cp tools/fixtures/optional-guard-order.ts "$fixture_dir/optional-guard-order.ts"
 cp tools/fixtures/optional-comparison-order.ts "$fixture_dir/optional-comparison-order.ts"
 cp tools/fixtures/spread-null-override.ts "$fixture_dir/spread-null-override.ts"
 cp tools/fixtures/optional-enum-fields.ts "$fixture_dir/optional-enum-fields.ts"
+cp tools/fixtures/class-dependencies.ts "$fixture_dir/class-dependencies.ts"
+cp tools/fixtures/const-enum.ts "$fixture_dir/const-enum.ts"
 cp examples/conditionalCalls.ts "$fixture_dir/conditional-calls.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/impure.ts"
@@ -73,6 +75,20 @@ npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/opt
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-comparison-order.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/spread-null-override.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-enum-fields.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/class-dependencies.ts"
+sed 's/return this.runner.epoch !== INACTIVE;/return this.runner.epoch === INACTIVE;/' \
+  tools/fixtures/class-dependencies.ts > "$fixture_dir/class-dependencies-mutated.ts"
+expect_failure \
+  "Dafny accepted the inverted class method despite its postcondition" \
+  npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/class-dependencies-mutated.ts"
+
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/const-enum.ts"
+sed 's/return Phase.Active;/return Phase.Idle;/' \
+  tools/fixtures/const-enum.ts > "$fixture_dir/const-enum-mutated.ts"
+expect_failure \
+  "Dafny accepted the wrong const enum member despite its postcondition" \
+  npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/const-enum-mutated.ts"
+
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/conditional-calls.ts"
 sed 's/return enabled ? checkedIncrement(enabled, 0) : -1;/return enabled ? checkedIncrement(!enabled, 0) : -1;/' \
   examples/conditionalCalls.ts > "$fixture_dir/conditional-calls-mutated.ts"
