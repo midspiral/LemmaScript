@@ -44,6 +44,22 @@ test("ordinary array parameters and object bindings remain supported", () => {
   `));
 });
 
+test("unused rest parameters in callback lambdas pass through", () => {
+  assert.doesNotThrow(() => extract(`
+    export function mapped(xs: number[][]): number[] {
+      return xs.map((value: number[], ..._rest: (number | number[][])[]) => value.length);
+    }
+  `));
+});
+
+test("unused rest-only callback parameter passes through", () => {
+  assert.doesNotThrow(() => extract(`
+    export function mapped(xs: number[][]): number[] {
+      return xs.map((..._args: (number[] | number | number[][])[]) => 42);
+    }
+  `));
+});
+
 test("named variadic declarations retain their rest grouping metadata", () => {
   const module = extract(`
     export function named(...values: number[]): number { return values.length; }

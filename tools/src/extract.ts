@@ -542,7 +542,16 @@ function extractExpr(node: Expression): RawExpr {
     const destructureBindings: RawStmt[] = [];
     const params = node.getParameters().map((p, paramIndex) => {
       if (p.isRestParameter()) {
-        throw new Error(`rest parameter in arrow lambda not yet supported: ${p.getText()}`);
+        const restName = p.getName();
+        const body = node.getBody();
+        const isUsed = body !== undefined && body.getDescendantsOfKind(SyntaxKind.Identifier)
+          .some(id => id.getText() === restName);
+        if (isUsed) {
+          throw new Error(`rest parameter in arrow lambda not yet supported: ${p.getText()}`);
+        }
+        // Unused rest binding — safe to lower as an ordinary parameter.
+        const typeNode = p.getTypeNode();
+        return { name: restName, tsType: typeNode ? typeNode.getText() : undefined };
       }
       const typeNode = p.getTypeNode();
       const tsType = typeNode ? typeNode.getText() : undefined;
