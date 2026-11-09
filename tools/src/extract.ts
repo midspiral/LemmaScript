@@ -370,7 +370,8 @@ function extractExpr(node: Expression): RawExpr {
 
   // Numeric literal
   if (Node.isNumericLiteral(node)) {
-    return { kind: "num", value: Number(node.getLiteralValue()) };
+    // ts-morph's getLiteralValue truncates exponent forms with an integer mantissa.
+    return { kind: "num", value: Number(node.getText().replace(/_/g, "")) };
   }
 
   // BigInt literal (e.g. 32n, 0xffffn) — exact integer, with bigint division

@@ -1086,6 +1086,13 @@ Constants are always extracted (even in `//@ verify` selective mode) so verified
 
 JavaScript has one numeric type (`number`, IEEE 754 doubles). LemmaScript maps `number` to `int` by default, but **non-integer numeric literals** (e.g., `0.8`, `3.14`) are typed as `real`:
 
+Numeric literals are read using JavaScript's `Number` conversion, including
+exponents and numeric separators. Emission expands the resulting shortest decimal
+spelling without exponent syntax: `1e-10` becomes `0.0000000001`, and `1e21`
+becomes `1000000000000000000000`. This is a mathematical-number model, not an
+exact encoding of the binary64 value. Fractional module constants retain their
+`real` type. Non-finite numeric literals are rejected.
+
 | TypeScript | Dafny | Lean |
 |-----------|-------|------|
 | `42` | `42` (int) | `42` (Int) |

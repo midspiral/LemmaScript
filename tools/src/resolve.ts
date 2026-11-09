@@ -1906,13 +1906,15 @@ export function resolveModule(raw: RawModule): TModule {
   });
   const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
   const constants = (raw.constants ?? []).map(c => {
-    const ty = expandAlias(parseTsType(c.tsType), raw.typeDecls);
+    const declaredTy = expandAlias(parseTsType(c.tsType), raw.typeDecls);
     // Propagate the declared type into the value's resolution context so that
     // record literals on map-typed constants (e.g. `Record<string, number>`)
     // get their `ty` set to `map<...>` rather than `user("...")`.
-    const valueCtx: Ctx = { ...emptyCtx, returnTy: ty };
-    const value = coerceToTargetTy(resolveExpr(c.value, valueCtx), ty, raw.typeDecls);
-    return { name: c.name, ty, value };
+    const valueCtx: Ctx = { ...emptyCtx, returnTy: declaredTy };
+    const value = resolveExpr(c.value, valueCtx);
+    // TypeScript's number defaults to int, but fractional initializers need real.
+    const ty = declaredTy.kind === "int" && value.ty.kind === "real" ? value.ty : declaredTy;
+    return { name: c.name, ty, value: coerceToTargetTy(value, ty, raw.typeDecls) };
   });
   const moduleConstants = new Map<string, Ty>(constants.map(c => [c.name, c.ty]));
 
