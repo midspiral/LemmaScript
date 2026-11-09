@@ -42,7 +42,7 @@ export interface VerifyRecord {
   passed: string[];
   tsHash: string | null;
   dfyHash: string | null;
-  lsc: string;
+  lsc: string | null;
 }
 
 export interface RunLogInit {
@@ -50,7 +50,7 @@ export interface RunLogInit {
   cmd: "check" | "regen";
   sourcePath: string;
   extraFlags?: string;
-  lscVersion: string;
+  lscVersion: string | null;
 }
 
 /**
@@ -115,7 +115,7 @@ export function hashText(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 12);
 }
 
-function safely<T>(fn: () => T): T | null {
+export function safely<T>(fn: () => T): T | null {
   try {
     return fn();
   } catch {

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { dafnyCheckDiff, dafnyRegen, dafnyVerify } from "../src/dafny-commands.ts";
 import {
-  RunLog, ensureLogDir, hashText, isPartialRun, parseTextLog, readRecords, resolveLogDir, runLogEnabled, snapshotSource,
+  RunLog, ensureLogDir, hashText, isPartialRun, parseTextLog, readRecords, resolveLogDir, runLogEnabled, safely, snapshotSource,
 } from "../src/run-log.ts";
 
 const posixOnly = { skip: process.platform === "win32" };
@@ -323,6 +323,19 @@ test("an unwritable log directory never throws", () => {
     const log = new RunLog({ logDir: join(blocker, "sub"), cmd: "check", sourcePath: source, lscVersion: "0" });
     assert.doesNotThrow(() => log.dafnyArgs());
     assert.doesNotThrow(() => log.finish({ stage: "ok", exit: 0, dfyPath: source }));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a version that can't be read is recorded as null", () => {
+  const root = tempDir();
+  try {
+    const source = join(root, "a.ts");
+    writeFileSync(source, "");
+    const lscVersion = safely((): string => { throw new Error("ENOENT: no such file or directory, open 'package.json'"); });
+    new RunLog({ logDir: root, cmd: "check", sourcePath: source, lscVersion }).finish({ stage: "ok", exit: 0, dfyPath: source });
+    assert.equal(records(root)[0].lsc, null);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

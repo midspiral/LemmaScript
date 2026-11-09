@@ -123,6 +123,10 @@ function resolveTsType(tsType: string, overrides: Map<string, string>, varName?:
 /** Infer a conditional's result type after its branches have been resolved or
  *  contextually coerced. A void branch is the source-level null/undefined arm. */
 function conditionalResultTy(thenTy: Ty, elseTy: Ty): Ty {
+  if ((thenTy.kind === "int" || thenTy.kind === "nat") &&
+      (elseTy.kind === "int" || elseTy.kind === "nat")) {
+    return { ...thenTy, kind: thenTy.kind === "int" || elseTy.kind === "int" ? "int" : "nat" };
+  }
   let ty = thenTy.kind !== "unknown" ? thenTy : elseTy;
   if (thenTy.kind === "void" && elseTy.kind !== "void" && elseTy.kind !== "unknown") {
     ty = { kind: "optional", inner: elseTy };
@@ -339,8 +343,13 @@ function findDecl(ctx: Ctx, name: string): TypeDeclInfo | undefined {
 function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new Set()): Ty {
   if (ty.kind === "user") {
     if (seen.has(ty.name)) return ty;
+    const dot = ty.name.lastIndexOf(".");
+    const enumDecl = typeDecls.find(d => d.name === ty.name.slice(0, dot));
+    if (dot > 0 && enumDecl?.constEnumMembers?.some(m => m.name === ty.name.slice(dot + 1))) return { kind: "int" };
     const decl = declOfDotted(typeDecls, ty.name);
     if (decl?.kind === "alias" && decl.aliasOfTy) {
+      // Numeric enums must behave as numbers (not truthy user objects).
+      if (decl.constEnumMembers) return { kind: "int" };
       const target = decl.aliasOfTy;
       if (target.kind === "array" || target.kind === "map" || target.kind === "set" || target.kind === "optional" || target.kind === "user") {
         return expandAlias(target, typeDecls, new Set([...seen, ty.name]));
@@ -353,6 +362,20 @@ function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new 
   if (ty.kind === "tuple") return { kind: "tuple", elems: ty.elems.map(e => expandAlias(e, typeDecls, seen)) };
   if (ty.kind === "set") return { kind: "set", elem: expandAlias(ty.elem, typeDecls, seen) };
   if (ty.kind === "map") return { kind: "map", key: expandAlias(ty.key, typeDecls, seen), value: expandAlias(ty.value, typeDecls, seen) };
+  return ty;
+}
+
+/** Numeric aliases keep their names in declarations but use their underlying
+ *  types in expressions. Optional payloads need the same treatment for zero's
+ *  falsiness; collection elements are resolved when read. */
+function numericValueType(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new Set()): Ty {
+  if (ty.kind === "optional") return { ...ty, inner: numericValueType(ty.inner, typeDecls, seen) };
+  if (ty.kind !== "user" || seen.has(ty.name)) return ty;
+  const decl = declOfDotted(typeDecls, ty.name);
+  if (decl?.kind === "alias" && decl.aliasOfTy) {
+    const target = numericValueType(decl.aliasOfTy, typeDecls, new Set([...seen, ty.name]));
+    if (target.kind === "int" || target.kind === "nat" || target.kind === "real") return target;
+  }
   return ty;
 }
 
@@ -672,8 +695,9 @@ let mergeBinder = 0;
 
 /** Expand `{ ...base, ...override }` into a faithful field-wise merge. Driven by
  *  the result record type's fields: an override field wins when present, else the
- *  base's field shows through. Optional fields decide presence at runtime
- *  (`Some?`); an `Option`-typed override is the whole merge guarded by its tag. */
+ *  base's field shows through. `f?:` fields decide presence at runtime (`Some?`);
+ *  required fields (including `T | null`) are always copied from the override.
+ *  An `Option`-typed override is the whole merge guarded by its tag. */
 function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
   const tbase = resolveExpr(base, ctx);
   const tover = resolveExpr(override, ctx);
@@ -698,8 +722,9 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
     fields: fields.map(f => {
       const ft = f.type!;
       const ovf: TExpr = { kind: "field", obj: ov, field: f.name, ty: ft };
-      if (ft.kind !== "optional") return { name: f.name, value: ovf };  // required: override always provides
-      // optional: override field wins iff present, else base's field
+      // A required key is always copied, even when its value is null/undefined.
+      if (ft.kind !== "optional" || !f.optionalKey) return { name: f.name, value: ovf };
+      // `f?:` key: override field wins iff present, else base's field
       const bvf: TExpr = { kind: "field", obj: bv, field: f.name, ty: ft };
       const binder = freshName(`_m${mergeBinder++}`);
       // someBody is the unwrapped present value; transform re-wraps each arm in
@@ -764,7 +789,21 @@ function tryRecordIndexByEnum(obj: TExpr, idx: TExpr, ctx: Ctx): TExpr | null {
   return expr;
 }
 
+function resolveConstEnumMember(obj: RawExpr, name: string, ctx: Ctx): TExpr | undefined {
+  if (obj.kind !== "var" || lookup(ctx.env, obj.name)) return undefined;
+  const decl = ctx.typeDecls.find(d => d.name === obj.name);
+  if (!decl?.constEnumMembers) return undefined;
+  const member = decl.constEnumMembers.find(m => m.name === name);
+  if (!member) throw new Error(`Unknown const enum member ${obj.name}.${name}`);
+  return resolveExpr({ kind: "num", value: member.value }, ctx);
+}
+
 function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
+  const expr = resolveExprInner(e, ctx);
+  return { ...expr, ty: numericValueType(expr.ty, ctx.typeDecls) };
+}
+
+function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
   switch (e.kind) {
     case "var":
       if (e.name === "undefined") return { kind: "var", name: "undefined", ty: { kind: "void" } };
@@ -840,7 +879,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "unop": {
       const expr = resolveExpr(e.expr, ctx);
-      const ty: Ty = e.op === "!" ? { kind: "bool" } : e.op === "typeof" ? { kind: "string" } : expr.ty;
+      const ty: Ty = e.op === "!" ? { kind: "bool" } : e.op === "typeof" ? { kind: "string" }
+        : e.op === "-" && expr.ty.kind === "nat" ? { ...expr.ty, kind: "int" } : expr.ty;
       return { kind: "unop", op: e.op, expr, ty };
     }
 
@@ -853,8 +893,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         if (!ctx.inSpec) throw new Error("perm(a, b) may only be used in //@ specifications");
         const a = resolveExpr(e.args[0], ctx);
         const b = resolveExpr(e.args[1], ctx);
-        if (a.ty.kind !== "array" || b.ty.kind !== "array")
-          throw new Error(`perm(a, b) requires two array arguments (got ${a.ty.kind} and ${b.ty.kind})`);
+        // Let the backend check argument types, including calls to proof helpers.
         const fn: TExpr = { kind: "var", name: "Perm", ty: { kind: "unknown" } };
         return { kind: "call", fn, args: [a, b], ty: { kind: "bool" }, callKind: "pure" };
       }
@@ -942,6 +981,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "index": {
+      if (e.idx.kind === "str") {
+        const member = resolveConstEnumMember(e.obj, e.idx.value, ctx);
+        if (member) return member;
+      }
       const obj = resolveExpr(e.obj, ctx);
       const idx = resolveExpr(e.idx, ctx);
       // Map bracket access: default to Option<V>. But if the enclosing scope has a
@@ -976,6 +1019,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "field": {
+      const member = resolveConstEnumMember(e.obj, e.field, ctx);
+      if (member) return member;
       const obj = resolveExpr(e.obj, ctx);
       let isDiscriminant = false;
       let ty: Ty = { kind: "unknown" };
@@ -1769,10 +1814,10 @@ function resolveFunction(
 }
 
 function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map(), externs: Map<string, ExternSignature> = new Map(), moduleConstants: Map<string, Ty> = new Map()): import("./typedir.js").TClass {
-  const fields = cls.fields.map(f => ({ name: f.name, ty: parseTsType(f.tsType) }));
+  const fields = cls.fields.map(f => ({ name: f.name, ty: expandAlias(parseTsType(f.tsType), typeDecls) }));
   // Create a synthetic record type for 'this' so field access resolves
   const thisType: Ty = { kind: "user", name: cls.name };
-  const thisDecl: TypeDeclInfo = { name: cls.name, kind: "record", fields: cls.fields.map(f => ({ name: f.name, tsType: f.tsType, type: parseTsType(f.tsType) })) };
+  const thisDecl: TypeDeclInfo = { name: cls.name, kind: "record", fields: cls.fields.map((f, i) => ({ name: f.name, tsType: f.tsType, type: fields[i].ty })) };
   const allTypeDecls = [...typeDecls, thisDecl];
 
   const methods = cls.methods.map(fn =>
@@ -1860,13 +1905,15 @@ export function resolveModule(raw: RawModule): TModule {
   });
   const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
   const constants = (raw.constants ?? []).map(c => {
-    const ty = expandAlias(parseTsType(c.tsType), raw.typeDecls);
+    const declaredTy = expandAlias(parseTsType(c.tsType), raw.typeDecls);
     // Propagate the declared type into the value's resolution context so that
     // record literals on map-typed constants (e.g. `Record<string, number>`)
     // get their `ty` set to `map<...>` rather than `user("...")`.
-    const valueCtx: Ctx = { ...emptyCtx, returnTy: ty };
-    const value = coerceToTargetTy(resolveExpr(c.value, valueCtx), ty, raw.typeDecls);
-    return { name: c.name, ty, value };
+    const valueCtx: Ctx = { ...emptyCtx, returnTy: declaredTy };
+    const value = resolveExpr(c.value, valueCtx);
+    // TypeScript's number defaults to int, but fractional initializers need real.
+    const ty = declaredTy.kind === "int" && value.ty.kind === "real" ? value.ty : declaredTy;
+    return { name: c.name, ty, value: coerceToTargetTy(value, ty, raw.typeDecls) };
   });
   const moduleConstants = new Map<string, Ty>(constants.map(c => [c.name, c.ty]));
 
