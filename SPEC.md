@@ -152,7 +152,7 @@ When a variable is Nat-typed:
 - Dafny: no difference (Dafny handles `nat` natively)
 - Ghost function calls pass the variable directly
 
-Type aliases can be overridden with a leading `//@ type <ty>` annotation. Use this when the declared TS type can't be modeled precisely — e.g. numeric-literal unions:
+Type aliases can be overridden with a leading `//@ type <ty>` annotation. For example, choose `nat` for a union of nonnegative numeric literals:
 
 ```typescript
 //@ type nat
@@ -1016,6 +1016,7 @@ The spec body is purely additive — `regen` three-way-merges and preserves user
 | TypeScript type | Lean type | Dafny type |
 |----------------|-----------|-----------|
 | `number` | `Int` | `int` |
+| Numeric literal types / unions (e.g. `0 \| 1 \| 2`) | `Int` | `int` |
 | `bigint` | `Int` | `int` |
 | `number` (with `//@ type nat`) | `Nat` | `nat` |
 | `boolean` | `Bool` | `bool` |
