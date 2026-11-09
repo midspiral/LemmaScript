@@ -150,11 +150,19 @@ export function active(): Phase {
   });
 }
 
-test("runtime enum member reads are not folded as const enum values", () => {
-  assert.throws(() => extract(`
+for (const [read, expected] of [
+  ["Phase.Active", { kind: "field", obj: { kind: "var", name: "Phase" }, field: "Active" }],
+  ['Phase["Active"]', { kind: "index", obj: { kind: "var", name: "Phase" }, idx: { kind: "str", value: "Active" } }],
+] as const) {
+  test(`runtime enum member ${read} falls through to ordinary access`, () => {
+    const mod = extract(`
 enum Phase { Active = 4 }
 export function active(): number {
   //@ verify
-  return Phase.Active;
-}`), /const enum/i);
-});
+  return ${read};
+}`);
+    const ret = mod.functions[0].body[0];
+    assert.equal(ret.kind, "return");
+    if (ret.kind === "return") assert.deepEqual(ret.value, expected);
+  });
+}

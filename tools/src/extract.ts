@@ -427,9 +427,8 @@ function extractExpr(node: Expression): RawExpr {
     const symbol = Node.isPropertyAccessExpression(node) ? node.getSymbol()
       : arg && Node.isStringLiteral(arg) ? node.getExpression().getType().getProperty(arg.getLiteralValue()) : undefined;
     const member = symbol?.getDeclarations().find(Node.isEnumMember);
-    if (member) {
+    if (member && member.getParent().isConstEnum()) {
       const decl = member.getParent();
-      if (!decl.isConstEnum()) throw new Error(`Enum member ${node.getText()} requires a numeric const enum; runtime enum objects are unsupported`);
       const info = extractConstEnum(decl);
       return { kind: "num", value: info.constEnumMembers!.find(m => m.name === member.getName())!.value };
     }
