@@ -1,12 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import { Project, ScriptTarget } from "ts-morph";
 import { extractModule } from "../src/extract.ts";
+import { DEFAULT_OPTIONS, type LscOptions } from "../src/config.ts";
 
-function extract(text: string) {
+function extract(text: string, unread: LscOptions["unread-annotations"] = "error", fileName = "f.ts") {
   const project = new Project({ compilerOptions: { strict: true,
     target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true } });
-  return extractModule(project.createSourceFile("f.ts", text));
+  return extractModule(project.createSourceFile(fileName, text), { ...DEFAULT_OPTIONS, "unread-annotations": unread });
 }
 
 const inBody = (annotation: string) =>
@@ -50,8 +52,33 @@ for (const [name, text] of [
   ["a TypeScript directive", inBody("//@ts-ignore")],
   ["an option with extra spaces", "//@   option safe-slice true\n" + inBody("")],
   ["an option alias after a tab", "//@\tsafe-slice\n" + inBody("")],
+  ["a type override on a field of a selected class", "export class C {\n  n: number = 0; //@ type nat\n" +
+    "  //@ verify\n  get(): number {\n    return this.n;\n  }\n}\n"],
+  ["a contract in a class outside the selected ones", "export class C {\n  m(): number {\n    //@ ensures false\n" +
+    "    return 0;\n  }\n}\n"],
 ] as const) {
   test(`${name} still extracts`, () => {
     assert.doesNotThrow(() => extract(text));
   });
 }
+
+const unread = inBody(String.raw`//@ ensure \result > x`);
+
+test("unread-annotations warn reports an unread annotation without failing", t => {
+  const stderr = t.mock.method(console, "error", () => {});
+  assert.doesNotThrow(() => extract(unread, "warn"));
+  assert.deepEqual(stderr.mock.calls.map(call => call.arguments),
+    [[String.raw`warning: f.ts:2: lsc does not read this annotation: //@ ensure \result > x`]]);
+});
+
+test("unread-annotations off ignores an unread annotation", t => {
+  const stderr = t.mock.method(console, "error", () => {});
+  assert.doesNotThrow(() => extract(unread, "off"));
+  assert.equal(stderr.mock.callCount(), 0);
+});
+
+test("an unread annotation is named by its path relative to the current directory", () => {
+  const file = join("src", "nested", "f.ts");
+  assert.throws(() => extract(unread, "error", file),
+    { message: String.raw`${file}:2: lsc does not read this annotation: //@ ensure \result > x` });
+});

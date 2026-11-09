@@ -51,6 +51,13 @@ export const OPTION_SPECS = {
     fileOverride: false,
     description: "Record lsc check and regen runs in .lemmascript/.",
   },
+  "unread-annotations": {
+    type: "enum",
+    values: ["off", "warn", "error"],
+    default: "error",
+    fileOverride: true,
+    description: "What lsc does with a //@ annotation it does not read: ignore it, warn, or fail.",
+  },
 } as const;
 
 type OptionSpecs = typeof OPTION_SPECS;

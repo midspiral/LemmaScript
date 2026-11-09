@@ -5,6 +5,7 @@
  * The only strings are //@ annotation expressions (parsed later by specparser).
  */
 
+import path from "path";
 import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
@@ -810,10 +811,14 @@ function skipSpan(node: Node): void {
   _skippedSpans.push([from, node.getEndLineNumber()]);
 }
 
-/** Fail on `//@` comments lsc ignores: a malformed or unknown one, or a
- *  contract annotation where no reader looks. Other directives are checked
- *  by keyword only. TypeScript's `//@ts-…` comments are not ours. */
+/** Report `//@` comments lsc ignores, as the `unread-annotations` option
+ *  says: a malformed or unknown one, or a contract annotation where no reader
+ *  looks. Other directives are checked by keyword only. TypeScript's
+ *  `//@ts-…` comments are not ours. */
 function checkAnnotationsRead(sourceFile: SourceFile): void {
+  const mode = _extractOptions["unread-annotations"];
+  if (mode === "off") return;
+  const fileName = path.relative(process.cwd(), sourceFile.getFilePath());
   const errors: string[] = [];
   for (const { comment, index } of fileCommentLines(sourceFile.getFullText())) {
     const text = comment.trim();
@@ -823,9 +828,10 @@ function checkAnnotationsRead(sourceFile: SourceFile): void {
     const read = parseAnnotation(text)
       ? _readLines.has(line) || _skippedSpans.some(([from, to]) => from <= line && line <= to)
       : DIRECTIVES.includes(keyword ?? "") || isOptionDirective(text);
-    if (!read) errors.push(`${sourceFile.getBaseName()}:${line}: lsc does not read this annotation: ${text}`);
+    if (!read) errors.push(`${fileName}:${line}: lsc does not read this annotation: ${text}`);
   }
-  if (errors.length > 0) throw new Error(errors.join("\n"));
+  if (mode === "warn") for (const error of errors) console.error(`warning: ${error}`);
+  else if (errors.length > 0) throw new Error(errors.join("\n"));
 }
 
 function collectAnnotations(node: Node, body?: Node[]): Annotation[] {
