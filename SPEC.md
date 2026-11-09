@@ -51,6 +51,8 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `autohavoc` | File-level, or before a `//@ verify` function | Abstract every unmodellable expression to a nondeterministic value, so verification rests only on declared contracts (see §2.12). Dafny only. |
 | `skip` | Before a statement or top-level value declaration | Omit it from the verification model (for side-effect-only code or an intentionally unsupported declaration). |
 
+`lsc` reports a `//@` comment it does not read: a malformed one, an unknown keyword, or a `requires`, `ensures`, `contract`, `invariant`, `decreases`, `done_with` or `type` placed where nothing takes it. Placement is not checked inside declarations left out on purpose (unselected, `extern` or `skip`), and TypeScript's own `//@ts-…` comments are left alone. The `unread-annotations` option (§7.6) sets what a report does: `error`, the default, stops `lsc`; `warn` prints `warning: <file>:<line>: …` to stderr and continues; `off` skips the check. `<file>` is relative to the current directory.
+
 ### 2.2 Spec Expression Grammar
 
 At top level, `//@ skip` may precede a function, class, or `const` declaration;
@@ -1418,6 +1420,7 @@ it; absent means current behavior. Unknown keys and bad values are errors.
 | `string-semantics` | `unicode-scalar` \| `javascript-utf16` | `unicode-scalar` | yes (Dafny only) |
 | `dafny-library` | `stdlib` \| `local` | `stdlib` | yes (Dafny only) |
 | `run-log` | boolean | `true` | no (Dafny only) |
+| `unread-annotations` | `off` \| `warn` \| `error` | `error` | yes |
 
 Eligible settings use `//@ option <key> <value>` before the first source
 statement. File values override project values; duplicates are errors.

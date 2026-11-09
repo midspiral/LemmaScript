@@ -160,3 +160,21 @@ test("--config pins the shared project settings for dependencies too", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.generated!, /string-semantics=javascript-utf16/);
 });
+
+const unreadSource = "export function f(x: number): number {\n  //@ ensure x > 0\n  return x;\n}\n";
+
+test("a file directive turns unread annotations into warnings", () => {
+  const result = runCli({ "source.ts": "//@ option unread-annotations warn\n" + unreadSource });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /^warning: source\.ts:3: lsc does not read this annotation: \/\/@ ensure x > 0$/m);
+  assert.notEqual(result.generated, null);
+});
+
+test("a project config can turn the unread-annotation check off", () => {
+  const result = runCli({
+    "lemmascript.json": JSON.stringify({ "unread-annotations": "off" }),
+    "source.ts": unreadSource,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /does not read/);
+});

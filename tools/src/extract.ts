@@ -5,13 +5,14 @@
  * The only strings are //@ annotation expressions (parsed later by specparser).
  */
 
+import path from "path";
 import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
 import { normalizeBigIntLiteral } from "./rawir.js";
 import { setUserNames, freshName } from "./names.js";
-import { DEFAULT_OPTIONS, type LscOptions } from "./config.js";
+import { DEFAULT_OPTIONS, fileCommentLines, isOptionDirective, type LscOptions } from "./config.js";
 
 // ── Expression extraction ────────────────────────────────────
 
@@ -752,22 +753,85 @@ function extractExpr(node: Expression): RawExpr {
 
 const PREFIX = "//@ ";
 const KEYWORDS = ["requires", "ensures", "contract", "invariant", "decreases", "done_with", "type"] as const;
+/** The other directives (SPEC §2.1) besides options, read by keyword elsewhere. */
+const DIRECTIVES = ["verify", "pure", "impure", "skip", "extern", "havoc", "autohavoc", "assert", "assume",
+  "ghost", "declare-type", "backend", "lean-module"];
 export type AnnotKind = (typeof KEYWORDS)[number];
-interface Annotation { kind: AnnotKind; expr: string }
+/** `line` is set only for annotations in the file being extracted. */
+interface Annotation { kind: AnnotKind; expr: string; line?: number }
+
+function parseAnnotation(text: string): Annotation | null {
+  if (!text.startsWith(PREFIX)) return null;
+  const content = text.slice(PREFIX.length);
+  const sp = content.indexOf(" ");
+  if (sp === -1) return null;
+  const kw = content.slice(0, sp);
+  if (!(KEYWORDS as readonly string[]).includes(kw)) return null;
+  return { kind: kw as AnnotKind, expr: content.slice(sp + 1).trim() };
+}
 
 function parseAnnotations(node: Node): Annotation[] {
   const result: Annotation[] = [];
   for (const range of node.getLeadingCommentRanges()) {
-    const text = range.getText().trim();
-    if (!text.startsWith(PREFIX)) continue;
-    const content = text.slice(PREFIX.length);
-    const sp = content.indexOf(" ");
-    if (sp === -1) continue;
-    const kw = content.slice(0, sp);
-    if (!(KEYWORDS as readonly string[]).includes(kw)) continue;
-    result.push({ kind: kw as AnnotKind, expr: content.slice(sp + 1).trim() });
+    const a = parseAnnotation(range.getText().trim());
+    if (!a) continue;
+    a.line = currentFileLine(node, range.getPos());
+    result.push(a);
   }
   return result;
+}
+
+/** The line of `pos` in `node`'s file, when that is the file being extracted. */
+function currentFileLine(node: Node, pos: number): number | undefined {
+  const sourceFile = node.getSourceFile();
+  return sourceFile === _currentSourceFile ? sourceFile.getLineAndColumnAtPos(pos).line : undefined;
+}
+
+/** Lines of the annotations whose value reached the Raw IR. */
+const _readLines = new Set<number>();
+/** Line spans the extractor leaves out on purpose: `//@ skip`, unselected and extern functions. */
+const _skippedSpans: [number, number][] = [];
+
+/** The annotation's expression, recording that it was read. */
+function readExpr(a: Annotation): string {
+  if (a.line !== undefined) _readLines.add(a.line);
+  return a.expr;
+}
+function annotExprs(annots: Annotation[], kind: AnnotKind): string[] {
+  return annots.filter(a => a.kind === kind).map(readExpr);
+}
+/** Only the first is read; a repeated one is reported as unread. */
+function firstAnnotExpr(annots: Annotation[], kind: AnnotKind): string | null {
+  const a = annots.find(a => a.kind === kind);
+  return a ? readExpr(a) : null;
+}
+function skipSpan(node: Node): void {
+  const first = node.getLeadingCommentRanges()[0];
+  const from = first ? node.getSourceFile().getLineAndColumnAtPos(first.getPos()).line : node.getStartLineNumber();
+  _skippedSpans.push([from, node.getEndLineNumber()]);
+}
+
+/** Report `//@` comments lsc ignores, as the `unread-annotations` option
+ *  says: a malformed or unknown one, or a contract annotation where no reader
+ *  looks. Other directives are checked by keyword only. TypeScript's
+ *  `//@ts-…` comments are not ours. */
+function checkAnnotationsRead(sourceFile: SourceFile): void {
+  const mode = _extractOptions["unread-annotations"];
+  if (mode === "off") return;
+  const fileName = path.relative(process.cwd(), sourceFile.getFilePath());
+  const errors: string[] = [];
+  for (const { comment, index } of fileCommentLines(sourceFile.getFullText())) {
+    const text = comment.trim();
+    if (!text.startsWith("//@") || text.startsWith("//@ts-")) continue;
+    const line = index + 1;
+    const keyword = text.match(/^\/\/@ (\S+)(?: |$)/)?.[1];
+    const read = parseAnnotation(text)
+      ? _readLines.has(line) || _skippedSpans.some(([from, to]) => from <= line && line <= to)
+      : DIRECTIVES.includes(keyword ?? "") || isOptionDirective(text);
+    if (!read) errors.push(`${fileName}:${line}: lsc does not read this annotation: ${text}`);
+  }
+  if (mode === "warn") for (const error of errors) console.error(`warning: ${error}`);
+  else if (errors.length > 0) throw new Error(errors.join("\n"));
 }
 
 function collectAnnotations(node: Node, body?: Node[]): Annotation[] {
@@ -930,8 +994,8 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   // Leading `//@ type <ty>` overrides extraction — the declared TS type is
   // replaced by the annotated backend type. Used to coerce literal unions
   // (`5 | 15 | 30` → `nat`) and other types LS can't model precisely.
-  const override = parseAnnotations(decl).find(a => a.kind === "type");
-  if (override) return { name, typeParams: tpField, kind: "alias", aliasOf: override.expr };
+  const override = firstAnnotExpr(parseAnnotations(decl), "type");
+  if (override) return { name, typeParams: tpField, kind: "alias", aliasOf: override };
 
   const enumInfo = constEnumInfo(type);
   if (enumInfo) {
@@ -1035,7 +1099,8 @@ function fieldTypeOverride(node: Node | undefined): string | undefined {
   if (!node || !(Node.isPropertyDeclaration(node) ||
       (Node.isPropertySignature(node) && Node.isInterfaceDeclaration(node.getParent())))) return undefined;
   const text = node.getTrailingCommentRanges().map(r => r.getText()).join(" ");
-  return text.match(/\/\/@ type (\w+)/)?.[1];
+  const type = text.match(/\/\/@ type (\w+)/)?.[1];
+  return type === undefined ? undefined : readExpr({ kind: "type", expr: type, line: currentFileLine(node, node.getEnd()) });
 }
 
 function extractInterface(decl: InterfaceDeclaration, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
@@ -1477,6 +1542,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     // //@ skip — omit this statement from the verification model
     if (leadingComments.some(r => r.getText().trim() === "//@ skip")) {
+      skipSpan(s);
       continue;
     }
 
@@ -1683,9 +1749,9 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       result.push({
         kind: "while",
         cond: extractExpr(s.getExpression()),
-        invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
-        decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
-        doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
+        invariants: annotExprs(annots, "invariant"),
+        decreases: firstAnnotExpr(annots, "decreases"),
+        doneWith: firstAnnotExpr(annots, "done_with"),
         body: extractStmts(bodyStmts),
         line,
       });
@@ -1733,8 +1799,8 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         kind: "forof",
         names,
         iterable: extractExpr(iterableExpr),
-        invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
-        doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
+        invariants: annotExprs(annots, "invariant"),
+        doneWith: firstAnnotExpr(annots, "done_with"),
         body: extractStmts(bodyStmts),
         line,
       });
@@ -1794,9 +1860,9 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       }
 
       let condExpr: RawExpr = cond ? extractExpr(cond) : { kind: "bool", value: true };
-      let invariants = annots.filter(a => a.kind === "invariant").map(a => a.expr);
-      let decreases = annots.find(a => a.kind === "decreases")?.expr ?? null;
-      let doneWith = annots.find(a => a.kind === "done_with")?.expr ?? null;
+      let invariants = annotExprs(annots, "invariant");
+      let decreases = firstAnnotExpr(annots, "decreases");
+      let doneWith = firstAnnotExpr(annots, "done_with");
       for (const [from, to] of renames) {
         for (let k = 0; k < hoisted.length; k++) hoisted[k] = renameRawStmt(hoisted[k], from, to);
         condExpr = renameRawExpr(condExpr, from, to);
@@ -1833,8 +1899,8 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         kind: "forof",
         names: [name],
         iterable: extractExpr(s.getExpression()),
-        invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
-        doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
+        invariants: annotExprs(annots, "invariant"),
+        doneWith: firstAnnotExpr(annots, "done_with"),
         body: extractStmts(bodyStmts),
         line,
       });
@@ -2053,7 +2119,9 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
   for (const a of annots) {
     if (a.kind === "type") {
       const parts = a.expr.split(/\s+/);
-      if (parts.length === 2) typeAnnotations.push({ name: parts[0], type: parts[1] });
+      if (parts.length !== 2) continue;
+      readExpr(a);
+      typeAnnotations.push({ name: parts[0], type: parts[1] });
     }
   }
 
@@ -2142,10 +2210,10 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
       if (inferred.isAny()) return "unknown";
       return _eraseGenerics(typeToString(inferred));
     })(),
-    requires: annots.filter(a => a.kind === "requires").map(a => a.expr),
-    ensures: annots.filter(a => a.kind === "ensures").map(a => a.expr),
-    contract: annots.filter(a => a.kind === "contract").map(a => a.expr),
-    decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
+    requires: annotExprs(annots, "requires"),
+    ensures: annotExprs(annots, "ensures"),
+    contract: annotExprs(annots, "contract"),
+    decreases: firstAnnotExpr(annots, "decreases"),
     pure: hasPureAnnotation(fn, body && Node.isBlock(body) ? body.getStatements() as Node[] : undefined),
     autohavoc: false,  // set in extractModule (file-level directive or per-function)
     typeAnnotations,
@@ -2171,6 +2239,8 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   // here), deduped by qualified name.
   _externs.clear();
   _externSigTypes.length = 0;
+  _readLines.clear();
+  _skippedSpans.length = 0;
 
   // Match a `//@ <kw>` directive only as the first non-whitespace on a line,
   // so prose mentioning an annotation does not activate it.
@@ -2306,7 +2376,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   const constants: RawConst[] = [];
   for (const stmt of sourceFile.getStatements()) {
     if (Node.isVariableStatement(stmt)) {
-      if (hasLeadingDirective(stmt, "skip")) continue;
+      if (hasLeadingDirective(stmt, "skip")) { skipSpan(stmt); continue; }
       for (const decl of stmt.getDeclarationList().getDeclarations()) {
         if (stmt.getDeclarationList().getFlags() & 2 /* const */) {
           const init = decl.getInitializer();
@@ -2463,6 +2533,12 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   );
   const hasVerifyDirective = nonExternFns.some(hasVerify) || hasVerifiedClassMethod;
   const fnsToExtract = hasVerifyDirective ? nonExternFns.filter(hasVerify) : nonExternFns;
+  // A statement holding a selected function keeps its comments checked.
+  for (const f of allFns) {
+    if (fnsToExtract.includes(f)) continue;
+    const wholeStmt = f.parentStmt && !fnsToExtract.some(s => s.parentStmt === f.parentStmt);
+    skipSpan(wholeStmt ? f.parentStmt! : f.node);
+  }
 
   // `//@ autohavoc` — enable the auto-havoc abstraction (see autohavoc.ts).
   // File-level: a directive at column 0 (top of file) enables it for every
@@ -2501,10 +2577,11 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   const classes: RawClass[] = [];
   const classFields: PropertyDeclaration[] = [];
   for (const cls of sourceFile.getClasses()) {
-    if (hasLeadingDirective(cls, "skip")) continue;
+    if (hasLeadingDirective(cls, "skip")) { skipSpan(cls); continue; }
     const methodNodes = cls.getMethods().filter(method =>
       !hasLeadingDirective(method, "skip") && hasLineDirective(method.getFullText(), "verify"));
-    if (methodNodes.length === 0) continue;
+    if (methodNodes.length === 0) { skipSpan(cls); continue; }
+    for (const method of cls.getMethods()) if (!methodNodes.includes(method)) skipSpan(method);
     const name = cls.getName() ?? "Anonymous";
     const methods = methodNodes.map(node => {
       const fn = extractFunction(node);
@@ -2911,6 +2988,8 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   // Clear the synth-union accumulator so typeToString reverts to plain
   // union stringification outside of an extractModule call.
   _synthArrayUnions = null;
+
+  checkAnnotationsRead(sourceFile);
 
   return {
     file: sourceFile.getFilePath(),
