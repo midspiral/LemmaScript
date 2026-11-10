@@ -1,6 +1,6 @@
 # LemmaScript — Implementation Specification
 
-**Version:** 0.6.6
+**Version:** 0.6.7
 **Date:** November 2026
 
 Backend-specific details:
