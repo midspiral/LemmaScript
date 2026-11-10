@@ -163,11 +163,20 @@ test("--config pins the shared project settings for dependencies too", () => {
 
 const unreadSource = "export function f(x: number): number {\n  //@ ensure x > 0\n  return x;\n}\n";
 
-test("a file directive turns unread annotations into warnings", () => {
-  const result = runCli({ "source.ts": "//@ option unread-annotations warn\n" + unreadSource });
+test("unread annotations warn by default", () => {
+  const result = runCli({ "source.ts": unreadSource }, ["gen", "--backend=dafny", "source.ts"]);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /^warning: source\.ts:3: lsc does not read this annotation: \/\/@ ensure x > 0$/m);
+  assert.match(result.stderr, /^warning: source\.ts:2: lsc does not read this annotation: \/\/@ ensure x > 0$/m);
   assert.notEqual(result.generated, null);
+});
+
+test("a file directive can make unread annotations fatal", () => {
+  const result = runCli({ "source.ts": "//@ option unread-annotations error\n" + unreadSource },
+    ["gen", "--backend=dafny", "source.ts"]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /source\.ts:3: lsc does not read this annotation: \/\/@ ensure x > 0/);
+  assert.equal(result.generated, null);
+  assert.equal(result.proofExists, false);
 });
 
 test("a project config can turn the unread-annotation check off", () => {
