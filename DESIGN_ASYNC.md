@@ -137,17 +137,54 @@ a second implementation.
 
 ## References
 
-- Sampaio et al., [A Trusted Infrastructure for Symbolic Analysis of Event-Driven
-  Web Applications](https://vtss.doc.ic.ac.uk/publications/Sampaio2020Trusted.pdf),
-  ECOOP 2020, §4.2: JavaScript async translation and event semantics.
-- Ahrendt and Dylla, [A Verification System for Distributed Objects with
-  Asynchronous Method Calls](https://people.mpi-inf.mpg.de/alumni/d5/2014/mdylla/publications/ICFEM09.pdf),
-  ICFEM 2009, §4.3: invariant reasoning at cooperative release points; its object
-  isolation assumptions need adaptation for TypeScript.
-- de Vilhena and Pottier, [A Separation Logic for Effect
+Start with de Vilhena–Pottier for promise contracts and Kamburjan et al. for
+contracts under cooperative interference. Crowbar shows a tool implementation;
+Sampaio et al. and ECMAScript address the JavaScript semantics to preserve.
+
+- **de Vilhena and Pottier, [A Separation Logic for Effect
   Handlers](https://devilhena-paulo.github.io/files/separation-logic-effect-handlers.pdf),
-  POPL 2021, §6: persistent promise facts for multiple awaiters, with different
-  scheduling and no exceptions in that example.
-- Gray, Krishnamurthi, and Crichton, [A Design Space Exploration of
-  Async/Await](https://arxiv.org/abs/2608.20677), 2026, §3.1: differences between
-  languages, particularly eager calls and guaranteed suspension in JavaScript.
+  POPL 2021.** Read §6, especially Figure 11 (public promise contracts) and
+  Figure 12 (internal invariants). Await obtains a persistent result assertion,
+  reusable by multiple waiters. This is an Iris logic with ownership and ghost
+  resources. The example omits exceptions and can resume immediately on an
+  already fulfilled promise.
+- **Kamburjan, Din, Hähnle, and Johnsen, [Asynchronous Cooperative Contracts
+  for Cooperative Scheduling](https://ebjohnsen.org/publication/19-sefm/19-sefm.pdf),
+  SEFM 2019.** A compositional contract logic for asynchronous calls and futures
+  in ABS. Addresses the gaps between calling and executing, and between
+  completing and consuming a result, plus interference at suspension. Its
+  encapsulation assumptions need justification before adapting the rules to TS.
+- **Kamburjan, Scaletta, and Rollshausen, [Crowbar: Behavioral Symbolic Execution
+  for Deductive Verification of Active Objects](https://arxiv.org/abs/2102.10127),
+  2021, revised 2022.** Concrete deductive verification of ABS using symbolic
+  execution, specification-guided reasoning, and source-level counterexamples.
+  Useful for studying a toolchain built around an explicit verification calculus;
+  the language is ABS, with isolated object state.
+- **Sampaio et al., [A Trusted Infrastructure for Symbolic Analysis of Event-Driven
+  Web Applications](https://vtss.doc.ic.ac.uk/publications/Sampaio2020Trusted.pdf),
+  ECOOP 2020.** See §§4.1–4.2 for JavaScript promises and async/await. Reference
+  implementations and tests against applicable official suites provide a model
+  for validating execution semantics. This addresses a different obligation from
+  proving contracts inside an abstract promise model.
+- **Ahrendt and Dylla, [A Verification System for Distributed Objects with
+  Asynchronous Method Calls](https://people.mpi-inf.mpg.de/alumni/d5/2014/mdylla/publications/ICFEM09.pdf),
+  ICFEM 2009.** See §4.3 for invariant reasoning at cooperative release points
+  in Creol, using KeY. Earlier background for shared-state reasoning; object
+  isolation is part of its setting.
+- **Gray, Krishnamurthi, and Crichton, [A Design Space Exploration of
+  Async/Await](https://arxiv.org/abs/2608.20677), 2026.** Semantic differences
+  between languages, including eager calls and guaranteed suspension in
+  JavaScript (§3.1). Useful when deciding which assumptions from another
+  language's verification rules survive translation.
+- **ECMAScript 2025: [Promise Objects](https://tc39.es/ecma262/2025/multipage/control-abstraction-objects.html#sec-promise-objects),
+  [Await](https://tc39.es/ecma262/2025/multipage/control-abstraction-objects.html#await),
+  and [PerformPromiseThen](https://tc39.es/ecma262/2025/multipage/control-abstraction-objects.html#sec-performpromisethen).**
+  Normative execution semantics. In particular, settled means fulfilled or
+  rejected; resolved can still mean pending when adopting another promise.
+- **OpenJML, [Specifying Exceptions](https://www.openjml.org/tutorial/SpecifyingExceptions).**
+  Precedent for normal `ensures` and exceptional `signals` postconditions.
+  JML's typed exception syntax differs from JavaScript rejection values; these
+  clauses alone supply no async interference discipline.
+- **ABS language manual, [Await statement](https://abs-models.org/manual/statements.html#await-statement).**
+  The executable guard `f?` observes whether a future contains a value or an
+  exception, providing a concrete example of completion observations.
