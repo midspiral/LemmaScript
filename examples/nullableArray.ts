@@ -67,7 +67,6 @@ export function dropOrphans(messages: Message[]): Message[] {
 
   let i = 0;
   while (i < messages.length) {
-    //@ type i nat
     //@ invariant i <= messages.length
     //@ invariant filteredContents.length === messages.length
     const cur = filteredContents[i];
@@ -80,7 +79,6 @@ export function dropOrphans(messages: Message[]): Message[] {
   const result: Message[] = [];
   let j = 0;
   while (j < messages.length) {
-    //@ type j nat
     //@ invariant j <= messages.length
     //@ invariant result.length <= j
     const f = filteredContents[j];

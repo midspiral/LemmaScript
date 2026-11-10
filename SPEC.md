@@ -1,7 +1,7 @@
 # LemmaScript — Implementation Specification
 
-**Version:** 0.6.5
-**Date:** October 2026
+**Version:** 0.6.6
+**Date:** November 2026
 
 Backend-specific details:
 - [SPEC_LEAN.md](SPEC_LEAN.md) — Lean backend (Velvet 2, four-file scheme, proof workflow)
@@ -50,6 +50,8 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `impure` | Alongside `extern`, or on a cross-file source declaration | Model each call with an independent arbitrary result instead of a deterministic function (see §2.9–2.11). Dafny only. |
 | `autohavoc` | File-level, or before a `//@ verify` function | Abstract every unmodellable expression to a nondeterministic value, so verification rests only on declared contracts (see §2.12). Dafny only. |
 | `skip` | Before a statement or top-level value declaration | Omit it from the verification model (for side-effect-only code or an intentionally unsupported declaration). |
+
+`lsc` reports a `//@` comment it does not read: a malformed one, an unknown keyword, or a `requires`, `ensures`, `contract`, `invariant`, `decreases`, `done_with` or `type` placed where nothing takes it. Placement is not checked inside declarations left out on purpose (unselected, `extern` or `skip`), and TypeScript's own `//@ts-…` comments are left alone. The `unread-annotations` option (§7.6) sets what a report does: `error`, the default, stops `lsc`; `warn` prints `warning: <file>:<line>: …` to stderr and continues; `off` skips the check. `<file>` is relative to the current directory.
 
 ### 2.2 Spec Expression Grammar
 
@@ -152,7 +154,7 @@ When a variable is Nat-typed:
 - Dafny: no difference (Dafny handles `nat` natively)
 - Ghost function calls pass the variable directly
 
-Type aliases can be overridden with a leading `//@ type <ty>` annotation. Use this when the declared TS type can't be modeled precisely — e.g. numeric-literal unions:
+Type aliases can be overridden with a leading `//@ type <ty>` annotation. For example, choose `nat` for a union of nonnegative numeric literals:
 
 ```typescript
 //@ type nat
@@ -161,7 +163,7 @@ export type PresetMinutes = 5 | 15 | 30 | 45 | 60;
 
 emits `type PresetMinutes = nat`. Any reference to `PresetMinutes` (parameters, fields, `PresetMinutes[]`) then resolves through the alias.
 
-Interface fields can also be overridden with a trailing annotation on the same line:
+Interface fields and class properties can also be overridden with a trailing annotation on the same line:
 
 ```typescript
 export interface Model {
@@ -169,6 +171,8 @@ export interface Model {
   expenses: Expense[];
 }
 ```
+
+Class properties remain present in the verification model. A trailing `//@ type unknown` makes an irrelevant field opaque without extracting its original type's dependencies; accesses that require that hidden structure still need a suitable model. A named override can refer to a local `//@ declare-type` projection. Type overrides are trusted: the compiler does not check correspondence with the original TypeScript type. The projection must preserve the observations and mutations used by the selected code, including any relevant aliasing or identity.
 
 ### 2.5 Type Declarations: `//@ declare-type`
 
@@ -252,6 +256,8 @@ class Counter {
   }
 }
 ```
+
+Selected methods participate in type and constant dependency discovery, including their signatures, bodies, specifications, and modeled class fields. Unselected methods remain outside verification; all class properties are retained, with the field type overrides from §2.4 available for irrelevant or projected state.
 
 **`modifies this` / `reads this`:** Not generated automatically. Add as proof-level additions in the `.dfy` file. Dafny will report an error if they're missing.
 
@@ -1013,6 +1019,7 @@ The spec body is purely additive — `regen` three-way-merges and preserves user
 | TypeScript type | Lean type | Dafny type |
 |----------------|-----------|-----------|
 | `number` | `Int` | `int` |
+| Numeric literal types / unions (e.g. `0 \| 1 \| 2`) | `Int` | `int` |
 | `bigint` | `Int` | `int` |
 | `number` (with `//@ type nat`) | `Nat` | `nat` |
 | `boolean` | `Bool` | `bool` |
@@ -1038,6 +1045,8 @@ To use JavaScript's UTF-16 code-unit model, select
 (§7.6). See SPEC_DAFNY.md §4 for the behavior and limitations of each model.
 
 `lsc` reads parameter and variable types from ts-morph. Primitive types are mapped per the table. User-defined types (like `State`, `Event`) are passed through by name — the corresponding backend type is generated from the TS type declaration.
+
+**Numeric const enums.** Local or named-imported `const enum`s whose members are all safe integers map to `Int`/`int`; references to their members become numeric literals in code and contracts. Enum values are modeled as unrestricted integers. Other enums fall through to ordinary extraction without constant folding.
 
 **Tuples.** A tuple type lowers to a native backend tuple (`(A, B)` in Dafny, `A × B` in Lean) only when its element types differ; a *homogeneous* tuple (`[number, number]`) lowers to `seq`/`Array` instead, since a sequence is a superset of what a same-typed tuple offers (dynamic index, `.length`, `.map`). The same homogeneity rule applies to an unannotated array literal: `[1, "a"]` is a tuple, `[1, 2, 3]` a sequence; an explicit expected type wins. Tuple element access **requires a compile-time integer-literal index** — `t[0]`, `t[1]` — because a tuple has a distinct type per slot, so a runtime index has neither a single result type nor a backend projection (`t.0`/`t.1`). A non-literal index into a tuple is a `lsc` error. `const [a, b] = t` destructuring works (it desugars to per-slot access). See [`examples/tuples.ts`](examples/tuples.ts).
 
@@ -1079,6 +1088,13 @@ Constants are always extracted (even in `//@ verify` selective mode) so verified
 ### 6.1.3 Real Numbers
 
 JavaScript has one numeric type (`number`, IEEE 754 doubles). LemmaScript maps `number` to `int` by default, but **non-integer numeric literals** (e.g., `0.8`, `3.14`) are typed as `real`:
+
+Numeric literals are read using JavaScript's `Number` conversion, including
+exponents and numeric separators. Emission expands the resulting shortest decimal
+spelling without exponent syntax: `1e-10` becomes `0.0000000001`, and `1e21`
+becomes `1000000000000000000000`. This is a mathematical-number model, not an
+exact encoding of the binary64 value. Fractional module constants retain their
+`real` type. Non-finite numeric literals are rejected.
 
 | TypeScript | Dafny | Lean |
 |-----------|-------|------|
@@ -1332,6 +1348,11 @@ lsc version                                    — print the lemmascript package
 
 Default backend is Dafny. `extract` and `info` are backend-neutral and always run, regardless of any `//@ backend` directive. With no `<file.ts>`, `gen`, `gen-check`, and `check` batch over the files listed in `LemmaScript-files.txt`.
 
+Within a batch, files in the same tsconfig's source graph share one fully loaded
+TypeScript project, including ambient declarations and module augmentations.
+Files outside that graph or without a tsconfig use isolated projects. Reuse lasts
+only for that CLI invocation; per-file LemmaScript options are still resolved separately.
+
 **Flags:**
 - `--backend=lean|dafny` — select the backend (default Dafny).
 - `--config=<path>` — use a specific `lemmascript.json` instead of nearest-ancestor discovery.
@@ -1400,6 +1421,7 @@ it; absent means current behavior. Unknown keys and bad values are errors.
 | `string-semantics` | `unicode-scalar` \| `javascript-utf16` | `unicode-scalar` | yes (Dafny only) |
 | `dafny-library` | `stdlib` \| `local` | `stdlib` | yes (Dafny only) |
 | `run-log` | boolean | `true` | no (Dafny only) |
+| `unread-annotations` | `off` \| `warn` \| `error` | `error` | yes |
 
 Eligible settings use `//@ option <key> <value>` before the first source
 statement. File values override project values; duplicates are errors.

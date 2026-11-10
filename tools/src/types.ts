@@ -11,6 +11,8 @@ export interface FieldInfo {
   name: string;
   tsType: string;
   type?: Ty;     // pre-computed Ty — populated by resolveModule, avoids re-parsing tsType
+  /** Declared with `?` (`f?: T`): the key itself may be absent, not just the value. */
+  optionalKey?: boolean;
 }
 
 export interface VariantInfo {
@@ -38,6 +40,9 @@ export interface TypeDeclInfo {
   /** For alias: the underlying type string */
   aliasOf?: string;
   aliasOfTy?: Ty;  // pre-computed Ty for aliasOf
+  /** Numeric const enum: integer semantics; members exist only on value bindings.
+   * A type-only alias has an empty member list. */
+  constEnumMembers?: { name: string; value: number }[];
 }
 
 // ── TS type string → Ty (single source of truth) ───────────
@@ -116,6 +121,17 @@ function tyFromTypeNode(tn: TypeNode): Ty {
         ? { kind: "optional", inner: { kind: "string", values } }
         : { kind: "string", values };
     }
+    // Numeric literal unions have the same integer model as number, including
+    // in inline annotations and optional types with several numeric arms.
+    if (nonNullish.length >= 2 && nonNullish.every(a => {
+      if ("syntheticBool" in a) return false;
+      const ty = tyFromTypeNode(a.node);
+      return ty.kind === "int" && !ty.big;
+    })) {
+      const inner: Ty = { kind: "int" };
+      return normalized.some(a => !("syntheticBool" in a) && isNullish(a.node))
+        ? { kind: "optional", inner } : inner;
+    }
     if (nonNullish.length === 1 && normalized.length >= 2) {
       const sole = nonNullish[0];
       const inner: Ty = "syntheticBool" in sole ? { kind: "bool" } : tyFromTypeNode(sole.node);
@@ -152,8 +168,11 @@ function tyFromTypeNode(tn: TypeNode): Ty {
     return { kind: "fn", params, result };
   }
   if (Node.isLiteralTypeNode(tn)) {
-    const lk = tn.getLiteral().getKind();
+    const literal = tn.getLiteral();
+    const lk = literal.getKind();
     if (lk === SyntaxKind.TrueKeyword || lk === SyntaxKind.FalseKeyword) return { kind: "bool" };
+    if (Node.isNumericLiteral(literal) ||
+        (Node.isPrefixUnaryExpression(literal) && Node.isNumericLiteral(literal.getOperand()))) return { kind: "int" };
   }
   switch (tn.getKind()) {
     case SyntaxKind.NumberKeyword:

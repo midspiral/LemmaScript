@@ -5,13 +5,14 @@
  * The only strings are //@ annotation expressions (parsed later by specparser).
  */
 
-import { Project, Node, FunctionDeclaration, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
-import type { TypeDeclInfo, VariantInfo } from "./types.js";
+import path from "path";
+import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
+import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
 import { normalizeBigIntLiteral } from "./rawir.js";
 import { setUserNames, freshName } from "./names.js";
-import { DEFAULT_OPTIONS, type LscOptions } from "./config.js";
+import { DEFAULT_OPTIONS, fileCommentLines, isOptionDirective, type LscOptions } from "./config.js";
 
 // ── Expression extraction ────────────────────────────────────
 
@@ -370,7 +371,8 @@ function extractExpr(node: Expression): RawExpr {
 
   // Numeric literal
   if (Node.isNumericLiteral(node)) {
-    return { kind: "num", value: Number(node.getLiteralValue()) };
+    // ts-morph's getLiteralValue truncates exponent forms with an integer mantissa.
+    return { kind: "num", value: Number(node.getText().replace(/_/g, "")) };
   }
 
   // BigInt literal (e.g. 32n, 0xffffn) — exact integer, with bigint division
@@ -417,6 +419,20 @@ function extractExpr(node: Expression): RawExpr {
   // this
   if (node.getKind() === SyntaxKind.ThisKeyword) {
     return { kind: "var", name: "this" };
+  }
+
+  // Resolve actual enum members through symbols, so a local value shadowing
+  // an enum name remains a normal property access. Element accesses have no
+  // symbol of their own; look up the literal key on the receiver instead.
+  if (Node.isPropertyAccessExpression(node) || Node.isElementAccessExpression(node)) {
+    const arg = Node.isElementAccessExpression(node) ? node.getArgumentExpression() : undefined;
+    const symbol = Node.isPropertyAccessExpression(node) ? node.getSymbol()
+      : arg && Node.isStringLiteral(arg) ? node.getExpression().getType().getProperty(arg.getLiteralValue()) : undefined;
+    const member = symbol?.getDeclarations().find(Node.isEnumMember);
+    if (member) {
+      const info = tryExtractConstEnum(member.getParent());
+      if (info) return { kind: "num", value: info.constEnumMembers!.find(m => m.name === enumMemberName(member))!.value };
+    }
   }
 
   // Property access: x.foo or x?.foo
@@ -737,22 +753,85 @@ function extractExpr(node: Expression): RawExpr {
 
 const PREFIX = "//@ ";
 const KEYWORDS = ["requires", "ensures", "contract", "invariant", "decreases", "done_with", "type"] as const;
+/** The other directives (SPEC §2.1) besides options, read by keyword elsewhere. */
+const DIRECTIVES = ["verify", "pure", "impure", "skip", "extern", "havoc", "autohavoc", "assert", "assume",
+  "ghost", "declare-type", "backend", "lean-module"];
 export type AnnotKind = (typeof KEYWORDS)[number];
-interface Annotation { kind: AnnotKind; expr: string }
+/** `line` is set only for annotations in the file being extracted. */
+interface Annotation { kind: AnnotKind; expr: string; line?: number }
+
+function parseAnnotation(text: string): Annotation | null {
+  if (!text.startsWith(PREFIX)) return null;
+  const content = text.slice(PREFIX.length);
+  const sp = content.indexOf(" ");
+  if (sp === -1) return null;
+  const kw = content.slice(0, sp);
+  if (!(KEYWORDS as readonly string[]).includes(kw)) return null;
+  return { kind: kw as AnnotKind, expr: content.slice(sp + 1).trim() };
+}
 
 function parseAnnotations(node: Node): Annotation[] {
   const result: Annotation[] = [];
   for (const range of node.getLeadingCommentRanges()) {
-    const text = range.getText().trim();
-    if (!text.startsWith(PREFIX)) continue;
-    const content = text.slice(PREFIX.length);
-    const sp = content.indexOf(" ");
-    if (sp === -1) continue;
-    const kw = content.slice(0, sp);
-    if (!(KEYWORDS as readonly string[]).includes(kw)) continue;
-    result.push({ kind: kw as AnnotKind, expr: content.slice(sp + 1).trim() });
+    const a = parseAnnotation(range.getText().trim());
+    if (!a) continue;
+    a.line = currentFileLine(node, range.getPos());
+    result.push(a);
   }
   return result;
+}
+
+/** The line of `pos` in `node`'s file, when that is the file being extracted. */
+function currentFileLine(node: Node, pos: number): number | undefined {
+  const sourceFile = node.getSourceFile();
+  return sourceFile === _currentSourceFile ? sourceFile.getLineAndColumnAtPos(pos).line : undefined;
+}
+
+/** Lines of the annotations whose value reached the Raw IR. */
+const _readLines = new Set<number>();
+/** Line spans the extractor leaves out on purpose: `//@ skip`, unselected and extern functions. */
+const _skippedSpans: [number, number][] = [];
+
+/** The annotation's expression, recording that it was read. */
+function readExpr(a: Annotation): string {
+  if (a.line !== undefined) _readLines.add(a.line);
+  return a.expr;
+}
+function annotExprs(annots: Annotation[], kind: AnnotKind): string[] {
+  return annots.filter(a => a.kind === kind).map(readExpr);
+}
+/** Only the first is read; a repeated one is reported as unread. */
+function firstAnnotExpr(annots: Annotation[], kind: AnnotKind): string | null {
+  const a = annots.find(a => a.kind === kind);
+  return a ? readExpr(a) : null;
+}
+function skipSpan(node: Node): void {
+  const first = node.getLeadingCommentRanges()[0];
+  const from = first ? node.getSourceFile().getLineAndColumnAtPos(first.getPos()).line : node.getStartLineNumber();
+  _skippedSpans.push([from, node.getEndLineNumber()]);
+}
+
+/** Report `//@` comments lsc ignores, as the `unread-annotations` option
+ *  says: a malformed or unknown one, or a contract annotation where no reader
+ *  looks. Other directives are checked by keyword only. TypeScript's
+ *  `//@ts-…` comments are not ours. */
+function checkAnnotationsRead(sourceFile: SourceFile): void {
+  const mode = _extractOptions["unread-annotations"];
+  if (mode === "off") return;
+  const fileName = path.relative(process.cwd(), sourceFile.getFilePath());
+  const errors: string[] = [];
+  for (const { comment, index } of fileCommentLines(sourceFile.getFullText())) {
+    const text = comment.trim();
+    if (!text.startsWith("//@") || text.startsWith("//@ts-")) continue;
+    const line = index + 1;
+    const keyword = text.match(/^\/\/@ (\S+)(?: |$)/)?.[1];
+    const read = parseAnnotation(text)
+      ? _readLines.has(line) || _skippedSpans.some(([from, to]) => from <= line && line <= to)
+      : DIRECTIVES.includes(keyword ?? "") || isOptionDirective(text);
+    if (!read) errors.push(`${fileName}:${line}: lsc does not read this annotation: ${text}`);
+  }
+  if (mode === "warn") for (const error of errors) console.error(`warning: ${error}`);
+  else if (errors.length > 0) throw new Error(errors.join("\n"));
 }
 
 function collectAnnotations(node: Node, body?: Node[]): Annotation[] {
@@ -872,6 +951,40 @@ function externIsImpure(node: Node, name: string, parentStmt?: Node): boolean {
 
 // ── Type declaration extraction ──────────────────────────────
 
+function constEnumInfo(type: Type): TypeDeclInfo | undefined {
+  for (const decl of type.getSymbol()?.getDeclarations() ?? []) {
+    const parent = Node.isEnumMember(decl) ? decl.getParent() : decl;
+    if (Node.isEnumDeclaration(parent)) return tryExtractConstEnum(parent);
+  }
+  return undefined;
+}
+
+function enumMemberName(member: EnumMember): string {
+  const name = member.getNameNode();
+  return Node.isStringLiteral(name) ? name.getLiteralValue() : member.getName();
+}
+
+// All merged declarations must have safe-integer numeric const enum members.
+// Otherwise the entire enum keeps ordinary expression and type extraction.
+function tryExtractConstEnum(decl: EnumDeclaration, name = decl.getName()): TypeDeclInfo | undefined {
+  const declarations = decl.getSymbol()?.getDeclarations().filter(Node.isEnumDeclaration) ?? [decl];
+  const members: { name: string; value: number }[] = [];
+  for (const declaration of declarations) {
+    if (!declaration.isConstEnum()) return undefined;
+    for (const member of declaration.getMembers()) {
+      const value = member.getValue();
+      if (typeof value !== "number" || !Number.isSafeInteger(value)) return undefined;
+      members.push({ name: enumMemberName(member), value });
+    }
+  }
+  return { name, kind: "alias", aliasOf: "number", constEnumMembers: members };
+}
+
+function isNumberType(type: Type): boolean {
+  const members = type.isUnion() ? type.getUnionTypes() : [type];
+  return members.every(m => (m.isNumber() || m.isNumberLiteral()) && !m.isEnumLiteral());
+}
+
 function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
   const name = decl.getName();
   const type = decl.getType();
@@ -881,8 +994,18 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   // Leading `//@ type <ty>` overrides extraction — the declared TS type is
   // replaced by the annotated backend type. Used to coerce literal unions
   // (`5 | 15 | 30` → `nat`) and other types LS can't model precisely.
-  const override = parseAnnotations(decl).find(a => a.kind === "type");
-  if (override) return { name, typeParams: tpField, kind: "alias", aliasOf: override.expr };
+  const override = firstAnnotExpr(parseAnnotations(decl), "type");
+  if (override) return { name, typeParams: tpField, kind: "alias", aliasOf: override };
+
+  const enumInfo = constEnumInfo(type);
+  if (enumInfo) {
+    // A type alias preserves numeric behavior but creates no value binding.
+    return { ...enumInfo, name, constEnumMembers: [] };
+  }
+
+  // Numeric literal unions are numbers at runtime. Keeping the alias without
+  // its numeric target would make conditions treat its values as objects.
+  if (isNumberType(type)) return { name, typeParams: tpField, kind: "alias", aliasOf: "number" };
 
   if (type.isUnion()) {
     const members = type.getUnionTypes();
@@ -972,14 +1095,21 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   return null;
 }
 
+function fieldTypeOverride(node: Node | undefined): string | undefined {
+  if (!node || !(Node.isPropertyDeclaration(node) ||
+      (Node.isPropertySignature(node) && Node.isInterfaceDeclaration(node.getParent())))) return undefined;
+  const text = node.getTrailingCommentRanges().map(r => r.getText()).join(" ");
+  const type = text.match(/\/\/@ type (\w+)/)?.[1];
+  return type === undefined ? undefined : readExpr({ kind: "type", expr: type, line: currentFileLine(node, node.getEnd()) });
+}
+
 function extractInterface(decl: InterfaceDeclaration, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
   // Collect field type overrides from trailing //@ type annotations
   const overrides = new Map<string, string>();
   for (const member of decl.getMembers()) {
     if (Node.isPropertySignature(member)) {
-      const text = member.getTrailingCommentRanges().map(r => r.getText()).join(" ");
-      const match = text.match(/\/\/@ type (\w+)/);
-      if (match) overrides.set(member.getName(), match[1]);
+      const override = fieldTypeOverride(member);
+      if (override) overrides.set(member.getName(), override);
     }
   }
   return extractRecord(decl.getName(), decl.getType(), decl, overrides, extraDecls);
@@ -988,19 +1118,20 @@ function extractInterface(decl: InterfaceDeclaration, extraDecls?: TypeDeclInfo[
 function extractRecord(name: string, type: Type, locationNode: Node, overrides?: Map<string, string>, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
   const props = type.getProperties();
   if (props.length === 0) return null;
-  const fields: { name: string; tsType: string }[] = [];
+  const fields: FieldInfo[] = [];
   for (const prop of props) {
+    const propDecl = prop.getDeclarations()[0];
+    const optionalKey = propDecl && (propDecl as any).hasQuestionToken?.() ? { optionalKey: true } : {};
     const override = overrides?.get(prop.getName());
-    if (override) { fields.push({ name: prop.getName(), tsType: override }); continue; }
+    if (override) { fields.push({ name: prop.getName(), tsType: override, ...optionalKey }); continue; }
 
     const propType = prop.getTypeAtLocation(locationNode);
     let tsType = typeToString(propType);
-    const propDecl = prop.getDeclarations()[0];
     tsType = declaredTypeTextIfBetter(propDecl, tsType);
     // Optional property: `foo?: T` reports as `T` (ts-morph strips the
     // `| undefined` from a question-token type). Add it back so the field
     // resolves to `Optional<T>`.
-    if (propDecl && (propDecl as any).hasQuestionToken?.()) {
+    if (optionalKey.optionalKey) {
       // Normalize checker output that puts `undefined` first, then ensure
       // exactly one trailing `| undefined`.
       if (tsType.startsWith("undefined | ")) tsType = `${tsType.slice("undefined | ".length)} | undefined`;
@@ -1031,7 +1162,7 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
       }
     }
 
-    fields.push({ name: prop.getName(), tsType });
+    fields.push({ name: prop.getName(), tsType, ...optionalKey });
   }
   return { name, kind: "record", fields };
 }
@@ -1068,6 +1199,7 @@ function declaredTypeTextIfBetter(propDecl: Node | undefined, tsType: string): s
 }
 
 function typeToString(type: Type): string {
+  if (constEnumInfo(type)) return "number";
   if (type.isUndefined()) return "undefined";
   if (type.isNumber() || type.isNumberLiteral()) return "number";
   if (type.isBigInt() || type.isBigIntLiteral()) return "bigint";
@@ -1085,6 +1217,16 @@ function typeToString(type: Type): string {
   }
   if (type.isUnion()) {
     const unionTypes = type.getUnionTypes();
+    // Mapping union members individually loses a named inner union. Ask the
+    // checker for its non-nullable type before widening literals, preserving
+    // alias metadata and generic substitutions in record fields.
+    const nullish = unionTypes.filter(t => t.isNull() || t.isUndefined());
+    if (nullish.length > 0) {
+      const inner = type.getNonNullableType();
+      if (inner.isUnion() && inner.getAliasSymbol()) {
+        return [typeToString(inner), ...nullish.map(typeToString)].join(" | ");
+      }
+    }
     // `T[] | U` synthesis: exactly two members, one array, the other not
     // array/undefined/null. Detected via ts-morph type predicates (no string
     // parsing). Registers a discriminated-union TypeDeclInfo with variants
@@ -1400,6 +1542,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     // //@ skip — omit this statement from the verification model
     if (leadingComments.some(r => r.getText().trim() === "//@ skip")) {
+      skipSpan(s);
       continue;
     }
 
@@ -1606,9 +1749,9 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       result.push({
         kind: "while",
         cond: extractExpr(s.getExpression()),
-        invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
-        decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
-        doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
+        invariants: annotExprs(annots, "invariant"),
+        decreases: firstAnnotExpr(annots, "decreases"),
+        doneWith: firstAnnotExpr(annots, "done_with"),
         body: extractStmts(bodyStmts),
         line,
       });
@@ -1656,8 +1799,8 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         kind: "forof",
         names,
         iterable: extractExpr(iterableExpr),
-        invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
-        doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
+        invariants: annotExprs(annots, "invariant"),
+        doneWith: firstAnnotExpr(annots, "done_with"),
         body: extractStmts(bodyStmts),
         line,
       });
@@ -1717,9 +1860,9 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       }
 
       let condExpr: RawExpr = cond ? extractExpr(cond) : { kind: "bool", value: true };
-      let invariants = annots.filter(a => a.kind === "invariant").map(a => a.expr);
-      let decreases = annots.find(a => a.kind === "decreases")?.expr ?? null;
-      let doneWith = annots.find(a => a.kind === "done_with")?.expr ?? null;
+      let invariants = annotExprs(annots, "invariant");
+      let decreases = firstAnnotExpr(annots, "decreases");
+      let doneWith = firstAnnotExpr(annots, "done_with");
       for (const [from, to] of renames) {
         for (let k = 0; k < hoisted.length; k++) hoisted[k] = renameRawStmt(hoisted[k], from, to);
         condExpr = renameRawExpr(condExpr, from, to);
@@ -1756,8 +1899,8 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         kind: "forof",
         names: [name],
         iterable: extractExpr(s.getExpression()),
-        invariants: annots.filter(a => a.kind === "invariant").map(a => a.expr),
-        doneWith: annots.find(a => a.kind === "done_with")?.expr ?? null,
+        invariants: annotExprs(annots, "invariant"),
+        doneWith: firstAnnotExpr(annots, "done_with"),
         body: extractStmts(bodyStmts),
         line,
       });
@@ -1931,7 +2074,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
 // ── Function extraction ──────────────────────────────────────
 
-function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
+function extractFunction(fn: FunctionDeclaration | MethodDeclaration, parentAnnotations?: Annotation[]): RawFunction {
   const prevInFn = _inFunctionExtraction;
   _inFunctionExtraction = true;
   try {
@@ -1940,7 +2083,7 @@ function extractFunction(fn: FunctionDeclaration, parentAnnotations?: Annotation
     _inFunctionExtraction = prevInFn;
   }
 }
-function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annotation[]): RawFunction {
+function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, parentAnnotations?: Annotation[]): RawFunction {
   // A `<T extends B>` bound is handled one of two ways. When B is a modelable
   // type (a record/nominal), substitute T with B — a body that reads T's fields
   // (e.g. `x.id`) then typechecks against B. When B is a union/intersection we
@@ -1976,7 +2119,9 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
   for (const a of annots) {
     if (a.kind === "type") {
       const parts = a.expr.split(/\s+/);
-      if (parts.length === 2) typeAnnotations.push({ name: parts[0], type: parts[1] });
+      if (parts.length !== 2) continue;
+      readExpr(a);
+      typeAnnotations.push({ name: parts[0], type: parts[1] });
     }
   }
 
@@ -2065,10 +2210,10 @@ function extractFunctionInner(fn: FunctionDeclaration, parentAnnotations?: Annot
       if (inferred.isAny()) return "unknown";
       return _eraseGenerics(typeToString(inferred));
     })(),
-    requires: annots.filter(a => a.kind === "requires").map(a => a.expr),
-    ensures: annots.filter(a => a.kind === "ensures").map(a => a.expr),
-    contract: annots.filter(a => a.kind === "contract").map(a => a.expr),
-    decreases: annots.find(a => a.kind === "decreases")?.expr ?? null,
+    requires: annotExprs(annots, "requires"),
+    ensures: annotExprs(annots, "ensures"),
+    contract: annotExprs(annots, "contract"),
+    decreases: firstAnnotExpr(annots, "decreases"),
     pure: hasPureAnnotation(fn, body && Node.isBlock(body) ? body.getStatements() as Node[] : undefined),
     autohavoc: false,  // set in extractModule (file-level directive or per-function)
     typeAnnotations,
@@ -2094,6 +2239,8 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   // here), deduped by qualified name.
   _externs.clear();
   _externSigTypes.length = 0;
+  _readLines.clear();
+  _skippedSpans.length = 0;
 
   // Match a `//@ <kw>` directive only as the first non-whitespace on a line,
   // so prose mentioning an annotation does not activate it.
@@ -2197,6 +2344,31 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       // Synthetic types from inline objects must precede the parent type
       typeDecls.push(...extra);
       if (info) typeDecls.push(info);
+    } else if (Node.isEnumDeclaration(stmt)
+        && !declaredNames.has(stmt.getName()) && !hasLeadingDirective(stmt, "skip")) {
+      const info = tryExtractConstEnum(stmt);
+      if (info && !typeDecls.some(d => d.name === info.name)) typeDecls.push(info);
+    }
+  }
+
+  // Specifications lack TS expression nodes. Retain enum values under each
+  // local import binding, including renamed exports and barrel re-exports.
+  for (const imp of sourceFile.getImportDeclarations()) {
+    for (const binding of imp.getNamedImports()) {
+      const local = binding.getAliasNode() ?? binding.getNameNode();
+      if (declaredNames.has(local.getText())) continue;
+      const symbol = local.getSymbol();
+      const target = symbol?.getAliasedSymbol() ?? symbol;
+      for (const decl of target?.getDeclarations() ?? []) {
+        if (Node.isEnumDeclaration(decl)) {
+          const info = tryExtractConstEnum(decl, local.getText());
+          if (info && !typeDecls.some(d => d.name === info.name)) typeDecls.push(info);
+        } else if (Node.isTypeAliasDeclaration(decl)
+            && (constEnumInfo(decl.getType()) || isNumberType(decl.getType()))) {
+          const info = extractTypeDecl(decl);
+          if (info) typeDecls.push({ ...info, name: local.getText() });
+        }
+      }
     }
   }
 
@@ -2204,7 +2376,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   const constants: RawConst[] = [];
   for (const stmt of sourceFile.getStatements()) {
     if (Node.isVariableStatement(stmt)) {
-      if (hasLeadingDirective(stmt, "skip")) continue;
+      if (hasLeadingDirective(stmt, "skip")) { skipSpan(stmt); continue; }
       for (const decl of stmt.getDeclarationList().getDeclarations()) {
         if (stmt.getDeclarationList().getFlags() & 2 /* const */) {
           const init = decl.getInitializer();
@@ -2361,6 +2533,12 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   );
   const hasVerifyDirective = nonExternFns.some(hasVerify) || hasVerifiedClassMethod;
   const fnsToExtract = hasVerifyDirective ? nonExternFns.filter(hasVerify) : nonExternFns;
+  // A statement holding a selected function keeps its comments checked.
+  for (const f of allFns) {
+    if (fnsToExtract.includes(f)) continue;
+    const wholeStmt = f.parentStmt && !fnsToExtract.some(s => s.parentStmt === f.parentStmt);
+    skipSpan(wholeStmt ? f.parentStmt! : f.node);
+  }
 
   // `//@ autohavoc` — enable the auto-havoc abstraction (see autohavoc.ts).
   // File-level: a directive at column 0 (top of file) enables it for every
@@ -2391,6 +2569,31 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     raw.autohavoc = hasAutohavoc(f);
     return raw;
   });
+
+  // Class methods participate in the same dependency passes as functions.
+  // Keep their source nodes alongside the raw methods for imported-type lookup.
+  const selected: { node: FunctionDeclaration | MethodDeclaration; fn: RawFunction; owner: string }[] =
+    fnsToExtract.map((f, i) => ({ node: f.node, fn: functions[i], owner: "" }));
+  const classes: RawClass[] = [];
+  const classFields: PropertyDeclaration[] = [];
+  for (const cls of sourceFile.getClasses()) {
+    if (hasLeadingDirective(cls, "skip")) { skipSpan(cls); continue; }
+    const methodNodes = cls.getMethods().filter(method =>
+      !hasLeadingDirective(method, "skip") && hasLineDirective(method.getFullText(), "verify"));
+    if (methodNodes.length === 0) { skipSpan(cls); continue; }
+    for (const method of cls.getMethods()) if (!methodNodes.includes(method)) skipSpan(method);
+    const name = cls.getName() ?? "Anonymous";
+    const methods = methodNodes.map(node => {
+      const fn = extractFunction(node);
+      selected.push({ node, fn, owner: name });
+      return fn;
+    });
+    const fields = cls.getProperties().map(prop => {
+      classFields.push(prop);
+      return { name: prop.getName(), tsType: fieldTypeOverride(prop) ?? typeToString(prop.getType()) };
+    });
+    classes.push({ name, fields, methods });
+  }
 
   // Resolve type references in function signatures via ts-morph's type
   // checker — walk the TypeNode tree, resolve each TypeReferenceNode to its
@@ -2453,14 +2656,14 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       return;
     }
   }
-  for (const f of fnsToExtract) {
+  for (const f of selected) {
     for (const p of f.node.getParameters()) resolveTypeNodeRefs(p.getTypeNode());
     resolveTypeNodeRefs(f.node.getReturnTypeNode());
   }
 
   // Resolve union param types: A | B → intersection of fields
   const typeDeclMap = new Map(typeDecls.map(d => [d.name, d]));
-  for (const fn of functions) {
+  for (const { fn } of selected) {
     for (const p of fn.params) {
       if (!p.tsType.includes(" | ")) continue;
       const arms = p.tsType.split(" | ").map(a => a.trim());
@@ -2489,18 +2692,34 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     }
   }
 
-  // In brownfield mode, filter consts to only those referenced by verified functions.
+  // In brownfield mode, keep dependencies of selected functions and methods.
   if (hasVerifyDirective) {
     const referencedNames = new Set<string>();
+    function collectSpecNames(spec: string | null) {
+      if (!spec) return;
+      for (const m of spec.matchAll(/\b([a-zA-Z_]\w*)\b/g)) referencedNames.add(m[1]);
+    }
     function collectNames(stmts: RawStmt[]) {
       for (const s of stmts) {
         if (s.kind === "let") { if (s.tsType) referencedNames.add(s.tsType); collectNamesExpr(s.init); }
-        if (s.kind === "assign") { collectNamesExpr(s.value); }
+        if (s.kind === "assign") { collectSpecNames(s.target); collectNamesExpr(s.value); }
         if (s.kind === "return") { collectNamesExpr(s.value); }
         if (s.kind === "if") { collectNamesExpr(s.cond); collectNames(s.then); collectNames(s.else); }
-        if (s.kind === "while") { collectNamesExpr(s.cond); collectNames(s.body); }
-        if (s.kind === "forof") { collectNamesExpr(s.iterable); collectNames(s.body); }
+        if (s.kind === "while") {
+          collectNamesExpr(s.cond); collectNames(s.body);
+          s.invariants.forEach(collectSpecNames); collectSpecNames(s.decreases); collectSpecNames(s.doneWith);
+        }
+        if (s.kind === "forof") {
+          collectNamesExpr(s.iterable); collectNames(s.body);
+          s.invariants.forEach(collectSpecNames); collectSpecNames(s.doneWith);
+        }
+        if (s.kind === "switch") {
+          collectNamesExpr(s.expr); s.cases.forEach(c => collectNames(c.body)); collectNames(s.defaultBody);
+        }
         if (s.kind === "expr") { collectNamesExpr(s.expr); }
+        if (s.kind === "assert") collectSpecNames(s.expr);
+        if (s.kind === "ghostLet") { collectSpecNames(s.tsType); collectSpecNames(s.init); }
+        if (s.kind === "ghostAssign") { collectSpecNames(s.target); collectSpecNames(s.value); }
       }
     }
     function collectNamesExpr(e: RawExpr) {
@@ -2518,22 +2737,18 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       if (e.kind === "nonNull") { collectNamesExpr(e.expr); }
       if (e.kind === "optChain") { collectNamesExpr(e.obj); for (const c of e.chain) { if (c.kind === "call") c.args.forEach(collectNamesExpr); if (c.kind === "index") collectNamesExpr(c.idx); } }
       if (e.kind === "lambda") { if (Array.isArray(e.body)) collectNames(e.body); else collectNamesExpr(e.body); }
-      if (e.kind === "forall" || e.kind === "exists") { collectNamesExpr(e.body); }
+      if (e.kind === "forall" || e.kind === "exists") { collectSpecNames(e.varType); collectNamesExpr(e.body); }
     }
     // Signature types (params + return) get base-name stripping below; body /
     // spec references stay exact-match (so a body `let xs: Hunk[]` doesn't pull
     // `Hunk` into the filter early and reorder output that resolveType re-adds).
     const sigTypes = new Set<string>();
-    for (const fn of functions) {
+    for (const { fn } of selected) {
       for (const p of fn.params) { referencedNames.add(p.tsType); sigTypes.add(p.tsType); }
       referencedNames.add(fn.returnType); sigTypes.add(fn.returnType);
       collectNames(fn.body);
       // Also scan spec annotations for identifier references
-      for (const spec of [...fn.requires, ...fn.ensures]) {
-        for (const m of spec.matchAll(/\b([a-zA-Z_]\w*)\b/g)) {
-          referencedNames.add(m[1]);
-        }
-      }
+      for (const spec of [...fn.requires, ...fn.ensures, fn.decreases]) collectSpecNames(spec);
     }
     // A constant's initializer can reference other constants
     // (`const ZERO_NINE = ZERO + nthDigit(-1)`). Close over those initializers
@@ -2561,7 +2776,12 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     function markType(name: string) {
       if (neededTypes.has(name)) return;
       const d = typeDecls.find(t => t.name === name);
-      if (!d) return;
+      if (!d) {
+        const dot = name.lastIndexOf(".");
+        const parent = typeDecls.find(t => t.name === name.slice(0, dot));
+        if (dot > 0 && parent?.constEnumMembers?.some(m => m.name === name.slice(dot + 1))) markType(parent.name);
+        return;
+      }
       neededTypes.add(name);
       for (const f of d.fields ?? [])
         for (const m of f.tsType.matchAll(/\b([A-Z]\w*)\b/g)) markType(m[1]);
@@ -2576,16 +2796,23 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     // (`Omit<FilePathOptions, …>` must not pull in the inner type).
     for (const name of sigTypes) {
       const base = name.replace(/\s*\|\s*(undefined|null)\s*$/, "").replace(/(\[\])+$/, "").trim();
-      if (base !== name && /^[A-Za-z_]\w*$/.test(base)) markType(base);
+      if (base !== name && /^[A-Za-z_]\w*(?:\.\w+)*$/.test(base)) markType(base);
+    }
+    // Fields can carry nested generic arguments and lowercase type aliases.
+    // Only inspect the modeled type: an override hides the original field type.
+    for (const cls of classes) for (const field of cls.fields) {
+      for (const m of field.tsType.matchAll(/\b([A-Za-z_]\w*)\b/g)) markType(m[1]);
     }
     typeDecls.splice(0, typeDecls.length, ...typeDecls.filter(d => neededTypes.has(d.name) || declaredNames.has(d.name)));
   }
 
   // Resolve imported types: extract types referenced in function signatures but not in this file
-  const knownTypes = new Set(typeDecls.map(d => d.name));
+  const knownTypes = new Set([...typeDecls.map(d => d.name), ...classes.map(c => c.name)]);
   const builtins = new Set(["Map", "Set", "Array", "String", "Number", "Boolean", "Promise", "Date", "RegExp", "Error"]);
   const visitedTypes = new Set<unknown>();
   function resolveType(t: Type, locationNode: Node) {
+    // Enums are primitive values, not records of Number prototype methods.
+    if (constEnumInfo(t)) return;
     // Resolve type aliases (e.g. string unions imported from other files).
     // BEFORE the visited guard: the same interned compilerType can arrive both
     // with and without its alias symbol (getTypeAtLocation drops it), and an
@@ -2620,17 +2847,34 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     visitedTypes.add(t.compilerType);
     // Unwrap arrays and generics to find user-defined types
     if (t.isArray()) { resolveType(t.getArrayElementTypeOrThrow(), locationNode); return; }
-    if (t.isUnion()) { for (const u of t.getUnionTypes()) resolveType(u, locationNode); return; }
+    if (t.isUnion()) {
+      // Discover the same named inner type that typeToString preserves. Walking
+      // only individual literals would leave an imported optional enum opaque.
+      const inner = t.getNonNullableType();
+      if (inner.compilerType !== t.compilerType && inner.isUnion() && inner.getAliasSymbol()) {
+        resolveType(inner, locationNode);
+        return;
+      }
+      for (const u of t.getUnionTypes()) resolveType(u, locationNode);
+      return;
+    }
     for (const arg of t.getTypeArguments()) resolveType(arg, locationNode);
     const sym = t.getSymbol() ?? t.getAliasSymbol();
     const name = sym?.getName();
-    if (name && !name.startsWith("__") && !knownTypes.has(name) && !builtins.has(name) && (t.isObject() || t.isIntersection())) {
-      const extra: TypeDeclInfo[] = [];
-      const info = extractRecord(name, t, locationNode, undefined, extra);
-      if (info) {
-        typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(name);
-        // Recursively resolve types referenced in this type's fields
-        for (const prop of t.getProperties()) {
+    if (name && !name.startsWith("__") && !builtins.has(name) && (t.isObject() || t.isIntersection())) {
+      if (declaredNames.has(name)) return;
+      let info = typeDecls.find(d => d.name === name);
+      if (!knownTypes.has(name)) {
+        const extra: TypeDeclInfo[] = [];
+        info = extractRecord(name, t, locationNode, undefined, extra) ?? undefined;
+        if (info) { typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(name); }
+      }
+      // Local records are already known, but their field types can still be
+      // imported. Follow their modeled fields too, respecting field overrides.
+      if (info?.kind === "record") {
+        for (const field of info.fields ?? []) {
+          const prop = t.getProperty(field.name);
+          if (!prop || field.tsType === fieldTypeOverride(prop.getDeclarations()[0])) continue;
           resolveType(prop.getTypeAtLocation(locationNode), locationNode);
         }
       }
@@ -2644,9 +2888,8 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       }
     }
   }
-  for (let i = 0; i < fnsToExtract.length; i++) {
-    const f = fnsToExtract[i];
-    const fn = functions[i];
+  for (const f of selected) {
+    const fn = f.fn;
     // Skip params whose TS type was overridden by `//@ type <param> <Override>`
     // — the verification works against the override, so cross-file resolving
     // the original type pulls in unused datatypes (often with unsupported
@@ -2656,14 +2899,20 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       if (overriddenNames.has(p.getName())) continue;
       resolveType(p.getType(), p);
     }
+    if (f.owner && !overriddenNames.has("\\result")) resolveType(f.node.getReturnType(), f.node);
+  }
+  for (const prop of classFields) {
+    if (!fieldTypeOverride(prop)) resolveType(prop.getType(), prop);
   }
   // Extern signature types: see _externSigTypes.
   for (const r of _externSigTypes) resolveType(r.type, r.node);
   // Resolve anonymous object return types into synthetic named types
-  for (let i = 0; i < fnsToExtract.length; i++) {
-    const f = fnsToExtract[i];
-    const fn = functions[i];
+  for (const f of selected) {
+    const fn = f.fn;
     const retType = f.node.getReturnType();
+    // Preserve the source's local enum binding or member type. Restoring the
+    // checker's canonical name here loses renamed imports.
+    if (constEnumInfo(retType)) continue;
     // Prefer alias symbol (named type aliases) over underlying object symbol (__type)
     const aliasSym = retType.getAliasSymbol();
     if (aliasSym && !aliasSym.getName().startsWith("__")) {
@@ -2699,7 +2948,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       || sourceReturnText.includes(" | null ") || sourceReturnText.includes(" | undefined ")
       || sourceReturnText.includes(" | null|") || sourceReturnText.includes(" | undefined|");
     const sym = retType.getSymbol();
-    if (sym?.getName() === "__type" && retType.isObject() && !retType.isArray()) {
+    if ((sym?.getName() === "__type" || sym?.getName() === "__object") && retType.isObject() && !retType.isArray()) {
       innerType = retType;
       if (sourceHadNullish) wrapOptional = true;
     } else if (retType.isUnion()) {
@@ -2709,7 +2958,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       if (nullish.length >= 1 && others.length === 1) {
         const onlyOther = others[0];
         const otherSym = onlyOther.getSymbol();
-        if (otherSym?.getName() === "__type" && onlyOther.isObject() && !onlyOther.isArray()) {
+        if ((otherSym?.getName() === "__type" || otherSym?.getName() === "__object") && onlyOther.isObject() && !onlyOther.isArray()) {
           innerType = onlyOther;
           wrapOptional = true;
         }
@@ -2722,7 +2971,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
         fn.returnType = wrapOptional ? `${resolved} | undefined` : resolved;
         continue;
       }
-      const synName = fn.name.charAt(0).toUpperCase() + fn.name.slice(1) + "Result";
+      const synName = f.owner + fn.name.charAt(0).toUpperCase() + fn.name.slice(1) + "Result";
       if (!knownTypes.has(synName)) {
         const extra: TypeDeclInfo[] = [];
         const info = extractRecord(synName, innerType, f.node, undefined, extra);
@@ -2736,27 +2985,11 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     }
   }
 
-  // Extract classes with //@ verify methods
-  const classes: RawClass[] = [];
-  for (const cls of sourceFile.getClasses()) {
-    if (hasLeadingDirective(cls, "skip")) continue;
-    const methods: RawFunction[] = [];
-    for (const method of cls.getMethods()) {
-      if (hasLeadingDirective(method, "skip")) continue;
-      if (!method.getFullText().includes('//@ verify')) continue;
-      methods.push(extractFunction(method as any));
-    }
-    if (methods.length === 0) continue;
-    const fields: { name: string; tsType: string }[] = [];
-    for (const prop of cls.getProperties()) {
-      fields.push({ name: prop.getName(), tsType: typeToString(prop.getType()) });
-    }
-    classes.push({ name: cls.getName() ?? "Anonymous", fields, methods });
-  }
-
   // Clear the synth-union accumulator so typeToString reverts to plain
   // union stringification outside of an extractModule call.
   _synthArrayUnions = null;
+
+  checkAnnotationsRead(sourceFile);
 
   return {
     file: sourceFile.getFilePath(),
