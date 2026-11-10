@@ -54,7 +54,7 @@ export const OPTION_SPECS = {
   "unread-annotations": {
     type: "enum",
     values: ["off", "warn", "error"],
-    default: "error",
+    default: "warn",
     fileOverride: true,
     description: "What lsc does with a //@ annotation it does not read: ignore it, warn, or fail.",
   },
