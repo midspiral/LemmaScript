@@ -97,6 +97,16 @@ lsc gen --backend=lean src/myModule.ts
 lake build
 ```
 
+## Sub-packages
+
+### Claimcheck
+
+`lsc claimcheck` forwards to [lemmascript-claimcheck](https://github.com/midspiral/lemmascript-claimcheck) to sanity check the natural language `//@ contract` against the formal specifications.
+
+### Runtime precondition checks
+
+`lsc guard` forwards to [lemmascript-guard](https://github.com/midspiral/lemmascript-guard) to generate a sibling `*.guarded.ts` module that checks `//@ requires` at runtime. Import its wrappers at application boundaries.
+
 ## Continuous Integration
 
 LemmaScript ships a **reusable GitHub Actions workflow** that regenerates your artifacts, verifies them, and fails the build if any committed generated file is out of date. Call it from your own repo's workflow:

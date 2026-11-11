@@ -753,9 +753,10 @@ function extractExpr(node: Expression): RawExpr {
 
 const PREFIX = "//@ ";
 const KEYWORDS = ["requires", "ensures", "contract", "invariant", "decreases", "done_with", "type"] as const;
-/** The other directives (SPEC §2.1) besides options, read by keyword elsewhere. */
+/** The other directives (SPEC §2.1) besides options, read by keyword elsewhere.
+ *  `guarded` is consumed by lemmascript-guard's manifest sweep. */
 const DIRECTIVES = ["verify", "pure", "impure", "skip", "extern", "havoc", "autohavoc", "assert", "assume",
-  "ghost", "declare-type", "backend", "lean-module"];
+  "ghost", "declare-type", "backend", "lean-module", "guarded"];
 export type AnnotKind = (typeof KEYWORDS)[number];
 /** `line` is set only for annotations in the file being extracted. */
 interface Annotation { kind: AnnotKind; expr: string; line?: number }

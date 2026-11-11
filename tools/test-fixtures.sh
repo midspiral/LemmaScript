@@ -6,6 +6,9 @@ cd "$(dirname "$0")/.."
 # the current directory. Keep it off; the run-log section turns it on locally.
 export LSC_RUN_LOG=false
 
+# The guard integration tests exercise the compiled CLI that ships on npm.
+npm run build
+
 # Run executable tests before the Dafny fixture checks.
 npx tsx --test tools/tests/*.test.ts
 

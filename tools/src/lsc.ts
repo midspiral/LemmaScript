@@ -23,6 +23,7 @@ import { leanGen, leanCheck } from "./lean-commands.js";
 import { runInfo, runTypedInfo, type TypedInfoDafny } from "./info-command.js";
 import { RunLog, resolveLogDir, runLogEnabled, safely } from "./run-log.js";
 import { runRuns } from "./runs-command.js";
+import { runGuard } from "./guard-command.js";
 import { SourceProjects } from "./source-projects.js";
 import {
   loadConfigOptions,
@@ -85,6 +86,12 @@ function main() {
         process.exit(1);
       }
     }
+    return;
+  }
+
+  // Guard owns its arguments and is backend-neutral, like extraction.
+  if (args[0] === "guard") {
+    runGuard(args.slice(1));
     return;
   }
 
@@ -182,8 +189,15 @@ function main() {
     console.error("       lsc info --typed <file.ts>   (machine-readable Typed IR contract to stdout)");
     console.error("       lsc <gen|gen-check|check> [--backend=…] [--slow]   (no file: batch over LemmaScript-files.txt)");
     console.error("       lsc claimcheck [<file.ts>] [flags…]   (forwards to lemmascript-claimcheck)");
+    console.error("       lsc guard <file.ts>   (forwards to lemmascript-guard; Node.js >=22)");
     console.error("       lsc runs [--json] [--config=path]   (what verification caught, from .lemmascript/runs.jsonl)");
     console.error("       lsc version");
+    process.exit(1);
+  }
+  // Validate before loading a file or entering batch mode: a backend mismatch
+  // must not turn an unknown command into a successful skipped run.
+  if (!["gen", "gen-check", "check", "regen", "extract", "info", "config"].includes(cmd)) {
+    console.error(`Unknown command: ${cmd}`);
     process.exit(1);
   }
   if (typedInfo && cmd !== "info") {
