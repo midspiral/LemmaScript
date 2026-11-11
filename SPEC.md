@@ -478,6 +478,7 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `Math.abs(x)` | `MathAbs(x)` | `MathAbs(x)` (preamble: `if x >= 0 then x else -x`) |
 | `Math.min(a, b)` | `MathMin(a, b)` | `MathMin(a, b)` (preamble: `if a <= b then a else b`) |
 | `Math.max(a, b)` | `MathMax(a, b)` | `MathMax(a, b)` (preamble: `if a >= b then a else b`) |
+| `Number.isSafeInteger(n)` (integer arg) | `-9007199254740991 ≤ n ∧ n ≤ 9007199254740991` | `-9007199254740991 <= n && n <= 9007199254740991`; `false` for a bigint argument; real arguments are rejected |
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `opt ? f(opt) : undefined` | match on Some/None | `match opt { case Some(v) => Some(f(v)) case None => None }` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
