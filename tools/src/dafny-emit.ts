@@ -331,16 +331,15 @@ function emitExpr(e: Expr): string {
         // No-arg slice is a full copy; Dafny seq is an immutable value type, so
         // the copy is just the seq itself (the idiom for "copy then mutate").
         if (e.method === "slice" && args.length === 0) return obj;
-        if (e.method === "slice" && args.length === 1) return `${obj}[${args[0]}..]`;
-        if (e.method === "slice" && args.length === 2) {
+        if (e.method === "slice" && (args.length === 1 || args.length === 2)) {
           // JS slice clamps both bounds; Dafny requires `0 <= lo <= hi <= |s|`.
           // Direct slice is default (matches existing case studies that wrote
           // bounded calls). Files needing JS clamping opt in via `//@ safe-slice`.
           if (_useSafeSlice) {
             needPreamble("SafeSlice");
-            return `SafeSlice(${obj}, ${args[0]}, ${args[1]})`;
+            return `SafeSlice(${obj}, ${args[0]}, ${args[1] ?? `|${obj}|`})`;
           }
-          return `${obj}[${args[0]}..${args[1]}]`;
+          return args.length === 1 ? `${obj}[${args[0]}..]` : `${obj}[${args[0]}..${args[1]}]`;
         }
         if (e.method === "map") {
           // Always a seq comprehension: Seq.Map would hide the element access
