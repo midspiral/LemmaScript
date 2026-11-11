@@ -28,6 +28,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | Keyword | Placement | Meaning |
 |---------|-----------|---------|
 | `backend` | Top of file | Restrict file to a specific backend (see §2.6) |
+| `guarded` | Top of file | Select file for the `lemmascript-guard` manifest sweep; accepted by the compiler without changing the verification model |
 | `option <key> <value>` | Top of file | Override an eligible `lemmascript.json` option for this file (see §7.6) |
 | `safe-slice` | Top of file | Legacy alias for `option safe-slice true` (see §2.7) |
 | `verify` | Before first statement of function/method body | Mark function for verification (see §2.5) |

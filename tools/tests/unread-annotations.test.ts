@@ -21,6 +21,8 @@ for (const [name, text, line] of [
   ["a tab after the keyword", inBody(String.raw`//@ ensures` + "\t" + String.raw`\result > x`), 2],
   ["a missing expression", inBody("//@ ensures"), 2],
   ["a misspelled keyword", inBody(String.raw`//@ ensure \result > x`), 2],
+  ["a misspelled guard marker", "//@ gaurded\n" + inBody(""), 1],
+  ["a truncated guard marker", "//@ guard\n" + inBody(""), 1],
   ["a block-body arrow", String.raw`//@ ensures \result > x` + "\nexport const f = (x: number): number => { return x; };\n", 1],
   ["a statement before the function", String.raw`//@ ensures \result > x` + "\nconst unrelated = 1;\n" + inBody(""), 1],
   ["a loop body requires", "export function f(n: number): number {\n  let i = 0;\n  while (i < n) {\n" +
@@ -63,6 +65,15 @@ for (const [name, text] of [
 }
 
 const unread = inBody(String.raw`//@ ensure \result > x`);
+
+for (const mode of ["warn", "error"] as const) {
+  test(`the guard tool's marker is accepted with unread-annotations ${mode}`, t => {
+    const stderr = t.mock.method(console, "error", () => {});
+    const raw = extract("//@ backend dafny\n//@ guarded\n" + inBody("//@ requires x > 0"), mode);
+    assert.deepEqual(raw.functions[0].requires, ["x > 0"]);
+    assert.equal(stderr.mock.callCount(), 0);
+  });
+}
 
 test("unread-annotations warn reports an unread annotation without failing", t => {
   const stderr = t.mock.method(console, "error", () => {});

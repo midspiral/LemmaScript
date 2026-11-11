@@ -60,6 +60,15 @@ for (const directive of ["", "//@ backend lean\n", "//@ backend dafny\n"]) {
   }));
 }
 
+test("guard accepts its file marker when unread annotations are errors", () => fixture(dir => {
+  writeFileSync(join(dir, "source.ts"), "//@ option unread-annotations error\n//@ guarded\n" + source);
+  const result = runCli(dir, ["guard", "source.ts"]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(result.stderr, "");
+  assert.match(result.stdout, /1 functions guarded/);
+  assert.ok(existsSync(join(dir, "source.guarded.ts")));
+}));
+
 test("guard without a file reports the satellite's usage and fails", () => fixture(dir => {
   const result = runCli(dir, ["guard"]);
   assert.equal(result.status, 1);
