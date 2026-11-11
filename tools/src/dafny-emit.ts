@@ -448,6 +448,14 @@ function emitExpr(e: Expr): string {
           }
           return `StringIndexOf(${obj}, ${args[0]})`;
         }
+        if (e.method === "lastIndexOf") {
+          needPreamble("StringLastIndexOf");
+          if (args.length === 2) {
+            needPreamble("StringSearchPosition");
+            return `StringLastIndexOfFrom(${obj}, ${args[0]}, StringSearchPosition(${obj}, ${args[1]}))`;
+          }
+          return `StringLastIndexOf(${obj}, ${args[0]})`;
+        }
         if (e.method === "split")   { needPreamble("StringSplit"); return `StringSplit(${obj}, ${args[0]})`; }
         if (e.method === "slice") {
           // JS negative index: arr.slice(0, -N) → arr[0..|arr|-N]. Transform
@@ -1289,6 +1297,37 @@ function StringIndexOfFromN(s: string, sub: string, from: nat): int
   else StringIndexOfFromN(s, sub, from + 1)
 }`;
 
+// JS `s.lastIndexOf(sub, position)` searches backward from the clamped
+// position for the last match starting at or before it. An empty `sub` matches
+// at that position. The postconditions also state that no later match exists,
+// which is what lets callers reason about the not-found result.
+const STRING_LAST_INDEX_OF = `predicate StringMatchesAt(s: string, sub: string, j: int)
+{
+  0 <= j && j + |sub| <= |s| && s[j..j + |sub|] == sub
+}
+
+function StringLastIndexOf(s: string, sub: string): int
+  ensures StringLastIndexOf(s, sub) == -1
+       || (0 <= StringLastIndexOf(s, sub) <= |s| - |sub| && StringMatchesAt(s, sub, StringLastIndexOf(s, sub)))
+  ensures forall j {:trigger StringMatchesAt(s, sub, j)} ::
+            StringLastIndexOf(s, sub) < j ==> !StringMatchesAt(s, sub, j)
+{
+  StringLastIndexOfFrom(s, sub, |s|)
+}
+
+function StringLastIndexOfFrom(s: string, sub: string, from: nat): int
+  decreases from
+  ensures StringLastIndexOfFrom(s, sub, from) == -1
+       || (0 <= StringLastIndexOfFrom(s, sub, from) <= from
+           && StringMatchesAt(s, sub, StringLastIndexOfFrom(s, sub, from)))
+  ensures forall j {:trigger StringMatchesAt(s, sub, j)} ::
+            StringLastIndexOfFrom(s, sub, from) < j <= from ==> !StringMatchesAt(s, sub, j)
+{
+  if StringMatchesAt(s, sub, from) then from as int
+  else if from == 0 then -1
+  else StringLastIndexOfFrom(s, sub, from - 1)
+}`;
+
 // `s.split(d)` in TS returns a non-empty sequence of segments. Modeled here as
 // an axiom — defining it recursively would force StringIndexOf to grow ensures
 // clauses that callers don't need. The two ensures cover what verification
@@ -1538,6 +1577,7 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["SeqJoin", SEQ_JOIN],
   ["SafeSlice", SAFE_SLICE],
   ["StringIndexOf", STRING_INDEX_OF],
+  ["StringLastIndexOf", STRING_LAST_INDEX_OF],
   ["StringSearchPosition", STRING_SEARCH_POSITION],
   ["StringStartsWithAt", STRING_STARTS_WITH_AT],
   ["StringEndsWithAt", STRING_ENDS_WITH_AT],
