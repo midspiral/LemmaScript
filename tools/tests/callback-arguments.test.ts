@@ -14,13 +14,13 @@ import { emitDafnyFile } from "../src/dafny-emit.ts";
 import { emitLeanFile, resetLeanModule } from "../src/lean-emit.ts";
 import { DEFAULT_OPTIONS } from "../src/config.ts";
 import { peepholeModule } from "../src/peephole.ts";
-import * as runtime from "../fixtures/callback-arguments.ts";
+import * as runtime from "../../examples/callbackArguments.ts";
 
 function raw(source?: string) {
   const project = new Project({ compilerOptions: { strict: true, target: ScriptTarget.ESNext,
     lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true } });
   const file = source === undefined
-    ? project.addSourceFileAtPath(fileURLToPath(new URL("../fixtures/callback-arguments.ts", import.meta.url)))
+    ? project.addSourceFileAtPath(fileURLToPath(new URL("../../examples/callbackArguments.ts", import.meta.url)))
     : project.createSourceFile("callbacks.ts", source);
   const diagnostics = project.getPreEmitDiagnostics();
   assert.equal(diagnostics.length, 0, project.formatDiagnosticsWithColorAndContext(diagnostics));
@@ -49,7 +49,7 @@ function verify(text: string) {
 
 test("callback observations agree with JavaScript", () => {
   for (const [name, expected] of Object.entries({ restCount: [3], tailCount: [2], unusedRestOnly: [42],
-    indexedMap: [7, 8], restIndex: [0, 1], sourceArgument: [7, 8], indexedSome: true,
+    indexedMap: [7, 8], restIndex: [0, 1], sourceArgument: [7, 8], indexedSome: true, defaultFromIndex: [0, 1],
     indexedEvery: true, indexedFilter: [7, 9], indexedFind: 8, indexedFindIndex: 1,
     indexedReduce: 9, reduceRestCount: 6, nestedShadow: [2], nestedCapture: [2], unusedPositional: [8] })) {
     assert.deepEqual((runtime[name as keyof typeof runtime] as () => unknown)(), expected, name);
