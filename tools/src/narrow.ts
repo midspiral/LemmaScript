@@ -530,7 +530,8 @@ function ruleLetCondAndOptional(s: TStmt, ctx: CondCtx): TStmt[] | null {
  *  `||`, when another disjunct reads the path other than as a comparison
  *  operand (see `resolveOrRight`). Without the match, the chain would read
  *  the optional itself; a chain that reads none keeps its plain lowering. Skips `rest` with method
- *  calls, for the same binder-scope reason as `ruleConditionalAndOptional`. */
+ *  calls, for the same binder-scope reason as `ruleConditionalAndOptional`, except in a pure
+ *  function body, which transform lowers as one expression without lifting calls. */
 function ruleLogicalOptional(e: TExpr, ctx: CondCtx): TExpr | null {
   if (!isLogical(e) || e.ty.kind !== "bool") return null;
   const isOr = e.op === "||";
@@ -538,7 +539,7 @@ function ruleLogicalOptional(e: TExpr, ctx: CondCtx): TExpr | null {
   if (!extracted) return null;
   const { check, restCond } = extracted;
   if (!isOr && !readsCheckedPath(e)) return null;
-  if (containsMethodCall(restCond)) return null;
+  if (!ctx.pureBody && containsMethodCall(restCond)) return null;
   const none: TExpr = { kind: "bool", value: isOr, ty: { kind: "bool" } };
   return presentMatchExpr(check, walkExpr(restCond, ctx), none, e.ty, ctx);
 }
@@ -611,13 +612,14 @@ function ruleExprCondFallback(e: TExpr, ctx: CondCtx): TExpr | null {
  *  nested someMatches. Does NOT fire if the guard `rest` contains method
  *  calls — transform lifts those out of the match arm, breaking the binder
  *  scope. The original transform's let-desugar handles those by lifting to
- *  a mutable var first. */
+ *  a mutable var first. A pure function body is exempt: transform lowers it
+ *  as one expression, so the call stays inside the arm. */
 function ruleConditionalAndOptional(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "conditional") return null;
   const extracted = leadingPresent(e.cond);
   if (!extracted) return null;
   const { check, restCond } = extracted;
-  if (containsMethodCall(restCond)) return null;
+  if (!ctx.pureBody && containsMethodCall(restCond)) return null;
   const innerCond: TExpr = {
     kind: "conditional",
     cond: restCond, then: e.then, else: e.else, ty: e.ty,
@@ -785,12 +787,12 @@ function ruleDiscriminantNegEarlyReturn(stmts: TStmt[], ctx: CondCtx): { stmt: T
 
 // ── Function / module entry ──────────────────────────────────
 
-function narrowFunction(fn: TFunction, ctx: CondCtx): TFunction {
+function narrowFunction(fn: TFunction, ctx: CondCtx, pureBody = false): TFunction {
   // Contracts and the body bind their payloads in separate generated scopes.
   // Do not reserve a body's names because of a contract's \result (or another
   // function's paths). Keep the shared counter's traversal order unchanged.
   const specCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc };
-  const bodyCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc };
+  const bodyCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc, pureBody };
   return {
     ...fn,
     requires: fn.requires.map(e => walkExpr(e, specCtx)),
@@ -805,7 +807,7 @@ export function narrowModule(mod: TModule): TModule {
   return {
     ...mod,
     constants: mod.constants.map(c => ({ ...c, value: walkExpr(c.value, ctx) })),
-    functions: mod.functions.map(fn => narrowFunction(fn, ctx)),
+    functions: mod.functions.map(fn => narrowFunction(fn, ctx, fn.isPure)),
     classes: mod.classes.map(cls => ({
       ...cls,
       methods: cls.methods.map(m => narrowFunction(m, ctx)),

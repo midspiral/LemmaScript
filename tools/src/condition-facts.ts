@@ -31,6 +31,9 @@ export interface CondCtx {
   decls: TypeDecls;
   oc: { n: number };
   binders?: { names: Map<string, string>; used: Set<string> };
+  /** The body of a pure module function. Transform lowers it as one
+   *  expression and leaves calls in place, so a call may sit in a match arm. */
+  pureBody?: boolean;
 }
 
 /** Allocate within this context, retaining a path's name on repeated
