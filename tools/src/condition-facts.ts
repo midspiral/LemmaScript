@@ -95,9 +95,11 @@ export function bindPresentFact(f: PresentFact, ctx: CondCtx): PresentFact {
 
 /** Detect optional checks: `e !== undefined`, `e === undefined`, `!e`, or a
  *  bare optional `e` — for a pure-access-path optional-typed `e`. `!e` and
- *  bare `e` are truthiness forms. Following TS, only pure access paths
- *  narrow; complex scrutinees return null. */
+ *  bare `e` are truthiness forms. `!!c` is the same check as `c`. Following
+ *  TS, only pure access paths narrow; complex scrutinees return null. */
 export function presentFact(cond: TExpr): PresentFact | null {
+  if (cond.kind === "unop" && cond.op === "!" && cond.expr.kind === "unop" && cond.expr.op === "!")
+    return presentFact(cond.expr.expr);
   // `!e` where e is optional — a truthiness form: false iff e is absent OR its
   // inner value is itself falsy (so `Some(0)`/`Some("")` count as falsy too).
   if (cond.kind === "unop" && cond.op === "!" && cond.expr.ty.kind === "optional") {
