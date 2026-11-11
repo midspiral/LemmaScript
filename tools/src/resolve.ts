@@ -959,6 +959,11 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       if (ty.kind === "unknown" && fn.kind === "var" && ctx.fnReturns.has(fn.name)) {
         ty = ctx.fnReturns.get(fn.name)!;
       }
+      // BigInt(n) / Number(n) between integer types: identity on the model's int.
+      if (ty.kind === "unknown" && fn.kind === "var" && (fn.name === "BigInt" || fn.name === "Number") &&
+          args.length === 1 && (args[0].ty.kind === "int" || args[0].ty.kind === "nat")) {
+        ty = fn.name === "BigInt" ? { kind: "int", big: true } : { kind: "int" };
+      }
       // Call through a function-typed value: its fn type carries the result
       if (ty.kind === "unknown" && fn.kind === "var") {
         const varTy = lookup(ctx.env, fn.name);
