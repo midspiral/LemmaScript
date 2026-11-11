@@ -655,6 +655,21 @@ Lambda bodies can be expressions (`(x) => x + 1`) or statement blocks (`(x) => {
 
 Flat object destructuring in a lambda parameter is supported, including aliases (`({ id, hidden: isHidden }) => ...`). It remains one callback parameter and lowers to immutable field bindings inside the lambda. Array patterns, nested object patterns, defaults, and rest properties are rejected during extraction with an explicit unsupported-pattern error.
 
+Inline array callbacks bind JavaScript's actual arguments: `(element, index, array)`
+for `map`, `filter`, `some`, `every`, and the `find` family; `(acc, element, index, array)`
+for `reduce` with an initial value; `(a, b)` for sort comparators. Unused trailing
+parameters need no backend representation. A rest binding stays symbolic: its
+`.length` and nonnegative constant-index reads resolve against that argument list,
+including inside nested closures. Returning, passing, or mutating the rest array
+requires materialization and is currently rejected; it never becomes an ordinary
+positional parameter. Rest/default lambdas outside these known callback contexts
+are also rejected. Defaults execute for missing arguments and are ignored for
+arguments known to be defined; optional/unknown values lack the needed undefined check.
+Indexed callbacks use a shared adapter over array positions, evaluating the
+receiver once. Dafny's proved `CallbackIndices(n)` helper exposes length, indexing,
+and membership facts; proof additions can supply witnesses such as
+`assert 1 in CallbackIndices(2);` without editing a generated quantifier or trigger.
+
 **filterMap.** `xs.map(x => ... | undefined).filter((x): x is T => x !== undefined)` drops the `undefined`s *and* unwraps to `seq<T>` — lowered to the proven `SeqFilterSome` preamble (a plain `Map(.value, Filter(.Some?, ...))` wouldn't verify, since `.value` is partial).
 
 **`.map` (Dafny).** Lowered to a `seq` comprehension with the element access inlined (`var x := arr[i]; e`), not `Seq.Map`. `Seq.Map` hides the element behind a closure, so a recursive rebuild walker (`Node(kids.map(walk))`) fails Dafny's termination check — the obligation gets quantified over the lambda's parameter instead of anchored at `kids[i]`. Applying a lambda inside the comprehension fails the same way, hence the inlining.

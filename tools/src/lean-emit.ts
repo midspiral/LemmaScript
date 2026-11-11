@@ -330,6 +330,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "arrayLiteral":
       if (e.elems.length === 0) return `#[]`;
       return `#[${e.elems.map(el => emitExpr(el)).join(", ")}]`;
+    case "arrayRange": return `((Array.range ${emitExpr(e.length)}).map Int.ofNat)`;
     case "tupleLiteral":
       return `(${e.elems.map(el => emitExpr(el)).join(", ")})`;
     case "tupleProj": {
@@ -373,7 +374,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "lambda": {
-      const params = e.params.map(p => p.name).join(" ");
+      const params = e.params.map(p => e.typedParams ? `(${p.name} : ${tyToLean(p.type)})` : p.name).join(" ");
       // Single return statement → expression lambda
       if (e.body.length === 1 && e.body[0].kind === "return") {
         return `(fun ${params} => ${emitExpr(e.body[0].value)})`;
@@ -498,6 +499,8 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       return wrap ? `(${inner}).toNat` : `${inner}.toNat`;
     }
 
+    case "toInt": return `(Int.ofNat ${emitExpr(e.expr)})`;
+
     case "toReal":
       // A real value reached the Lean backend via coercion (e.g. number `/`).
       // Same unsupported-real story as the `real` type case in tyToLean.
@@ -532,7 +535,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "forall": return `∀ ${e.var} : ${tyToLean(e.type)}, ${emitExpr(e.body)}`;
     case "exists": return `∃ ${e.var} : ${tyToLean(e.type)}, ${emitExpr(e.body)}`;
 
-    case "let": return `let ${e.name} := ${emitExpr(e.value)}\n${emitExpr(e.body)}`;
+    case "let": return `let ${e.name}${e.type ? ` : ${tyToLean(e.type)}` : ""} := ${emitExpr(e.value)}\n${emitExpr(e.body)}`;
     default: throw new Error(`Unsupported Lean expression: ${(e as Expr).kind}`);
   }
 }
@@ -875,7 +878,7 @@ function emitPureExpr(e: Expr, indent: number): string {
       return lines.join("\n");
     }
     case "let":
-      return `${pad}let ${e.name} := ${emitExpr(e.value)}\n${emitPureExpr(e.body, indent)}`;
+      return `${pad}let ${e.name}${e.type ? ` : ${tyToLean(e.type)}` : ""} := ${emitExpr(e.value)}\n${emitPureExpr(e.body, indent)}`;
     default:
       return `${pad}${emitExpr(e)}`;
   }

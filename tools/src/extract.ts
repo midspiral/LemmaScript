@@ -560,7 +560,11 @@ function extractExpr(node: Expression): RawExpr {
       const typeNode = p.getTypeNode();
       const tsType = typeNode ? annotationTypeText(typeNode, p.getType()) ?? typeNode.getText() : undefined;
       const nameNode = p.getNameNode();
-      if (Node.isIdentifier(nameNode)) return { name: nameNode.getText(), tsType };
+      if (Node.isIdentifier(nameNode)) return {
+        name: nameNode.getText(), tsType,
+        ...(p.isRestParameter() ? { rest: true as const } : {}),
+        ...(p.getInitializer() ? { defaultValue: extractExpr(p.getInitializer()!) } : {}),
+      };
       if (Node.isArrayBindingPattern(nameNode)) {
         throw new Error(`array binding pattern in arrow parameter not yet supported: ${nameNode.getText()}`);
       }
@@ -1430,7 +1434,8 @@ function renameRawExpr(e: RawExpr, from: string, to: string): RawExpr {
     case "optChain": return { ...e, obj: r(e.obj), chain: e.chain.map(c =>
       c.kind === "call" ? { ...c, args: c.args.map(r) } : c.kind === "index" ? { ...c, idx: r(c.idx) } : c) };
     case "lambda": return e.params.some(p => p.name === from) ? e
-      : { ...e, body: Array.isArray(e.body) ? renameRawStmts(e.body, from, to) : r(e.body) };
+      : { ...e, params: e.params.map(p => p.defaultValue ? { ...p, defaultValue: r(p.defaultValue) } : p),
+          body: Array.isArray(e.body) ? renameRawStmts(e.body, from, to) : r(e.body) };
     case "forall": case "exists": return e.var === from ? e : { ...e, body: r(e.body) };
   }
 }
@@ -2758,7 +2763,10 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       if (e.kind === "nullish") { collectNamesExpr(e.left); collectNamesExpr(e.right); }
       if (e.kind === "nonNull") { collectNamesExpr(e.expr); }
       if (e.kind === "optChain") { collectNamesExpr(e.obj); for (const c of e.chain) { if (c.kind === "call") c.args.forEach(collectNamesExpr); if (c.kind === "index") collectNamesExpr(c.idx); } }
-      if (e.kind === "lambda") { if (Array.isArray(e.body)) collectNames(e.body); else collectNamesExpr(e.body); }
+      if (e.kind === "lambda") {
+        e.params.forEach(p => { if (p.defaultValue) collectNamesExpr(p.defaultValue); });
+        if (Array.isArray(e.body)) collectNames(e.body); else collectNamesExpr(e.body);
+      }
       if (e.kind === "forall" || e.kind === "exists") { collectSpecNames(e.varType); collectNamesExpr(e.body); }
     }
     // Signature types (params + return) get base-name stripping below; body /

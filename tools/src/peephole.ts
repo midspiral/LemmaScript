@@ -31,6 +31,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "app": return { ...e, args: e.args.map(r) };
     case "field": return { ...e, obj: r(e.obj) };
     case "toNat": return { ...e, expr: r(e.expr) };
+    case "toInt": return { ...e, expr: r(e.expr) };
     case "toReal": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
     case "tupleLiteral": return { ...e, elems: e.elems.map(r) };
@@ -38,6 +39,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null,
       fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
+    case "arrayRange": return { ...e, length: r(e.length) };
     case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
     case "match": {
       const scr = r(e.scrutinee);
@@ -284,6 +286,7 @@ function rewriteChildrenExpr(e: Expr): Expr {
     case "app": return { ...e, args: e.args.map(r) };
     case "field": return { ...e, obj: r(e.obj) };
     case "toNat": return { ...e, expr: r(e.expr) };
+    case "toInt": return { ...e, expr: r(e.expr) };
     case "toReal": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
     case "tupleLiteral": return { ...e, elems: e.elems.map(r) };
@@ -291,6 +294,7 @@ function rewriteChildrenExpr(e: Expr): Expr {
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null,
       fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
+    case "arrayRange": return { ...e, length: r(e.length) };
     case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
     case "match": {
       const scr = r(e.scrutinee);

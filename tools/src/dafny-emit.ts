@@ -301,6 +301,7 @@ function emitExpr(e: Expr): string {
       if (e.elems.length === 0) return `[]`;
       return `[${e.elems.map(emitExpr).join(", ")}]`;
 
+    case "arrayRange": needPreamble("CallbackIndices"); return `CallbackIndices(${emitExpr(e.length)})`;
     case "tupleLiteral": return `(${e.elems.map(emitExpr).join(", ")})`;
     case "tupleProj": return `${emitExpr(e.obj)}.${e.index}`;
 
@@ -671,6 +672,8 @@ function emitExpr(e: Expr): string {
       // Dafny doesn't need toNat — just emit the inner expression
       return emitExpr(e.expr);
 
+    case "toInt": return emitExpr(e.expr);
+
     case "toReal":
       return `(${emitExpr(e.expr)} as real)`;
 
@@ -745,7 +748,7 @@ function emitExpr(e: Expr): string {
     case "forall": return emitQuantifier(e, "forall");
     case "exists": return emitQuantifier(e, "exists");
 
-    case "let": return `(var ${escapeName(e.name)} := ${emitExpr(e.value)}; ${emitExpr(e.body)})`;
+    case "let": return `(var ${escapeName(e.name)}${e.type ? `: ${tyToDafny(e.type)}` : ""} := ${emitExpr(e.value)}; ${emitExpr(e.body)})`;
     case "havoc": return "*";
     // No Dafny producer: the only `default` source is the Lean return-in-loop
     // rewrite, which never runs on the Dafny path (native in-loop returns).
@@ -770,7 +773,7 @@ function emitPureExpr(e: Expr, indent: number): string {
       return lines.join("\n");
     }
     case "let":
-      return `${pad}var ${escapeName(e.name)} := ${emitExpr(e.value)};\n${emitPureExpr(e.body, indent)}`;
+      return `${pad}var ${escapeName(e.name)}${e.type ? `: ${tyToDafny(e.type)}` : ""} := ${emitExpr(e.value)};\n${emitPureExpr(e.body, indent)}`;
     default:
       return `${pad}${emitExpr(e)}`;
   }
@@ -1103,6 +1106,14 @@ const CEIL_REAL = `function CeilReal(x: real): int
   else x.Floor + 1
 }`;
 
+const CALLBACK_INDICES = `function CallbackIndices(n: nat): (r: seq<int>)
+  ensures |r| == n
+  ensures forall i :: 0 <= i < n ==> r[i] == i
+  ensures forall i :: i in r <==> 0 <= i < n
+{
+  if n == 0 then [] else CallbackIndices(n - 1) + [n - 1]
+}`;
+
 const SEQ_FILTER_SOME = `function SeqFilterSome<T>(xs: seq<Option<T>>): seq<T>
   ensures |SeqFilterSome(xs)| <= |xs|
 {
@@ -1113,6 +1124,7 @@ const SEQ_FILTER_SOME = `function SeqFilterSome<T>(xs: seq<Option<T>>): seq<T>
 const SEQ_FILTER = `function SeqFilter<T(!new)>(p: T -> bool, xs: seq<T>): seq<T>
   ensures |SeqFilter(p, xs)| <= |xs|
   ensures forall x :: x in SeqFilter(p, xs) <==> x in xs && p(x)
+  ensures forall i :: 0 <= i < |SeqFilter(p, xs)| ==> SeqFilter(p, xs)[i] in xs
   decreases |xs|
 {
   if |xs| == 0 then []
@@ -1120,6 +1132,7 @@ const SEQ_FILTER = `function SeqFilter<T(!new)>(p: T -> bool, xs: seq<T>): seq<T
 }`;
 
 const SEQ_ALL = `predicate SeqAll<T>(xs: seq<T>, p: T -> bool)
+  ensures SeqAll(xs, p) <==> (forall x :: x in xs ==> p(x))
   decreases |xs|
 {
   |xs| == 0 || (p(xs[0]) && SeqAll(xs[1..], p))
@@ -1570,6 +1583,7 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["SeqAll", SEQ_ALL],
   ["SeqFoldLeft", SEQ_FOLD_LEFT],
   ["SeqFilterSome", SEQ_FILTER_SOME],
+  ["CallbackIndices", CALLBACK_INDICES],
   ["SeqFind", SEQ_FIND],
   ["SeqFindLast", SEQ_FIND_LAST],
   ["SeqFlatten", SEQ_FLATTEN],

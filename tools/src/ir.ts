@@ -21,23 +21,25 @@ export type Expr =
   | { kind: "app"; fn: string; args: Expr[]; ctorOf?: string }  // f a b; ctorOf set ⇒ fn is a datatype constructor of that (base) type. Dafny takes the bare name `fn(args)`; Lean must qualify it as `ctorOf.fn args`.
   | { kind: "field"; obj: Expr; field: string; fromUnion?: string; ctor?: string; datatypeField?: boolean }   // x.res, arr.size; fromUnion set ⇒ `field` is a destructor of that (base) discriminated-union type. Dafny reads `x.field` directly; Lean must `match` since multi-ctor inductives have no field projections. ctor pins the owning constructor when several variants share the field name. datatypeField set ⇒ `field` is a declared datatype field (proven by the transform), so the Dafny emitter projects it rather than treating `size`/`length`/`keys` as the collection intrinsic (`|obj|`, `.Keys`).
   | { kind: "toNat"; expr: Expr }                               // expr.toNat
+  | { kind: "toInt"; expr: Expr }                               // nat → int coercion
   | { kind: "toReal"; expr: Expr }                             // int/nat → real coercion
   | { kind: "index"; arr: Expr; idx: Expr }                // arr[idx]!
   | { kind: "tupleLiteral"; elems: Expr[] }                // (a, b) — heterogeneous tuple literal
   | { kind: "tupleProj"; obj: Expr; index: number; arity: number }  // projection at a 0-based position; arity is needed only by Lean, whose right-nested Prod makes the last slot asymmetric (Dafny just uses `t.index`)
   | { kind: "record"; spread: Expr | null; fields: RecordField[]; ctor?: string; ctorOf?: string }  // ctorOf: the union whose variant `ctor` is, when a datatype update needs renamed destructors
   | { kind: "arrayLiteral"; elems: Expr[] }
+  | { kind: "arrayRange"; length: Expr }  // sequence of integer positions [0, length)
   | { kind: "emptyMap" }
   | { kind: "emptySet" }
   | { kind: "mapLiteral"; entries: MapEntry[] }
   | { kind: "methodCall"; obj: Expr; objTy: Ty; method: string; args: Expr[]; monadic: boolean }
-  | { kind: "lambda"; params: Param[]; body: Stmt[] }
+  | { kind: "lambda"; params: Param[]; body: Stmt[]; typedParams?: boolean }
   | { kind: "if"; cond: Expr; then: Expr; else: Expr }
   | { kind: "match"; scrutinee: Expr; arms: MatchArm[] }
   | { kind: "forall"; var: string; type: Ty; body: Expr }
   | { kind: "exists"; var: string; type: Ty; body: Expr }
   | { kind: "implies"; premises: Expr[]; conclusion: Expr }
-  | { kind: "let"; name: string; value: Expr; body: Expr }
+  | { kind: "let"; name: string; type?: Ty; value: Expr; body: Expr }
   | { kind: "havoc"; type: Ty }
   | { kind: "default"; type: Ty }                              // default value of T (Lean: `(default : T)` via Inhabited). Only produced by the return-in-loop→break rewrite, which is Lean-gated since Dafny keeps native in-loop returns; hence no Dafny producer today.
 
@@ -274,7 +276,7 @@ export function anyExpr(e: Expr, pred: ExprPred): boolean {
     case "emptyMap": case "emptySet": case "havoc": case "default": return false;
     case "constructor": return e.args.some(a => anyExpr(a, pred));
     case "binop": return anyExpr(e.left, pred) || anyExpr(e.right, pred);
-    case "unop": case "toNat": case "toReal": return anyExpr(e.expr, pred);
+    case "unop": case "toNat": case "toInt": case "toReal": return anyExpr(e.expr, pred);
     case "app": return e.args.some(a => anyExpr(a, pred));
     case "field": return anyExpr(e.obj, pred);
     case "index": return anyExpr(e.arr, pred) || anyExpr(e.idx, pred);
@@ -283,6 +285,7 @@ export function anyExpr(e: Expr, pred: ExprPred): boolean {
     case "implies": return e.premises.some(p => anyExpr(p, pred)) || anyExpr(e.conclusion, pred);
     case "record": return (e.spread ? anyExpr(e.spread, pred) : false) || e.fields.some(f => anyExpr(f.value, pred));
     case "arrayLiteral": return e.elems.some(x => anyExpr(x, pred));
+    case "arrayRange": return anyExpr(e.length, pred);
     case "mapLiteral": return e.entries.some(en => anyExpr(en.key, pred) || anyExpr(en.value, pred));
     case "methodCall": return anyExpr(e.obj, pred) || e.args.some(a => anyExpr(a, pred));
     case "lambda": return e.body.some(s => anyExprInStmt(s, pred));

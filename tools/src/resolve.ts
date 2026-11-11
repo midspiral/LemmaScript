@@ -12,7 +12,7 @@ import { parseTsType, tyToCanonical } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
-import { recognizeBuiltin, builtinSpec } from "./builtins.js";
+import { recognizeBuiltin, builtinSpec, callbackArgumentTypes, callbackBaseArity } from "./builtins.js";
 import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName } from "./typedecls.js";
 import { presentFact, variantFact } from "./condition-facts.js";
 
@@ -22,6 +22,16 @@ interface Env {
   name: string;
   ty: Ty;
   parent: Env | null;
+  /** Callback bindings are lexical, so a nested declaration shadows them in
+   *  exactly the same way as ordinary parameters. */
+  onRead?: () => void;
+  value?: TExpr;
+  argumentPack?: { length: number; at: (index: number) => TExpr };
+}
+
+function binding(env: Env | null, name: string): Env | undefined {
+  if (!env) return undefined;
+  return env.name === name ? env : binding(env.parent, name);
 }
 
 function lookup(env: Env | null, name: string): Ty | undefined {
@@ -531,9 +541,8 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
 
 // ── Call resolution helpers ─────────────────────────────────
 
-/** Infer lambda param types from array method context (map, filter, etc.)
- *  AND from function-typed parameters of named callees (e.g., a `Comparator =
- *  (a, b) => bool` parameter propagates `string, string` to the lambda's
+/** Infer lambda param types from function-typed parameters of named callees
+ *  (e.g., a `Comparator = (a, b) => bool` parameter propagates `string, string` to the lambda's
  *  inline params). Returns updated rawArgs with inferred tsType. */
 function tyToTsStr(ty: Ty): string | undefined {
   if (ty.kind === "user") return ty.name;
@@ -546,42 +555,6 @@ function tyToTsStr(ty: Ty): string | undefined {
   return undefined;
 }
 function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExpr[] {
-  const hofShape = fn.kind === "field"
-    ? (id => id ? builtinSpec(id).hof?.shape : undefined)(recognizeBuiltin(fn.obj.ty, fn.field))
-    : undefined;
-  // sort's comparator takes two params, both the element type.
-  if (hofShape === "comparator" && fn.kind === "field" && fn.obj.ty.kind === "array" &&
-      rawArgs.length >= 1 && rawArgs[0].kind === "lambda" && rawArgs[0].params.length >= 1) {
-    const tsType = tyToTsStr(fn.obj.ty.elem);
-    if (tsType) {
-      const lam = rawArgs[0];
-      const updatedParams = lam.params.map(p => (p.tsType ? p : { ...p, tsType }));
-      return [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
-    }
-  }
-  // reduce's callback is (acc, elem): acc from the init arg's type, elem from the array.
-  if (hofShape === "reduce" && fn.kind === "field" && fn.obj.ty.kind === "array" && ctx &&
-      rawArgs.length >= 2 && rawArgs[0].kind === "lambda" && rawArgs[0].params.length >= 2) {
-    const accTs = tyToTsStr(resolveExpr(rawArgs[1], ctx).ty);
-    const elemTs = tyToTsStr(fn.obj.ty.elem);
-    if (accTs && elemTs) {
-      const lam = rawArgs[0];
-      const updatedParams = lam.params.map((p, i) =>
-        p.tsType || i > 1 ? p : { ...p, tsType: i === 0 ? accTs : elemTs });
-      return [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
-    }
-  }
-  if (hofShape === "unary" && fn.kind === "field" && fn.obj.ty.kind === "array" &&
-      rawArgs.length >= 1 && rawArgs[0].kind === "lambda" &&
-      rawArgs[0].params.length >= 1 && !rawArgs[0].params[0].tsType) {
-    const elemTy = fn.obj.ty.elem;
-    const tsType = tyToTsStr(elemTy);
-    if (tsType) {
-      const lam = rawArgs[0];
-      const updatedParams = [{ ...lam.params[0], tsType }, ...lam.params.slice(1)];
-      return [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
-    }
-  }
   // Named-callee propagation: when an argument position expects a function
   // type, infer the lambda's param types from that function type. Aliases
   // (e.g., `Comparator`) are expanded via the typeDecls.
@@ -602,6 +575,89 @@ function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExp
     });
   }
   return rawArgs;
+}
+
+let callbackCounter = 0;
+
+function callbackDefaultState(ty: Ty, ctx: Ctx, seen = new Set<string>()): "missing" | "defined" | "optional" | "unknown" {
+  if (ty.kind === "void") return "missing";
+  if (ty.kind === "optional" || ty.kind === "unknown") return ty.kind;
+  if (ty.kind !== "user" || ty.name === "null") return "defined";
+  if (seen.has(ty.name)) return "unknown";
+  const decl = declOfDotted(ctx.typeDecls, ty.name);
+  if (decl?.kind === "alias" && decl.aliasOfTy)
+    return callbackDefaultState(decl.aliasOfTy, ctx, new Set([...seen, ty.name]));
+  return decl && decl.kind !== "opaque" ? "defined" : "unknown";
+}
+
+/** Bind an inline callback against its actual JavaScript argument list.
+ * Rest is a symbolic argument pack: observing its length or a fixed position
+ * needs no heterogeneous array. Unobserved slots disappear without inspecting
+ * identifier spellings or dropping any source computation. */
+function resolveCallback(e: Extract<RawExpr, { kind: "lambda" }>, actual: Ty[], baseArity: number, ctx: Ctx): TExpr {
+  const id = callbackCounter++;
+  const used = actual.map(() => false);
+  const defaults = actual.map(ty => callbackDefaultState(ty, ctx));
+  const slots = actual.map((ty, i) => {
+    const p = e.params[i];
+    return {
+      name: p && !p.rest && !(p.defaultValue && defaults[i] === "missing") ? p.name : freshName(`_callbackArg${id}_${i}`),
+      ty: p && !p.rest && p.tsType ? parseTsType(p.tsType)
+        : ty.kind === "nat" ? { ...ty, kind: "int" as const } : ty,
+    };
+  });
+  const read = (i: number): TExpr => {
+    if (i >= slots.length) return { kind: "var", name: "undefined", ty: { kind: "void" } };
+    used[i] = true;
+    return { kind: "var", ...slots[i] };
+  };
+  let env = ctx.env;
+  const prefix: TStmt[] = [];
+  for (const [i, p] of e.params.entries()) {
+    if (p.rest) {
+      env = { name: p.name, ty: { kind: "unknown" }, parent: env,
+        argumentPack: { length: Math.max(0, actual.length - i), at: k => read(i + k) } };
+    } else if (p.defaultValue && (i >= actual.length || defaults[i] === "missing")) {
+      const init = resolveExpr(p.defaultValue, { ...ctx, env, inLambda: true });
+      prefix.push({ kind: "let", name: p.name, ty: init.ty, mutable: false, init });
+      env = extend(env, p.name, init.ty);
+    } else if (i < actual.length) {
+      // A supplied non-optional value never evaluates a default. An Option
+      // cannot distinguish null from undefined, and an unknown value may be
+      // either; dropping the initializer could erase a call obligation.
+      if (p.defaultValue && defaults[i] === "optional") {
+        throw new Error(`callback default for '${p.name}' needs a distinction between null and undefined`);
+      }
+      if (p.defaultValue && defaults[i] === "unknown") {
+        throw new Error(`callback default for '${p.name}' needs a known argument type to decide whether the initializer executes`);
+      }
+      env = { name: p.name, ty: slots[i].ty, parent: env, onRead: () => { used[i] = true; } };
+    } else {
+      const value: TExpr = { kind: "var", name: "undefined", ty: { kind: "void" } };
+      env = { name: p.name, ty: value.ty, value, parent: env };
+    }
+  }
+  const returnTy: Ty = e.returnTsType ? parseTsType(e.returnTsType) : { kind: "unknown" };
+  const lambdaCtx = { ...ctx, env, inLambda: true, returnTy };
+  const body = [...prefix, ...(Array.isArray(e.body) ? resolveBlock(e.body, lambdaCtx)
+    : [{ kind: "return" as const, value: resolveExpr(e.body, lambdaCtx) }])];
+  const arity = Math.max(baseArity, used.lastIndexOf(true) + 1);
+  const params = slots.slice(0, arity);
+  const ty: Ty = e.returnTsType ? { kind: "fn", params: params.map(p => p.ty), result: returnTy } : { kind: "unknown" };
+  return { kind: "lambda", params, body, ty };
+}
+
+function callbackContext(fn: TExpr, initial?: TExpr): { actual: Ty[]; baseArity: number } | undefined {
+  if (fn.kind !== "field") return undefined;
+  const id = recognizeBuiltin(fn.obj.ty, fn.field);
+  if (!id) return undefined;
+  const spec = builtinSpec(id);
+  const actual = callbackArgumentTypes(spec, fn.obj.ty, initial?.ty);
+  return actual && spec.hof ? { actual, baseArity: callbackBaseArity(spec.hof.shape) } : undefined;
+}
+
+function argumentPack(e: RawExpr, ctx: Ctx): Env["argumentPack"] {
+  return e.kind === "var" ? binding(ctx.env, e.name)?.argumentPack : undefined;
 }
 
 /** A defined-check filter predicate: `(x) => x !== undefined` (expression or
@@ -809,9 +865,15 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
 function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
   switch (e.kind) {
-    case "var":
+    case "var": {
       if (e.name === "undefined") return { kind: "var", name: "undefined", ty: { kind: "void" } };
-      return { kind: "var", name: e.name, ty: lookup(ctx.env, e.name) ?? { kind: "unknown" } };
+      const entry = binding(ctx.env, e.name);
+      if (entry?.argumentPack) {
+        throw new Error(`cannot materialize callback rest parameter '${e.name}'; use its length or a constant indexed read`);
+      }
+      entry?.onRead?.();
+      return entry?.value ?? { kind: "var", name: e.name, ty: entry?.ty ?? { kind: "unknown" } };
+    }
 
     case "num":
       if (!Number.isInteger(e.value)) return { kind: "num", value: e.value, ty: { kind: "real" } };
@@ -943,13 +1005,18 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       // Propagate parameter types to arguments for record literal resolution
       // (enables inline discriminated union construction in function arguments)
       const paramTypes = fn.kind === "var" && ctx.fnParams.has(fn.name) ? ctx.fnParams.get(fn.name)! : null;
+      const initial = fn.kind === "field" && fn.field === "reduce" && rawArgs.length >= 2
+        ? resolveExpr(rawArgs[1], argCtx) : undefined;
+      const callback = callbackContext(fn, initial);
       let args = coerceCallArgs(rawArgs.map((a, i) => {
         let aCtx = argCtx;
         if (paramTypes && i < paramTypes.length &&
             (paramTypes[i].kind === "user" || paramTypes[i].kind === "array" || paramTypes[i].kind === "optional")) {
           aCtx = { ...aCtx, returnTy: paramTypes[i] };
         }
-        return resolveExpr(a, aCtx);
+        if (i === 0 && a.kind === "lambda" && callback)
+          return resolveCallback(a, callback.actual, callback.baseArity, aCtx);
+        return i === 1 && initial ? initial : resolveExpr(a, aCtx);
       }), fn, ctx);
       // Array method `.with(i, v)`: coerce the value arg to the element type
       // so `arr[i] = v` on `(T|null)[]` wraps `T` → `Some(T)` (and similarly
@@ -990,6 +1057,10 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "index": {
+      const pack = argumentPack(e.obj, ctx);
+      if (pack && e.idx.kind === "num" && Number.isInteger(e.idx.value) && e.idx.value >= 0) {
+        return pack.at(e.idx.value);
+      }
       if (e.idx.kind === "str") {
         const member = resolveConstEnumMember(e.obj, e.idx.value, ctx);
         if (member) return member;
@@ -1028,6 +1099,8 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "field": {
+      const pack = argumentPack(e.obj, ctx);
+      if (pack && e.field === "length") return { kind: "num", value: pack.length, ty: { kind: "nat" } };
       const member = resolveConstEnumMember(e.obj, e.field, ctx);
       if (member) return member;
       const obj = resolveExpr(e.obj, ctx);
@@ -1120,7 +1193,11 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
             const fakeObj: TExpr = { kind: "var", name: "_chain_recv", ty: priorInTy };
             const fakeFn: TExpr = { kind: "field", obj: fakeObj, field: lastField.name, ty: lastField.ty };
             rawArgs = inferLambdaParamTypes(fakeFn, rawArgs);
-            const args = rawArgs.map(a => resolveExpr(a, ctx));
+            const initial = lastField.name === "reduce" && rawArgs.length >= 2 ? resolveExpr(rawArgs[1], ctx) : undefined;
+            const callback = callbackContext(fakeFn, initial);
+            const args = rawArgs.map((a, i) => i === 0 && a.kind === "lambda" && callback
+              ? resolveCallback(a, callback.actual, callback.baseArity, ctx)
+              : i === 1 && initial ? initial : resolveExpr(a, ctx));
             callTy = inferMethodReturnTy(fakeFn, args, ctx);
             callKind = "method";
             const builtinId = recognizeBuiltin(priorInTy, lastField.name);
@@ -1264,6 +1341,8 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       const params = e.params.map(p => ({
         name: p.name,
         ty: p.tsType ? parseTsType(p.tsType) : { kind: "unknown" as const },
+        ...(p.rest ? { rest: true as const } : {}),
+        ...(p.defaultValue ? { defaultValue: resolveExpr(p.defaultValue, ctx) } : {}),
       }));
       // Extend env with lambda params
       let lambdaEnv = ctx.env;
@@ -1461,6 +1540,11 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     }
 
     case "assign": {
+      const entry = binding(ctx.env, s.target);
+      if (entry?.argumentPack || entry?.value) {
+        throw new Error(`assignment to callback binding '${s.target}' requires materializing its argument value`);
+      }
+      entry?.onRead?.();
       const targetTy = lookup(ctx.env, s.target) ?? { kind: "unknown" as const };
       // Propagate the target's type as returnTy, mirroring the annotated-let
       // case, so record/union literals and array literals in the RHS resolve
@@ -1643,6 +1727,7 @@ function collectCallsExpr(e: RawExpr, fns: Set<string>, out: Set<string>): void 
       return;
     case "arrayLiteral": for (const el of e.elems) collectCallsExpr(el, fns, out); return;
     case "lambda":
+      for (const p of e.params) if (p.defaultValue) collectCallsExpr(p.defaultValue, fns, out);
       if (Array.isArray(e.body)) collectCallsStmts(e.body, fns, out);
       else collectCallsExpr(e.body, fns, out);
       return;
@@ -1860,6 +1945,7 @@ function precomputeFieldTypesInner(typeDecls: TypeDeclInfo[]) {
 }
 
 export function resolveModule(raw: RawModule): TModule {
+  callbackCounter = 0;
   _warnedRefEq.clear();
   precomputeFieldTypes(raw.typeDecls);
   const pureFns = computePureFns(raw.functions, raw.externs ?? []);
