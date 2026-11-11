@@ -98,6 +98,7 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | Helper | When | Purpose |
 |--------|------|---------|
 | `SeqIndexOf` | `arr.indexOf(x)` | First-index search (`-1` if absent) |
+| `CallbackIndices` | Array callbacks that use index or source-array arguments | Ordered positions `[0, ..., n-1]`, with proved length, indexing, and membership contracts |
 | `SeqFilter` / `SeqAll` / `SeqFoldLeft` | `filter` / `every` / `reduce` with `dafny-library: local` | Local recursive collection helpers (no Dafny standard-library dependency) |
 | `SeqFindIndex` | `arr.findIndex(f)` | Predicate first-index search |
 | `SeqFind` | `arr.find(f)` | Predicate first-match search |
@@ -139,6 +140,22 @@ Unicode-scalar mode supports either; UTF-16 mode requires an explicit `local` se
 This choice does not change string semantics or control handwritten proof imports.
 Those imports must still be compatible with the selected string model (see §5).
 Both settings support file directives; see [examples/utf16.ts](examples/utf16.ts).
+
+**Indexed callbacks.** In either library mode, `CallbackIndices(n)` constructs `[0, ..., n-1]` as a `seq<int>`:
+
+```dafny
+function CallbackIndices(n: nat): (r: seq<int>)
+  ensures |r| == n
+  ensures forall i :: 0 <= i < n ==> r[i] == i
+  ensures forall i :: i in r <==> 0 <= i < n
+{
+  if n == 0 then [] else CallbackIndices(n - 1) + [n - 1]
+}
+```
+
+Dafny proves the contracts from the recursive body; callers use the order and bounds facts without unfolding it. The adapter binds the receiver once as `source`, then traverses these positions with callback arguments `(source[i], i, source)` (preceded by the accumulator for `reduce`). Equal elements retain distinct positions; `filter` and `find` map selected positions back to elements.
+
+For an existential `some` proof, an addition such as `assert 1 in CallbackIndices(2);` can expose a concrete witness. Dafny must prove that assertion too. See the [source](examples/callbackArguments.ts), [generated Dafny](examples/callbackArguments.dfy.gen), and [proof addition](examples/callbackArguments.dfy) in the callback example.
 
 ---
 

@@ -667,8 +667,8 @@ are also rejected. Defaults execute for missing arguments and are ignored for
 arguments known to be defined; optional/unknown values lack the needed undefined check.
 Indexed callbacks use a shared adapter over array positions, evaluating the
 receiver once. Dafny's proved `CallbackIndices(n)` helper exposes length, indexing,
-and membership facts; proof additions can supply witnesses such as
-`assert 1 in CallbackIndices(2);` without editing a generated quantifier or trigger.
+and membership facts; its definition and witness-based proof workflow are documented
+in [SPEC_DAFNY.md §4](SPEC_DAFNY.md#4-helper-preambles).
 
 **filterMap.** `xs.map(x => ... | undefined).filter((x): x is T => x !== undefined)` drops the `undefined`s *and* unwraps to `seq<T>` — lowered to the proven `SeqFilterSome` preamble (a plain `Map(.value, Filter(.Some?, ...))` wouldn't verify, since `.value` is partial).
 
