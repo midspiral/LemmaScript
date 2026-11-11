@@ -505,6 +505,7 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Math") return "pure";
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Array" && fn.field === "isArray") return "pure";
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "String" && fn.field === "fromCharCode") return "pure";
+  if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Number" && fn.field === "isSafeInteger") return "pure";
   if (fn.kind === "var" && (ctx.inSpec || ctx.inLambda) && ctx.pureFns.has(fn.name)) return "spec-pure";
   // Effectively pure bare-name externs are function calls. Impure externs are
   // lifted to statement-level method binds so repeated invocations remain
@@ -646,6 +647,9 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
   // point in, a one-character string out.
   if (fn.obj.kind === "var" && fn.obj.name === "String" && fn.field === "fromCharCode") {
     return { kind: "string" };
+  }
+  if (fn.obj.kind === "var" && fn.obj.name === "Number" && fn.field === "isSafeInteger") {
+    return { kind: "bool" };
   }
   // Math.* numeric builtins: abs/min/max preserve the operand's numeric type
   // (real if any operand is real); floor/ceil/round/trunc return an integer.
