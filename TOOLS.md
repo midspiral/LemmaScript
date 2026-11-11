@@ -182,7 +182,7 @@ not implement routing themselves.
 
 The walker is bottom-up over TExpr/TStmt. At each node, recurse into children, then try the rules in order.
 
-Throughout, `e !== undefined` includes equivalent forms: `undefined !== e`, bare truthiness `e` where `e` is optional-typed, and (for the negative direction) `e === undefined`, `undefined === e`, `!e`.
+Throughout, `e !== undefined` includes equivalent forms: `undefined !== e`, bare truthiness `e` where `e` is optional-typed, and (for the negative direction) `e === undefined`, `undefined === e`, `!e`. A double negation `!!c` is the same check as `c`, so `!!e` is a truthiness form and `!!!e` a negative one.
 
 **Statement-level rules — optional narrowing**
 
