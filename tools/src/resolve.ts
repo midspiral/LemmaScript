@@ -1895,20 +1895,22 @@ export function resolveModule(raw: RawModule): TModule {
     }
     const baseCtx: Ctx = { env, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: sig.returnTy, pureFns, fnParams, fnReturns, externs, inSpec: true, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
     const ensuresCtx: Ctx = { ...baseCtx, env: extend(env, "\\result", sig.returnTy), allowResult: true };
-    const requires = ext.requires.map(s => {
-      try { return resolveSpec(s, baseCtx); } catch { return null; }
-    }).filter((e): e is TExpr => e !== null);
-    const ensures = ext.ensures.map(s => {
-      try { return resolveSpec(s, ensuresCtx); } catch { return null; }
-    }).filter((e): e is TExpr => e !== null);
+    const resolveClauses = (kind: "requires" | "ensures", ctx: Ctx) => ext[kind].map(s => {
+      try {
+        return resolveSpec(s, ctx);
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        throw new Error(`extern ${ext.qualified}: //@ ${kind} ${s}: ${reason}`);
+      }
+    });
     return {
       qualified: ext.qualified,
       flat: ext.flat,
       typeParams: ext.typeParams,
       params: ext.params.map((p, i) => ({ name: p.name, ty: sig.params[i] })),
       returnTy: sig.returnTy,
-      requires,
-      ensures,
+      requires: resolveClauses("requires", baseCtx),
+      ensures: resolveClauses("ensures", ensuresCtx),
       impure: ext.impure,
     };
   });
