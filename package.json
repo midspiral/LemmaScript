@@ -42,5 +42,8 @@
     "lean4",
     "dafny",
     "formal-methods"
-  ]
+  ],
+  "optionalDependencies": {
+    "lemmascript-guard": "^0.1.0"
+  }
 }
