@@ -483,6 +483,8 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `opt ? f(opt) : undefined` | match on Some/None | `match opt { case Some(v) => Some(f(v)) case None => None }` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
 | `s.indexOf(sub, from)` | — (rejected) | `StringIndexOfFrom(s, sub, StringSearchPosition(s, from))`; position clamps to `[0, \|s\|]` |
+| `s.lastIndexOf(sub)` | — (rejected) | `StringLastIndexOf(s, sub)` (preamble: `-1` or a match, with no match starting later) |
+| `s.lastIndexOf(sub, from)` | — (rejected) | `StringLastIndexOfFrom(s, sub, StringSearchPosition(s, from))`; position clamps to `[0, \|s\|]` |
 | `s.slice(start, end)` | `JSString.slice s start end` | `s[start..end]` |
 | `s.substring(start)` / `s.substring(start, end)` | — | `s[start..]` / `s[start..end]` |
 | `s.charCodeAt(i)` | — | `(s[i] as int)` |
