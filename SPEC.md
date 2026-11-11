@@ -218,7 +218,7 @@ A file-level directive that restricts the file to a specific backend:
 
 When `lsc` runs with a different backend (e.g., `--backend=lean`), the file is silently skipped. This is used for features only supported in one backend, such as class methods (Dafny only).
 
-The `safe-slice` option selects JS-clamping semantics for two-arg `arr.slice(lo, hi)`: the emitted Dafny goes through a `SafeSlice` helper that clamps both bounds to `[0, |s|]` rather than producing a direct `s[lo..hi]` (which Dafny requires `0 <= lo <= hi <= |s|`). It is off by default and can be enabled project-wide in `lemmascript.json` or per file with `//@ option safe-slice true`. The older top-of-file `//@ safe-slice` spelling remains an alias. A file can override a project default with `//@ option safe-slice false` when its bounds are proved.
+The `safe-slice` option selects JS-clamping semantics for `arr.slice(lo, hi)` and `arr.slice(lo)`: the emitted Dafny goes through a `SafeSlice` helper that clamps both bounds to `[0, |s|]` rather than producing a direct `s[lo..hi]` (which Dafny requires `0 <= lo <= hi <= |s|`). The one-argument form passes `|s|` as `hi`. It is off by default and can be enabled project-wide in `lemmascript.json` or per file with `//@ option safe-slice true`. The older top-of-file `//@ safe-slice` spelling remains an alias. A file can override a project default with `//@ option safe-slice false` when its bounds are proved.
 
 ### 2.8 Classes
 
