@@ -222,6 +222,22 @@ const OP_MAP: Record<string, string> = {
   "arrayConcat": "+",
 };
 
+/** Escape controls and line separators while preserving printable Unicode. */
+function escapeDafnyScalarString(value: string): string {
+  return value.replace(/["\\\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, char => {
+    switch (char) {
+      case '"': return '\\"';
+      case "\\": return "\\\\";
+      case "\0": return "\\0";
+      case "\n": return "\\n";
+      case "\r": return "\\r";
+      case "\t": return "\\t";
+      // Dafny has no short escapes for controls such as backspace or form feed.
+      default: return `\\U{${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}}`;
+    }
+  });
+}
+
 /** Render a JavaScript string without losing its UTF-16 representation.
  *
  * JavaScript iteration by index exposes UTF-16 code units, including unpaired
@@ -281,11 +297,9 @@ function emitExpr(e: Expr): string {
     case "bigint": return e.value;
     case "bool": return e.value ? "true" : "false";
     case "str":
-      // Under the default profile the literal is written exactly as before;
-      // only the UTF-16 profile needs code-unit escapes (DESIGN_STRINGS.md §3).
       return isUtf16()
         ? `"${escapeDafnyUTF16String(e.value)}"`
-        : `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+        : `"${escapeDafnyScalarString(e.value)}"`;
 
     case "constructor": {
       // Option constructors (Some/None) may appear in inferred positions
