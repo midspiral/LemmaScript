@@ -245,19 +245,6 @@ Local IR-to-IR rewrites applied bottom-up to fixed point at each node, in `peeph
 
 Each rule is local and semantics-preserving. The pass takes a `backend` parameter — some rules are Dafny-only (see below).
 
-The expression traversal includes every constructor argument and both keys and
-values of map literals, recursively. Constructor metadata and argument/entry order
-are retained. Source lowering produces unary `Option.some` constructors for
-present optional branches, and map literals with string-literal keys for nonempty
-map-typed records. Multiple-argument `constructor` nodes and computed map-literal
-keys are covered through the public IR interface in `tools/tests/peephole.test.ts`;
-current source lowering does not produce those shapes (data-carrying user
-constructors use `app` instead). The source fixtures `peephole-children.ts` and
-`peephole-map-entries.ts` exercise optional constructor children and record-map
-values through generation. Lean applies its existing map-get rules inside
-constructors and retains Boolean conditionals; its emitter currently does not
-support `mapLiteral`, so source record-map generation is tested on Dafny.
-
 ### Map.get rules (both backends)
 
 **Expression rules**
