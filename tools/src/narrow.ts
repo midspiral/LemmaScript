@@ -36,21 +36,24 @@
 
 import type { TModule, TFunction, TStmt, TExpr } from "./typedir.js";
 import { isTerminatorKind } from "./typedir.js";
-import { builtinSpec } from "./builtins.js";
 import {
   type CondCtx, type PresentFact, type NoneDetector,
   presentFact, leadingPresent, leadingIsArray, flattenOr, noneDetector,
   bindPresentFact, freshPathBinder, binderHintForMapAccess, freshOcBinder,
   applyChain, restoreDiscriminantFlag, arrayBoundsCond, exprEqual,
   isArrayFact, typeofStringFact, variantFact, negVariantFact,
-  presentMatchStmts, presentMatchExpr,
+  presentMatchStmts, presentMatchExpr, containsMethodCall, readsPath,
 } from "./condition-facts.js";
 
 // ── Walkers ──────────────────────────────────────────────────
 
 function walkExpr(e: TExpr, ctx: CondCtx): TExpr {
+  if (isLogical(e)) {
+    const r = walkSpine(e, e.op, ctx);
+    return ruleLogicalOptional(r, ctx) ?? r;
+  }
   const r = recurseExpr(e, ctx);
-  return ruleNullish(r, ctx) ?? ruleNullishIndex(r) ?? ruleOptChainIndex(r) ?? ruleOptChain(r, ctx) ?? ruleImplOptional(r, ctx) ?? ruleImplArrayIsArray(r, ctx) ?? ruleConditionalArrayIsArray(r, ctx) ?? ruleConditionalAndArrayIsArray(r, ctx) ?? ruleConditionalAndOptional(r, ctx) ?? ruleConditionalOptionalSimple(r, ctx) ?? ruleConditionalInMap(r, ctx) ?? ruleConditionalOptionalTruthy(r, ctx) ?? r;
+  return ruleNullish(r, ctx) ?? ruleNullishIndex(r) ?? ruleOptChainIndex(r) ?? ruleOptChain(r, ctx) ?? ruleImplOptional(r, ctx) ?? ruleImplArrayIsArray(r, ctx) ?? ruleConditionalArrayIsArray(r, ctx) ?? ruleConditionalAndArrayIsArray(r, ctx) ?? ruleConditionalAndOptional(r, ctx) ?? ruleConditionalOptionalSimple(r, ctx) ?? ruleConditionalInMap(r, ctx) ?? ruleConditionalOptionalTruthy(r, ctx) ?? ruleExprCondFallback(r, ctx) ?? r;
 }
 
 function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
@@ -59,7 +62,7 @@ function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
     case "var": case "num": case "bigint": case "str": case "bool":
     case "havoc":
       return e;
-    case "binop": return { ...e, left: re(e.left), right: re(e.right) };
+    case "binop": return { ...e, left: e.op === "==>" ? walkCond(e.left, ctx) : re(e.left), right: re(e.right) };
     case "unop": return { ...e, expr: re(e.expr) };
     case "call": return { ...e, fn: re(e.fn), args: e.args.map(re) };
     case "index": return { ...e, obj: re(e.obj), idx: re(e.idx) };
@@ -68,7 +71,7 @@ function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
       fields: e.fields.map(f => ({ ...f, value: re(f.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(re) };
     case "lambda": return { ...e, body: walkStmts(e.body, ctx) };
-    case "conditional": return { ...e, cond: re(e.cond), then: re(e.then), else: re(e.else) };
+    case "conditional": return { ...e, cond: walkCond(e.cond, ctx), then: re(e.then), else: re(e.else) };
     case "optChain": return { ...e, obj: re(e.obj),
       chain: e.chain.map(s => s.kind === "call" ? { ...s, args: s.args.map(re) }
         : s.kind === "index" ? { ...s, idx: re(s.idx) }
@@ -83,6 +86,31 @@ function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
   }
 }
 
+type Logical = TExpr & { kind: "binop"; op: "&&" | "||" };
+
+function isLogical(e: TExpr): e is Logical {
+  return e.kind === "binop" && (e.op === "&&" || e.op === "||");
+}
+
+/** Walk a `&&`/`||` chain without firing rules on its own `op` nodes: the
+ *  chain is analyzed whole (by `ruleLogicalOptional`, or by the positional
+ *  drivers when it is a condition), so an inner `x !== undefined && a` must
+ *  stay visible as a conjunct. Operands of the other operator walk normally. */
+function walkSpine(e: TExpr, op: string, ctx: CondCtx): TExpr {
+  if (e.kind === "binop" && e.op === op) {
+    return { ...e, left: walkSpine(e.left, op, ctx), right: walkSpine(e.right, op, ctx) };
+  }
+  return walkExpr(e, ctx);
+}
+
+/** Walk a condition consumed by a positional driver (if, ternary, guard
+ *  statement, implication premise). The driver reads the raw chain, so the
+ *  value-position rule must not rewrite it first; when no driver takes the
+ *  chain, the `*CondFallback` rules apply it afterwards. */
+function walkCond(e: TExpr, ctx: CondCtx): TExpr {
+  return isLogical(e) ? walkSpine(e, e.op, ctx) : walkExpr(e, ctx);
+}
+
 function walkStmt(s: TStmt, ctx: CondCtx): TStmt {
   // Recurse into children first, then try rules at this node.
   const r = recurseStmt(s, ctx);
@@ -93,7 +121,7 @@ function walkStmt(s: TStmt, ctx: CondCtx): TStmt {
   // array rule fires; independent narrows commute, so the order is harmless.)
   // && rules fire before the simple rule because they produce nested ifs whose
   // inner shape doesn't match the simple rule directly.
-  return ruleIfAndOptional(r, ctx) ?? ruleIfAndArrayIsArray(r, ctx) ?? ruleIfOptionalSimple(r, ctx) ?? ruleExprStmtAndOptional(r, ctx) ?? ruleOptionalIndexBinding(r) ?? r;
+  return ruleIfAndOptional(r, ctx) ?? ruleIfAndArrayIsArray(r, ctx) ?? ruleIfOptionalSimple(r, ctx) ?? ruleExprStmtAndOptional(r, ctx) ?? ruleOptionalIndexBinding(r) ?? ruleStmtCondFallback(r, ctx) ?? r;
 }
 
 function walkStmts(stmts: TStmt[], ctx: CondCtx): TStmt[] {
@@ -134,8 +162,8 @@ function recurseStmt(s: TStmt, ctx: CondCtx): TStmt {
     case "assign": return { ...s, value: re(s.value) };
     case "return": return { ...s, value: re(s.value) };
     case "break": case "continue": case "throw": return s;
-    case "expr": return { ...s, expr: re(s.expr) };
-    case "if": return { ...s, cond: re(s.cond), then: rs(s.then), else: rs(s.else) };
+    case "expr": return { ...s, expr: walkCond(s.expr, ctx) };
+    case "if": return { ...s, cond: walkCond(s.cond, ctx), then: rs(s.then), else: rs(s.else) };
     case "while": return { ...s, cond: re(s.cond),
       invariants: s.invariants.map(re),
       decreases: s.decreases ? re(s.decreases) : null,
@@ -492,42 +520,89 @@ function ruleLetCondAndOptional(s: TStmt, ctx: CondCtx): TStmt[] | null {
   ];
 }
 
-/** Does this expression contain a method call that would be lifted to a
- *  var binding outside its containing expression by transform? Such calls
- *  are unsafe inside a match arm — the lifted binding would reference a
- *  name only valid in the arm. Builtins whose registry entry is `pure`
- *  (they lower to pure Dafny expressions: `x in arr`, `x in m`, `s.Keys`,
- *  …) are exempt even though they carry `callKind: "method"`. */
-function containsMethodCall(e: TExpr): boolean {
-  if (e.kind === "call" && e.callKind === "method" &&
-      !(e.builtinId !== undefined && builtinSpec(e.builtinId).pure)) {
-    return true;
+/** Driver (expression): `x !== undefined && rest` / `x === undefined || rest`
+ *  as a boolean value (return, initializer, argument, contract body).
+ *  → `someMatch x { Some(_x_val) => rest, None => false }` (`&&`), or
+ *    `someMatch x { Some(_x_val) => rest, None => true }` (`||`).
+ *  Fires where resolve typed a checked optional as narrowed in the chain:
+ *  for `&&`, when another conjunct reads one of its checked paths (the
+ *  leading check still binds first, so `box.v` is read under `box`); for
+ *  `||`, when another disjunct reads the path other than as a comparison
+ *  operand (see `resolveOrRight`). Without the match, the chain would read
+ *  the optional itself; a chain that reads none keeps its plain lowering. Skips `rest` with method
+ *  calls, for the same binder-scope reason as `ruleConditionalAndOptional`, except in a pure
+ *  function body, which transform lowers as one expression without lifting calls. */
+function ruleLogicalOptional(e: TExpr, ctx: CondCtx): TExpr | null {
+  if (!isLogical(e) || e.ty.kind !== "bool") return null;
+  const isOr = e.op === "||";
+  const extracted = isOr ? leadingAbsent(e) : leadingPresent(e);
+  if (!extracted) return null;
+  const { check, restCond } = extracted;
+  if (!isOr && !readsCheckedPath(e)) return null;
+  if (!ctx.pureBody && containsMethodCall(restCond)) return null;
+  const none: TExpr = { kind: "bool", value: isOr, ty: { kind: "bool" } };
+  return presentMatchExpr(check, walkExpr(restCond, ctx), none, e.ty, ctx);
+}
+
+/** Does some conjunct of an `&&` chain read a path that another conjunct
+ *  checks for presence? */
+function readsCheckedPath(e: TExpr): boolean {
+  const conjuncts = flattenAnd(e);
+  return conjuncts.some((c, i) => {
+    const f = presentFact(c);
+    return !!f && !f.negated && conjuncts.some((o, j) => j !== i && readsPath(o, f.scrutinee));
+  });
+}
+
+function flattenAnd(e: TExpr): TExpr[] {
+  if (e.kind === "binop" && e.op === "&&") return [...flattenAnd(e.left), ...flattenAnd(e.right)];
+  return [e];
+}
+
+/** The first absence check (`x === undefined`, `!x`) in a `||` chain whose
+ *  optional the other disjuncts read other than as a comparison operand,
+ *  plus those disjuncts in source order. Its Some arm is where the check is
+ *  false, so it is reified as the positive fact. */
+function leadingAbsent(cond: TExpr): { check: PresentFact; restCond: TExpr } | null {
+  const leaves = flattenOr(cond);
+  if (leaves.length < 2) return null;
+  const or = (es: TExpr[]) => es.reduce((a, b): TExpr => ({ kind: "binop", op: "||", left: a, right: b, ty: { kind: "bool" } }));
+  for (let i = 0; i < leaves.length; i++) {
+    const f = presentFact(leaves[i]);
+    if (!f?.negated) continue;
+    const restCond = or(leaves.filter((_, j) => j !== i));
+    if (readsPath(restCond, f.scrutinee, true)) return { check: f, restCond };
   }
-  switch (e.kind) {
-    case "var": case "num": case "bigint": case "str": case "bool":
-    case "havoc":
-      return false;
-    case "binop": return containsMethodCall(e.left) || containsMethodCall(e.right);
-    case "unop": return containsMethodCall(e.expr);
-    case "call": return containsMethodCall(e.fn) || e.args.some(containsMethodCall);
-    case "index": return containsMethodCall(e.obj) || containsMethodCall(e.idx);
-    case "field": return containsMethodCall(e.obj);
-    case "record":
-      return (e.spread ? containsMethodCall(e.spread) : false) ||
-        e.fields.some(f => containsMethodCall(f.value));
-    case "arrayLiteral": return e.elems.some(containsMethodCall);
-    case "lambda": return false;  // body is its own scope
-    case "conditional":
-      return containsMethodCall(e.cond) || containsMethodCall(e.then) || containsMethodCall(e.else);
-    case "optChain": return containsMethodCall(e.obj);
-    case "nullish": return containsMethodCall(e.left) || containsMethodCall(e.right);
-    case "forall": case "exists": return containsMethodCall(e.body);
-    case "someMatch": return containsMethodCall(e.scrutinee) ||
-      containsMethodCall(e.someBody) || containsMethodCall(e.noneBody);
-    case "tagMatch": return containsMethodCall(e.scrutinee) ||
-      e.cases.some(c => containsMethodCall(c.body)) ||
-      (e.fallthrough ? containsMethodCall(e.fallthrough) : false);
+  return null;
+}
+
+/** Fallback (statement): an `if` / guard-statement condition that no
+ *  positional driver took (an `if` with an else, a non-terminating `||`
+ *  guard) is lowered as a value, so the narrowed reads in it stay bound. */
+function ruleStmtCondFallback(s: TStmt, ctx: CondCtx): TStmt | null {
+  if (s.kind === "if") {
+    const cond = ruleLogicalOptional(s.cond, ctx);
+    return cond ? { ...s, cond } : null;
   }
+  if (s.kind === "expr") {
+    const expr = ruleLogicalOptional(s.expr, ctx);
+    return expr ? { ...s, expr } : null;
+  }
+  return null;
+}
+
+/** Fallback (expression): the same for a ternary condition or an
+ *  implication premise that no driver took. */
+function ruleExprCondFallback(e: TExpr, ctx: CondCtx): TExpr | null {
+  if (e.kind === "conditional") {
+    const cond = ruleLogicalOptional(e.cond, ctx);
+    return cond ? { ...e, cond } : null;
+  }
+  if (e.kind === "binop" && e.op === "==>") {
+    const left = ruleLogicalOptional(e.left, ctx);
+    return left ? { ...e, left } : null;
+  }
+  return null;
 }
 
 /** Driver (expression): `x !== undefined && rest ? a : b` — presence fact in
@@ -537,13 +612,14 @@ function containsMethodCall(e: TExpr): boolean {
  *  nested someMatches. Does NOT fire if the guard `rest` contains method
  *  calls — transform lifts those out of the match arm, breaking the binder
  *  scope. The original transform's let-desugar handles those by lifting to
- *  a mutable var first. */
+ *  a mutable var first. A pure function body is exempt: transform lowers it
+ *  as one expression, so the call stays inside the arm. */
 function ruleConditionalAndOptional(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "conditional") return null;
   const extracted = leadingPresent(e.cond);
   if (!extracted) return null;
   const { check, restCond } = extracted;
-  if (containsMethodCall(restCond)) return null;
+  if (!ctx.pureBody && containsMethodCall(restCond)) return null;
   const innerCond: TExpr = {
     kind: "conditional",
     cond: restCond, then: e.then, else: e.else, ty: e.ty,
@@ -711,12 +787,12 @@ function ruleDiscriminantNegEarlyReturn(stmts: TStmt[], ctx: CondCtx): { stmt: T
 
 // ── Function / module entry ──────────────────────────────────
 
-function narrowFunction(fn: TFunction, ctx: CondCtx): TFunction {
+function narrowFunction(fn: TFunction, ctx: CondCtx, pureBody = false): TFunction {
   // Contracts and the body bind their payloads in separate generated scopes.
   // Do not reserve a body's names because of a contract's \result (or another
   // function's paths). Keep the shared counter's traversal order unchanged.
   const specCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc };
-  const bodyCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc };
+  const bodyCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc, pureBody };
   return {
     ...fn,
     requires: fn.requires.map(e => walkExpr(e, specCtx)),
@@ -731,7 +807,7 @@ export function narrowModule(mod: TModule): TModule {
   return {
     ...mod,
     constants: mod.constants.map(c => ({ ...c, value: walkExpr(c.value, ctx) })),
-    functions: mod.functions.map(fn => narrowFunction(fn, ctx)),
+    functions: mod.functions.map(fn => narrowFunction(fn, ctx, fn.isPure)),
     classes: mod.classes.map(cls => ({
       ...cls,
       methods: cls.methods.map(m => narrowFunction(m, ctx)),
