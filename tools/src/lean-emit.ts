@@ -323,7 +323,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       const head = e.type ? `${e.type}.${leanCtorName(e.name)}` : `.${leanCtorName(e.name)}`;
       if (!e.args || e.args.length === 0) return head;
       const args = e.args.map(a =>
-        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall") ? `(${emitExpr(a)})` : emitExpr(a)
+        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall" || a.kind === "if") ? `(${emitExpr(a)})` : emitExpr(a)
       );
       return `${head} ${args.join(" ")}`;
     }
