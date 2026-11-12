@@ -18,3 +18,6 @@
 - Handwritten proofs depend on its names and structure.
 - Avoid incidental changes to generated output.
 
+### Add end-to-end verification examples
+
+- If the change makes a new example verifiable, add it to `examples/`.
