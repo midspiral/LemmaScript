@@ -5,6 +5,7 @@ import { Project, ScriptTarget } from "ts-morph";
 import {
   belowSet, nullable, arithmetic, both, field, inContract,
   unsetOrAbove, zeroOrAbove, orEarlyReturn, orTernary, andIfElse, lowest, countAbove,
+  nestedEarly, nestedCompare,
 } from "../fixtures/optional-and-value.ts";
 import { extractModule } from "../src/extract.ts";
 import { resolveModule } from "../src/resolve.ts";
@@ -43,6 +44,8 @@ const expected: [string, string, string][] = [
   ["orEarlyReturn", "(i_opt_val + 1) > x", "_opt_val + 1 > x"],
   ["orTernary", "(i_opt_val + 1) > x", "_opt_val + 1 > x"],
   ["andIfElse", "(i_opt_val + 1) > x", "_opt_val + 1 > x"],
+  ["nestedEarly", "i_a_inner_value_val\n", "_a_inner_value_val"],
+  ["nestedCompare", "x < i_a_inner_value_val", "x < _a_inner_value_val"],
 ];
 
 test("a presence check guards the rest of an && value at runtime", () => {
@@ -62,6 +65,8 @@ test("a presence check guards the rest of an && value at runtime", () => {
   assert.equal(andIfElse(5, 5), 1);
   assert.deepEqual([lowest([]), lowest([3, 1, 2])], [null, 1]);
   assert.deepEqual([countAbove([1, 5, 9]), countAbove([1, 5, 9], 4)], [3, 2]);
+  assert.deepEqual([{}, { inner: {} }, { inner: { value: 7 } }].map(nestedEarly), [-1, -1, 7]);
+  assert.deepEqual([{}, { inner: {} }, { inner: { value: 7 } }].map(a => nestedCompare(a, 9)), [1, 1, 0]);
 });
 
 test("Lean decides a match used as an if condition as a Bool", () => {

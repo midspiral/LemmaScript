@@ -1,4 +1,6 @@
 export interface Box { v?: number }
+interface Leaf { value?: number }
+export interface Nest { inner?: Leaf }
 
 export function belowSet(x: number, opt?: number): boolean {
   //@ ensures x === 1 && opt === 5 ==> \result
@@ -106,4 +108,16 @@ export function countAbove(xs: number[], floor?: number): number {
     if (floor === undefined || xs[i]! - floor > 0) n = n + 1;
   }
   return n;
+}
+
+export function nestedEarly(a: Nest): number {
+  //@ ensures a.inner === undefined ==> \result === -1
+  if (a.inner === undefined || a.inner.value === undefined) return -1;
+  return a.inner.value;
+}
+
+export function nestedCompare(a: Nest, x: number): number {
+  //@ ensures a.inner === undefined ==> \result === 1
+  if (a.inner === undefined || a.inner.value === undefined || x < a.inner.value) return 1;
+  return 0;
 }
