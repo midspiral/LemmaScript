@@ -514,6 +514,22 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const { premises, conclusion } = flattenImpl(e);
         return { kind: "implies", premises: premises.map(transformExpr), conclusion: transformExpr(conclusion) };
       }
+      // Boolean connectives evaluate the RHS only if the left operand selects
+      // it. Keep lifted calls in that branch instead of hoisting them eagerly.
+      if ((e.op === "&&" || e.op === "||") && e.left.ty.kind === "bool" && e.right.ty.kind === "bool") {
+        const left = lowerExpr(e.left, binds);
+        const rightBinds: Stmt[] | null = binds ? [] : null;
+        const right = lowerExpr(e.right, rightBinds);
+        if (binds && rightBinds?.length) {
+          const name = freshName(`_branch${_branchCounter++}`);
+          const value: Expr = { kind: "var", name };
+          binds.push({ kind: "let", name, type: { kind: "bool" }, mutable: true, value: left });
+          binds.push({ kind: "if", cond: e.op === "&&" ? value : { kind: "unop", op: "¬", expr: value },
+            then: [...rightBinds, { kind: "assign", target: name, value: right }], else: [] });
+          return value;
+        }
+        return { kind: "binop", op: OP_MAP[e.op], left, right };
+      }
       // Discriminant check: x.discriminant === "foo" → x = .foo (before generic string literal comparison)
       if ((e.op === "===" || e.op === "!==") && e.left.kind === "field" && e.left.isDiscriminant && e.right.kind === "str") {
         const objTy = e.left.obj.ty.kind === "user" ? e.left.obj.ty.name : undefined;
@@ -825,6 +841,20 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           e.fn.field === "fromCharCode" && e.args.length === 1) {
         return { kind: "app", fn: "StringFromCharCode", args: [lowerExpr(e.args[0], binds)] };
       }
+      // Number.isSafeInteger(n) on an integer: a bigint is never a safe integer
+      // in JS, so the result is false. A `number` is an unbounded integer in the
+      // model, so the JS bound -(2^53 - 1) <= n <= 2^53 - 1 must be stated.
+      if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Number" &&
+          e.fn.field === "isSafeInteger" && e.args.length === 1 && isIntegral(e.args[0].ty)) {
+        if (e.args[0].ty.kind === "int" && e.args[0].ty.big) return { kind: "bool", value: false };
+        const n = lowerExpr(e.args[0], binds);
+        const max = 9007199254740991;
+        return {
+          kind: "binop", op: "∧",
+          left: { kind: "binop", op: "≤", left: { kind: "num", value: -max }, right: n },
+          right: { kind: "binop", op: "≤", left: n, right: { kind: "num", value: max } },
+        };
+      }
       // Math.abs/min/max → preamble functions
       if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math") {
         if (e.fn.field === "abs" && e.args.length === 1)
@@ -1053,11 +1083,24 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // negation forms (`!s` → `s == ""`).  Optional conds are already
       // rewritten to someMatch by narrow.ts.
       const cond = lowerExpr(asCondition(e.cond), binds);
-      let thenExpr = lowerExpr(e.then, binds);
-      let elseExpr = lowerExpr(e.else, binds);
+      const thenBinds: Stmt[] | null = binds ? [] : null;
+      const elseBinds: Stmt[] | null = binds ? [] : null;
+      let thenExpr = lowerExpr(e.then, thenBinds);
+      let elseExpr = lowerExpr(e.else, elseBinds);
       if (e.ty.kind === "optional") {
         thenExpr = wrapOptionalBranch(thenExpr, e.then);
         elseExpr = wrapOptionalBranch(elseExpr, e.else);
+      }
+      if (binds && (thenBinds?.length || elseBinds?.length)) {
+        const name = freshName(`_branch${_branchCounter++}`);
+        // Both arms assign before the result is read. This initializer is not
+        // observable and supplies no assumption about the selected result.
+        binds.push({ kind: "let", name, type: e.ty, mutable: true,
+          value: { kind: _opts.backend === "dafny" ? "havoc" : "default", type: e.ty } });
+        binds.push({ kind: "if", cond,
+          then: [...(thenBinds ?? []), { kind: "assign", target: name, value: thenExpr }],
+          else: [...(elseBinds ?? []), { kind: "assign", target: name, value: elseExpr }] });
+        return { kind: "var", name };
       }
       return { kind: "if", cond, then: thenExpr, else: elseExpr };
     }
@@ -1611,6 +1654,8 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
 }
 
 let _liftCounter = 0;
+// Branch results must not renumber the existing lifted-call temporaries.
+let _branchCounter = 0;
 
 function liftMethodCalls(e: TExpr): { binds: Stmt[]; expr: Expr } {
   const binds: Stmt[] = [];
@@ -2458,6 +2503,7 @@ export function transformModuleDafny(mod: TModule): { typesFile: Module | null; 
 export function transformModule(mod: TModule, specImport?: string, moduleBaseOverride?: string): { typesFile: Module | null; defFile: Module } {
   _forofCounters.clear();
   _liftCounter = 0;
+  _branchCounter = 0;
   _typeDecls = mod.typeDecls;
   _neededKindHelpers = new Map();
   _pureDefNames = new Set(mod.functions.filter(f => f.isPure).map(f => f.name));
@@ -2642,6 +2688,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
     }
   };
   const knownTypeNames = new Set<string>(typeDecls.map(d => (d as { name: string }).name));
+  for (const cls of mod.classes ?? []) knownTypeNames.add(cls.name);
   const allTypeParams = new Set<string>();
   // Exclude type params from the *source* decls — the transformed IR drops
   // them for aliases (`type Step<S, A> = …`), and a generic alias's params

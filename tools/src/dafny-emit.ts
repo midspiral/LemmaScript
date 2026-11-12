@@ -3,7 +3,7 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
+import { decimalNumberLiteral, exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshName, freshNameWhere, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
@@ -222,6 +222,22 @@ const OP_MAP: Record<string, string> = {
   "arrayConcat": "+",
 };
 
+/** Escape controls and line separators while preserving printable Unicode. */
+function escapeDafnyScalarString(value: string): string {
+  return value.replace(/["\\\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, char => {
+    switch (char) {
+      case '"': return '\\"';
+      case "\\": return "\\\\";
+      case "\0": return "\\0";
+      case "\n": return "\\n";
+      case "\r": return "\\r";
+      case "\t": return "\\t";
+      // Dafny has no short escapes for controls such as backspace or form feed.
+      default: return `\\U{${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}}`;
+    }
+  });
+}
+
 /** Render a JavaScript string without losing its UTF-16 representation.
  *
  * JavaScript iteration by index exposes UTF-16 code units, including unpaired
@@ -276,16 +292,14 @@ function wrapQuantifier(sub: Expr): string {
 function emitExpr(e: Expr): string {
   switch (e.kind) {
     case "var": return e.name === "undefined" ? "None" : escapeName(e.name);
-    case "num": return `${e.value}`;
+    case "num": return decimalNumberLiteral(e.value);
     // Already canonical decimal; Dafny's `int` is mathematical, so no `n` suffix.
     case "bigint": return e.value;
     case "bool": return e.value ? "true" : "false";
     case "str":
-      // Under the default profile the literal is written exactly as before;
-      // only the UTF-16 profile needs code-unit escapes (DESIGN_STRINGS.md §3).
       return isUtf16()
         ? `"${escapeDafnyUTF16String(e.value)}"`
-        : `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+        : `"${escapeDafnyScalarString(e.value)}"`;
 
     case "constructor": {
       // Option constructors (Some/None) may appear in inferred positions
@@ -331,16 +345,15 @@ function emitExpr(e: Expr): string {
         // No-arg slice is a full copy; Dafny seq is an immutable value type, so
         // the copy is just the seq itself (the idiom for "copy then mutate").
         if (e.method === "slice" && args.length === 0) return obj;
-        if (e.method === "slice" && args.length === 1) return `${obj}[${args[0]}..]`;
-        if (e.method === "slice" && args.length === 2) {
+        if (e.method === "slice" && (args.length === 1 || args.length === 2)) {
           // JS slice clamps both bounds; Dafny requires `0 <= lo <= hi <= |s|`.
           // Direct slice is default (matches existing case studies that wrote
           // bounded calls). Files needing JS clamping opt in via `//@ safe-slice`.
           if (_useSafeSlice) {
             needPreamble("SafeSlice");
-            return `SafeSlice(${obj}, ${args[0]}, ${args[1]})`;
+            return `SafeSlice(${obj}, ${args[0]}, ${args[1] ?? `|${obj}|`})`;
           }
-          return `${obj}[${args[0]}..${args[1]}]`;
+          return args.length === 1 ? `${obj}[${args[0]}..]` : `${obj}[${args[0]}..${args[1]}]`;
         }
         if (e.method === "map") {
           // Always a seq comprehension: Seq.Map would hide the element access
@@ -447,6 +460,14 @@ function emitExpr(e: Expr): string {
             return `StringIndexOfFrom(${obj}, ${args[0]}, StringSearchPosition(${obj}, ${args[1]}))`;
           }
           return `StringIndexOf(${obj}, ${args[0]})`;
+        }
+        if (e.method === "lastIndexOf") {
+          needPreamble("StringLastIndexOf");
+          if (args.length === 2) {
+            needPreamble("StringSearchPosition");
+            return `StringLastIndexOfFrom(${obj}, ${args[0]}, StringSearchPosition(${obj}, ${args[1]}))`;
+          }
+          return `StringLastIndexOf(${obj}, ${args[0]})`;
         }
         if (e.method === "split")   { needPreamble("StringSplit"); return `StringSplit(${obj}, ${args[0]})`; }
         if (e.method === "slice") {
@@ -1289,6 +1310,37 @@ function StringIndexOfFromN(s: string, sub: string, from: nat): int
   else StringIndexOfFromN(s, sub, from + 1)
 }`;
 
+// JS `s.lastIndexOf(sub, position)` searches backward from the clamped
+// position for the last match starting at or before it. An empty `sub` matches
+// at that position. The postconditions also state that no later match exists,
+// which is what lets callers reason about the not-found result.
+const STRING_LAST_INDEX_OF = `predicate StringMatchesAt(s: string, sub: string, j: int)
+{
+  0 <= j && j + |sub| <= |s| && s[j..j + |sub|] == sub
+}
+
+function StringLastIndexOf(s: string, sub: string): int
+  ensures StringLastIndexOf(s, sub) == -1
+       || (0 <= StringLastIndexOf(s, sub) <= |s| - |sub| && StringMatchesAt(s, sub, StringLastIndexOf(s, sub)))
+  ensures forall j {:trigger StringMatchesAt(s, sub, j)} ::
+            StringLastIndexOf(s, sub) < j ==> !StringMatchesAt(s, sub, j)
+{
+  StringLastIndexOfFrom(s, sub, |s|)
+}
+
+function StringLastIndexOfFrom(s: string, sub: string, from: nat): int
+  decreases from
+  ensures StringLastIndexOfFrom(s, sub, from) == -1
+       || (0 <= StringLastIndexOfFrom(s, sub, from) <= from
+           && StringMatchesAt(s, sub, StringLastIndexOfFrom(s, sub, from)))
+  ensures forall j {:trigger StringMatchesAt(s, sub, j)} ::
+            StringLastIndexOfFrom(s, sub, from) < j <= from ==> !StringMatchesAt(s, sub, j)
+{
+  if StringMatchesAt(s, sub, from) then from as int
+  else if from == 0 then -1
+  else StringLastIndexOfFrom(s, sub, from - 1)
+}`;
+
 // `s.split(d)` in TS returns a non-empty sequence of segments. Modeled here as
 // an axiom — defining it recursively would force StringIndexOf to grow ensures
 // clauses that callers don't need. The two ensures cover what verification
@@ -1538,6 +1590,7 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["SeqJoin", SEQ_JOIN],
   ["SafeSlice", SAFE_SLICE],
   ["StringIndexOf", STRING_INDEX_OF],
+  ["StringLastIndexOf", STRING_LAST_INDEX_OF],
   ["StringSearchPosition", STRING_SEARCH_POSITION],
   ["StringStartsWithAt", STRING_STARTS_WITH_AT],
   ["StringEndsWithAt", STRING_ENDS_WITH_AT],

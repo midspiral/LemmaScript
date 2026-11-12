@@ -85,7 +85,7 @@ Generics work: `<T extends Base>` parameters, plus the higher-order array method
 Arrays, strings, maps, and sets all carry a useful slice of their standard library. A representative set (Dafny has the fullest coverage — see [SPEC.md §3.2](SPEC.md#32-special-forms) for the exact list and any per-backend gaps):
 
 - **Array** — `.length`, indexing `a[i]`, `.map`, `.filter`, `.some`, `.every`, `.includes`, `.indexOf`, `.find`, `.findIndex`, `.slice`, `.concat`, `.flat`, `.join`, `.shift`, `.pop`, immutable update `a.with(i, v)` (and `a[i] = v`), spread `[...a, x]`.
-- **String** — `.length`, indexing, `.slice`, `.substring`, `.indexOf`, `.includes`, `.startsWith`, `.endsWith`, `.split`, `.trim`/`.trimStart`/`.trimEnd`, `.toLowerCase`/`.toUpperCase`, `.charCodeAt`.
+- **String** — `.length`, indexing, `.slice`, `.substring`, `.indexOf`, `.lastIndexOf` (Dafny only), `.includes`, `.startsWith`, `.endsWith`, `.split`, `.trim`/`.trimStart`/`.trimEnd`, `.toLowerCase`/`.toUpperCase`, `.charCodeAt`.
 - **Map / Record** — `.get` (returns optional in code, direct in specs), `.set`, `.has`, `.delete`, `.size`, `in`, object-literal construction, `Object.entries`/`values`/`fromEntries`.
 - **Set** — `.add`, `.delete`, `.has`, `.size`, `in`, iteration.
 

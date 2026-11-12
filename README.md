@@ -4,6 +4,8 @@ A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` s
 
 See [SPEC.md](SPEC.md), [DESIGN.md](DESIGN.md), and [GETTING_STARTED.md](GETTING_STARTED.md).
 
+For changes to LemmaScript itself, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 This is a **Tech Preview**: the core idea is there, but support, semantics, and ergonomics are still evolving.
 
 See our [blog post](https://midspiral.com/blog/lemmascript-a-verification-toolchain-for-typescript/).
@@ -94,6 +96,16 @@ The Dafny backend generates two files per TS source: `foo.dfy.gen` (always regen
 lsc gen --backend=lean src/myModule.ts
 lake build
 ```
+
+## Sub-packages
+
+### Claimcheck
+
+`lsc claimcheck` forwards to [lemmascript-claimcheck](https://github.com/midspiral/lemmascript-claimcheck) to sanity check the natural language `//@ contract` against the formal specifications.
+
+### Runtime precondition checks
+
+`lsc guard` forwards to [lemmascript-guard](https://github.com/midspiral/lemmascript-guard) to generate a sibling `*.guarded.ts` module that checks `//@ requires` at runtime. Import its wrappers at application boundaries.
 
 ## Continuous Integration
 
