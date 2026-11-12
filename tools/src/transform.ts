@@ -464,7 +464,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
 
   switch (e.kind) {
     case "var": return { kind: "var", name: e.name };
-    case "num": return { kind: "num", value: e.value };
+    case "num": {
+      const literal: Expr = { kind: "num", value: e.value };
+      return e.ty.kind === "real" && Number.isInteger(e.value)
+        ? { kind: "toReal", expr: literal } : literal;
+    }
     case "bigint": return { kind: "bigint", value: e.value };
     case "bool": return { kind: "bool", value: e.value };
 
@@ -476,8 +480,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // Only `num` folds. A `bigint` payload is a string, so negating it here
       // would coerce through `Number` and round: `-9007199254740993n` stays a
       // structural `unop("-", bigint(...))` and is negated by the emitter.
+      // Keep the resolved type so a contextually real literal retains its cast.
       if (e.op === "-" && e.expr.kind === "num")
-        return { kind: "num", value: -e.expr.value };
+        return lowerExpr({ ...e.expr, value: -e.expr.value, ty: e.ty }, binds);
       // String truthiness: !str → str == ""
       if (e.op === "!" && e.expr.ty.kind === "string")
         return { kind: "binop", op: "=", left: lowerExpr(e.expr, binds), right: { kind: "str", value: "" } };
