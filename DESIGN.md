@@ -63,11 +63,11 @@ Both backends share the same TypeScript source, `//@ ` annotations, and pipeline
        │
        ├──→ extract  (ts-morph → Raw IR)
        │         │
-       │         └──→ resolve   (types + type-narrowing)
+       │         └──→ resolve   (types + callback bindings + type-narrowing)
        │                   │
        │                   └──→ narrow  (structural narrowing → someMatch / tagMatch)
        │                             │
-       │                             └──→ transform (Typed IR → IR)
+       │                             └──→ transform (Typed IR → IR, including callback adaptation)
        │                                       │
        │                                       └──→ peephole (Some/None cleanup)
        │                                                 │
@@ -90,13 +90,15 @@ See [ARCHITECTURE_NARROWING.md](ARCHITECTURE_NARROWING.md) for the
 design choices in the resolve/narrow/transform split, and
 [TOOLS.md](TOOLS.md) for the implementation surface.
 
+Inline callbacks bind JavaScript's actual arguments during resolve, then a shared adapter inside transform lowers index/source access to iteration over positions. This keeps lexical binding and unused-argument simplification shared across backends; see [Callback binding and lowering](TOOLS.md#callback-binding-and-lowering).
+
 ### Key properties
 
 **No erasure, no gap.** The TypeScript source *is* the production code. The `//@ ` annotations are comments — invisible to tsc, bundlers, and the runtime. Proof files never touch the production build.
 
 **Shared pipeline, separate emitters.** Extract, resolve, and narrow are backend-agnostic. Transform and peephole take a `backend` parameter (some steps are backend-specific — see [TOOLS.md](TOOLS.md#peephole-rules)). The IR retains raw method-name strings (e.g., `push`, `slice`) with their `Ty` objects — each emitter maps those to its own syntax and type system.
 
-**The trust question.** Does the generated embedding faithfully model the TypeScript code? This is a one-directional question (TS → prover) validated by inspection of the code generator. The code generator is a straightforward syntactic translation — it does not optimize, reorder, or transform.
+**The trust question.** Does the generated embedding faithfully model the TypeScript code? This is a one-directional question (TS → prover). The generator's lowerings, including callback argument binding and adaptation, are part of the trusted translation and must preserve source behavior. Verification checks the generated program; correspondence with TypeScript is assessed through code review and regression tests comparing runtime behavior, generated output, and proof outcomes.
 
 ### Lean backend file separation
 
