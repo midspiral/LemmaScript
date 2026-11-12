@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Project, ScriptTarget } from "ts-morph";
+import ts from "typescript";
 import { extractModule } from "../src/extract.ts";
 import { resolveModule } from "../src/resolve.ts";
 import { narrowModule } from "../src/narrow.ts";
@@ -47,6 +48,15 @@ function verify(text: string) {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
+function execute(source: string, ...args: unknown[]): unknown {
+  const { outputText } = ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.CommonJS },
+  });
+  const exports: { f?: (...args: unknown[]) => unknown } = {};
+  new Function("exports", outputText)(exports);
+  return exports.f!(...args);
+}
+
 test("callback observations agree with JavaScript", () => {
   for (const [name, expected] of Object.entries({ restCount: [3], tailCount: [2], unusedRestOnly: [42],
     indexedMap: [7, 8], restIndex: [0, 1], sourceArgument: [7, 8], indexedSome: true, defaultFromIndex: [0, 1],
@@ -56,6 +66,7 @@ test("callback observations agree with JavaScript", () => {
   }
   assert.equal(runtime.capturedIndex(1), false);
   assert.deepEqual(runtime.unusedRest([1, 2]), [2, 3]);
+  assert.deepEqual(runtime.laterDefaultCapture(3), [9]);
 });
 
 test("extraction preserves rest binding operations", () => {
@@ -173,6 +184,131 @@ test("Dafny rejects the formerly provable false rest and index postconditions", 
     const result = verify(generate(source));
     assert.notEqual(result.status, 0, result.output);
     assert.match(result.output, /postcondition could not be proved/);
+  }
+});
+
+test("default closures capture later parameters instead of same-named outer variables", () => {
+  const source = (expected: number) => `export function f(extra: number): number[] {
+    //@ requires extra === 3
+    //@ ensures \\result[0] === ${expected}
+    return [7].map((value, index, source, read = (unused: number) => extra, extra = 9) => read(0));
+  }`;
+  assert.deepEqual(execute(source(3), 3), [9]);
+  const falseProof = verify(generate(source(3)));
+  assert.notEqual(falseProof.status, 0, falseProof.output);
+  assert.match(falseProof.output, /postcondition could not be proved/);
+  const trueProof = verify(generate(source(9)));
+  assert.equal(trueProof.status, 0, trueProof.output);
+});
+
+test("default closure dependencies preserve earlier, later, and shadowed bindings", () => {
+  const result = verify(generate(`
+    export function laterCall(): number[] {
+      //@ ensures \\result[0] === 9
+      return [7].map((value, index, source, read = (unused: number) => extra,
+        extra = 9, result = read(0)) => result);
+    }
+    export function closureChain(): number[] {
+      //@ ensures \\result[0] === 8
+      return [7].map((value, index, source, read = (n: number) => next(n),
+        next = (n: number) => value + n) => read(1));
+    }
+    export function shadow(): number[] {
+      //@ ensures \\result[0] === 6
+      return [7].map((value, index, source, read = (unused: number) =>
+        [5].map(extra => extra + 1)[0], extra = 9) => read(0));
+    }
+    export function laterRest(): number[] {
+      //@ ensures \\result[0] === 0
+      return [7].map((value, index, source, read = (unused: number) => rest.length,
+        ...rest: number[]) => read(0));
+    }
+    export function separateBodyScope(outer: number): number[] {
+      //@ requires outer === 3
+      //@ ensures \\result[0] === 3
+      return [7].map((value, index, source, read = (unused: number) => outer) => {
+        const outer = 9;
+        return read(0);
+      });
+    }
+  `));
+  assert.equal(result.status, 0, result.output);
+});
+
+test("parameter bindings also shadow module function classification and signatures", () => {
+  const source = `
+    function read(n: number, ignored?: number): number { return 3; }
+    export function f(): number[] {
+      //@ ensures \\result[0] === 9
+      return [7].map((value, index, source, read = (n: number) => extra, extra = 9) => read(0));
+    }`;
+  assert.deepEqual(execute(source), [9]);
+  const result = verify(generate(source));
+  assert.equal(result.status, 0, result.output);
+  const lean = generate(source, "lean");
+  assert.doesNotMatch(lean.slice(lean.indexOf("def f "), lean.indexOf("end Pure")), /Pure\.read/);
+});
+
+test("initialization cannot erase early reads or expose a closure before its captures", () => {
+  for (const initializer of [
+    "read = (unused: number) => extra, result = read(0), extra = 9",
+    "result = invoke((unused: number) => extra), extra = 9",
+    "result = [1].map(unused => extra)[0], extra = 9",
+    "result = invoke((unused: number) => rest.length), ...rest: number[]",
+  ]) {
+    const source = `
+    function invoke(f: (unused: number) => number): number { return f(0); }
+    export function f(extra: number): number[] {
+      return [7].map((value, index, source, ${initializer}) => value);
+    }`;
+    assert.throws(() => execute(source, 3), ReferenceError);
+    assert.throws(() => generate(source), /before (initialization|its captured parameters are available)/);
+  }
+});
+
+test("passing a forward-capturing default before initialization needs a closure environment", () => {
+  const source = `
+    function identity(f: (n: number) => number): (n: number) => number { return f; }
+    export function f(): number[] {
+      return [7].map((value, index, source, read = (n: number) => extra,
+        alias = identity(read), extra = 9) => alias(0));
+    }`;
+  assert.deepEqual(execute(source), [9]);
+  assert.throws(() => generate(source), /closure 'read' is used before its captured parameters are available/);
+});
+
+test("recursive default closures require an explicit environment representation", () => {
+  assert.throws(() => generate(`export function f(): number[] {
+    return [7].map((value, index, source,
+      read: (n: number) => number = n => n === 0 ? value : read(n - 1)) => read(1));
+  }`), /recursive closure environment/);
+});
+
+test("default captures cannot become stale after parameter assignment or narrowing", () => {
+  for (const parameters of [
+    "read = (unused: number) => extra, extra = 9",
+    "extra: number | undefined = 9, read = (unused: number) => extra",
+  ]) {
+    assert.throws(() => generate(`export function f(): (number | undefined)[] {
+      return [7].map((value, index, source, ${parameters}) => {
+        if (extra !== undefined) { extra = 8; }
+        return read(0);
+      });
+    }`), /captured callback parameter 'extra' is assigned/);
+  }
+  // A new declaration is a different binding, even when its name is identical.
+  assert.doesNotThrow(() => resolveModule(raw(`export function f(): number[] {
+    return [7].map((value, index, source, read = (unused: number) => extra, extra = 9) => {
+      return [1].map(extra => { extra += 1; return extra + read(0); })[0];
+    });
+  }`)));
+  for (const update of ["extra.push(8)", "extra?.push(8)", "extra[0] = 8"]) {
+    assert.throws(() => generate(`export function f(): number[] {
+      return [7].map((value, index, source, read = (unused: number) => extra[0], extra = [9]) => {
+        ${update};
+        return read(0);
+      });
+    }`), /captured callback parameter 'extra' is assigned/);
   }
 });
 

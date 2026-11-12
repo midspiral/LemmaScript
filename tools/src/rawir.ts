@@ -67,6 +67,8 @@ export type RawExpr =
 export interface RawLambdaParam {
   name: string;
   tsType?: string;
+  /** Defaulted bindings must be typed before any initializer is resolved. */
+  inferredTsType?: string;
   rest?: true;
   defaultValue?: RawExpr;
 }

@@ -32,6 +32,9 @@ export interface BuiltinSpec {
   /** Lowers to a pure backend expression (`x in s`, `|s|`, `s.Keys`, …) —
    *  safe inside match arms even with `callKind: "method"`. */
   pure: boolean;
+  /** Writes the receiver's binding in the value model. Used to detect captures
+   * that would require a shared mutable environment. */
+  mutatesReceiver?: true;
   /** JavaScript callback convention, including arguments omitted by unary
    *  backend collection operations. */
   hof?: { shape: "element" | "comparator" | "reduce" };
@@ -59,12 +62,12 @@ export const BUILTINS = {
     intArgPositions: [1], argIsKey: true },
   "array.indexOf": { ret: INT, pure: true,
     intArgPositions: [1] },
-  "array.shift": { ret: elem, pure: false },
-  "array.pop": { ret: optElem, pure: false },
-  "array.push": { ret: self, pure: false },
-  "array.unshift": { ret: self, pure: false },
+  "array.shift": { ret: elem, pure: false, mutatesReceiver: true },
+  "array.pop": { ret: optElem, pure: false, mutatesReceiver: true },
+  "array.push": { ret: self, pure: false, mutatesReceiver: true },
+  "array.unshift": { ret: self, pure: false, mutatesReceiver: true },
   "array.concat": { ret: self, pure: true },
-  "array.sort": { ret: self, pure: false,
+  "array.sort": { ret: self, pure: false, mutatesReceiver: true,
     hof: { shape: "comparator" } },
   "array.filter": { ret: self, pure: false,
     hof: { shape: "element" } },
@@ -126,15 +129,15 @@ export const BUILTINS = {
     ret: (objTy, _args, c) => objTy.kind !== "map" ? UNKNOWN
       : c.inSpec ? objTy.value : { kind: "optional", inner: objTy.value } },
   "map.has": { ret: BOOL, pure: true, argIsKey: true },
-  "map.set": { ret: self, pure: false },
-  "map.delete": { ret: self, pure: false },
+  "map.set": { ret: self, pure: false, mutatesReceiver: true },
+  "map.delete": { ret: self, pure: false, mutatesReceiver: true },
   "map.keys": { ret: () => UNKNOWN, pure: true },
   "map.values": { ret: () => UNKNOWN, pure: true },
 
   // ── set ───────────────────────────────────────────────────
   "set.has": { ret: BOOL, pure: true, argIsKey: true },
-  "set.add": { ret: self, pure: false },
-  "set.delete": { ret: self, pure: false },
+  "set.add": { ret: self, pure: false, mutatesReceiver: true },
+  "set.delete": { ret: self, pure: false, mutatesReceiver: true },
 } satisfies Record<`${RecvKind}.${string}`, BuiltinSpec>;
 
 /** One id per table entry. */

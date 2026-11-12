@@ -95,3 +95,11 @@ export function unusedPositional(): number[] {
   //@ ensures \result[0] === 8
   return [7].map((value, _index, _source) => value + 1);
 }
+
+export function laterDefaultCapture(extra: number): number[] {
+  //@ requires extra === 3
+  //@ ensures \result[0] === 9
+  // All parameters are in scope before initialization. The closure reads the
+  // later parameter after it is initialized, rather than the outer argument.
+  return [7].map((value, index, source, read = (unused: number) => extra, extra = 9) => read(0));
+}

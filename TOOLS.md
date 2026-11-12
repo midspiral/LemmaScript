@@ -94,11 +94,13 @@ Callback semantics are resolved before either backend chooses collection syntax:
 | Stage | Responsibility |
 |---|---|
 | [Extract](tools/src/extract.ts) | Preserve each lambda parameter's rest marker and default initializer in Raw IR. |
-| [Resolve](tools/src/resolve.ts), using [builtins](tools/src/builtins.ts) | `resolveCallback` binds `(element, index, source)`, `(acc, element, index, source)` for initialized `reduce`, or `(a, b)` for comparators. Lexical environment lookups track which slots are used, including through nested closures. |
+| [Resolve](tools/src/resolve.ts), using [builtins](tools/src/builtins.ts) and [binding plans](tools/src/callback-bindings.ts) | `resolveCallback` establishes all parameter bindings before initializing `(element, index, source)`, `(acc, element, index, source)` for initialized `reduce`, or `(a, b)` for comparators. Lookups track binding identity, initialization, captures, and argument use separately. |
 | [Callback lowering](tools/src/callback-lowering.ts), within transform | `lowerIndexedCallback` adapts callbacks needing index/source arguments to an operation over `arrayRange(source.size)`. It binds the receiver once with a fresh name and supplies the original argument values at each position. |
 | Emit | Render `arrayRange` as Dafny's `CallbackIndices(n)` or Lean's `(Array.range n).map Int.ofNat`; reuse existing collection emission. |
 
 Rest parameters are symbolic argument packs during resolution: `.length` becomes a constant and a fixed indexed read selects an argument slot. Unused trailing slots beyond the backend's base arity are removed, while defaults that execute remain in the callback body even when their result is unused. Operations requiring a materialized rest array, or defaults whose undefined test cannot be represented, retain explicit unsupported boundaries ([SPEC §3.7](SPEC.md#37-higher-order-functions-and-lambdas)).
+
+Parameter scope precedes left-to-right initialization. In `(..., read = n => extra, extra = 9) => read(0)`, `read` captures the later parameter, even when an outer variable is also named `extra`. A binding plan delays only literal lambda creation until its captured parameters are available, producing `let extra = 9; let read = n => extra; ...`. Other default expressions retain their source order and obligations. Early parameter reads, use of a deferred closure before its captures are available, recursive capture dependencies, and writes to parameters captured by default lambdas require an environment representation this lowering does not provide. In particular, passing such a closure to an earlier default is currently unsupported even when that call would only store it. This does not add a general model of mutable closures or heap aliases.
 
 For example, using schematic names:
 
@@ -137,7 +139,7 @@ The resolve pass uses linked environments (Scheme-style). Each binding is a fram
 interface Env { name: string; ty: Ty; parent: Env | null }
 ```
 
-`let` extends the chain. Lookup walks it; extending a scope does not mutate or copy existing frames. `resolveStmt` returns `[TStmt, Env]` so bindings thread through a block. Block-creating constructs (`if`, `while`, `forof`, `switch`) call `resolveBlock`; inner bindings don't leak out. `let x = init` resolves init before adding x to the env. Callback frames additionally carry an `onRead` hook, a replacement value for a missing argument, or a symbolic argument pack; ordinary shadowing controls which binding is observed.
+`let` extends the chain. Lookup walks it; extending a scope does not mutate existing frames. `resolveStmt` returns `[TStmt, Env]` so bindings thread through a block. Block-creating constructs (`if`, `while`, `forof`, `switch`) call `resolveBlock`; inner bindings don't leak out. `let x = init` resolves init before adding x to the env. Callback frames instead point to predeclared bindings in an initialization plan, with read/write hooks, missing-argument replacements, and symbolic argument packs. A declaration creates a new binding; flow narrowing refines an existing one and preserves its hooks. Nested default closures collect dependencies by binding identity, not identifier spelling.
 
 ## Known Limitations
 

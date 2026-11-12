@@ -665,6 +665,11 @@ requires materialization and is currently rejected; it never becomes an ordinary
 positional parameter. Rest/default lambdas outside these known callback contexts
 are also rejected. Defaults execute for missing arguments and are ignored for
 arguments known to be defined; optional/unknown values lack the needed undefined check.
+All parameter names are in scope before defaults initialize from left to right.
+A literal default lambda can capture a later parameter and be called after that
+parameter initializes. Early reads, early use of such a closure, recursive captures,
+and writes to its captured parameters are unsupported; see the
+[binding plan](TOOLS.md#callback-binding-and-lowering) for the lowering boundary.
 Indexed callbacks use a shared adapter over array positions, evaluating the
 receiver once. Dafny's proved `CallbackIndices(n)` helper exposes length, indexing,
 and membership facts; its definition and witness-based proof workflow are documented
