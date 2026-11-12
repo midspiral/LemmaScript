@@ -646,6 +646,9 @@ function emitExpr(e: Expr): string {
       if (e.fn === "MathAbs") needPreamble("MathAbs");
       if (e.fn === "MathMin") needPreamble("MathMin");
       if (e.fn === "MathMax") needPreamble("MathMax");
+      if (e.fn === "MathAbsReal") needPreamble("MathAbsReal");
+      if (e.fn === "MathMinReal") needPreamble("MathMinReal");
+      if (e.fn === "MathMaxReal") needPreamble("MathMaxReal");
       if (e.fn === "MaxOfSeq") { needPreamble("MathMax"); needPreamble("MaxOfSeq"); }
       if (e.fn === "MinOfSeq") { needPreamble("MathMin"); needPreamble("MinOfSeq"); }
       if (e.fn === "Perm") needPreamble("Perm");
@@ -1469,6 +1472,8 @@ const STRING_REPEAT = `function StringRepeat(s: string, n: int): string
 
 const MATH_MIN = `function MathMin(a: int, b: int): int { if a <= b then a else b }`;
 const MATH_MAX = `function MathMax(a: int, b: int): int { if a >= b then a else b }`;
+const MATH_MIN_REAL = `function MathMinReal(a: real, b: real): real { if a <= b then a else b }`;
+const MATH_MAX_REAL = `function MathMaxReal(a: real, b: real): real { if a >= b then a else b }`;
 
 const MAX_OF_SEQ = `function MaxOfSeq(s: seq<int>): int
   requires |s| > 0
@@ -1533,6 +1538,7 @@ const INT_TO_STRING = `function IntToString(n: int): string
 }`;
 
 const MATH_ABS = `function MathAbs(x: int): nat { if x >= 0 then x else -x }`;
+const MATH_ABS_REAL = `function MathAbsReal(x: real): real { if x >= 0.0 then x else -x }`;
 
 // perm(a, b) — `a` and `b` are reorderings of each other (equal as multisets).
 // Transparent (Dafny unfolds it), so hand-proofs can reason with `multiset`
@@ -1607,6 +1613,9 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["MathAbs", MATH_ABS],
   ["MathMin", MATH_MIN],
   ["MathMax", MATH_MAX],
+  ["MathAbsReal", MATH_ABS_REAL],
+  ["MathMinReal", MATH_MIN_REAL],
+  ["MathMaxReal", MATH_MAX_REAL],
   ["MaxOfSeq", MAX_OF_SEQ],
   ["MinOfSeq", MIN_OF_SEQ],
   ["Perm", PERM],

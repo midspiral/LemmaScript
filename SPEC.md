@@ -475,9 +475,11 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `Math.ceil(x)` (real arg) | — | `CeilReal(x)` → `x.Floor + 1` if non-integer |
 | `Math.floor(n)` (int arg) | identity | identity |
 | `Math.ceil(n)` (int arg) | identity | identity |
-| `Math.abs(x)` | `MathAbs(x)` | `MathAbs(x)` (preamble: `if x >= 0 then x else -x`) |
-| `Math.min(a, b)` | `MathMin(a, b)` | `MathMin(a, b)` (preamble: `if a <= b then a else b`) |
-| `Math.max(a, b)` | `MathMax(a, b)` | `MathMax(a, b)` (preamble: `if a >= b then a else b`) |
+| `Math.abs(x)` (int arg) | `MathAbs(x)` | `MathAbs(x)` (preamble: `if x >= 0 then x else -x`) |
+| `Math.min(a, b)` (int args) | `MathMin(a, b)` | `MathMin(a, b)` (preamble: `if a <= b then a else b`) |
+| `Math.max(a, b)` (int args) | `MathMax(a, b)` | `MathMax(a, b)` (preamble: `if a >= b then a else b`) |
+| `Math.abs(x)` (real arg) | — | `MathAbsReal(x)` → `real` |
+| `Math.min(a, b)` / `Math.max(a, b)` (either arg real) | — | `MathMinReal(a, b)` / `MathMaxReal(a, b)` → `real`; int/nat operands coerced with `as real` |
 | `Number.isSafeInteger(n)` (integer arg) | `-9007199254740991 ≤ n ∧ n ≤ 9007199254740991` | `-9007199254740991 <= n && n <= 9007199254740991`; `false` for a bigint argument; real arguments are rejected |
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `opt ? f(opt) : undefined` | match on Some/None | `match opt { case Some(v) => Some(f(v)) case None => None }` |
