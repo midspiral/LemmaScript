@@ -191,8 +191,8 @@ function findSynthArrayUnion(name: string, typeDecls: TypeDeclInfo[]): TypeDeclI
   return null;
 }
 
-/** Coerce `value` to `targetTy` at an assignment-position. Mirrors TS subtyping
- *  for the two upcast shapes LS synthesizes:
+/** Coerce `value` to `targetTy` at an assignment-position. Contextually types
+ *  real literals, then mirrors TS subtyping for the upcast shapes LS synthesizes:
  *    - `T` into `optional<T>` slot  → wrap with `Some(...)`
  *    - `T[]` into a synth `T[] | U` slot → wrap with `ArrayBranch(...)`
  *    - `U`   into a synth `T[] | U` slot → wrap with `NonArrayBranch(...)`
@@ -200,6 +200,20 @@ function findSynthArrayUnion(name: string, typeDecls: TypeDeclInfo[]): TypeDeclI
  *  source is unknown, or no rule matches). */
 function coerceToTargetTy(value: TExpr, targetTy: Ty, typeDecls: TypeDeclInfo[]): TExpr {
   value = coerceStr(value, targetTy);
+  // Real targets also type integer literals, including negative literals and
+  // conditional arms. Coerce optional payloads before adding Some wrappers.
+  const payloadTy = targetTy.kind === "optional" ? targetTy.inner : targetTy;
+  if (payloadTy.kind === "real") {
+    if (value.kind === "num") {
+      value = { ...value, ty: payloadTy };
+    } else if (value.kind === "unop" && value.op === "-" && value.expr.kind === "num") {
+      value = { ...value, expr: { ...value.expr, ty: payloadTy }, ty: payloadTy };
+    } else if (value.kind === "conditional") {
+      const then_ = coerceToTargetTy(value.then, payloadTy, typeDecls);
+      const else_ = coerceToTargetTy(value.else, payloadTy, typeDecls);
+      value = { ...value, then: then_, else: else_, ty: conditionalResultTy(then_.ty, else_.ty) };
+    }
+  }
   if (value.ty.kind === "unknown" || value.ty.kind === "void") return value;
   if (targetTy.kind === "optional" && value.ty.kind !== "optional") {
     return wrapSome(value, targetTy);

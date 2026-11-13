@@ -222,6 +222,22 @@ const OP_MAP: Record<string, string> = {
   "arrayConcat": "+",
 };
 
+/** Escape controls and line separators while preserving printable Unicode. */
+function escapeDafnyScalarString(value: string): string {
+  return value.replace(/["\\\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, char => {
+    switch (char) {
+      case '"': return '\\"';
+      case "\\": return "\\\\";
+      case "\0": return "\\0";
+      case "\n": return "\\n";
+      case "\r": return "\\r";
+      case "\t": return "\\t";
+      // Dafny has no short escapes for controls such as backspace or form feed.
+      default: return `\\U{${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}}`;
+    }
+  });
+}
+
 /** Render a JavaScript string without losing its UTF-16 representation.
  *
  * JavaScript iteration by index exposes UTF-16 code units, including unpaired
@@ -281,11 +297,9 @@ function emitExpr(e: Expr): string {
     case "bigint": return e.value;
     case "bool": return e.value ? "true" : "false";
     case "str":
-      // Under the default profile the literal is written exactly as before;
-      // only the UTF-16 profile needs code-unit escapes (DESIGN_STRINGS.md §3).
       return isUtf16()
         ? `"${escapeDafnyUTF16String(e.value)}"`
-        : `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+        : `"${escapeDafnyScalarString(e.value)}"`;
 
     case "constructor": {
       // Option constructors (Some/None) may appear in inferred positions
@@ -633,6 +647,9 @@ function emitExpr(e: Expr): string {
       if (e.fn === "MathAbs") needPreamble("MathAbs");
       if (e.fn === "MathMin") needPreamble("MathMin");
       if (e.fn === "MathMax") needPreamble("MathMax");
+      if (e.fn === "MathAbsReal") needPreamble("MathAbsReal");
+      if (e.fn === "MathMinReal") needPreamble("MathMinReal");
+      if (e.fn === "MathMaxReal") needPreamble("MathMaxReal");
       if (e.fn === "MaxOfSeq") { needPreamble("MathMax"); needPreamble("MaxOfSeq"); }
       if (e.fn === "MinOfSeq") { needPreamble("MathMin"); needPreamble("MinOfSeq"); }
       if (e.fn === "Perm") needPreamble("Perm");
@@ -1468,6 +1485,8 @@ const STRING_REPEAT = `function StringRepeat(s: string, n: int): string
 
 const MATH_MIN = `function MathMin(a: int, b: int): int { if a <= b then a else b }`;
 const MATH_MAX = `function MathMax(a: int, b: int): int { if a >= b then a else b }`;
+const MATH_MIN_REAL = `function MathMinReal(a: real, b: real): real { if a <= b then a else b }`;
+const MATH_MAX_REAL = `function MathMaxReal(a: real, b: real): real { if a >= b then a else b }`;
 
 const MAX_OF_SEQ = `function MaxOfSeq(s: seq<int>): int
   requires |s| > 0
@@ -1532,6 +1551,7 @@ const INT_TO_STRING = `function IntToString(n: int): string
 }`;
 
 const MATH_ABS = `function MathAbs(x: int): nat { if x >= 0 then x else -x }`;
+const MATH_ABS_REAL = `function MathAbsReal(x: real): real { if x >= 0.0 then x else -x }`;
 
 // perm(a, b) — `a` and `b` are reorderings of each other (equal as multisets).
 // Transparent (Dafny unfolds it), so hand-proofs can reason with `multiset`
@@ -1607,6 +1627,9 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["MathAbs", MATH_ABS],
   ["MathMin", MATH_MIN],
   ["MathMax", MATH_MAX],
+  ["MathAbsReal", MATH_ABS_REAL],
+  ["MathMinReal", MATH_MIN_REAL],
+  ["MathMaxReal", MATH_MAX_REAL],
   ["MaxOfSeq", MAX_OF_SEQ],
   ["MinOfSeq", MIN_OF_SEQ],
   ["Perm", PERM],

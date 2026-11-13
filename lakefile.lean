@@ -32,6 +32,7 @@ lean_lib Examples where
     `«unionInArray.types», `«unionInArray.def»,
     `«truthiness.types», `«truthiness.def», `«truthiness.proof»,
     `«conditionalCalls.def», `«conditionalCalls.proof»,
+    `«optionalLookup.types», `«optionalLookup.def», `«optionalLookup.proof»,
     `«iff.types», `«iff.def», `«iff.proof»,
     `«setFromArray.types», `«setFromArray.def», `«setFromArray.proof»,
     `«templateConcat.types», `«templateConcat.def», `«templateConcat.proof»,

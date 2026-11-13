@@ -278,8 +278,10 @@ function peepholeExpr(e: Expr): Expr {
 function rewriteChildrenExpr(e: Expr): Expr {
   const r = peepholeExpr;
   switch (e.kind) {
-    case "var": case "num": case "bigint": case "bool": case "str": case "constructor":
-    case "emptyMap": case "emptySet": case "havoc": case "default": case "mapLiteral": return e;
+    case "var": case "num": case "bigint": case "bool": case "str":
+    case "emptyMap": case "emptySet": case "havoc": case "default": return e;
+    case "constructor": return { ...e, args: e.args.map(r) };
+    case "mapLiteral": return { ...e, entries: e.entries.map(en => ({ ...en, key: r(en.key), value: r(en.value) })) };
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
     case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };

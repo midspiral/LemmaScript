@@ -467,7 +467,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
 
   switch (e.kind) {
     case "var": return { kind: "var", name: e.name };
-    case "num": return { kind: "num", value: e.value };
+    case "num": {
+      const literal: Expr = { kind: "num", value: e.value };
+      return e.ty.kind === "real" && Number.isInteger(e.value)
+        ? { kind: "toReal", expr: literal } : literal;
+    }
     case "bigint": return { kind: "bigint", value: e.value };
     case "bool": return { kind: "bool", value: e.value };
 
@@ -479,8 +483,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // Only `num` folds. A `bigint` payload is a string, so negating it here
       // would coerce through `Number` and round: `-9007199254740993n` stays a
       // structural `unop("-", bigint(...))` and is negated by the emitter.
+      // Keep the resolved type so a contextually real literal retains its cast.
       if (e.op === "-" && e.expr.kind === "num")
-        return { kind: "num", value: -e.expr.value };
+        return lowerExpr({ ...e.expr, value: -e.expr.value, ty: e.ty }, binds);
       // String truthiness: !str → str == ""
       if (e.op === "!" && e.expr.ty.kind === "string")
         return { kind: "binop", op: "=", left: lowerExpr(e.expr, binds), right: { kind: "str", value: "" } };
@@ -858,14 +863,20 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           right: { kind: "binop", op: "≤", left: n, right: { kind: "num", value: max } },
         };
       }
-      // Math.abs/min/max → preamble functions
+      // Math.abs/min/max preserve the resolved numeric type. Mixed operands
+      // need explicit int/nat→real coercions, just like real binary operations.
       if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math") {
-        if (e.fn.field === "abs" && e.args.length === 1)
-          return { kind: "app", fn: "MathAbs", args: [lowerExpr(e.args[0], binds)] };
-        if (e.fn.field === "min" && e.args.length === 2)
-          return { kind: "app", fn: "MathMin", args: e.args.map(a => lowerExpr(a, binds)) };
-        if (e.fn.field === "max" && e.args.length === 2)
-          return { kind: "app", fn: "MathMax", args: e.args.map(a => lowerExpr(a, binds)) };
+        const fn = e.fn.field === "abs" && e.args.length === 1 ? "MathAbs"
+          : e.fn.field === "min" && e.args.length === 2 ? "MathMin"
+          : e.fn.field === "max" && e.args.length === 2 ? "MathMax" : null;
+        if (fn) {
+          const real = e.ty.kind === "real";
+          const args = e.args.map((arg): Expr => {
+            const lowered = lowerExpr(arg, binds);
+            return real && isIntegral(arg.ty) ? { kind: "toReal", expr: lowered } : lowered;
+          });
+          return { kind: "app", fn: real ? `${fn}Real` : fn, args };
+        }
       }
       // Math.ceil(x): CeilReal on real args, identity on int
       if (e.fn.kind === "field" && e.fn.field === "ceil" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1) {
