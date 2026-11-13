@@ -6,7 +6,7 @@
  */
 
 import path from "path";
-import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ElementAccessExpression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
+import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
@@ -2257,6 +2257,12 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   validateDependency: (source: SourceFile) => void = () => {}): RawModule {
   _extractOptions = options;
   _validateDependency = validateDependency;
+  // Per-module state: a previous module in the same process (batch mode,
+  // tests) must not leak a havoc key, temp-name counter, or function-local maps.
+  _havocKey = null;
+  _destrCounter = 0;
+  _typeParamMap = new Map();
+  _reservedForCounterNames = new Set();
   // Seed the fresh-name check (names.ts) before anything mints: every
   // Identifier token in the module, a deliberate over-approximation.
   setUserNames(new Set(sourceFile.getDescendantsOfKind(SyntaxKind.Identifier).map(i => i.getText())));

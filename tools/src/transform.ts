@@ -5,9 +5,9 @@
  * No type lookups, no string parsing, no re-inference.
  */
 
-import type { TExpr, TStmt, TFunction, TModule, Ty } from "./typedir.js";
+import type { TExpr, TStmt, TModule, Ty } from "./typedir.js";
 import { tyEqual } from "./typedir.js";
-import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, StmtMatchArm, ConstDecl, MatchPattern } from "./ir.js";
+import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
 import { anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { parseTsType } from "./types.js";
@@ -1734,7 +1734,6 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           const idxName = freshName(`_${param}_idx`);
           const idx: Expr = { kind: "var", name: idxName };
           const arrSize: Expr = { kind: "field", obj: arrIR, field: "size" };
-          const elemVar: Expr = { kind: "var", name: param };
           const keyIR = transformExpr(keyExpr);
           const valIR = transformExpr(valExpr);
           const mapSet: Expr = { kind: "methodCall", obj: { kind: "var", name: s.name }, objTy: s.ty, method: "set", args: [keyIR, valIR], monadic: false };
@@ -1902,11 +1901,6 @@ interface Chain {
   typeName: string;
   cases: { variant: string; body: TStmt[] }[];
   fallthrough: TStmt[];
-}
-
-/** Apply an expression transform to all expressions in a statement (convenience wrapper). */
-function mapStmtExprs(s: Stmt, r: (e: Expr) => Expr): Stmt {
-  return mapStmt(s, e => r(e));
 }
 
 /** Build match arms from variant cases — shared by imperative and pure paths.
@@ -2192,25 +2186,6 @@ function projectStructuralCallArgsInTStmts(
   }));
 }
 
-/** Replace obj.field → replacement var in typed IR expressions (before lowering).
- *  Mirrors replaceFieldsInTStmts but operates on a single TExpr tree. */
-function replaceFieldInTExpr(
-  expr: TExpr, objName: string,
-  replacements: { fieldName: string; newName: string; fallbackTy: Ty }[]
-): TExpr {
-  if (replacements.length === 0) return expr;
-  return mapTExpr(expr, e => {
-    if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === objName) {
-      const r = replacements.find(r => r.fieldName === e.field);
-      if (r) {
-        const ty = e.ty.kind !== "unknown" ? e.ty : r.fallbackTy;
-        return { kind: "var", name: r.newName, ty } as TExpr;
-      }
-    }
-    return null;
-  });
-}
-
 /** A pure access path — chain of field accesses rooted at a var. */
 interface AccessPath { rootVar: string; fields: string[] }
 
@@ -2247,16 +2222,6 @@ function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, b
     matchesAccessPath(e, path)
       ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
   ));
-}
-
-/** Unwrap optional type on match-bound variables in TExpr.
- *  After replaceFieldInTExpr, the replaced variable carries the original optional
- *  type from the field declaration. The match binding unwraps it to the inner type. */
-function fixBoundType(expr: TExpr, boundName: string): TExpr {
-  return mapTExpr(expr, e =>
-    e.kind === "var" && e.name === boundName && e.ty.kind === "optional"
-      ? { ...e, ty: e.ty.inner } as TExpr : null
-  );
 }
 
 

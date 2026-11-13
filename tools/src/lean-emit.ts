@@ -562,7 +562,6 @@ function isPropValued(e: Expr): boolean {
 // ── Statement emission ──────────────────────────────────────
 
 function emitStmts(stmts: Stmt[], indent: number): string {
-  const pad = "  ".repeat(indent);
   return stmts.map(s => emitStmt(s, indent)).join("\n");
 }
 

@@ -5,7 +5,7 @@
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
 import { decimalNumberLiteral, exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
-import { freshName, freshNameWhere, userNames } from "./names.js";
+import { freshNameWhere, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
 import { DEFAULT_OPTIONS, resolveOptions, type LscOptions } from "./config.js";
 
@@ -366,8 +366,9 @@ function emitExpr(e: Expr): string {
           // comprehension mentions it three times, and splicing would make
           // any closure literal inside it (e.g. a Filter predicate) three
           // distinct closures, unprovably equal through an opaque callee.
-          // Name freshness is a local IR-level check until a backend name
-          // allocator exists.
+          // Name freshness is a local IR-level check (`usesName`), not the
+          // Dafny-namespace allocator (`escapeGeneratedName`): a user identifier
+          // that *escapes* to `i_map`/`s_map` (e.g. `_map`) is still captured.
           const lam = e.args[0];
           const fresh = (base: string, taken: (n: string) => boolean): string => {
             let name = base;

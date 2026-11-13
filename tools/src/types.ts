@@ -1,8 +1,8 @@
 /**
- * Type mapping — TS types → Lean types.
+ * Type mapping — TS type strings → backend-neutral `Ty`.
  *
- * Single source of truth for type-related decisions.
- * The transform phase imports this.
+ * Single source of truth for type-related decisions; resolve, transform, and
+ * both emitters import this.
  */
 
 // ── Type info extracted from TS ──────────────────────────────
