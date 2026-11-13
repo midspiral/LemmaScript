@@ -5,11 +5,13 @@ The [docs.lemmascript.org](https://docs.lemmascript.org) site — [Astro](https:
 
 ## The docs are the repo's root markdown
 
-Edit the canonical docs **at the repo root** (`README.md`, `SPEC.md`, `GETTING_STARTED.md`,
-`TUTORIAL.md`, …). `scripts/sync-docs.mjs` (run automatically before `dev`/`build`) renders
-them into Starlight's content dir — deriving each page title from its first `# H1`, mapping
-`README.md` to the home, and rewriting cross-doc links. The generated `src/content/docs/` is
-git-ignored; never edit it by hand.
+Edit the canonical docs **at the repo root** (`README.md`, `CASE_STUDIES.md`, `SPEC.md`,
+`GETTING_STARTED.md`, `TUTORIAL_GREENFIELD.md`, …). `scripts/sync-docs.mjs` (run automatically
+before `dev`/`build`) renders them into Starlight's content dir — deriving each page title
+from its first `# H1` unless overridden and rewriting cross-doc links. `README.md` maps to
+`/overview/`; `CASE_STUDIES.md` maps to `/case-studies/`. These generated files in
+`src/content/docs/` are git-ignored; edit their root sources. The homepage and tutorials
+are hand-written in `src/content/docs/`.
 
 ### Adding a new root doc
 
