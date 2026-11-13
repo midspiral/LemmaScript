@@ -113,8 +113,6 @@ xs.map((value, ...rest) => value + rest[0])
 
 The adapter preserves position order and maps `filter`/`find`/`findLast` results back to source elements. Expression callbacks passed to total backend helpers guard out-of-range indices, returning `false` for predicates or the unchanged accumulator for `reduce`; `map` and `some` inline their bodies under bounds or membership checks. When the callback needs no extra argument slots, the adapter returns `null` and ordinary method-call lowering continues, preserving existing unary output.
 
-See [the example](examples/callbackArguments.ts), [regression tests](tools/tests/callback-arguments.test.ts), and [the Dafny helper contract and witness workflow](SPEC_DAFNY.md#4-helper-preambles).
-
 ## Externs
 
 When a call resolves to a function declared in a *different* `.ts` file, extract records it as a `RawExtern` (resolved to `TExtern`, lowered to `ExternDecl`). The Dafny emitter renders it as a top-of-file `function {:axiom} Name(...): R` by default, or as a body-less `method {:axiom}` when selected by `extern-default: impure` or `//@ impure`; the latter gives every call an independent result. A source `//@ pure` overrides an impure project default. In both cases the source `requires`/`ensures` are lifted along. Externs are emitted before all other declarations so they're in scope everywhere.
