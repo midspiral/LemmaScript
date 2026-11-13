@@ -196,18 +196,51 @@ export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, t
     if (!existsSync(basePath)) writeFileSync(basePath, anchor);
     const mergedPath = dfyPath + ".merged";
     console.log("Gen changed. Three-way merging...");
+    const merge = (flags: string[]) => execFileSync(
+      "git", ["merge-file", ...flags, "--", dfyPath, basePath, genPath],
+      // A stable locale lets us recognize an unsupported option without
+      // mistaking other usage errors for an older Git version.
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, LC_ALL: "C" } },
+    );
     try {
-      execFileSync("git", ["merge-file", dfyPath, basePath, genPath], { stdio: "pipe" });
+      try {
+        // Match the additions-only check: the default diff can misalign
+        // unchanged generated lines after a large inserted proof block.
+        merge(["--diff-algorithm=minimal"]);
+      } catch (e: any) {
+        if (e?.status !== 129 || e?.signal != null || e?.code != null
+          || typeof e?.stderr !== "string"
+          || !/^error: unknown option [`']diff-algorithm(?:=minimal)?'/m.test(e.stderr)) throw e;
+        writeFileSync(dfyPath, savedDfy);
+        console.warn("WARNING: this Git does not support git merge-file --diff-algorithm; retrying with the default algorithm. " +
+          "Upgrade to Git 2.44 or later to avoid false conflicts after large proof additions.");
+        merge([]);
+      }
       console.log(`Merged: ${path.basename(dfyPath)}`);
     } catch (e: any) {
-      if (e.status > 0) {
-        copyFileSync(dfyPath, mergedPath);
+      // Git returns a conflict count capped at 127. Usage errors, fatal
+      // errors and interrupted/failed processes are not merge conflicts.
+      const conflict = Number.isInteger(e?.status) && e.status >= 1 && e.status <= 127
+        && e?.signal == null && e?.code == null;
+      try {
+        if (conflict) copyFileSync(dfyPath, mergedPath);
+      } finally {
         writeFileSync(dfyPath, savedDfy);
+      }
+      if (conflict) {
         console.error(`CONFLICT: ${path.basename(dfyPath)} — merge had conflicts, dfy restored. See ${path.basename(mergedPath)}`);
         log?.finish({ stage: "conflict", exit: 1, dfyPath });
-        process.exit(1);
+      } else {
+        const reason = e?.code === "ENOENT" ? " (git not found on PATH)"
+          : e?.code != null ? ` (${e.code})`
+          : e?.signal != null ? ` (signal ${e.signal})`
+          : typeof e?.status === "number" ? ` (git exited ${e.status})` : "";
+        const detail = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+        console.error(`ERROR: could not run \`git merge-file\` for ${path.basename(dfyPath)}${reason}; dfy restored` +
+          `${detail ? `: ${detail}` : "."}`);
+        log?.discard();
       }
-      throw e;
+      process.exit(1);
     }
   }
 

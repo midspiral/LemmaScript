@@ -68,6 +68,8 @@ Non-pure functions become Dafny `method` declarations.
 
 On merge conflict, the original `foo.dfy` is restored and the merged result is saved as `foo.dfy.merged` for manual inspection. Conflicts and additions-only failures retain the old anchor. A verifier failure after a clean additions-only merge instead retains the new anchor, because the proof already contains that generation; the next retry must not merge it a second time.
 
+Merges use `--diff-algorithm=minimal`, matching the additions-only check so large proof additions do not cause spurious generated-line deletions in the diff. Git versions before 2.44 fall back to the default algorithm with a warning; upgrading avoids the resulting false conflicts. Git execution errors restore the proof and retain the old anchor, but do not create `.dfy.merged` or record a verification conflict.
+
 ---
 
 ## 4. Helper Preambles
