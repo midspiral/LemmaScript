@@ -993,7 +993,6 @@ function tagNameExists(m: Model, name: string, excludeTag?: TagId): boolean {
 If `transformPureBody` can auto-convert the body to a pure expression, the function emits as a normal Dafny `function`. If it cannot (e.g., the body has loops), it emits as `function by method`:
 
 ```dafny
-// Specification of tagNameExists: add its body in the .dfy.
 function tagNameExists_spec(m: Model, name: string, excludeTag: Option<TagId>): bool
 
 function tagNameExists(m: Model, name: string, excludeTag: Option<TagId>): bool

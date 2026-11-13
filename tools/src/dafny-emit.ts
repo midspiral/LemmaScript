@@ -984,7 +984,6 @@ function emitDecl(d: Decl): string {
       // between generated braces.
       const spec = escapeGeneratedName(`${d.name}${SPEC_FUNCTION_SUFFIX}`);
       const lines = [
-        `// Specification of ${escapeName(d.name)}: add its body in the .dfy.`,
         `function ${spec}${signature}`, ...requires, "",
         `function ${escapeName(d.name)}${signature}`, ...requires,
       ];

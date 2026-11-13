@@ -30,7 +30,6 @@ datatype Pair = Pair(i: nat, j: nat)
 // hand-written predicate, so the `by method` block verifies the imperative
 // impl returns that set.
 
-// Specification of allPairsImpl: add its body in the .dfy.
 function allPairsImpl_spec(nums: seq<int>): set<Pair>
 {
   AllPairs(nums)
@@ -67,7 +66,6 @@ by method {
   return result;
 }
 
-// Specification of goodPairsImpl: add its body in the .dfy.
 function goodPairsImpl_spec(nums: seq<int>): set<Pair>
 {
   GoodPairs(nums)
@@ -106,7 +104,6 @@ by method {
   return result;
 }
 
-// Specification of badPairsImpl: add its body in the .dfy.
 function badPairsImpl_spec(nums: seq<int>): set<Pair>
 {
   BadPairs(nums)

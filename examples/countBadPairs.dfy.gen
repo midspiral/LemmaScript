@@ -13,7 +13,6 @@ function JSFloorDiv(a: int, b: int): int
 
 datatype Pair = Pair(i: nat, j: nat)
 
-// Specification of allPairsImpl: add its body in the .dfy.
 function allPairsImpl_spec(nums: seq<int>): set<Pair>
 
 function allPairsImpl(nums: seq<int>): set<Pair>
@@ -47,7 +46,6 @@ by method {
   return result;
 }
 
-// Specification of goodPairsImpl: add its body in the .dfy.
 function goodPairsImpl_spec(nums: seq<int>): set<Pair>
 
 function goodPairsImpl(nums: seq<int>): set<Pair>
@@ -83,7 +81,6 @@ by method {
   return result;
 }
 
-// Specification of badPairsImpl: add its body in the .dfy.
 function badPairsImpl_spec(nums: seq<int>): set<Pair>
 
 function badPairsImpl(nums: seq<int>): set<Pair>
