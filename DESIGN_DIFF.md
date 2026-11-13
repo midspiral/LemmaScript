@@ -35,17 +35,18 @@ Diff the files **as Dafny prints them**, not as the author wrote them.
    Dafny re-prints the parsed program: comments gone, string literals intact,
    one clause per line, each declaration header on its own line, parentheses
    normalized.
-2. Drop the first line of each print (a filename comment) and normalize two
-   things the printer does not keep line-stable. Join any multi-line verbatim
-   string `@"…"` onto one line: Dafny prints such a literal as written, so
-   generated lines wrapped in one would otherwise still appear as present; it
-   is the only token that can span lines once comments are gone, so a
-   string-literal scan (not a lexer) suffices. Split a loop header's trailing
-   `{` onto its own line: the printer writes `while c {` for a loop without
-   clauses and `while c` / `invariant …` / `{` once the proof adds invariants,
-   which would make every generated loop header look modified. Then run the
-   **existing** `git diff --no-index --minimal` check on the two outputs. Any
-   `-` line fails, exactly as today.
+2. Drop the first line of each print (a filename comment), put a loop
+   header's trailing `{` on its own line (the printer writes `while c {` for a
+   loop without clauses but `while c` / `invariant …` / `{` once the proof adds
+   invariants), and run the **existing** `git diff --no-index --minimal`
+   check on the two outputs. Any `-` line fails, exactly as today.
+
+   One literal defeats the print: a verbatim string `@"…"` spans lines and the
+   printer keeps it as written, so generated lines wrapped in one would still
+   appear present. Proofs have no use for verbatim strings, so the source pass
+   rejects any added line containing `@"`. That is the single blacklisted
+   pattern; everything else is handled by the print.
+
 3. Nothing else. In particular no rule about *which* clauses may be added:
    `modifies this` / `reads this` are proof-level additions by design
    (SPEC.md §2.8), and proofs add preconditions over proof-only predicates to
@@ -56,31 +57,23 @@ Diff the files **as Dafny prints them**, not as the author wrote them.
 
 Measured on the scratch reproductions: the commented-out `requires` becomes a
 deleted printed line; the `|| true` becomes a modified printed line; an
-inserted `{:verify false}` or `{:axiom}` in front of a generated declaration
-modifies its printed header. All three fail with no rule specific to them.
-The first CI run over the case studies found the loop-header issue above and
-nothing else: every other proof printed line-stably.
+inserted `{:verify false}` or `@Verify(false)` in front of a generated
+declaration modifies its printed header. All three fail with no rule specific
+to them. The first CI run over the case studies found the loop-header issue
+above and nothing else: every other proof printed line-stably.
 
-### The `.dfy.gen` need not resolve
+### The `.dfy.gen` need not resolve, but must parse
 
-A generated file may name a predicate or function whose definition exists
-only in the proof file, so `dafny resolve` on it reports unresolved
-identifiers. That is fine: Dafny writes the `--print` output after
-**parsing**, before resolution (checked on 4.11: resolution errors still
-produce a complete print; a parse error produces none). The check therefore
-ignores the exit status and requires only that both print files exist. A
-`.dfy` that does not parse is an error (it would fail verification anyway).
-
-One generated form is not Dafny on its own: a `//@ pure` function whose body
-cannot auto-convert is emitted as `function f(...) { } by method { ... }` with
-an **empty** functional body for the proof to supply (`examples/countBadPairs`,
-several functions in a case study). When the generated copy fails to parse,
-the check rebuilds it from the full-context source diff, splicing the proof's
-lines into each such body; those lines are proof-authored, so comparing
-against them hides nothing, and the print pass then runs as usual. Only a
-generated file that still fails to parse after that falls back to the
-source-line result, with a warning naming the file. The same fallback applies
-when `dafny` is not on `PATH` (`lsc gen-check` without a verifier).
+A generated file may name a function whose definition exists only in the
+proof: a `//@ pure` function that lowers to `function … by method` delegates
+to a bodyless `<name>_fun_spec` stub that the proof completes (SPEC.md §5.1).
+`dafny resolve` accepts that on its own. More generally, Dafny writes the
+`--print` output after **parsing**, before resolution (checked on 4.11), so
+the check ignores the exit status and requires only that both print files
+exist. A generated file that does not parse is an emitter bug and an error; a
+proof that does not parse is an error too. When `dafny` is not on `PATH`
+(`lsc gen-check` without a verifier) the check falls back to the source-line
+result with a warning naming the file.
 
 ## Reporting
 
@@ -114,7 +107,8 @@ block comment around a clause, verbatim string, `|| true` continuation, and
 block comments, an `assert` with a string containing `//`, a new `{:axiom}`
 lemma, an `ensures` and a `requires` added to a generated function, loop
 invariants added to a generated `while`, a `.dfy.gen` that references a
-proof-only predicate, and the non-parsing and no-`dafny` fallbacks pass. The acceptance test
+proof-only predicate, a `_fun_spec` stub given its body, and the no-`dafny`
+fallback pass. The acceptance test
 for switching is that every example and case-study proof still passes; a
 rejection there is either a real finding or a rule to relax.
 

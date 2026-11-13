@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_OPTIONS, OPTION_SPECS, validateOptions } from "../src/config.ts";
-import { dafnyCheckDiff, dafnyVerifyArgs, joinVerbatimStrings, normalizePrint } from "../src/dafny-commands.ts";
+import { dafnyCheckDiff, dafnyVerifyArgs } from "../src/dafny-commands.ts";
 
 function fixture(gen: string, proof: string, check: (g: string, p: string, dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "lsc-git-review-"));
@@ -213,7 +213,7 @@ test("a block comment cannot hide a generated clause", needsDafny, () =>
   fixture(GEN, GEN.replace("  requires x >= 2\n", "/*\n  requires x >= 2\n*/\n"),
     (g, p) => assert.equal(dafnyCheckDiff(g, p), false)));
 
-test("a verbatim string cannot hide generated text", needsDafny, () =>
+test("a verbatim string cannot hide generated text", () =>
   fixture(GEN, 'const hidden := @"\n' + GEN + '";\n',
     (g, p) => assert.equal(dafnyCheckDiff(g, p), false)));
 
@@ -245,12 +245,11 @@ test("a generated file that names a proof-only predicate still prints", needsDaf
   fixture(gen, gen + "predicate Valid(x: int) { x > 0 }\n", (g, p) => assert.equal(dafnyCheckDiff(g, p), true));
 });
 
-test("a function-by-method body supplied by the proof is spliced in, so the print pass still runs", needsDafny, () => {
-  const gen = GEN + "function f(x: int): int\n{\n}\nby method {\n  return x;\n}\n";
-  const filled = gen.replace("{\n}\n", "{\n  x\n}\n");
+test("a function by method: the proof gives the generated _fun_spec stub a body", needsDafny, () => {
+  const gen = GEN + "function f_fun_spec(x: int): int\n\nfunction f(x: int): int\n{\n  f_fun_spec(x)\n}\nby method {\n  return x;\n}\n";
+  const filled = gen.replace("function f_fun_spec(x: int): int\n", "function f_fun_spec(x: int): int\n{\n  x\n}\n");
   fixture(gen, filled, (g, p) => assert.equal(dafnyCheckDiff(g, p), true));
   fixture(gen, filled.replace("return x;", "return 0;"), (g, p) => assert.equal(dafnyCheckDiff(g, p), false));
-  // The hiding attack is caught in such a file too.
   fixture(gen, filled.replace("  requires x >= 2\n", "/*\n  requires x >= 2\n*/\n"), (g, p) => assert.equal(dafnyCheckDiff(g, p), false));
 });
 
@@ -260,14 +259,4 @@ test("a missing dafny falls back to the line check with a warning", { skip: proc
     symlinkSync(git, join(dir, "git"));
     env({ PATH: dir }, () => assert.equal(dafnyCheckDiff(g, p), true));
   });
-});
-
-test("multi-line verbatim strings are joined; ordinary strings and identifiers with ' are not", () => {
-  assert.equal(joinVerbatimStrings('const s := @"a\n  b""c\nd";\nmethod M() {}'), 'const s := @"a\\n  b""c\\nd";\nmethod M() {}');
-  assert.equal(joinVerbatimStrings('var x := "@\\"";\nvar y\' := \'"\';\nnext'), 'var x := "@\\"";\nvar y\' := \'"\';\nnext');
-});
-
-test("normalizePrint splits a loop header's brace but leaves other braces alone", () => {
-  assert.equal(normalizePrint("  while i < n {\n    x := 1;\n  }\n  for i := 0 to n {\n  }\n  if c {\n  }\n"),
-    "  while i < n\n  {\n    x := 1;\n  }\n  for i := 0 to n\n  {\n  }\n  if c {\n  }\n");
 });

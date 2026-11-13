@@ -36,8 +36,8 @@ export function dafnyCheckDiff(genPath: string, dfyPath: string, log?: RunLog): 
  * 2. Canonical print: the same diff on `dafny resolve --print` output of both
  *    files. Dafny re-prints the parsed program with comments dropped and one
  *    clause per line, so a generated clause hidden inside an added block
- *    comment or verbatim string, or extended by an added `|| true` line,
- *    becomes a deleted or modified printed line. See DESIGN_DIFF.md.
+ *    comment, or extended by an added `|| true` line, becomes a deleted or
+ *    modified printed line. See DESIGN_DIFF.md.
  */
 function additionsOnly(genPath: string, dfyPath: string): boolean {
   for (const filePath of [genPath, dfyPath]) {
@@ -63,43 +63,50 @@ function additionsOnly(genPath: string, dfyPath: string): boolean {
 
   const source = gitDiff(genPath, dfyPath, dfyPath);
   if (source === null) return false;
-  const deletions = hunkLines(source).filter(l => l.startsWith("-"));
+  const deletions = source.filter(l => l.startsWith("-"));
   if (deletions.length > 0) {
     console.error(`WARNING: ${path.basename(dfyPath)} has modifications to generated lines (not additions-only):`);
     for (const d of deletions.slice(0, 5)) console.error("  " + d);
     return false;
   }
+  // A verbatim string is the one Dafny literal that spans lines, and the
+  // printer keeps it as written, so generated lines wrapped in one would
+  // survive the canonical pass. Proofs have no use for it; reject it outright.
+  const verbatim = source.find(l => l.startsWith("+") && l.includes('@"'));
+  if (verbatim) {
+    console.error(`ERROR: ${path.basename(dfyPath)}: verbatim strings (@"...") are not allowed in proof additions:`);
+    console.error("  " + verbatim);
+    return false;
+  }
   return additionsOnlyCanonical(genPath, dfyPath, utf16);
 }
 
-/** `git diff --no-index --minimal a b`, or null (after reporting) when the
- *  comparison did not complete. */
-function gitDiff(a: string, b: string, reportAs: string, context?: number): string | null {
-  const args = ["diff", "--no-index", "--minimal", "--no-color", "--no-ext-diff", "--no-textconv", "--text"];
-  if (context !== undefined) args.push(`--unified=${context}`);
+/** The hunk body lines of `git diff --no-index --minimal a b`, each with its
+ *  leading ` `, `+`, or `-`; or null (after reporting) when the comparison did
+ *  not complete. Only file headers are metadata: inside a hunk, even a line
+ *  beginning with "---" is a deletion. */
+function gitDiff(a: string, b: string, reportAs: string): string[] | null {
+  const args = ["diff", "--no-index", "--minimal", "--no-color", "--no-ext-diff", "--no-textconv", "--text", "--", a, b];
+  let diff: string;
   try {
-    return execFileSync("git", [...args, "--", a, b], { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+    diff = execFileSync("git", args, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
   } catch (e: any) {
     // `git diff --no-index` exits 1 for a valid, non-empty comparison. Every
     // other exit shape means the comparison did not complete, even when git
     // happened to return partial stdout.
     const status = e?.status;
     const stdout = typeof e?.stdout === "string" ? e.stdout : "";
-    if (status === 1 && e?.signal == null && e?.code == null && stdout.startsWith("diff --git ")) return stdout;
-    const detail = typeof e?.stderr === "string" ? e.stderr.trim() : "";
-    console.error(
-      `ERROR: could not run \`git diff\` to verify ${path.basename(reportAs)} is additions-only` +
-      `${status == null ? " (is git installed?)" : ` (git exited ${status})`}` +
-      `${detail ? `: ${detail}` : ""}`,
-    );
-    return null;
+    if (status !== 1 || e?.signal != null || e?.code != null || !stdout.startsWith("diff --git ")) {
+      const detail = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+      console.error(
+        `ERROR: could not run \`git diff\` to verify ${path.basename(reportAs)} is additions-only` +
+        `${status == null ? " (is git installed?)" : ` (git exited ${status})`}` +
+        `${detail ? `: ${detail}` : ""}`,
+      );
+      return null;
+    }
+    diff = stdout;
   }
-}
-
-/** The body lines of every hunk, with their leading ` `, `+`, or `-`. Only
- *  file headers are metadata: inside a hunk, even a line beginning with "---"
- *  is a deletion (for example, text inside a multiline string). */
-function hunkLines(diff: string): string[] {
   const out: string[] = [];
   let inHunk = false;
   for (const line of diff.split("\n")) {
@@ -110,31 +117,14 @@ function hunkLines(diff: string): string[] {
   return out;
 }
 
-/** A `function … by method` is emitted with an empty functional body for the
- *  proof to supply, so the generated file alone does not parse. Given the
- *  full-context source diff (already known to have no deletions), rebuild the
- *  generated text with the proof's lines spliced into each such body. Those
- *  lines are proof-authored, so comparing against them hides nothing. */
-function fillByMethodBodies(fullDiff: string): string {
-  const lines = hunkLines(fullDiff), out: string[] = [];
-  for (let k = 0; k < lines.length; k++) {
-    if (lines[k].startsWith(" ")) { out.push(lines[k].slice(1)); continue; }
-    let n = k;
-    while (n < lines.length && lines[n].startsWith("+")) n++;
-    if (out[out.length - 1] === "{" && lines[n]?.slice(1) === "}" && lines[n + 1]?.slice(1).startsWith("by method")) {
-      for (; k < n; k++) out.push(lines[k].slice(1));
-    }
-    k = n - 1;
-  }
-  return out.join("\n");
-}
-
-/** `dafny resolve --print` of `src` into `out`, with the filename header line
- *  removed. Dafny prints after parsing and before resolution, so unresolved
- *  names (a predicate defined only in the proof) do not matter and the exit
- *  status is ignored; only a parse error leaves no output. The standard
- *  library is deliberately not loaded: parsing does not need it, and with it
- *  Dafny would print the whole library too. */
+/** `dafny resolve --print` of `src` into `out`. Dafny prints after parsing and
+ *  before resolution, so unresolved names do not matter and the exit status is
+ *  ignored; only a parse error leaves no output. The standard library is not
+ *  loaded: parsing does not need it, and with it Dafny would print the whole
+ *  library too. Two normalizations keep the print line-stable: drop the
+ *  filename comment on the first line, and put a loop header's `{` on its own
+ *  line, since the printer writes `while c {` for a loop without clauses but
+ *  `while c` / `invariant …` / `{` once the proof adds invariants. */
 function printDafny(src: string, out: string, utf16: boolean): "ok" | "no-dafny" | "no-parse" {
   const args = ["resolve", `--print:${out}`, utf16 ? "--unicode-char:false" : "--unicode-char:true"];
   if (utf16) args.push("--allow-deprecation");
@@ -144,47 +134,10 @@ function printDafny(src: string, out: string, utf16: boolean): "ok" | "no-dafny"
     if (e?.code === "ENOENT") return "no-dafny";
   }
   if (!existsSync(out)) return "no-parse";
-  const lines = normalizePrint(readFileSync(out, "utf-8")).split("\n");
-  if (lines[0]?.startsWith("//")) lines.shift();
-  writeFileSync(out, lines.join("\n"));
+  const text = readFileSync(out, "utf-8").replace(/^\/\/[^\n]*\n/, "")
+    .replace(/^(\s*)((?:while|for)\b.*\S)\s*\{$/gm, "$1$2\n$1{");
+  writeFileSync(out, text);
   return "ok";
-}
-
-/** Make Dafny's print line-stable under proof additions. Besides joining
- *  verbatim strings, split a loop header's trailing `{` onto its own line:
- *  the printer writes `while c {` when a loop has no clauses and `while c`
- *  / `invariant …` / `{` once the proof adds invariants, which would make the
- *  generated header look modified. */
-export function normalizePrint(text: string): string {
-  return joinVerbatimStrings(text).replace(/^(\s*)((?:while|for)\b.*\S)\s*\{$/gm, "$1$2\n$1{");
-}
-
-/** Dafny prints a multi-line verbatim string `@"…"` as written, so generated
- *  lines wrapped in one would still appear in the print as if present. Join
- *  each such literal onto one line; it is the only Dafny token that can span
- *  lines once comments are gone, and an ordinary string cannot contain a raw
- *  newline. Scans string and char literals so a `@"` inside one is not a start. */
-export function joinVerbatimStrings(text: string): string {
-  const out: string[] = [];
-  let buf = "";
-  let inVerbatim = false;
-  for (const line of text.split("\n")) {
-    buf = inVerbatim ? `${buf}\\n${line}` : line;
-    let inString = false, inChar = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (inVerbatim) { if (c === '"') { if (line[i + 1] === '"') i++; else inVerbatim = false; } continue; }
-      if (inString) { if (c === "\\") i++; else if (c === '"') inString = false; continue; }
-      if (inChar) { if (c === "\\") i++; else if (c === "'") inChar = false; continue; }
-      if (c === "@" && line[i + 1] === '"') { inVerbatim = true; i++; }
-      else if (c === '"') inString = true;
-      // `'` also appears inside identifiers (x'); a char literal never follows one.
-      else if (c === "'" && (i === 0 || !/[\w?']/.test(line[i - 1]))) inChar = true;
-    }
-    if (!inVerbatim) out.push(buf);
-  }
-  if (inVerbatim) out.push(buf);
-  return out.join("\n");
 }
 
 function additionsOnlyCanonical(genPath: string, dfyPath: string, utf16: boolean): boolean {
@@ -195,32 +148,27 @@ function additionsOnlyCanonical(genPath: string, dfyPath: string, utf16: boolean
     copyFileSync(genPath, genCopy);
     const genPrint = path.join(tmp, "generated.print.dfy");
     const dfyPrint = path.join(tmp, "proof.print.dfy");
-    let g = printDafny(genCopy, genPrint, utf16);
-    if (g === "no-parse") {
-      const full = gitDiff(genPath, dfyPath, dfyPath, readFileSync(dfyPath, "utf-8").split("\n").length + 1);
-      if (full !== null) { writeFileSync(genCopy, fillByMethodBodies(full)); g = printDafny(genCopy, genPrint, utf16); }
-    }
+    const g = printDafny(genCopy, genPrint, utf16);
     if (g === "no-dafny") {
       console.warn(`WARNING: \`dafny\` not found on PATH; ${path.basename(dfyPath)} was checked additions-only on source lines only ` +
-        "(comments and strings were not normalized).");
+        "(comments were not normalized).");
       return true;
     }
     if (g === "no-parse") {
-      console.warn(`WARNING: ${path.basename(genPath)} does not parse as Dafny on its own; ` +
-        `${path.basename(dfyPath)} was checked additions-only on source lines only.`);
-      return true;
+      console.error(`ERROR: ${path.basename(genPath)} does not parse as Dafny (emitter bug); cannot check additions-only.`);
+      return false;
     }
     if (printDafny(dfyPath, dfyPrint, utf16) !== "ok") {
-      console.error(`ERROR: ${path.basename(dfyPath)} does not parse as Dafny; cannot check additions-only canonically.`);
+      console.error(`ERROR: ${path.basename(dfyPath)} does not parse as Dafny; cannot check additions-only.`);
       return false;
     }
     const diff = gitDiff(genPrint, dfyPrint, dfyPath);
     if (diff === null) return false;
-    const hidden = hunkLines(diff).filter(l => l.startsWith("-"));
+    const hidden = diff.filter(l => l.startsWith("-"));
     if (hidden.length > 0) {
       console.error(`ERROR: ${path.basename(dfyPath)}: generated text is hidden or altered (not additions-only):`);
       for (const d of hidden.slice(0, 5)) console.error("  " + d);
-      console.error("  Look for a block comment, verbatim string, or expression continuation around it.");
+      console.error("  Look for a block comment or an expression continuation around it.");
       return false;
     }
     return true;
