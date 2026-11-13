@@ -1,7 +1,7 @@
 # DESIGN_DIFF — additions-only on Dafny's canonical print
 
-Status: proposal. Targets `additionsOnly` in `tools/src/dafny-commands.ts` on
-the `diff-minimal` baseline.
+Status: implemented in `additionsOnly` (`tools/src/dafny-commands.ts`) on the
+`diff-minimal` baseline.
 
 ## Problem
 
@@ -27,12 +27,19 @@ self-contained; the fix is to make them so before diffing.
 
 Diff the files **as Dafny prints them**, not as the author wrote them.
 
-1. Copy `foo.dfy.gen` to a temporary `foo.gen.dfy` (Dafny only accepts the
-   `.dfy` extension) and run `dafny resolve --print:<out>` on it and on
-   `foo.dfy`, with the flags `dafnyVerify` would use. Dafny re-prints the
-   parsed program: comments gone, string literals intact, one clause per line,
-   each declaration header on its own line, parentheses normalized.
-2. Drop the first line of each print (a filename comment) and run the
+1. Copy `foo.dfy.gen` to a temporary `.dfy` (Dafny only accepts that
+   extension) and run `dafny resolve --print:<out>` on it and on `foo.dfy`,
+   with the `--unicode-char` flag the proof header selects but **without**
+   `--standard-libraries`: parsing does not need the library, and with the
+   flag Dafny prints the whole library too (18k lines, 3s instead of 0.4s).
+   Dafny re-prints the parsed program: comments gone, string literals intact,
+   one clause per line, each declaration header on its own line, parentheses
+   normalized.
+2. Drop the first line of each print (a filename comment) and join any
+   multi-line verbatim string `@"…"` onto one line. Dafny prints such a
+   literal as written, so generated lines wrapped in one would otherwise still
+   appear as present; it is the only token that can span lines once comments
+   are gone, so a string-literal scan (not a lexer) suffices. Then run the
    **existing** `git diff --no-index --minimal` check on the two outputs. Any
    `-` line fails, exactly as today.
 3. One new rule, trivial on canonical text: an added `requires`, `reads`, or
@@ -56,8 +63,17 @@ identifiers. That is fine: Dafny writes the `--print` output after
 **parsing**, before resolution (checked on 4.11: resolution errors still
 produce a complete print; a parse error produces none). The check therefore
 ignores the exit status and requires only that both print files exist. A
-`.dfy.gen` that does not parse is an emitter bug, reported as such; a `.dfy`
-that does not parse would fail verification anyway.
+`.dfy` that does not parse is an error (it would fail verification anyway).
+
+One generated form is not Dafny on its own: a `//@ pure` function whose body
+cannot auto-convert is emitted as `function f(...) { } by method { ... }` with
+an **empty** functional body for the proof to supply (`examples/countBadPairs`).
+For such a file the canonical pass is unavailable; the check warns and falls
+back to the source-line result. Follow-up: emit `{ f_spec(args) }` instead and
+let the proof define `f_spec`, which parses and is covered by the rule above;
+that changes generated output, so it waits for a case-study sweep. The same
+fallback applies when `dafny` is not on `PATH` (`lsc gen-check` without a
+verifier), with a warning naming the file.
 
 ### Reporting
 

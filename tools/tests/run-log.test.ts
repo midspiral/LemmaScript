@@ -59,6 +59,11 @@ Results for arraySum (correctness)
 // given (if any, even when empty), creates any CSV log a user asked for, and
 // exits with $FAKE_DAFNY_EXIT.
 const FAKE_DAFNY = `#!/bin/sh
+if [ "$1" = resolve ]; then
+  for a in "$@"; do case "$a" in --print:*) out="\${a#--print:}";; esac; done
+  for a in "$@"; do case "$a" in *.dfy) cp "$a" "$out";; esac; done
+  exit 0
+fi
 out=""
 for arg in "$@"; do
   case "$arg" in

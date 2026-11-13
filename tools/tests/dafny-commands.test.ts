@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_OPTIONS, OPTION_SPECS, validateOptions } from "../src/config.ts";
-import { dafnyCheckDiff, dafnyVerifyArgs } from "../src/dafny-commands.ts";
+import { dafnyCheckDiff, dafnyVerifyArgs, joinVerbatimStrings } from "../src/dafny-commands.ts";
 
 function fixture(gen: string, proof: string, check: (g: string, p: string, dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "lsc-git-review-"));
@@ -195,4 +196,64 @@ test("time limit and extra flags keep their positions before the char-mode pin",
     dafnyVerifyArgs("method M() {}\n", 30, "--isolate-assertions").args,
     ["verify", "--verification-time-limit", "30", "--isolate-assertions", "--unicode-char:true"],
   );
+});
+
+// ── Canonical-print pass (DESIGN_DIFF.md) ────────────────────
+// These need a real `dafny`: the pass re-prints both files with `dafny resolve
+// --print` so comments, strings, and line breaks cannot change what the line
+// diff sees.
+
+const hasDafny = spawnSync("dafny", ["--version"], { stdio: "ignore" }).status === 0;
+const needsDafny = { skip: hasDafny ? false : "dafny not on PATH" };
+const GEN = "function half(x: int): int\n  requires x >= 2\n  ensures half(x) >= 1\n{\n  x / 2\n}\n";
+const insertAfter = (text: string, marker: string, line: string): string =>
+  text.replace(marker + "\n", marker + "\n" + line + "\n");
+
+test("a block comment cannot hide a generated clause", needsDafny, () =>
+  fixture(GEN, GEN.replace("  requires x >= 2\n", "/*\n  requires x >= 2\n*/\n"),
+    (g, p) => assert.equal(dafnyCheckDiff(g, p), false)));
+
+test("a verbatim string cannot hide generated text", needsDafny, () =>
+  fixture(GEN, 'const hidden := @"\n' + GEN + '";\n',
+    (g, p) => assert.equal(dafnyCheckDiff(g, p), false)));
+
+test("an added line cannot continue a generated clause", needsDafny, () =>
+  fixture(GEN, insertAfter(GEN, "  ensures half(x) >= 1", "    || true"),
+    (g, p) => assert.equal(dafnyCheckDiff(g, p), false)));
+
+test("a verification attribute cannot be injected before a generated declaration", needsDafny, () =>
+  fixture(GEN, "@Verify(false)\n" + GEN, (g, p) => assert.equal(dafnyCheckDiff(g, p), false)));
+
+test("requires cannot be added to a generated declaration", needsDafny, () =>
+  fixture(GEN, insertAfter(GEN, "  requires x >= 2", "  requires false"),
+    (g, p) => assert.equal(dafnyCheckDiff(g, p), false)));
+
+test("ensures, comments, a new helper with its own requires, and an axiom are additions", needsDafny, () =>
+  fixture(GEN,
+    "/* proof notes */\nlemma {:axiom} Trusted() ensures true\nlemma Helper(x: int) requires x > 0 { assert \"a//b\" != \"\"; }\n" +
+      insertAfter(GEN, "  ensures half(x) >= 1", "  ensures half(x) <= x"),
+    (g, p) => assert.equal(dafnyCheckDiff(g, p), true)));
+
+test("a generated file that names a proof-only predicate still prints", needsDafny, () => {
+  const gen = "function keep(x: int): int\n  requires Valid(x)\n{\n  x\n}\n";
+  fixture(gen, gen + "predicate Valid(x: int) { x > 0 }\n", (g, p) => assert.equal(dafnyCheckDiff(g, p), true));
+});
+
+test("a generated file that does not parse falls back to the line check", needsDafny, () => {
+  const gen = "function f(x: int): int\n{\n}\nby method {\n  return x;\n}\n";
+  fixture(gen, gen.replace("{\n}\n", "{\n  x\n}\n"), (g, p) => assert.equal(dafnyCheckDiff(g, p), true));
+  fixture(gen, gen.replace("return x;", "return 0;"), (g, p) => assert.equal(dafnyCheckDiff(g, p), false));
+});
+
+test("a missing dafny falls back to the line check with a warning", { skip: process.platform === "win32" }, () => {
+  const git = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+  fixture(GEN, GEN + "lemma Proof() {}\n", (g, p, dir) => {
+    symlinkSync(git, join(dir, "git"));
+    env({ PATH: dir }, () => assert.equal(dafnyCheckDiff(g, p), true));
+  });
+});
+
+test("multi-line verbatim strings are joined; ordinary strings and identifiers with ' are not", () => {
+  assert.equal(joinVerbatimStrings('const s := @"a\n  b""c\nd";\nmethod M() {}'), 'const s := @"a\\n  b""c\\nd";\nmethod M() {}');
+  assert.equal(joinVerbatimStrings('var x := "@\\"";\nvar y\' := \'"\';\nnext'), 'var x := "@\\"";\nvar y\' := \'"\';\nnext');
 });

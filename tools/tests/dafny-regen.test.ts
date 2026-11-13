@@ -22,7 +22,16 @@ function fixture(run: (f: Fixture) => void): void {
   try {
     mkdirSync(bin);
     const verifier = join(bin, "dafny");
-    writeFileSync(verifier, "#!/bin/sh\nexit 1\n");
+    // The additions-only check prints both files with `dafny resolve`; answer
+    // with an identity print and fail everything else, as before.
+    writeFileSync(verifier, `#!/bin/sh
+if [ "$1" = resolve ]; then
+  for a in "$@"; do case "$a" in --print:*) out="\${a#--print:}";; esac; done
+  for a in "$@"; do case "$a" in *.dfy) cp "$a" "$out";; esac; done
+  exit 0
+fi
+exit 1
+`);
     chmodSync(verifier, 0o755);
     process.env.PATH = `${bin}${delimiter}${originalPath ?? ""}`;
     process.exit = ((code?: number) => { throw new ExitSignal(code); }) as typeof process.exit;

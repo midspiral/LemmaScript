@@ -27,7 +27,14 @@ function runCli(entries: string[], args: string[], runLog = false) {
       writeFileSync(join(dir, file), "export function identity(value: number): number { return value; }\n");
     }
     writeFileSync(join(bin, "dafny"), `#!/usr/bin/env node
-require("node:fs").appendFileSync(process.env.LSC_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "resolve") {
+  // The additions-only check prints both files; answer with an identity print.
+  fs.copyFileSync(args[args.length - 1], args.find(a => a.startsWith("--print:")).slice("--print:".length));
+  process.exit(0);
+}
+fs.appendFileSync(process.env.LSC_ARGV_LOG, JSON.stringify(args) + "\\n");
 `, { mode: 0o755 });
     const result = spawnSync(process.execPath, ["--import", loader, cli, "--backend=dafny", ...args], {
       cwd: dir,

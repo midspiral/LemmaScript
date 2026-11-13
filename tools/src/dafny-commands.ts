@@ -2,7 +2,8 @@
  * Dafny backend commands: gen, check, regen.
  */
 
-import { existsSync, readFileSync, writeFileSync, copyFileSync, unlinkSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, copyFileSync, unlinkSync, mkdtempSync, rmSync } from "fs";
+import os from "os";
 import { execFileSync } from "child_process";
 import path from "path";
 import { DEFAULT_OPTIONS, parseOptionValue, type LscOptions } from "./config.js";
@@ -27,6 +28,19 @@ export function dafnyCheckDiff(genPath: string, dfyPath: string, log?: RunLog): 
   return ok;
 }
 
+/**
+ * The proof must be the generated file plus additions. Two passes:
+ *
+ * 1. Source lines: `git diff --minimal` of `.dfy.gen` against `.dfy` shows no
+ *    deletions. Fast, and its messages point at the author's own lines.
+ * 2. Canonical print: the same diff on `dafny resolve --print` output of both
+ *    files. Dafny re-prints the parsed program with comments dropped and one
+ *    clause per line, so a generated clause hidden inside an added block
+ *    comment or verbatim string, or extended by an added `|| true` line,
+ *    becomes a deleted or modified printed line. Added `requires`/`reads`/
+ *    `modifies` under a generated declaration header are rejected there too:
+ *    they weaken the theorem rather than prove it. See DESIGN_DIFF.md.
+ */
 function additionsOnly(genPath: string, dfyPath: string): boolean {
   for (const filePath of [genPath, dfyPath]) {
     if (!existsSync(filePath)) {
@@ -36,56 +50,174 @@ function additionsOnly(genPath: string, dfyPath: string): boolean {
   }
 
   // Proof additions must retain the model chosen by the generated companion.
+  let utf16: boolean;
   try {
     const generated = readStringSemantics(readFileSync(genPath, "utf-8"));
     const proof = readStringSemantics(readFileSync(dfyPath, "utf-8"));
     if (proof !== generated) {
       throw new Error(`proof string-semantics=${proof} differs from generated string-semantics=${generated}`);
     }
+    utf16 = proof === "javascript-utf16";
   } catch (error) {
     console.error(`ERROR: ${path.basename(dfyPath)}: ${error instanceof Error ? error.message : String(error)}`);
     return false;
   }
 
-  let diff = "";
+  const source = gitDiff(genPath, dfyPath, dfyPath);
+  if (source === null) return false;
+  const deletions = hunkLines(source).filter(l => l.startsWith("-"));
+  if (deletions.length > 0) {
+    console.error(`WARNING: ${path.basename(dfyPath)} has modifications to generated lines (not additions-only):`);
+    for (const d of deletions.slice(0, 5)) console.error("  " + d);
+    return false;
+  }
+  return additionsOnlyCanonical(genPath, dfyPath, utf16);
+}
+
+/** `git diff --no-index --minimal a b`, or null (after reporting) when the
+ *  comparison did not complete. `context` widens the hunk context. */
+function gitDiff(a: string, b: string, reportAs: string, context?: number): string | null {
+  const args = ["diff", "--no-index", "--minimal", "--no-color", "--no-ext-diff", "--no-textconv", "--text"];
+  if (context !== undefined) args.push(`--unified=${context}`);
   try {
-    diff = execFileSync(
-      "git",
-      ["diff", "--no-index", "--minimal", "--no-color", "--no-ext-diff", "--no-textconv", "--text", "--", genPath, dfyPath],
-      { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
-    );
+    return execFileSync("git", [...args, "--", a, b], { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
   } catch (e: any) {
     // `git diff --no-index` exits 1 for a valid, non-empty comparison. Every
     // other exit shape means the comparison did not complete, even when git
     // happened to return partial stdout.
     const status = e?.status;
     const stdout = typeof e?.stdout === "string" ? e.stdout : "";
-    if (status !== 1 || e?.signal != null || e?.code != null || !stdout.startsWith("diff --git ")) {
-      const detail = typeof e?.stderr === "string" ? e.stderr.trim() : "";
-      console.error(
-        `ERROR: could not run \`git diff\` to verify ${path.basename(dfyPath)} is additions-only` +
-        `${status === undefined ? " (is git installed?)" : ` (git exited ${status})`}` +
-        `${detail ? `: ${detail}` : ""}`,
-      );
-      return false;
-    }
-    diff = stdout;
+    if (status === 1 && e?.signal == null && e?.code == null && stdout.startsWith("diff --git ")) return stdout;
+    const detail = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+    console.error(
+      `ERROR: could not run \`git diff\` to verify ${path.basename(reportAs)} is additions-only` +
+      `${status == null ? " (is git installed?)" : ` (git exited ${status})`}` +
+      `${detail ? `: ${detail}` : ""}`,
+    );
+    return null;
   }
-  // Only file headers are metadata. Inside a hunk, even a line beginning
-  // with "---" is a deletion (for example, text inside a multiline string).
-  const deletions: string[] = [];
+}
+
+/** The body lines of every hunk, with their leading ` `, `+`, or `-`. Only
+ *  file headers are metadata: inside a hunk, even a line beginning with "---"
+ *  is a deletion (for example, text inside a multiline string). */
+function hunkLines(diff: string): string[] {
+  const out: string[] = [];
   let inHunk = false;
   for (const line of diff.split("\n")) {
     if (line.startsWith("diff --git ")) inHunk = false;
     else if (line.startsWith("@@ ")) inHunk = true;
-    else if (inHunk && line.startsWith("-")) deletions.push(line);
+    else if (inHunk && line.length > 0) out.push(line);
   }
-  if (deletions.length > 0) {
-    console.error(`WARNING: ${path.basename(dfyPath)} has modifications to generated lines (not additions-only):`);
-    for (const d of deletions.slice(0, 5)) console.error("  " + d);
-    return false;
+  return out;
+}
+
+/** `dafny resolve --print` of `src` into `out`, with the filename header line
+ *  removed. Dafny prints after parsing and before resolution, so unresolved
+ *  names (a predicate defined only in the proof) do not matter and the exit
+ *  status is ignored; only a parse error leaves no output. The standard
+ *  library is deliberately not loaded: parsing does not need it, and with it
+ *  Dafny would print the whole library too. */
+function printDafny(src: string, out: string, utf16: boolean): "ok" | "no-dafny" | "no-parse" {
+  const args = ["resolve", `--print:${out}`, utf16 ? "--unicode-char:false" : "--unicode-char:true"];
+  if (utf16) args.push("--allow-deprecation");
+  try {
+    execFileSync("dafny", [...args, src], { stdio: "ignore" });
+  } catch (e: any) {
+    if (e?.code === "ENOENT") return "no-dafny";
   }
-  return true;
+  if (!existsSync(out)) return "no-parse";
+  const lines = joinVerbatimStrings(readFileSync(out, "utf-8")).split("\n");
+  if (lines[0]?.startsWith("//")) lines.shift();
+  writeFileSync(out, lines.join("\n"));
+  return "ok";
+}
+
+/** Dafny prints a multi-line verbatim string `@"…"` as written, so generated
+ *  lines wrapped in one would still appear in the print as if present. Join
+ *  each such literal onto one line; it is the only Dafny token that can span
+ *  lines once comments are gone, and an ordinary string cannot contain a raw
+ *  newline. Scans string and char literals so a `@"` inside one is not a start. */
+export function joinVerbatimStrings(text: string): string {
+  const out: string[] = [];
+  let buf = "";
+  let inVerbatim = false;
+  for (const line of text.split("\n")) {
+    buf = inVerbatim ? `${buf}\\n${line}` : line;
+    let inString = false, inChar = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inVerbatim) { if (c === '"') { if (line[i + 1] === '"') i++; else inVerbatim = false; } continue; }
+      if (inString) { if (c === "\\") i++; else if (c === '"') inString = false; continue; }
+      if (inChar) { if (c === "\\") i++; else if (c === "'") inChar = false; continue; }
+      if (c === "@" && line[i + 1] === '"') { inVerbatim = true; i++; }
+      else if (c === '"') inString = true;
+      // `'` also appears inside identifiers (x'); a char literal never follows one.
+      else if (c === "'" && (i === 0 || !/[\w?']/.test(line[i - 1]))) inChar = true;
+    }
+    if (!inVerbatim) out.push(buf);
+  }
+  if (inVerbatim) out.push(buf);
+  return out.join("\n");
+}
+
+const DECL_HEADER = /^\s*(?:(?:ghost|static|twostate|least|greatest|opaque|abstract)\s+)*(lemma|function|method|predicate|constructor|iterator|datatype|codatatype|class|trait|module|type|newtype|const|import)\b(?:\s+(?:\{[^}]*\}|@\w+(?:\([^)]*\))?)\s*)*\s*([A-Za-z_?'][\w?']*)?/;
+const WEAKENING = /^\s*(requires|reads|modifies)\b/;
+
+function additionsOnlyCanonical(genPath: string, dfyPath: string, utf16: boolean): boolean {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "lsc-print-"));
+  try {
+    // Dafny accepts only the .dfy extension; the generated file is .dfy.gen.
+    const genCopy = path.join(tmp, "generated.dfy");
+    copyFileSync(genPath, genCopy);
+    const genPrint = path.join(tmp, "generated.print.dfy");
+    const dfyPrint = path.join(tmp, "proof.print.dfy");
+    const g = printDafny(genCopy, genPrint, utf16);
+    if (g === "no-dafny") {
+      console.warn(`WARNING: \`dafny\` not found on PATH; ${path.basename(dfyPath)} was checked additions-only on source lines only ` +
+        "(comments and strings were not normalized).");
+      return true;
+    }
+    if (g === "no-parse") {
+      // A `function ... by method` is emitted with an empty functional body for
+      // the proof to supply, so that generated file is not Dafny on its own.
+      console.warn(`WARNING: ${path.basename(genPath)} does not parse as Dafny on its own (e.g. a function-by-method body left for the proof); ` +
+        `${path.basename(dfyPath)} was checked additions-only on source lines only.`);
+      return true;
+    }
+    if (printDafny(dfyPath, dfyPrint, utf16) !== "ok") {
+      console.error(`ERROR: ${path.basename(dfyPath)} does not parse as Dafny; cannot check additions-only canonically.`);
+      return false;
+    }
+    const lineCount = readFileSync(dfyPrint, "utf-8").split("\n").length;
+    const diff = gitDiff(genPrint, dfyPrint, dfyPath, lineCount + 1);
+    if (diff === null) return false;
+    const lines = hunkLines(diff);
+    const hidden = lines.filter(l => l.startsWith("-"));
+    if (hidden.length > 0) {
+      console.error(`ERROR: ${path.basename(dfyPath)}: generated text is hidden or altered (not additions-only):`);
+      for (const d of hidden.slice(0, 5)) console.error("  " + d);
+      console.error("  Look for a block comment, verbatim string, or expression continuation around it.");
+      return false;
+    }
+    // A weakening clause belongs to the nearest preceding declaration header.
+    let header: { generated: boolean; name: string } | null = null;
+    for (const l of lines) {
+      const body = l.slice(1);
+      const h = DECL_HEADER.exec(body);
+      if (h) { header = { generated: l.startsWith(" "), name: h[2] ?? h[1] }; continue; }
+      const w = WEAKENING.exec(body);
+      if (w && l.startsWith("+") && header?.generated) {
+        console.error(`ERROR: ${path.basename(dfyPath)}: \`${w[1]}\` added to generated declaration \`${header.name}\` weakens its contract; ` +
+          "put the restriction in the TypeScript with //@ requires:");
+        console.error("  " + l);
+        return false;
+      }
+    }
+    return true;
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 /** Read the saved model, rejecting ambiguous headers before verification. */

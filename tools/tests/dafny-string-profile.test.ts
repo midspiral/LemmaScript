@@ -26,7 +26,15 @@ function fixture(source: string, useFakeVerifier: boolean, run: (f: {
       const bin = join(dir, "bin");
       mkdirSync(bin);
       const verifier = join(bin, "dafny");
-      writeFileSync(verifier, '#!/bin/sh\nprintf "called\\n" > "$LSC_TEST_VERIFIER_MARKER"\nexit 0\n');
+      writeFileSync(verifier, `#!/bin/sh
+if [ "$1" = resolve ]; then
+  for a in "$@"; do case "$a" in --print:*) out="\${a#--print:}";; esac; done
+  for a in "$@"; do case "$a" in *.dfy) cp "$a" "$out";; esac; done
+  exit 0
+fi
+printf "called\\n" > "$LSC_TEST_VERIFIER_MARKER"
+exit 0
+`);
       chmodSync(verifier, 0o755);
       env.PATH = `${bin}${delimiter}${env.PATH ?? ""}`;
     }
