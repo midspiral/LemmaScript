@@ -26,12 +26,19 @@ function JSFloorDiv(a: int, b: int): int
 datatype Pair = Pair(i: nat, j: nat)
 
 // ═════════════════════ Iterative impls (function by method) ═════════════════════
-// Spec body delegates to the matching hand-written predicate, so the
-// `by method` block verifies the imperative impl returns that set.
+// Each generated `<name>_spec` stub gets its body here: the matching
+// hand-written predicate, so the `by method` block verifies the imperative
+// impl returns that set.
+
+// Specification of allPairsImpl: add its body in the .dfy.
+function allPairsImpl_spec(nums: seq<int>): set<Pair>
+{
+  AllPairs(nums)
+}
 
 function allPairsImpl(nums: seq<int>): set<Pair>
 {
-  AllPairs(nums)
+  allPairsImpl_spec(nums)
 }
 by method {
   var result: set<Pair> := {};
@@ -60,9 +67,15 @@ by method {
   return result;
 }
 
-function goodPairsImpl(nums: seq<int>): set<Pair>
+// Specification of goodPairsImpl: add its body in the .dfy.
+function goodPairsImpl_spec(nums: seq<int>): set<Pair>
 {
   GoodPairs(nums)
+}
+
+function goodPairsImpl(nums: seq<int>): set<Pair>
+{
+  goodPairsImpl_spec(nums)
 }
 by method {
   var result: set<Pair> := {};
@@ -93,9 +106,15 @@ by method {
   return result;
 }
 
-function badPairsImpl(nums: seq<int>): set<Pair>
+// Specification of badPairsImpl: add its body in the .dfy.
+function badPairsImpl_spec(nums: seq<int>): set<Pair>
 {
   BadPairs(nums)
+}
+
+function badPairsImpl(nums: seq<int>): set<Pair>
+{
+  badPairsImpl_spec(nums)
 }
 by method {
   var result: set<Pair> := {};

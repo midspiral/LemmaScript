@@ -11,6 +11,8 @@ import { DEFAULT_OPTIONS, resolveOptions, type LscOptions } from "./config.js";
 
 /** Appended to a function's name for the lemma that carries its `//@ ensures`. */
 export const ENSURES_LEMMA_SUFFIX = "_ensures";
+/** `function by method` bodies delegate to a proof-defined `<name>_spec`. */
+export const SPEC_FUNCTION_SUFFIX = "_spec";
 
 /** Fresh binder for a comprehension wrapping the given subexpressions: `base`
  *  verbatim unless one of them references it, then primed until free. A *local*
@@ -973,10 +975,22 @@ function emitDecl(d: Decl): string {
 
     case "def-by-method": {
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
-      const lines = [`function ${escapeName(d.name)}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
-      for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
+      const signature = `${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`;
+      const requires = d.requires.map(r => `  requires ${emitExpr(r)}`);
+      // The functional specification is the proof author's to write: a bodyless
+      // `<name>_spec` stub, which the .dfy completes by adding a body after its
+      // signature. The generated file parses and resolves on its own (an empty
+      // function body would not), and the proof adds lines instead of editing
+      // between generated braces.
+      const spec = escapeGeneratedName(`${d.name}${SPEC_FUNCTION_SUFFIX}`);
+      const lines = [
+        `// Specification of ${escapeName(d.name)}: add its body in the .dfy.`,
+        `function ${spec}${signature}`, ...requires, "",
+        `function ${escapeName(d.name)}${signature}`, ...requires,
+      ];
       if (d.decreases) lines.push(`  decreases ${emitExpr(d.decreases)}`);
       lines.push(`{`);
+      lines.push(`  ${spec}(${d.params.map(p => escapeName(p.name)).join(", ")})`);
       lines.push(`}`);
       lines.push(`by method {`);
       lines.push(emitStmts(d.methodBody, 1));
