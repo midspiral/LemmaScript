@@ -35,25 +35,31 @@ Diff the files **as Dafny prints them**, not as the author wrote them.
    Dafny re-prints the parsed program: comments gone, string literals intact,
    one clause per line, each declaration header on its own line, parentheses
    normalized.
-2. Drop the first line of each print (a filename comment) and join any
-   multi-line verbatim string `@"…"` onto one line. Dafny prints such a
-   literal as written, so generated lines wrapped in one would otherwise still
-   appear as present; it is the only token that can span lines once comments
-   are gone, so a string-literal scan (not a lexer) suffices. Then run the
+2. Drop the first line of each print (a filename comment) and normalize two
+   things the printer does not keep line-stable. Join any multi-line verbatim
+   string `@"…"` onto one line: Dafny prints such a literal as written, so
+   generated lines wrapped in one would otherwise still appear as present; it
+   is the only token that can span lines once comments are gone, so a
+   string-literal scan (not a lexer) suffices. Split a loop header's trailing
+   `{` onto its own line: the printer writes `while c {` for a loop without
+   clauses and `while c` / `invariant …` / `{` once the proof adds invariants,
+   which would make every generated loop header look modified. Then run the
    **existing** `git diff --no-index --minimal` check on the two outputs. Any
    `-` line fails, exactly as today.
-3. One new rule, trivial on canonical text: an added `requires`, `reads`, or
-   `modifies` line whose nearest preceding declaration header is an
-   *unchanged* line is rejected. Those clauses weaken a generated theorem; the
-   route for a domain restriction is `//@ requires` in the TypeScript. Added
-   `ensures`, `decreases`, and `invariant` lines are fine (more to prove), as
-   are axioms and `ensures` on externs, which are how out-of-model code is
-   imported.
+3. Nothing else. In particular no rule about *which* clauses may be added:
+   `modifies this` / `reads this` are proof-level additions by design
+   (SPEC.md §2.8), and proofs add preconditions over proof-only predicates to
+   generated declarations (`examples/preorder`, `requires ValidNode(root)`).
+   Such additions weaken what is proved, but they are visible in the line
+   diff, which is what this check is for; the sibling benchmark forbids them
+   and that is the right call for a benchmark, not for the tool.
 
 Measured on the scratch reproductions: the commented-out `requires` becomes a
 deleted printed line; the `|| true` becomes a modified printed line; an
 inserted `{:verify false}` or `{:axiom}` in front of a generated declaration
 modifies its printed header. All three fail with no rule specific to them.
+The first CI run over the case studies found the loop-header issue above and
+nothing else: every other proof printed line-stably.
 
 ### The `.dfy.gen` need not resolve
 
@@ -67,15 +73,16 @@ ignores the exit status and requires only that both print files exist. A
 
 One generated form is not Dafny on its own: a `//@ pure` function whose body
 cannot auto-convert is emitted as `function f(...) { } by method { ... }` with
-an **empty** functional body for the proof to supply (`examples/countBadPairs`).
-For such a file the canonical pass is unavailable; the check warns and falls
-back to the source-line result. Follow-up: emit `{ f_spec(args) }` instead and
-let the proof define `f_spec`, which parses and is covered by the rule above;
-that changes generated output, so it waits for a case-study sweep. The same
-fallback applies when `dafny` is not on `PATH` (`lsc gen-check` without a
-verifier), with a warning naming the file.
+an **empty** functional body for the proof to supply (`examples/countBadPairs`,
+several functions in a case study). When the generated copy fails to parse,
+the check rebuilds it from the full-context source diff, splicing the proof's
+lines into each such body; those lines are proof-authored, so comparing
+against them hides nothing, and the print pass then runs as usual. Only a
+generated file that still fails to parse after that falls back to the
+source-line result, with a warning naming the file. The same fallback applies
+when `dafny` is not on `PATH` (`lsc gen-check` without a verifier).
 
-### Reporting
+## Reporting
 
 The source-level diff stays as the reporting layer. When the printed diff
 fails, the message shows the printed text that was lost or altered, so the
@@ -101,13 +108,13 @@ comparison stays on source as well, since the print drops comments.
 
 ## Testing
 
-Fixtures under `tools/fixtures/additions/`, each asserting the reason: block
-comment around a clause, verbatim string, `|| true` continuation, `(0)` call
-continuation, `requires false` on a generated declaration, `{:verify false}`
-before a generated declaration. Positive fixtures: a proof with block
-comments, an `assert` with a string containing `//`, a new `{:axiom}` lemma,
-an `ensures` added to a generated function, a `.dfy.gen` that references a
-proof-only predicate, and every tracked example `.dfy`. The acceptance test
+In `tools/tests/dafny-commands.test.ts`, skipped without a `dafny` on PATH:
+block comment around a clause, verbatim string, `|| true` continuation, and
+`@Verify(false)` before a generated declaration are rejected; a proof with
+block comments, an `assert` with a string containing `//`, a new `{:axiom}`
+lemma, an `ensures` and a `requires` added to a generated function, loop
+invariants added to a generated `while`, a `.dfy.gen` that references a
+proof-only predicate, and the non-parsing and no-`dafny` fallbacks pass. The acceptance test
 for switching is that every example and case-study proof still passes; a
 rejection there is either a real finding or a rule to relax.
 

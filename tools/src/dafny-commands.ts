@@ -37,9 +37,7 @@ export function dafnyCheckDiff(genPath: string, dfyPath: string, log?: RunLog): 
  *    files. Dafny re-prints the parsed program with comments dropped and one
  *    clause per line, so a generated clause hidden inside an added block
  *    comment or verbatim string, or extended by an added `|| true` line,
- *    becomes a deleted or modified printed line. Added `requires`/`reads`/
- *    `modifies` under a generated declaration header are rejected there too:
- *    they weaken the theorem rather than prove it. See DESIGN_DIFF.md.
+ *    becomes a deleted or modified printed line. See DESIGN_DIFF.md.
  */
 function additionsOnly(genPath: string, dfyPath: string): boolean {
   for (const filePath of [genPath, dfyPath]) {
@@ -75,7 +73,7 @@ function additionsOnly(genPath: string, dfyPath: string): boolean {
 }
 
 /** `git diff --no-index --minimal a b`, or null (after reporting) when the
- *  comparison did not complete. `context` widens the hunk context. */
+ *  comparison did not complete. */
 function gitDiff(a: string, b: string, reportAs: string, context?: number): string | null {
   const args = ["diff", "--no-index", "--minimal", "--no-color", "--no-ext-diff", "--no-textconv", "--text"];
   if (context !== undefined) args.push(`--unified=${context}`);
@@ -107,9 +105,28 @@ function hunkLines(diff: string): string[] {
   for (const line of diff.split("\n")) {
     if (line.startsWith("diff --git ")) inHunk = false;
     else if (line.startsWith("@@ ")) inHunk = true;
-    else if (inHunk && line.length > 0) out.push(line);
+    else if (inHunk && line.length > 0 && !line.startsWith("\\")) out.push(line);
   }
   return out;
+}
+
+/** A `function … by method` is emitted with an empty functional body for the
+ *  proof to supply, so the generated file alone does not parse. Given the
+ *  full-context source diff (already known to have no deletions), rebuild the
+ *  generated text with the proof's lines spliced into each such body. Those
+ *  lines are proof-authored, so comparing against them hides nothing. */
+function fillByMethodBodies(fullDiff: string): string {
+  const lines = hunkLines(fullDiff), out: string[] = [];
+  for (let k = 0; k < lines.length; k++) {
+    if (lines[k].startsWith(" ")) { out.push(lines[k].slice(1)); continue; }
+    let n = k;
+    while (n < lines.length && lines[n].startsWith("+")) n++;
+    if (out[out.length - 1] === "{" && lines[n]?.slice(1) === "}" && lines[n + 1]?.slice(1).startsWith("by method")) {
+      for (; k < n; k++) out.push(lines[k].slice(1));
+    }
+    k = n - 1;
+  }
+  return out.join("\n");
 }
 
 /** `dafny resolve --print` of `src` into `out`, with the filename header line
@@ -127,10 +144,19 @@ function printDafny(src: string, out: string, utf16: boolean): "ok" | "no-dafny"
     if (e?.code === "ENOENT") return "no-dafny";
   }
   if (!existsSync(out)) return "no-parse";
-  const lines = joinVerbatimStrings(readFileSync(out, "utf-8")).split("\n");
+  const lines = normalizePrint(readFileSync(out, "utf-8")).split("\n");
   if (lines[0]?.startsWith("//")) lines.shift();
   writeFileSync(out, lines.join("\n"));
   return "ok";
+}
+
+/** Make Dafny's print line-stable under proof additions. Besides joining
+ *  verbatim strings, split a loop header's trailing `{` onto its own line:
+ *  the printer writes `while c {` when a loop has no clauses and `while c`
+ *  / `invariant …` / `{` once the proof adds invariants, which would make the
+ *  generated header look modified. */
+export function normalizePrint(text: string): string {
+  return joinVerbatimStrings(text).replace(/^(\s*)((?:while|for)\b.*\S)\s*\{$/gm, "$1$2\n$1{");
 }
 
 /** Dafny prints a multi-line verbatim string `@"…"` as written, so generated
@@ -161,9 +187,6 @@ export function joinVerbatimStrings(text: string): string {
   return out.join("\n");
 }
 
-const DECL_HEADER = /^\s*(?:(?:ghost|static|twostate|least|greatest|opaque|abstract)\s+)*(lemma|function|method|predicate|constructor|iterator|datatype|codatatype|class|trait|module|type|newtype|const|import)\b(?:\s+(?:\{[^}]*\}|@\w+(?:\([^)]*\))?)\s*)*\s*([A-Za-z_?'][\w?']*)?/;
-const WEAKENING = /^\s*(requires|reads|modifies)\b/;
-
 function additionsOnlyCanonical(genPath: string, dfyPath: string, utf16: boolean): boolean {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "lsc-print-"));
   try {
@@ -172,16 +195,18 @@ function additionsOnlyCanonical(genPath: string, dfyPath: string, utf16: boolean
     copyFileSync(genPath, genCopy);
     const genPrint = path.join(tmp, "generated.print.dfy");
     const dfyPrint = path.join(tmp, "proof.print.dfy");
-    const g = printDafny(genCopy, genPrint, utf16);
+    let g = printDafny(genCopy, genPrint, utf16);
+    if (g === "no-parse") {
+      const full = gitDiff(genPath, dfyPath, dfyPath, readFileSync(dfyPath, "utf-8").split("\n").length + 1);
+      if (full !== null) { writeFileSync(genCopy, fillByMethodBodies(full)); g = printDafny(genCopy, genPrint, utf16); }
+    }
     if (g === "no-dafny") {
       console.warn(`WARNING: \`dafny\` not found on PATH; ${path.basename(dfyPath)} was checked additions-only on source lines only ` +
         "(comments and strings were not normalized).");
       return true;
     }
     if (g === "no-parse") {
-      // A `function ... by method` is emitted with an empty functional body for
-      // the proof to supply, so that generated file is not Dafny on its own.
-      console.warn(`WARNING: ${path.basename(genPath)} does not parse as Dafny on its own (e.g. a function-by-method body left for the proof); ` +
+      console.warn(`WARNING: ${path.basename(genPath)} does not parse as Dafny on its own; ` +
         `${path.basename(dfyPath)} was checked additions-only on source lines only.`);
       return true;
     }
@@ -189,30 +214,14 @@ function additionsOnlyCanonical(genPath: string, dfyPath: string, utf16: boolean
       console.error(`ERROR: ${path.basename(dfyPath)} does not parse as Dafny; cannot check additions-only canonically.`);
       return false;
     }
-    const lineCount = readFileSync(dfyPrint, "utf-8").split("\n").length;
-    const diff = gitDiff(genPrint, dfyPrint, dfyPath, lineCount + 1);
+    const diff = gitDiff(genPrint, dfyPrint, dfyPath);
     if (diff === null) return false;
-    const lines = hunkLines(diff);
-    const hidden = lines.filter(l => l.startsWith("-"));
+    const hidden = hunkLines(diff).filter(l => l.startsWith("-"));
     if (hidden.length > 0) {
       console.error(`ERROR: ${path.basename(dfyPath)}: generated text is hidden or altered (not additions-only):`);
       for (const d of hidden.slice(0, 5)) console.error("  " + d);
       console.error("  Look for a block comment, verbatim string, or expression continuation around it.");
       return false;
-    }
-    // A weakening clause belongs to the nearest preceding declaration header.
-    let header: { generated: boolean; name: string } | null = null;
-    for (const l of lines) {
-      const body = l.slice(1);
-      const h = DECL_HEADER.exec(body);
-      if (h) { header = { generated: l.startsWith(" "), name: h[2] ?? h[1] }; continue; }
-      const w = WEAKENING.exec(body);
-      if (w && l.startsWith("+") && header?.generated) {
-        console.error(`ERROR: ${path.basename(dfyPath)}: \`${w[1]}\` added to generated declaration \`${header.name}\` weakens its contract; ` +
-          "put the restriction in the TypeScript with //@ requires:");
-        console.error("  " + l);
-        return false;
-      }
     }
     return true;
   } finally {

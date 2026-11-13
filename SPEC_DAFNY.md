@@ -15,7 +15,7 @@ For each verified TS function `foo.ts`, there are two Dafny files:
 
 The `.dfy.gen` extension prevents Dafny tooling from auto-verifying it.
 
-The diff between gen and dfy must be **additions only** — the LLM may insert helper lemmas, ghost predicates, assert statements, and loop invariants, but may not modify generated lines. The check runs twice: on source lines, and on `dafny resolve --print` output of both files, so a generated clause hidden in an added comment or verbatim string, or extended by an added continuation line, is caught as a deleted or modified line. Added `requires`/`reads`/`modifies` under a generated declaration are rejected as weakening; added `ensures` is fine. See [DESIGN_DIFF.md](DESIGN_DIFF.md).
+The diff between gen and dfy must be **additions only** — the LLM may insert helper lemmas, ghost predicates, assert statements, and loop invariants, but may not modify generated lines. The check runs twice: on source lines, and on `dafny resolve --print` output of both files, so a generated clause hidden in an added comment or verbatim string, or extended by an added continuation line, is caught as a deleted or modified line. See [DESIGN_DIFF.md](DESIGN_DIFF.md).
 
 `"proof-dir": "proofs"` in `lemmascript.json` relocates the complete Dafny
 artifact set while preserving the pair: a source `src/search/foo.ts` under that

@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_OPTIONS, OPTION_SPECS, validateOptions } from "../src/config.ts";
-import { dafnyCheckDiff, dafnyVerifyArgs, joinVerbatimStrings } from "../src/dafny-commands.ts";
+import { dafnyCheckDiff, dafnyVerifyArgs, joinVerbatimStrings, normalizePrint } from "../src/dafny-commands.ts";
 
 function fixture(gen: string, proof: string, check: (g: string, p: string, dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "lsc-git-review-"));
@@ -224,9 +224,15 @@ test("an added line cannot continue a generated clause", needsDafny, () =>
 test("a verification attribute cannot be injected before a generated declaration", needsDafny, () =>
   fixture(GEN, "@Verify(false)\n" + GEN, (g, p) => assert.equal(dafnyCheckDiff(g, p), false)));
 
-test("requires cannot be added to a generated declaration", needsDafny, () =>
-  fixture(GEN, insertAfter(GEN, "  requires x >= 2", "  requires false"),
-    (g, p) => assert.equal(dafnyCheckDiff(g, p), false)));
+test("a precondition or frame clause added to a generated declaration is a visible addition (SPEC §2.8)", needsDafny, () =>
+  fixture(GEN, insertAfter(GEN, "  requires x >= 2", "  requires x < 100"),
+    (g, p) => assert.equal(dafnyCheckDiff(g, p), true)));
+
+test("loop invariants added to a generated while pass", needsDafny, () => {
+  const gen = "method Sum(a: seq<int>) returns (s: int)\n{\n  s := 0;\n  var i := 0;\n  while (i < |a|)\n  {\n    s := s + a[i];\n    i := i + 1;\n  }\n}\n";
+  fixture(gen, insertAfter(gen, "  while (i < |a|)", "    invariant 0 <= i <= |a|\n    decreases |a| - i"),
+    (g, p) => assert.equal(dafnyCheckDiff(g, p), true));
+});
 
 test("ensures, comments, a new helper with its own requires, and an axiom are additions", needsDafny, () =>
   fixture(GEN,
@@ -239,10 +245,13 @@ test("a generated file that names a proof-only predicate still prints", needsDaf
   fixture(gen, gen + "predicate Valid(x: int) { x > 0 }\n", (g, p) => assert.equal(dafnyCheckDiff(g, p), true));
 });
 
-test("a generated file that does not parse falls back to the line check", needsDafny, () => {
-  const gen = "function f(x: int): int\n{\n}\nby method {\n  return x;\n}\n";
-  fixture(gen, gen.replace("{\n}\n", "{\n  x\n}\n"), (g, p) => assert.equal(dafnyCheckDiff(g, p), true));
-  fixture(gen, gen.replace("return x;", "return 0;"), (g, p) => assert.equal(dafnyCheckDiff(g, p), false));
+test("a function-by-method body supplied by the proof is spliced in, so the print pass still runs", needsDafny, () => {
+  const gen = GEN + "function f(x: int): int\n{\n}\nby method {\n  return x;\n}\n";
+  const filled = gen.replace("{\n}\n", "{\n  x\n}\n");
+  fixture(gen, filled, (g, p) => assert.equal(dafnyCheckDiff(g, p), true));
+  fixture(gen, filled.replace("return x;", "return 0;"), (g, p) => assert.equal(dafnyCheckDiff(g, p), false));
+  // The hiding attack is caught in such a file too.
+  fixture(gen, filled.replace("  requires x >= 2\n", "/*\n  requires x >= 2\n*/\n"), (g, p) => assert.equal(dafnyCheckDiff(g, p), false));
 });
 
 test("a missing dafny falls back to the line check with a warning", { skip: process.platform === "win32" }, () => {
@@ -256,4 +265,9 @@ test("a missing dafny falls back to the line check with a warning", { skip: proc
 test("multi-line verbatim strings are joined; ordinary strings and identifiers with ' are not", () => {
   assert.equal(joinVerbatimStrings('const s := @"a\n  b""c\nd";\nmethod M() {}'), 'const s := @"a\\n  b""c\\nd";\nmethod M() {}');
   assert.equal(joinVerbatimStrings('var x := "@\\"";\nvar y\' := \'"\';\nnext'), 'var x := "@\\"";\nvar y\' := \'"\';\nnext');
+});
+
+test("normalizePrint splits a loop header's brace but leaves other braces alone", () => {
+  assert.equal(normalizePrint("  while i < n {\n    x := 1;\n  }\n  for i := 0 to n {\n  }\n  if c {\n  }\n"),
+    "  while i < n\n  {\n    x := 1;\n  }\n  for i := 0 to n\n  {\n  }\n  if c {\n  }\n");
 });
