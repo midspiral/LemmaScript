@@ -339,6 +339,8 @@ fi
 
 # Run log: a real check → broken proof → fixed proof sequence is recorded with
 # member outcomes and hashes, inside a self-ignoring .lemmascript/ beside the config.
+# The repo root may already hold a local run log; only check that it is not appended to.
+root_runs_before=$(wc -l < .lemmascript/runs.jsonl 2>/dev/null || echo 0)
 run_log_dir="$fixture_dir/run-log-project"
 mkdir -p "$run_log_dir"
 echo '{}' > "$run_log_dir/lemmascript.json"
@@ -365,7 +367,11 @@ if (new Set(runs.map(r => r.tsHash)).size !== 1) fail("the .ts hash changed alth
 if (runs[1].dfyHash === runs[0].dfyHash || runs[2].dfyHash !== runs[0].dfyHash) fail("dfy hashes did not track the proof edit");
 ' "$run_log_dir/.lemmascript/runs.jsonl"
 grep -qx '\*' "$run_log_dir/.lemmascript/.gitignore"
-expect_absent .lemmascript
+root_runs_after=$(wc -l < .lemmascript/runs.jsonl 2>/dev/null || echo 0)
+if [ "$root_runs_after" != "$root_runs_before" ]; then
+  echo "ERROR: run log fixture appended to the repo-root .lemmascript/ instead of the config directory"
+  exit 1
+fi
 
 # lsc runs: a code bug in the .ts fails under regen and its removal passes, so
 # the log above now holds a proof catch (the proof edit) and a source-fix catch
