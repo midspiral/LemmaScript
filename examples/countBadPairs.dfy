@@ -30,14 +30,14 @@ datatype Pair = Pair(i: nat, j: nat)
 // hand-written predicate, so the `by method` block verifies the imperative
 // impl returns that set.
 
-function allPairsImpl_spec(nums: seq<int>): set<Pair>
+function allPairsImpl_fun_spec(nums: seq<int>): set<Pair>
 {
   AllPairs(nums)
 }
 
 function allPairsImpl(nums: seq<int>): set<Pair>
 {
-  allPairsImpl_spec(nums)
+  allPairsImpl_fun_spec(nums)
 }
 by method {
   var result: set<Pair> := {};
@@ -66,14 +66,14 @@ by method {
   return result;
 }
 
-function goodPairsImpl_spec(nums: seq<int>): set<Pair>
+function goodPairsImpl_fun_spec(nums: seq<int>): set<Pair>
 {
   GoodPairs(nums)
 }
 
 function goodPairsImpl(nums: seq<int>): set<Pair>
 {
-  goodPairsImpl_spec(nums)
+  goodPairsImpl_fun_spec(nums)
 }
 by method {
   var result: set<Pair> := {};
@@ -104,14 +104,14 @@ by method {
   return result;
 }
 
-function badPairsImpl_spec(nums: seq<int>): set<Pair>
+function badPairsImpl_fun_spec(nums: seq<int>): set<Pair>
 {
   BadPairs(nums)
 }
 
 function badPairsImpl(nums: seq<int>): set<Pair>
 {
-  badPairsImpl_spec(nums)
+  badPairsImpl_fun_spec(nums)
 }
 by method {
   var result: set<Pair> := {};

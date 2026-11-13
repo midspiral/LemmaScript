@@ -11,8 +11,8 @@ import { DEFAULT_OPTIONS, resolveOptions, type LscOptions } from "./config.js";
 
 /** Appended to a function's name for the lemma that carries its `//@ ensures`. */
 export const ENSURES_LEMMA_SUFFIX = "_ensures";
-/** `function by method` bodies delegate to a proof-defined `<name>_spec`. */
-export const SPEC_FUNCTION_SUFFIX = "_spec";
+/** `function by method` bodies delegate to a proof-defined `<name>_fun_spec`. */
+export const SPEC_FUNCTION_SUFFIX = "_fun_spec";
 
 /** Fresh binder for a comprehension wrapping the given subexpressions: `base`
  *  verbatim unless one of them references it, then primed until free. A *local*
@@ -978,7 +978,7 @@ function emitDecl(d: Decl): string {
       const signature = `${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`;
       const requires = d.requires.map(r => `  requires ${emitExpr(r)}`);
       // The functional specification is the proof author's to write: a bodyless
-      // `<name>_spec` stub, which the .dfy completes by adding a body after its
+      // `<name>_fun_spec` stub, which the .dfy completes by adding a body after its
       // signature. The generated file parses and resolves on its own (an empty
       // function body would not), and the proof adds lines instead of editing
       // between generated braces.

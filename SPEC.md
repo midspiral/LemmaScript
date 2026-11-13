@@ -993,11 +993,11 @@ function tagNameExists(m: Model, name: string, excludeTag?: TagId): boolean {
 If `transformPureBody` can auto-convert the body to a pure expression, the function emits as a normal Dafny `function`. If it cannot (e.g., the body has loops), it emits as `function by method`:
 
 ```dafny
-function tagNameExists_spec(m: Model, name: string, excludeTag: Option<TagId>): bool
+function tagNameExists_fun_spec(m: Model, name: string, excludeTag: Option<TagId>): bool
 
 function tagNameExists(m: Model, name: string, excludeTag: Option<TagId>): bool
 {
-  tagNameExists_spec(m, name, excludeTag)
+  tagNameExists_fun_spec(m, name, excludeTag)
 }
 by method {
   var i_tid_keys := SetToSeq(m.tags.Keys);
@@ -1005,10 +1005,10 @@ by method {
 }
 ```
 
-The functional body delegates to a bodyless `tagNameExists_spec` stub, so the generated file parses and resolves on its own. Give the stub a body in the `.dfy` by adding lines after its signature:
+The functional body delegates to a bodyless `tagNameExists_fun_spec` stub, so the generated file parses and resolves on its own. Give the stub a body in the `.dfy` by adding lines after its signature:
 
 ```dafny
-function tagNameExists_spec(m: Model, name: string, excludeTag: Option<TagId>): bool
+function tagNameExists_fun_spec(m: Model, name: string, excludeTag: Option<TagId>): bool
 {
   exists tid :: tid in m.tags &&
     (match excludeTag { case None => true case Some(v) => v != tid }) &&
@@ -1016,7 +1016,7 @@ function tagNameExists_spec(m: Model, name: string, excludeTag: Option<TagId>): 
 }
 ```
 
-Dafny then verifies that the `by method` block computes `tagNameExists_spec`; left bodyless, the stub is uninterpreted and that proof fails. `regen` three-way-merges the `by method` block when the TypeScript changes without touching the added body.
+Dafny then verifies that the `by method` block computes `tagNameExists_fun_spec`; left bodyless, the stub is uninterpreted and that proof fails. `regen` three-way-merges the `by method` block when the TypeScript changes without touching the added body.
 
 **Effect on callers:** Since `//@ pure` functions are `function`s in Dafny, callers that only invoke pure functions become pure automatically. For example, a large `switch`-based `apply` function becomes a `function` if all the map-iterating helpers it calls are marked `//@ pure`.
 
