@@ -44,7 +44,13 @@ function lookup(env: Env | null, name: string): Ty | undefined {
 function extend(env: Env | null, name: string, ty: Ty): Env {
   return { name, ty, parent: env };
 }
-/** Narrow a binding's type without losing its identity or callback observations. */
+/** Shadow a binding with a narrowed type, keeping its callback state.
+ *  Dropping that state would let the body reference a renamed parameter by its
+ *  source name, which can silently bind an outer variable. The spread is exact
+ *  because refine always follows a read of the same variable, and that read is
+ *  what sets `emittedName`; the `argumentPack`/`value` getters are evaluated
+ *  once, but they belong to rest and beyond-arity frames, whose types (`unknown`,
+ *  `void`) are never narrowed. */
 function refine(env: Env | null, name: string, ty: Ty): Env {
   let entry = binding(env, name);
   if (!entry) for (let e = env; e; e = e.parent) {
