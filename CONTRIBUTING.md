@@ -21,3 +21,4 @@
 ### Add end-to-end verification examples
 
 - If the change makes a new example verifiable, add it to `examples/`.
+- Avoid noisy unit tests that just check generated ASTs if the output is already covered by `examples/`.
