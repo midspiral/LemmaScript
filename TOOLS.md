@@ -7,9 +7,9 @@ The `lsc` toolchain translates annotated TypeScript to formal verification artif
 ```
 TS source (.ts)
   → extract    (ts-morph → Raw IR)
-  → resolve    (Raw IR → Typed IR; types and type-narrowing only)
+  → resolve    (Raw IR → Typed IR; types, callback bindings, type narrowing)
   → narrow     (Typed IR → Typed IR; structural narrowing — `someMatch` rewrites)
-  → transform  (Typed IR → IR, configured per backend)
+  → transform  (Typed IR → IR; includes shared callback lowering)
   → peephole   (IR → IR, local rewrites that eliminate Some/None ceremony)
   → emit       (IR → Lean text or Dafny text)
 ```
@@ -19,6 +19,8 @@ TS source (.ts)
 ### Raw IR (`rawir.ts`)
 
 Structured AST from ts-morph. Expressions are nodes, not strings. Has declared type references (`tsType: "Packet"`) but no resolved types. Close to TS syntax.
+
+Lambda parameters keep their `rest` marker and `defaultValue` for resolve to bind against the call's argument list.
 
 - `RawExpr`: var, num, str, bool, binop, unop, call, index, field, record, arrayLiteral, lambda, conditional, optChain (`obj?.…`), nullish (`a ?? b`), emptyCollection (`new Map`/`new Set`), nonNull (`e!`); spec-only: result (`\result`), forall, exists, havoc
 - `RawStmt`: let, assign, return, break, continue, expr, if, while, switch, forof, throw; spec-only: ghostLet, ghostAssign, assert
@@ -45,11 +47,13 @@ Type names: `Expr`, `Stmt`, `Module`, `MatchArm`, `StmtMatchArm`, and `Decl` = `
 
 **Extract** (`extract.ts`): ts-morph → Raw IR. Walks the TS AST, produces structured expression nodes. Only string outputs are `//@ ` annotation text. Two backend-neutral CLI commands stop here. `lsc extract foo.ts` dumps the Raw IR as JSON — external tools can consume it instead of re-parsing TS, e.g. [lemmascript-claimcheck](https://github.com/midspiral/lemmascript-claimcheck) reads each function's `//@ contract`, `requires`, and `ensures` to check the prose against the spec. `lsc info foo.ts` writes `foo.ts.json`, a per-function spec summary (`{ name: { sig, requires, ensures, decreases } }`, class methods keyed `Class.method`) — see `info-command.ts`. `lsc info --typed foo.ts` goes further — through resolve/narrow/autohavoc — and prints the machine-readable Typed IR contract (typed signatures, spec ASTs, flags, body-kind census, emitted-Dafny-name map) to stdout for satellites like [lemmascript-crosscheck](https://github.com/midspiral/lemmascript-crosscheck); see SPEC.md §7.5.
 
-**Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedPaths`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: simple vars and pure access paths (`a.b.c`, any depth) narrow. `&&` chains accumulate narrowings (each premise in scope for later ones); `==>` propagates premise narrowings into the conclusion. **Type narrowing only** — no structural rewriting.
+**Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedPaths`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: simple vars and pure access paths (`a.b.c`, any depth) narrow. `&&` chains accumulate narrowings (each premise in scope for later ones); `==>` propagates premise narrowings into the conclusion. Narrowing here changes types; structural narrowing remains in `narrow.ts`. Resolve also binds inline callbacks to their actual arguments and simplifies symbolic rest observations; see [Callback binding and lowering](#callback-binding-and-lowering).
 
 **Narrow** (`narrow.ts`): Typed IR → Typed IR. Owns all structural narrowing — both for optional checks and for discriminated unions. Optional patterns rewrite to `someMatch`; discriminant patterns (`x.kind === "v"`, `'k' in x`, `Array.isArray(x)` for synthesized array-unions, `x.kind !== "v") return; ...`) rewrite to `tagMatch`. Also handles `==>` premise narrowing in specs, `left ?? right` (nullish coalescing), `k in m ? m[k] : default` for map-typed `m`, and `obj?.<chain>` for any combination of `?.field`, `?.foo()`, `?.[i]`, and continuations (via the `optChain` IR node). Rules fire for pure access paths (`var(x)`, `field(purePath, name)`); `optChain` and `nullish` are the sole paths for complex scrutinees. The pass owns *where* a condition sits; *what* a condition establishes lives in `condition-facts.ts` (shared with resolve). See [Narrow rules](#narrow-rules) below.
 
 **Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None — substituting the binder for any pure access path scrutinee, or lowering naively when the scrutinee is complex (narrow pre-bound the someBody). No optional-narrowing logic of its own.
+
+For array callbacks, transform invokes `lowerIndexedCallback` from `callback-lowering.ts` after lowering the receiver and arguments. This shared adapter constructs ordinary IR inside transform; it does not run as a separate module-wide phase.
 
 **Peephole** (`peephole.ts`): IR → IR. Local rewrite rules applied bottom-up to fixed point. Eliminates wrap-then-unwrap ceremony around partial-access expressions like `m.get(k)` (which is internally lowered to `methodCall(map, "get", [k])` and emits as `(if k in m then Some(m[k]) else None)`). See [Peephole rules](#peephole-rules) below.
 
@@ -83,6 +87,22 @@ Each emitter dispatches on `(receiverTy, method)` to decide syntax. For example,
 
 `app` is reserved for receiver-less calls: user-defined functions, `Pure.fnName(...)`, `JSFloorDiv(a, b)`, `SetToSeq(s)`.
 
+## Callback Binding and Lowering
+
+| Stage | Responsibility |
+|---|---|
+| [Extract](tools/src/extract.ts) | Keep each lambda parameter's rest marker and default initializer in Raw IR. |
+| [Resolve](tools/src/resolve.ts) | `resolveCallback` binds the lambda to JavaScript's argument list (`callbackArgumentTypes` in [builtins](tools/src/builtins.ts)). Env lookups record which slots are read; unused trailing slots are dropped. Rest is a symbolic pack (`.length`, constant index). Defaults resolve with every parameter in scope; a literal default closure is emitted after the parameters it captures, other initializers keep source order. |
+| [Callback lowering](tools/src/callback-lowering.ts), inside transform | `lowerIndexedCallback` rewrites a callback that reads the index or source into an operation over `arrayRange(source.size)`, binding the receiver once. `filter`/`find` map positions back to elements; predicates guard out-of-range indices so backend helpers stay total. Returns `null` when no extra slot is read, leaving unary output unchanged. |
+| Emit | `arrayRange` is Dafny's `CallbackIndices(n)` (except under `map`, which becomes a plain `seq(n, i => ...)` comprehension) or Lean's `(Array.range n).map Int.ofNat`. |
+
+```text
+xs.map((value, ...rest) => value + rest[0])
+  resolve   → xs.map((value, index) => value + index)
+  transform → let source = xs;
+              arrayRange(source.size).map(i => source[i] + i)
+```
+
 ## Externs
 
 When a call resolves to a function declared in a *different* `.ts` file, extract records it as a `RawExtern` (resolved to `TExtern`, lowered to `ExternDecl`). The Dafny emitter renders it as a top-of-file `function {:axiom} Name(...): R` by default, or as a body-less `method {:axiom}` when selected by `extern-default: impure` or `//@ impure`; the latter gives every call an independent result. A source `//@ pure` overrides an impure project default. In both cases the source `requires`/`ensures` are lifted along. Externs are emitted before all other declarations so they're in scope everywhere.
@@ -107,7 +127,7 @@ The resolve pass uses linked environments (Scheme-style). Each binding is a fram
 interface Env { name: string; ty: Ty; parent: Env | null }
 ```
 
-`let` extends the chain. Lookup walks it. No mutation, no maps, no copying. `resolveStmt` returns `[TStmt, Env]` so bindings thread through a block. Block-creating constructs (`if`, `while`, `forof`, `switch`) call `resolveBlock`; inner bindings don't leak out. `let x = init` resolves init before adding x to the env.
+`let` extends the chain. Lookup walks it; extending a scope does not mutate or copy existing frames. `resolveStmt` returns `[TStmt, Env]` so bindings thread through a block. Block-creating constructs (`if`, `while`, `forof`, `switch`) call `resolveBlock`; inner bindings don't leak out. `let x = init` resolves init before adding x to the env. [Callback](#callback-binding-and-lowering) frames add an `onRead` hook, a replacement value, or a symbolic rest pack; shadowing is unchanged.
 
 ## Known Limitations
 

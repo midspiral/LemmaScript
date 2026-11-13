@@ -13,6 +13,7 @@ import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
+import { lowerIndexedCallback } from "./callback-lowering.js";
 import { isFalsyCapableTy } from "./condition-facts.js";
 import { declOf, declOfKind, declOfTy, unionDeclOfTy, declWithVariant, tyBaseName } from "./typedecls.js";
 
@@ -37,12 +38,14 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "app": return { ...e, args: e.args.map(r) };
     case "field": return { ...e, obj: r(e.obj) };
     case "toNat": return { ...e, expr: r(e.expr) };
+    case "toInt": return { ...e, expr: r(e.expr) };
     case "toReal": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
     case "tupleLiteral": return { ...e, elems: e.elems.map(r) };
     case "tupleProj": return { ...e, obj: r(e.obj) };
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
+    case "arrayRange": return { ...e, length: r(e.length) };
     case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
     case "match": {
       const scr = r(e.scrutinee);
@@ -947,7 +950,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         }
         // Check if any lambda arg has monadic body
         const needsMonadic = _opts.monadic && args.some(a => a.kind === "lambda" && isMonadicBody(a.body));
-        const result: Expr = { kind: "methodCall", obj: recv, objTy: e.fn.obj.ty, method, args, monadic: needsMonadic };
+        const indexed = spec?.hof ? lowerIndexedCallback(recv, e.fn.obj.ty, method, args,
+          spec.hof.shape, needsMonadic, _callbackCounter++) : null;
+        const result: Expr = indexed ?? { kind: "methodCall", obj: recv, objTy: e.fn.obj.ty, method, args, monadic: needsMonadic };
         // Monadic HOF call is itself monadic — lift via binds like a method call
         if (_opts.monadic && needsMonadic && binds) {
           const name = freshName(`_t${_liftCounter++}`);
@@ -1066,6 +1071,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "arrayLiteral", elems: e.elems.map(el => lowerExpr(el, binds)) };
 
     case "lambda": {
+      if (e.params.some(p => p.rest || p.defaultValue)) {
+        throw new Error("lambda rest/default bindings require a known callback argument list");
+      }
       // Pass the module typeDecls (not []), so type lookups inside the lambda
       // body — e.g. a `switch`'s variant fields — resolve. A bare `[]` left a
       // discriminated-union switch in a lambda with binderless patterns.
@@ -1665,6 +1673,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
 }
 
 let _liftCounter = 0;
+let _callbackCounter = 0;
 // Branch results must not renumber the existing lifted-call temporaries.
 let _branchCounter = 0;
 
@@ -2514,6 +2523,7 @@ export function transformModuleDafny(mod: TModule): { typesFile: Module | null; 
 export function transformModule(mod: TModule, specImport?: string, moduleBaseOverride?: string): { typesFile: Module | null; defFile: Module } {
   _forofCounters.clear();
   _liftCounter = 0;
+  _callbackCounter = 0;
   _branchCounter = 0;
   _typeDecls = mod.typeDecls;
   _neededKindHelpers = new Map();
