@@ -657,25 +657,12 @@ Lambda bodies can be expressions (`(x) => x + 1`) or statement blocks (`(x) => {
 
 Flat object destructuring in a lambda parameter is supported, including aliases (`({ id, hidden: isHidden }) => ...`). It remains one callback parameter and lowers to immutable field bindings inside the lambda. Array patterns, nested object patterns, defaults, and rest properties are rejected during extraction with an explicit unsupported-pattern error.
 
-Inline array callbacks bind JavaScript's actual arguments: `(element, index, array)`
-for `map`, `filter`, `some`, `every`, and the `find` family; `(acc, element, index, array)`
-for `reduce` with an initial value; `(a, b)` for sort comparators. Unused trailing
-parameters need no backend representation. A rest binding stays symbolic: its
-`.length` and nonnegative constant-index reads resolve against that argument list,
-including inside nested closures. Returning, passing, or mutating the rest array
-requires materialization and is currently rejected; it never becomes an ordinary
-positional parameter. Rest/default lambdas outside these known callback contexts
-are also rejected. Defaults execute for missing arguments and are ignored for
-arguments known to be defined; optional/unknown values lack the needed undefined check.
-All callback parameters are in scope throughout their default initializers. A literal
-default closure can capture a later parameter: its backend binding waits for that
-parameter's initialization. Other initializer computations retain source order.
-Passing such a closure to another function before its captures are initialized is
-currently unsupported by the backend translation, even if JavaScript permits it.
-Indexed callbacks use a shared adapter over array positions, evaluating the
-receiver once. Dafny's proved `CallbackIndices(n)` helper exposes length, indexing,
-and membership facts; its definition and witness-based proof workflow are documented
-in [SPEC_DAFNY.md §4](SPEC_DAFNY.md#4-helper-preambles).
+**Callback arguments.** Inline array callbacks receive JavaScript's actual arguments: `(element, index, array)` for `map`, `filter`, `some`, `every`, and the `find` family; `(acc, element, index, array)` for `reduce` with an initial value; `(a, b)` for sort comparators. Unused trailing parameters cost nothing; only callbacks that read the index or array are lowered to iterate over positions (Dafny's `CallbackIndices`, [SPEC_DAFNY.md §4](SPEC_DAFNY.md#4-helper-preambles)). A rest parameter is symbolic: `rest.length` and `rest[k]` for constant `k` resolve against the argument list, including inside nested closures, but returning, passing, or mutating the rest array is rejected. A default runs only when JavaScript omits the argument. All parameters are in scope in default initializers, and a literal default closure may capture a later parameter. Rest/default parameters outside these callback positions, and defaults on optional-typed slots (which would need an `undefined` check), are rejected.
+
+```ts
+a.every((x, i) => x <= b[i]);                 // i is the position
+[7].map((value, ...tail) => tail.length);     // 2: the index and the array
+```
 
 **filterMap.** `xs.map(x => ... | undefined).filter((x): x is T => x !== undefined)` drops the `undefined`s *and* unwraps to `seq<T>` — lowered to the proven `SeqFilterSome` preamble (a plain `Map(.value, Filter(.Some?, ...))` wouldn't verify, since `.value` is partial).
 

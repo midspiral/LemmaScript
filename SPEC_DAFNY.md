@@ -154,9 +154,7 @@ function CallbackIndices(n: nat): (r: seq<int>)
 }
 ```
 
-Dafny proves the contracts from the recursive body; callers use the order and bounds facts without unfolding it. The adapter binds the receiver once as `source`, then traverses these positions with callback arguments `(source[i], i, source)` (preceded by the accumulator for `reduce`). Equal elements retain distinct positions; `filter` and `find` map selected positions back to elements.
-
-For an existential `some` proof, an addition such as `assert 1 in CallbackIndices(2);` can expose a concrete witness. Dafny must prove that assertion too. See the [source](examples/callbackArguments.ts), [generated Dafny](examples/callbackArguments.dfy.gen), and [proof addition](examples/callbackArguments.dfy) in the callback example.
+Callers get the length, order, and membership facts without unfolding it. The adapter binds the receiver once and iterates these positions, passing `(source[i], i, source)` (after the accumulator for `reduce`); `filter` and `find` map selected positions back to elements. An existential `some` proof may need a witness such as `assert 1 in CallbackIndices(2);` — see [examples/callbackArguments.dfy](examples/callbackArguments.dfy).
 
 ---
 

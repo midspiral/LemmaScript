@@ -20,7 +20,7 @@ TS source (.ts)
 
 Structured AST from ts-morph. Expressions are nodes, not strings. Has declared type references (`tsType: "Packet"`) but no resolved types. Close to TS syntax.
 
-Lambda parameters retain their `rest` and `defaultValue` binding operations until a call context supplies the actual argument list.
+Lambda parameters keep their `rest` marker and `defaultValue` for resolve to bind against the call's argument list.
 
 - `RawExpr`: var, num, str, bool, binop, unop, call, index, field, record, arrayLiteral, lambda, conditional, optChain (`obj?.…`), nullish (`a ?? b`), emptyCollection (`new Map`/`new Set`), nonNull (`e!`); spec-only: result (`\result`), forall, exists, havoc
 - `RawStmt`: let, assign, return, break, continue, expr, if, while, switch, forof, throw; spec-only: ghostLet, ghostAssign, assert
@@ -89,20 +89,12 @@ Each emitter dispatches on `(receiverTy, method)` to decide syntax. For example,
 
 ## Callback Binding and Lowering
 
-Callback semantics are resolved before either backend chooses collection syntax:
-
 | Stage | Responsibility |
 |---|---|
-| [Extract](tools/src/extract.ts) | Preserve each lambda parameter's rest marker and default initializer in Raw IR. |
-| [Resolve](tools/src/resolve.ts), using [builtins](tools/src/builtins.ts) | `resolveCallback` binds `(element, index, source)`, `(acc, element, index, source)` for initialized `reduce`, or `(a, b)` for comparators. Lexical environment lookups track which slots are used, including through nested closures. |
-| [Callback lowering](tools/src/callback-lowering.ts), within transform | `lowerIndexedCallback` adapts callbacks needing index/source arguments to an operation over `arrayRange(source.size)`. It binds the receiver once with a fresh name and supplies the original argument values at each position. |
-| Emit | Render `arrayRange` as Dafny's `CallbackIndices(n)` or Lean's `(Array.range n).map Int.ofNat`; reuse existing collection emission. |
-
-Rest parameters are symbolic argument packs during resolution: `.length` becomes a constant and a fixed indexed read selects an argument slot. Unused trailing slots beyond the backend's base arity are removed, while defaults that execute remain in the callback body even when their result is unused. Operations requiring a materialized rest array, or defaults whose undefined test cannot be represented, retain explicit unsupported boundaries ([SPEC §3.7](SPEC.md#37-higher-order-functions-and-lambdas)).
-
-All callback parameter bindings enter scope before defaults are resolved. Literal default lambdas collect dependencies through lexical lookups and are emitted as ordinary `let` bindings once those dependencies are available; other initializer computations keep their order. Thus `read = () => extra, extra = 9` constructs the backend closure after binding `extra`. Forward references get fresh names, and reads that cannot wait retain a separate temporary so constant folding cannot erase an unavailable binding. Cycles and passing a closure before its captures are initialized reach ordinary backend scope checking; this lowering does not implement closures over mutable state.
-
-For example, using schematic names:
+| [Extract](tools/src/extract.ts) | Keep each lambda parameter's rest marker and default initializer in Raw IR. |
+| [Resolve](tools/src/resolve.ts) | `resolveCallback` binds the lambda to JavaScript's argument list (`callbackArgumentTypes` in [builtins](tools/src/builtins.ts)). Env lookups record which slots are read; unused trailing slots are dropped. Rest is a symbolic pack (`.length`, constant index). Defaults resolve with every parameter in scope; a literal default closure is emitted after the parameters it captures, other initializers keep source order. |
+| [Callback lowering](tools/src/callback-lowering.ts), inside transform | `lowerIndexedCallback` rewrites a callback that reads the index or source into an operation over `arrayRange(source.size)`, binding the receiver once. `filter`/`find` map positions back to elements; predicates guard out-of-range indices so backend helpers stay total. Returns `null` when no extra slot is read, leaving unary output unchanged. |
+| Emit | `arrayRange` is Dafny's `CallbackIndices(n)` or Lean's `(Array.range n).map Int.ofNat`. |
 
 ```text
 xs.map((value, ...rest) => value + rest[0])
@@ -110,8 +102,6 @@ xs.map((value, ...rest) => value + rest[0])
   transform → let source = xs;
               arrayRange(source.size).map(i => source[i] + i)
 ```
-
-The adapter preserves position order and maps `filter`/`find`/`findLast` results back to source elements. Expression callbacks passed to total backend helpers guard out-of-range indices, returning `false` for predicates or the unchanged accumulator for `reduce`; `map` and `some` inline their bodies under bounds or membership checks. When the callback needs no extra argument slots, the adapter returns `null` and ordinary method-call lowering continues, preserving existing unary output.
 
 ## Externs
 
@@ -137,7 +127,7 @@ The resolve pass uses linked environments (Scheme-style). Each binding is a fram
 interface Env { name: string; ty: Ty; parent: Env | null }
 ```
 
-`let` extends the chain. Lookup walks it; extending a scope does not mutate or copy existing frames. `resolveStmt` returns `[TStmt, Env]` so bindings thread through a block. Block-creating constructs (`if`, `while`, `forof`, `switch`) call `resolveBlock`; inner bindings don't leak out. `let x = init` resolves init before adding x to the env. Callback frames additionally carry an `onRead` hook, a replacement value for a missing argument, or a symbolic argument pack; ordinary shadowing controls which binding is observed.
+`let` extends the chain. Lookup walks it; extending a scope does not mutate or copy existing frames. `resolveStmt` returns `[TStmt, Env]` so bindings thread through a block. Block-creating constructs (`if`, `while`, `forof`, `switch`) call `resolveBlock`; inner bindings don't leak out. `let x = init` resolves init before adding x to the env. [Callback](#callback-binding-and-lowering) frames add an `onRead` hook, a replacement value, or a symbolic rest pack; shadowing is unchanged.
 
 ## Known Limitations
 
