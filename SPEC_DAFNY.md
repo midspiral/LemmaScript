@@ -99,7 +99,7 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | Helper | When | Purpose |
 |--------|------|---------|
 | `SeqIndexOf` | `arr.indexOf(x)` | First-index search (`-1` if absent) |
-| `CallbackIndices` | Array callbacks that use index or source-array arguments | Ordered positions `[0, ..., n-1]`, with proved length, indexing, and membership contracts |
+| `CallbackIndices` | Array callbacks (other than `map`) that use index or source-array arguments | Ordered positions `[0, ..., n-1]`, with proved length, indexing, and membership contracts |
 | `SeqFilter` / `SeqAll` / `SeqFoldLeft` | `filter` / `every` / `reduce` with `dafny-library: local` | Local recursive collection helpers (no Dafny standard-library dependency) |
 | `SeqFindIndex` | `arr.findIndex(f)` | Predicate first-index search |
 | `SeqFind` | `arr.find(f)` | Predicate first-match search |
@@ -154,7 +154,7 @@ function CallbackIndices(n: nat): (r: seq<int>)
 }
 ```
 
-Callers get the length, order, and membership facts without unfolding it. The adapter binds the receiver once and iterates these positions, passing `(source[i], i, source)` (after the accumulator for `reduce`); `filter` and `find` map selected positions back to elements. An existential `some` proof may need a witness such as `assert 1 in CallbackIndices(2);` — see [examples/callbackArguments.dfy](examples/callbackArguments.dfy).
+Callers get the length, order, and membership facts without unfolding it. The adapter binds the receiver once and iterates these positions, passing `(source[i], i, source)` (after the accumulator for `reduce`); `filter` and `find` map selected positions back to elements, and `map` skips the helper, since its `seq` comprehension already has the position in hand. An existential `some` proof may need a witness such as `assert 1 in CallbackIndices(2);` — see [examples/callbackArguments.dfy](examples/callbackArguments.dfy).
 
 ---
 

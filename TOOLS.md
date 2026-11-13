@@ -94,7 +94,7 @@ Each emitter dispatches on `(receiverTy, method)` to decide syntax. For example,
 | [Extract](tools/src/extract.ts) | Keep each lambda parameter's rest marker and default initializer in Raw IR. |
 | [Resolve](tools/src/resolve.ts) | `resolveCallback` binds the lambda to JavaScript's argument list (`callbackArgumentTypes` in [builtins](tools/src/builtins.ts)). Env lookups record which slots are read; unused trailing slots are dropped. Rest is a symbolic pack (`.length`, constant index). Defaults resolve with every parameter in scope; a literal default closure is emitted after the parameters it captures, other initializers keep source order. |
 | [Callback lowering](tools/src/callback-lowering.ts), inside transform | `lowerIndexedCallback` rewrites a callback that reads the index or source into an operation over `arrayRange(source.size)`, binding the receiver once. `filter`/`find` map positions back to elements; predicates guard out-of-range indices so backend helpers stay total. Returns `null` when no extra slot is read, leaving unary output unchanged. |
-| Emit | `arrayRange` is Dafny's `CallbackIndices(n)` or Lean's `(Array.range n).map Int.ofNat`. |
+| Emit | `arrayRange` is Dafny's `CallbackIndices(n)` (except under `map`, which becomes a plain `seq(n, i => ...)` comprehension) or Lean's `(Array.range n).map Int.ofNat`. |
 
 ```text
 xs.map((value, ...rest) => value + rest[0])

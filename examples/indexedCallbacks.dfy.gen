@@ -16,5 +16,5 @@ function pairwiseAtMost(a: seq<int>, b: seq<int>): bool
 function plusIndex(a: seq<int>): seq<int>
 {
   var i_callbackSource1: seq<int> := a;
-  (var s_map := CallbackIndices(|i_callbackSource1|); seq(|s_map|, i_map requires 0 <= i_map < |s_map| => var i_callbackIndex1 := s_map[i_map]; (var x: int := i_callbackSource1[i_callbackIndex1]; (var i: int := i_callbackIndex1; (x + i)))))
+  seq(|i_callbackSource1|, i_map requires 0 <= i_map < |i_callbackSource1| => var i_callbackIndex1: int := i_map; (var x: int := i_callbackSource1[i_callbackIndex1]; (var i: int := i_callbackIndex1; (x + i))))
 }

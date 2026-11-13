@@ -378,6 +378,17 @@ function emitExpr(e: Expr): string {
             usesName(e.obj, n) || usesName(lam, n) ||
             (lam.kind === "lambda" && (lam.params.some(pp => pp.name === n) ||
               usesNameInStmts(lam.body, n)));
+          // Mapping over positions (an indexed callback): the comprehension
+          // index is the position itself, so no CallbackIndices sequence is
+          // needed. Keep the callback's declared type so the binding is `int`.
+          if (e.obj.kind === "arrayRange" && lam.kind === "lambda" && lam.params.length === 1 &&
+              lam.body.length === 1 && lam.body[0].kind === "return") {
+            const n = emitExpr(e.obj.length);
+            const idx = fresh("i_map", taken);
+            const p = lam.params[0];
+            const ty = lam.typedParams ? tyToDafny(p.type) : "int";
+            return `seq(${n}, ${idx} requires 0 <= ${idx} < ${n} => var ${escapeName(p.name)}: ${ty} := ${idx}; ${emitExpr(lam.body[0].value)})`;
+          }
           const bind = e.obj.kind !== "var";
           const s = bind ? fresh("s_map", taken) : obj;
           const idx = fresh("i_map", n => taken(n) || n === s);

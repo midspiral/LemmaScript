@@ -88,7 +88,7 @@ lemma unusedRestOnly_ensures()
 function indexedMap(): seq<int>
 {
   var i_callbackSource4: seq<nat> := [7, 7];
-  (var s_map := CallbackIndices(|i_callbackSource4|); seq(|s_map|, i_map requires 0 <= i_map < |s_map| => var i_callbackIndex4 := s_map[i_map]; (var value: int := i_callbackSource4[i_callbackIndex4]; (var index: int := i_callbackIndex4; (value + index)))))
+  seq(|i_callbackSource4|, i_map requires 0 <= i_map < |i_callbackSource4| => var i_callbackIndex4: int := i_map; (var value: int := i_callbackSource4[i_callbackIndex4]; (var index: int := i_callbackIndex4; (value + index))))
 }
 
 lemma indexedMap_ensures()
@@ -100,7 +100,7 @@ lemma indexedMap_ensures()
 function restIndex(): seq<int>
 {
   var i_callbackSource5: seq<nat> := [7, 7];
-  (var s_map := CallbackIndices(|i_callbackSource5|); seq(|s_map|, i_map requires 0 <= i_map < |s_map| => var i_callbackIndex5 := s_map[i_map]; (var i_callbackArg5_1: int := i_callbackIndex5; i_callbackArg5_1)))
+  seq(|i_callbackSource5|, i_map requires 0 <= i_map < |i_callbackSource5| => var i_callbackIndex5: int := i_map; (var i_callbackArg5_1: int := i_callbackIndex5; i_callbackArg5_1))
 }
 
 lemma restIndex_ensures()
@@ -112,7 +112,7 @@ lemma restIndex_ensures()
 function sourceArgument(): seq<int>
 {
   var i_callbackSource6: seq<nat> := [7, 8];
-  (var s_map := CallbackIndices(|i_callbackSource6|); seq(|s_map|, i_map requires 0 <= i_map < |s_map| => var i_callbackIndex6 := s_map[i_map]; (var index: int := i_callbackIndex6; (var source: seq<nat> := i_callbackSource6; source[index]))))
+  seq(|i_callbackSource6|, i_map requires 0 <= i_map < |i_callbackSource6| => var i_callbackIndex6: int := i_map; (var index: int := i_callbackIndex6; (var source: seq<nat> := i_callbackSource6; source[index])))
 }
 
 lemma sourceArgument_ensures()
@@ -148,7 +148,7 @@ lemma indexedSome_ensures()
 function defaultFromIndex(): seq<int>
 {
   var i_callbackSource9: seq<nat> := [7, 7];
-  (var s_map := CallbackIndices(|i_callbackSource9|); seq(|s_map|, i_map requires 0 <= i_map < |s_map| => var i_callbackIndex9 := s_map[i_map]; (var index: int := i_callbackIndex9; (var extra := index; extra))))
+  seq(|i_callbackSource9|, i_map requires 0 <= i_map < |i_callbackSource9| => var i_callbackIndex9: int := i_map; (var index: int := i_callbackIndex9; (var extra := index; extra)))
 }
 
 lemma defaultFromIndex_ensures()
