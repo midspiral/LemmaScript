@@ -233,3 +233,15 @@ lemma unusedPositional_ensures()
   ensures (unusedPositional()[0] == 8)
 {
 }
+
+function laterDefaultCapture(extra: int): seq<int>
+  requires (extra == 3)
+{
+  (var s_map := [7]; seq(|s_map|, i_map requires 0 <= i_map < |s_map| => var value := s_map[i_map]; (var i_callbackParam21_4 := 9; (var read := (unused: int) => i_callbackParam21_4; read(0)))))
+}
+
+lemma laterDefaultCapture_ensures(extra: int)
+  requires (extra == 3)
+  ensures (laterDefaultCapture(extra)[0] == 9)
+{
+}

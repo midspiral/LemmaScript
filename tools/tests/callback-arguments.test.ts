@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Project, ScriptTarget } from "ts-morph";
+import { Project, ScriptTarget, ts } from "ts-morph";
 import { extractModule } from "../src/extract.ts";
 import { resolveModule } from "../src/resolve.ts";
 import { narrowModule } from "../src/narrow.ts";
@@ -47,6 +47,15 @@ function verify(text: string) {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
+function execute(source: string, ...args: unknown[]): unknown {
+  const { outputText } = ts.transpileModule(source, { compilerOptions: {
+    target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.CommonJS,
+  } });
+  const exports: { f?: (...args: unknown[]) => unknown } = {};
+  new Function("exports", outputText)(exports);
+  return exports.f!(...args);
+}
+
 test("callback observations agree with JavaScript", () => {
   for (const [name, expected] of Object.entries({ restCount: [3], tailCount: [2], unusedRestOnly: [42],
     indexedMap: [7, 8], restIndex: [0, 1], sourceArgument: [7, 8], indexedSome: true, defaultFromIndex: [0, 1],
@@ -56,6 +65,128 @@ test("callback observations agree with JavaScript", () => {
   }
   assert.equal(runtime.capturedIndex(1), false);
   assert.deepEqual(runtime.unusedRest([1, 2]), [2, 3]);
+  assert.deepEqual(runtime.laterDefaultCapture(3), [9]);
+});
+
+test("a default closure captures the later parameter, not its outer namesake", () => {
+  const source = `export function f(extra: number): number[] {
+    //@ requires extra === 3
+    //@ ensures \\result[0] === 9
+    return [7].map((value, index, source, read = (unused: number) => extra, extra = 9) => read(0));
+  }`;
+  assert.deepEqual(execute(source, 3), [9]);
+  const correct = verify(generate(source));
+  assert.equal(correct.status, 0, correct.output);
+  const incorrect = verify(generate(source.replace("result[0] === 9", "result[0] === 3")));
+  assert.notEqual(incorrect.status, 0, incorrect.output);
+  assert.match(incorrect.output, /postcondition could not be proved/);
+});
+
+test("default closures compose through dependencies, rest observations, and lexical shadowing", () => {
+  const cases: [string, number][] = [
+    ["(value, index, source, read = (n: number) => extra, extra = 9, result = read(0)) => result", 9],
+    ["(value, index, source, read = (n: number) => next(n), next = (n: number) => value + n) => read(1)", 8],
+    ["(value, index, source, read = (n: number) => [5].map(extra => extra + 1)[0], extra = 9) => read(0)", 6],
+    ["(value, index, source, read = (n: number) => rest.length, ...rest: number[]) => read(0)", 0],
+    ["(value, index, source, read = (n: number) => extra) => { const extra = 9; return read(0); }", 3],
+    ["(value, index, source, read = (n: number) => extra === undefined ? 0 : extra, extra = value > 0 ? value : undefined) => read(0)", 7],
+    ["(value, index, source, read = (n: number) => { if (extra === undefined) return 0; return extra; }, extra = value > 0 ? value : undefined) => read(0)", 7],
+  ];
+  const sources = cases.map(([callback, expected], i) => {
+    const source = `export function f(extra: number): number[] {
+      //@ requires extra === 3
+      //@ ensures \\result[0] === ${expected}
+      return [7].map(${callback});
+    }`;
+    assert.deepEqual(execute(source, 3), [expected], callback);
+    return source.replace("function f(", `function f${i}(`);
+  });
+  const result = verify(generate(sources.join("\n")));
+  assert.equal(result.status, 0, result.output);
+});
+
+test("a callback function binding shadows module call metadata", () => {
+  const source = `function read(n: number, extra?: number): number { return 3; }
+    export function f(): number[] {
+      //@ ensures \\result[0] === 9
+      return [7].map((value, index, source, read = (n: number) => extra, extra = 9) => read(0));
+    }`;
+  assert.deepEqual(execute(source), [9]);
+  const result = verify(generate(source));
+  assert.equal(result.status, 0, result.output);
+  const lean = generate(source, "lean");
+  assert.doesNotMatch(lean.slice(lean.indexOf("def f "), lean.indexOf("end Pure")), /Pure\.read/);
+});
+
+test("a default closure can capture a later supplied argument", () => {
+  const source = `export function f(xs: undefined[]): number[] {
+    //@ requires xs.length === 1
+    //@ ensures \\result[0] === 0
+    return xs.map((read: ((n: number) => number) | undefined = (n: number) => index, index) => read(0));
+  }`;
+  assert.deepEqual(execute(source, [undefined]), [0]);
+  const result = verify(generate(source));
+  assert.equal(result.status, 0, result.output);
+});
+
+test("calls in defaults cannot read a later binding before it is initialized", () => {
+  for (const parameters of [
+    "read = (n: number) => extra, result = read(0), extra = 9",
+    "result = invoke((n: number) => extra), extra = 9",
+    "result = [1].map(n => extra)[0], extra = 9",
+    "result = invoke((n: number) => rest.length), ...rest: number[]",
+  ]) {
+    const source = `function invoke(read: (n: number) => number): number { return read(0); }
+      export function f(extra: number): number[] {
+        return [7].map((value, index, source, ${parameters}) => result);
+      }`;
+    assert.throws(() => execute(source, 3), ReferenceError);
+    // No front-end policy rejection: ordinary lowering retains the reference
+    // and the backend diagnoses its unavailable binding.
+    const result = verify(generate(source));
+    assert.notEqual(result.status, 0, result.output);
+    assert.match(result.output, /unresolved identifier: i_callbackParam/);
+  }
+});
+
+test("passing a default closure before its captures are initialized remains a backend limitation", () => {
+  const source = `type Reader = (n: number) => number;
+    function identity(read: Reader): Reader { return read; }
+    function invoke(read: (n: number) => number): number { return read(0); }
+    export function f(extra: number): number[] {
+      //@ requires extra === 3
+      //@ ensures \\result[0] === 9
+      return [7].map((value, index, source, read = (n: number) => extra,
+        saved = identity(read), extra = 9) => invoke(saved));
+    }`;
+  // JavaScript can pass the closure without reading extra. Immutable backend
+  // closures cannot be constructed yet; do not move the identity call to hide it.
+  assert.deepEqual(execute(source, 3), [9]);
+  const result = verify(generate(source));
+  assert.notEqual(result.status, 0, result.output);
+  assert.match(result.output, /unresolved identifier: i_callbackParam/);
+  const afterInitialization = source.replace("saved = identity(read), extra = 9", "extra = 9, saved = identity(read)");
+  assert.deepEqual(execute(afterInitialization, 3), [9]);
+  // Function-level proof additions expose the helpers' bodies to their caller.
+  const proof = generate(afterInitialization)
+    .replace(/(function identity\(read: Reader\): Reader\n)/, "$1  ensures identity(read) == read\n")
+    .replace(/(function invoke\(read: \(int\) -> int\): int\n)/, "$1  ensures invoke(read) == read(0)\n")
+    .replace(/(lemma f_ensures[\s\S]*?\{\n)/, "$1  var read := (n: int) => 9;\n"
+      + "  assert identity(read) == read;\n  assert invoke(identity(read)) == 9;\n"
+      + "  assert f(extra)[0] == invoke(identity(read));\n");
+  const supported = verify(proof);
+  assert.equal(supported.status, 0, supported.output);
+});
+
+test("constant folding cannot erase an uninitialized parameter read", () => {
+  const source = `function invoke(read: (n: number) => boolean): boolean { return read(0); }
+    export function f(extra: number[]): boolean[] {
+      return [7].map((value, index, source, result = invoke((n: number) => !extra), extra = [9]) => result);
+    }`;
+  assert.throws(() => execute(source, []), ReferenceError);
+  const result = verify(generate(source));
+  assert.notEqual(result.status, 0, result.output);
+  assert.match(result.output, /unresolved identifier: i_callbackParam/);
 });
 
 test("extraction preserves rest binding operations", () => {

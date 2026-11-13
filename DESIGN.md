@@ -90,7 +90,7 @@ See [ARCHITECTURE_NARROWING.md](ARCHITECTURE_NARROWING.md) for the
 design choices in the resolve/narrow/transform split, and
 [TOOLS.md](TOOLS.md) for the implementation surface.
 
-Inline callbacks bind JavaScript's actual arguments during resolve, then a shared adapter inside transform lowers index/source access to iteration over positions. This keeps lexical binding and unused-argument simplification shared across backends; see [Callback binding and lowering](TOOLS.md#callback-binding-and-lowering).
+Inline callbacks bind JavaScript's actual arguments during resolve, with all parameter names in scope before defaults initialize them. Literal default closures wait for their captured bindings; initializer computations retain source order. A shared adapter inside transform lowers index/source access to iteration over positions. This keeps lexical binding and unused-argument simplification shared across backends; see [Callback binding and lowering](TOOLS.md#callback-binding-and-lowering).
 
 ### Key properties
 

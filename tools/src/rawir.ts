@@ -67,6 +67,8 @@ export type RawExpr =
 export interface RawLambdaParam {
   name: string;
   tsType?: string;
+  /** Parameter-scope type, available before default initializers are resolved. */
+  inferredTsType?: string;
   rest?: true;
   defaultValue?: RawExpr;
 }

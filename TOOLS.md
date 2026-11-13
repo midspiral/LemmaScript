@@ -100,6 +100,8 @@ Callback semantics are resolved before either backend chooses collection syntax:
 
 Rest parameters are symbolic argument packs during resolution: `.length` becomes a constant and a fixed indexed read selects an argument slot. Unused trailing slots beyond the backend's base arity are removed, while defaults that execute remain in the callback body even when their result is unused. Operations requiring a materialized rest array, or defaults whose undefined test cannot be represented, retain explicit unsupported boundaries ([SPEC §3.7](SPEC.md#37-higher-order-functions-and-lambdas)).
 
+All callback parameter bindings enter scope before defaults are resolved. Literal default lambdas collect dependencies through lexical lookups and are emitted as ordinary `let` bindings once those dependencies are available; other initializer computations keep their order. Thus `read = () => extra, extra = 9` constructs the backend closure after binding `extra`. Forward references get fresh names, and reads that cannot wait retain a separate temporary so constant folding cannot erase an unavailable binding. Cycles and passing a closure before its captures are initialized reach ordinary backend scope checking; this lowering does not implement closures over mutable state.
+
 For example, using schematic names:
 
 ```text

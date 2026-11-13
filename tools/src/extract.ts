@@ -563,7 +563,9 @@ function extractExpr(node: Expression): RawExpr {
       if (Node.isIdentifier(nameNode)) return {
         name: nameNode.getText(), tsType,
         ...(p.isRestParameter() ? { rest: true as const } : {}),
-        ...(p.getInitializer() ? { defaultValue: extractExpr(p.getInitializer()!) } : {}),
+        ...(p.getInitializer() ? { defaultValue: extractExpr(p.getInitializer()!),
+          inferredTsType: p.getType().getCallSignatures().length
+            ? p.getType().getText(p) : typeToString(p.getType()) } : {}),
       };
       if (Node.isArrayBindingPattern(nameNode)) {
         throw new Error(`array binding pattern in arrow parameter not yet supported: ${nameNode.getText()}`);
