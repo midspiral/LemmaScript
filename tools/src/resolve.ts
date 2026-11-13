@@ -58,13 +58,6 @@ function refine(env: Env | null, name: string, ty: Ty): Env {
   }
   return { ...entry, name: entry?.name ?? name, ty, parent: env };
 }
-function envKeys(env: Env | null): string[] {
-  const out: string[] = [];
-  let e = env;
-  while (e) { out.push(e.name); e = e.parent; }
-  return out;
-}
-
 // ── Access paths ─────────────────────────────────────────────
 
 /** Pure access path — a chain of field accesses rooted at a variable.
@@ -102,7 +95,7 @@ interface NarrowedPath {
  *  access paths (var or field chain) so we can compare by path equality.
  *  Produced by scanning function requires, enclosing `if (k in m)` branches,
  *  `//@ assert k in m` statements, and while-loop invariants. Consumed in
- *  the index case (resolve.ts:~447) to return `obj.ty.value` (non-optional)
+ *  the `index` case of `resolveExprInner` to return `obj.ty.value` (non-optional)
  *  instead of `Option<V>` when the access is provably safe. */
 interface NarrowedIndex {
   obj: AccessPath;
@@ -572,9 +565,7 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
 
 // ── Call resolution helpers ─────────────────────────────────
 
-/** Infer lambda param types from function-typed parameters of named callees
- *  (e.g., a `Comparator = (a, b) => bool` parameter propagates `string, string` to the lambda's
- *  inline params). Returns updated rawArgs with inferred tsType. */
+/** Render a resolved type back to a TS type string, for lambda param inference. */
 function tyToTsStr(ty: Ty): string | undefined {
   if (ty.kind === "user") return ty.name;
   if (ty.kind === "string") return "string";
@@ -585,6 +576,9 @@ function tyToTsStr(ty: Ty): string | undefined {
   if (ty.kind === "optional") { const inner = tyToTsStr(ty.inner); return inner ? `${inner} | undefined` : undefined; }
   return undefined;
 }
+/** Infer lambda param types from function-typed parameters of named callees
+ *  (e.g., a `Comparator = (a, b) => bool` parameter propagates `string, string` to the lambda's
+ *  inline params). Returns updated rawArgs with inferred tsType. */
 function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExpr[] {
   // Named-callee propagation: when an argument position expects a function
   // type, infer the lambda's param types from that function type. Aliases
@@ -1937,25 +1931,6 @@ function computePureFns(functions: RawFunction[], externDecls: import("./rawir.j
   return new Set(functions.map(fn => fn.name).filter(name => !nonPure.has(name)));
 }
 
-function hasReturnInLoop(stmts: RawStmt[]): boolean {
-  for (const s of stmts) {
-    if ((s.kind === "while" || s.kind === "forof") && containsReturn(s.body)) return true;
-    if (s.kind === "if" && (hasReturnInLoop(s.then) || hasReturnInLoop(s.else))) return true;
-    if (s.kind === "switch" && (s.cases.some(c => hasReturnInLoop(c.body)) || hasReturnInLoop(s.defaultBody))) return true;
-  }
-  return false;
-}
-
-function containsReturn(stmts: RawStmt[]): boolean {
-  for (const s of stmts) {
-    if (s.kind === "return") return true;
-    if (s.kind === "if" && (containsReturn(s.then) || containsReturn(s.else))) return true;
-    if ((s.kind === "while" || s.kind === "forof") && containsReturn(s.body)) return true;
-    if (s.kind === "switch" && (s.cases.some(c => containsReturn(c.body)) || containsReturn(s.defaultBody))) return true;
-  }
-  return false;
-}
-
 // ── Resolve function / module ────────────────────────────────
 
 function resolveFunction(
@@ -2047,6 +2022,7 @@ function precomputeFieldTypesInner(typeDecls: TypeDeclInfo[]) {
 
 export function resolveModule(raw: RawModule): TModule {
   callbackCounter = 0;
+  mergeBinder = 0;
   _warnedRefEq.clear();
   precomputeFieldTypes(raw.typeDecls);
   const pureFns = computePureFns(raw.functions, raw.externs ?? []);
