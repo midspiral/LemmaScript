@@ -48,7 +48,7 @@ function rehypeRepoLinks() {
 // only touch links whose visible text IS a bare *.md filename, so intentional
 // text like `[SPEC.md §2]` or `[TOOLS.md#narrow-rules]` is left untouched.
 const LINK_NAMES = {
-  "/case-studies/": "Case studies & examples",
+  "/case-studies/": "Case studies",
   "/subset/": "Supported TypeScript subset",
   "/getting-started/": "Getting started in an existing codebase",
   "/howto_greenfield/": "Start a new project",
@@ -111,6 +111,7 @@ export default defineConfig({
             { label: "Installation", link: "/installation/" },
             { label: "How the loop works", link: "/how-the-loop-works/" },
             { label: "How to: Brownfield", link: "/getting-started/" },
+            { label: "Case studies", link: "/case-studies/" },
           ],
         },
         {
@@ -149,7 +150,6 @@ export default defineConfig({
             { label: "Toolchain architecture", link: "/tools/" },
             { label: "Architecture: narrowing", link: "/architecture-narrowing/" },
             { label: "Guidance for agents", link: "/agents/" },
-            { label: "Case studies & examples", link: "/case-studies/" },
           ],
         },
       ],

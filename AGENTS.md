@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for AI coding agents working on LemmaScript itself or on projects that use it. Human-oriented docs live in [README.md](README.md), [SPEC.md](SPEC.md), [SPEC_DAFNY.md](SPEC_DAFNY.md), [SPEC_LEAN.md](SPEC_LEAN.md), [DESIGN.md](DESIGN.md), [TOOLS.md](TOOLS.md). This file collects the things that are easy to get wrong if you only read those.
+Guidance for AI coding agents working on LemmaScript itself or on projects that use it. Human-oriented docs live in [README.md](README.md), [CASE_STUDIES.md](CASE_STUDIES.md), [SPEC.md](SPEC.md), [SPEC_DAFNY.md](SPEC_DAFNY.md), [SPEC_LEAN.md](SPEC_LEAN.md), [DESIGN.md](DESIGN.md), [TOOLS.md](TOOLS.md). This file collects the things that are easy to get wrong if you only read those.
 
 ## What LemmaScript is
 
@@ -142,7 +142,7 @@ If you are working in a `<name>-lemmascript/` clone of an upstream library:
 
 ## Style for repo edits
 
-- **README case-study entries:** ~2–3 sentences, headline technique only. Lead with what makes the case study compelling (the WHY — what was proven and why it matters), not a function-by-function enumeration. Don't overclaim ("verified end-to-end") and don't apologize ("just a demo") — name the trust assumption inline.
+- **Case-study entries (`CASE_STUDIES.md`):** ~2–3 sentences, headline technique only. Lead with what makes the case study compelling (the WHY — what was proven and why it matters), not a function-by-function enumeration. Don't overclaim ("verified end-to-end") and don't apologize ("just a demo") — name the trust assumption inline.
 - **SPEC.md / SPEC_DAFNY.md / SPEC_LEAN.md subsections:** match the existing peers in length (~15 lines per subsection). Don't expand a section into multiple subheadings to fit a new feature; usually a sentence and a code block is enough.
 - **No customer or partner names in persisted docs.** Use generic terms ("a pilot," "a brownfield user") instead.
 - **Light edits stay light.** When the user says "lightly edit" or "one-paragraph edit," that's a single paragraph with no new sub-headings.

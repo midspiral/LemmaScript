@@ -141,4 +141,4 @@ The spec expressions support quantifiers (`forall(k, P)`, `exists(k, P)`), impli
 - [GETTING_STARTED.md](GETTING_STARTED.md) — clone a working example and run the edit loop.
 - [SPEC.md](SPEC.md) — the precise annotation language and translation rules.
 - [examples/](examples) — small, complete, verified LemmaScript files.
-- [README.md](README.md) — the case studies, from string helpers to full verified apps.
+- [CASE_STUDIES.md](CASE_STUDIES.md) — the case studies, from string helpers to full verified apps.
