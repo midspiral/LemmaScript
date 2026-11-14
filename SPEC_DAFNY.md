@@ -66,7 +66,9 @@ Non-pure functions become Dafny `method` declarations.
 6. Verify merged `foo.dfy` unless `--no-verify`; if verification fails, advance `.dfy.base` to the new gen before exiting with failure
 7. On success, delete `.dfy.base` (gen is now the anchor), including when verification was explicitly skipped
 
-On merge conflict, the original `foo.dfy` is restored and the merged result is saved as `foo.dfy.merged` for manual inspection. Conflicts and additions-only failures retain the old anchor. A verifier failure after a clean additions-only merge instead retains the new anchor, because the proof already contains that generation; the next retry must not merge it a second time.
+On merge conflict, `foo.dfy` is left unchanged and the merged result is saved as `foo.dfy.merged` for manual inspection. Conflicts and additions-only failures retain the old anchor. A verifier failure after a clean additions-only merge instead retains the new anchor, because the proof already contains that generation; the next retry must not merge it a second time.
+
+Merges use `--diff-algorithm=minimal`, matching the additions-only check so large proof additions do not cause spurious generated-line deletions in the diff. Git versions before 2.44 fall back to the default algorithm with a warning; upgrading avoids the resulting false conflicts. Git execution errors leave the proof unchanged and retain the old anchor, but do not create `.dfy.merged` or record a verification conflict.
 
 ---
 
