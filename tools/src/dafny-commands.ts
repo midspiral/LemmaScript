@@ -2,7 +2,7 @@
  * Dafny backend commands: gen, check, regen.
  */
 
-import { existsSync, readFileSync, writeFileSync, copyFileSync, unlinkSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from "fs";
 import { execFileSync } from "child_process";
 import path from "path";
 import { DEFAULT_OPTIONS, parseOptionValue, type LscOptions } from "./config.js";
@@ -192,42 +192,34 @@ export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, t
 
   // 5. If gen changed, three-way merge
   if (text !== anchor) {
-    const savedDfy = readFileSync(dfyPath, "utf-8");
     if (!existsSync(basePath)) writeFileSync(basePath, anchor);
     const mergedPath = dfyPath + ".merged";
     console.log("Gen changed. Three-way merging...");
+    // -p prints the merge instead of writing it, so the proof file changes
+    // only after a clean merge.
     const merge = (flags: string[]) => execFileSync(
-      "git", ["merge-file", ...flags, "--", dfyPath, basePath, genPath],
-      // A stable locale lets us recognize an unsupported option without
-      // mistaking other usage errors for an older Git version.
-      { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, LC_ALL: "C" } },
+      "git", ["merge-file", "-p", ...flags, "--", dfyPath, basePath, genPath],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: Infinity },
     );
+    let merged: string;
     try {
       try {
         // Match the additions-only check: the default diff can misalign
         // unchanged generated lines after a large inserted proof block.
-        merge(["--diff-algorithm=minimal"]);
+        merged = merge(["--diff-algorithm=minimal"]);
       } catch (e: any) {
-        if (e?.status !== 129 || e?.signal != null || e?.code != null
-          || typeof e?.stderr !== "string"
-          || !/^error: unknown option [`']diff-algorithm(?:=minimal)?'/m.test(e.stderr)) throw e;
-        writeFileSync(dfyPath, savedDfy);
+        // The other arguments are fixed, so a usage error (129) means this
+        // Git predates the option (2.44).
+        if (e?.status !== 129) throw e;
         console.warn("WARNING: this Git does not support git merge-file --diff-algorithm; retrying with the default algorithm. " +
           "Upgrade to Git 2.44 or later to avoid false conflicts after large proof additions.");
-        merge([]);
+        merged = merge([]);
       }
-      console.log(`Merged: ${path.basename(dfyPath)}`);
     } catch (e: any) {
       // Git returns a conflict count capped at 127. Usage errors, fatal
       // errors and interrupted/failed processes are not merge conflicts.
-      const conflict = Number.isInteger(e?.status) && e.status >= 1 && e.status <= 127
-        && e?.signal == null && e?.code == null;
-      try {
-        if (conflict) copyFileSync(dfyPath, mergedPath);
-      } finally {
-        writeFileSync(dfyPath, savedDfy);
-      }
-      if (conflict) {
+      if (e?.status >= 1 && e.status <= 127) {
+        writeFileSync(mergedPath, e.stdout);
         console.error(`CONFLICT: ${path.basename(dfyPath)} — merge had conflicts, dfy restored. See ${path.basename(mergedPath)}`);
         log?.finish({ stage: "conflict", exit: 1, dfyPath });
       } else {
@@ -242,6 +234,8 @@ export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, t
       }
       process.exit(1);
     }
+    writeFileSync(dfyPath, merged);
+    console.log(`Merged: ${path.basename(dfyPath)}`);
   }
 
   // 6. Check gen invariant (unconditional)

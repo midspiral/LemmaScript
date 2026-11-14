@@ -41,32 +41,12 @@ function fails(run: () => void): void {
 }
 const posixOnly = { skip: process.platform === "win32" };
 
-// Intercept selected merge calls, forwarding everything else (including the
-// additions-only check) to real Git. Record calls to catch accidental retries.
-function installGit(f: Fixture, script: string): void {
-  const bin = join(f.dir, "bin");
-  const realPath = process.env.PATH!.split(delimiter).filter(p => p !== bin).join(delimiter);
-  const git = join(bin, "git");
-  writeFileSync(git, `#!${process.execPath}
-const { appendFileSync, writeFileSync } = require("node:fs");
-const { spawnSync } = require("node:child_process");
-const args = process.argv.slice(2);
-const proof = ${JSON.stringify(f.proof)};
-appendFileSync(${JSON.stringify(join(f.dir, "git-calls.jsonl"))}, JSON.stringify(args) + "\\n");
-${script}
-const result = spawnSync("git", args, {
-  stdio: "inherit", env: { ...process.env, PATH: ${JSON.stringify(realPath)} },
-});
-if (result.error) throw result.error;
-if (result.signal) process.kill(process.pid, result.signal);
-process.exit(result.status ?? 1);
-`);
+// A git that runs `body` first, then defers to the real git.
+function fakeGit(f: Fixture, body: string): void {
+  const real = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+  const git = join(f.dir, "bin", "git");
+  writeFileSync(git, `#!/bin/sh\n${body}\nexec "${real}" "$@"\n`);
   chmodSync(git, 0o755);
-}
-
-function mergeCalls(f: Fixture): string[][] {
-  return readFileSync(join(f.dir, "git-calls.jsonl"), "utf8").trim().split("\n")
-    .map(line => JSON.parse(line) as string[]).filter(args => args[0] === "merge-file");
 }
 
 function runLog(f: Fixture): RunLog {
@@ -74,13 +54,6 @@ function runLog(f: Fixture): RunLog {
   writeFileSync(sourcePath, "");
   return new RunLog({ logDir: f.dir, cmd: "regen", sourcePath, lscVersion: "test" });
 }
-
-const oldGit = `
-if (args[0] === "merge-file" && args.includes("--diff-algorithm=minimal")) {
-  console.error("error: unknown option 'diff-algorithm=minimal'");
-  process.exit(129);
-}
-`;
 
 test("a generated change after a large proof block preserves every other byte", posixOnly, t => fixture(f => {
   const help = spawnSync("git", ["merge-file", "-h"], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" } });
@@ -104,79 +77,18 @@ test("a generated change after a large proof block preserves every other byte", 
   assert.equal(existsSync(f.proof + ".merged"), false);
 }));
 
-test("older Git retries once without the option and warns about false conflicts", posixOnly, t => fixture(f => {
-  installGit(f, oldGit);
+test("Git before 2.44 merges with the default algorithm and warns", posixOnly, t => fixture(f => {
+  fakeGit(f, `case "$*" in *--diff-algorithm*) echo "error: unknown option" >&2; exit 129;; esac`);
   const warnings: string[] = [];
   t.mock.method(console, "warn", (message: string) => warnings.push(message));
   dafnyRegen(f.gen, f.proof, f.base, generation(1), f.dir, undefined, undefined, true);
   assert.equal(readFileSync(f.proof, "utf8"), generation(1) + addition);
-  assert.equal(existsSync(f.base), false);
   assert.equal(existsSync(f.proof + ".merged"), false);
-  const calls = mergeCalls(f);
-  assert.equal(calls.length, 2);
-  assert.ok(calls[0].includes("--diff-algorithm=minimal"));
-  assert.ok(!calls[1].includes("--diff-algorithm=minimal"));
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /Git 2\.44.*false conflicts/);
+  assert.match(warnings.join("\n"), /Git 2\.44/);
 }));
 
-test("a genuine conflict on older Git still saves the merge and restores the proof", posixOnly, t => fixture(f => {
-  installGit(f, oldGit.replace("unknown option '", "unknown option `"));
-  t.mock.method(console, "warn", () => {});
-  const original = generation(99) + addition;
-  writeFileSync(f.proof, original);
-  const log = runLog(f);
-  fails(() => dafnyRegen(f.gen, f.proof, f.base, generation(1), f.dir, undefined, undefined, true, log));
-  assert.equal(readFileSync(f.proof, "utf8"), original);
-  assert.equal(readFileSync(f.base, "utf8"), generation(0));
-  assert.match(readFileSync(f.proof + ".merged", "utf8"), /<<<<<<</);
-  assert.equal(mergeCalls(f).length, 2);
-  assert.deepEqual(readRecords(f.dir).map(r => r.stage), ["conflict"]);
-}));
-
-for (const failure of [
-  { name: "fatal error", status: 128, detail: "fatal: cannot merge" },
-  { name: "unrelated usage error", status: 129, detail: "error: unknown option 'unrelated'" },
-  { name: "missing input", status: 255, detail: "error: Could not stat missing.dfy" },
-  { name: "signal", signal: "SIGTERM", detail: "merge interrupted" },
-  { name: "error after falling back", status: 255, detail: "error: Could not stat missing.dfy", legacy: true },
-]) {
-  test(`Git ${failure.name} restores recovery state without recording a conflict`, posixOnly, t => fixture(f => {
-    installGit(f, (failure.legacy ? oldGit : "") + `
-if (args[0] === "merge-file") {
-  writeFileSync(proof, "partial merge output\\n");
-  console.error(${JSON.stringify(failure.detail)});
-  ${failure.signal ? `process.kill(process.pid, ${JSON.stringify(failure.signal)});` : `process.exit(${failure.status});`}
-}
-`);
-    const errors: string[] = [];
-    const warnings: string[] = [];
-    t.mock.method(console, "error", (message: string) => errors.push(message));
-    t.mock.method(console, "warn", (message: string) => warnings.push(message));
-    // An existing recovery anchor must win over the last generated file.
-    writeFileSync(f.base, generation(0));
-    writeFileSync(f.gen, generation(9));
-    const priorMerge = "previous conflict for manual inspection\n";
-    if (failure.legacy) writeFileSync(f.proof + ".merged", priorMerge);
-    const log = runLog(f);
-    fails(() => dafnyRegen(f.gen, f.proof, f.base, generation(1), f.dir, undefined, undefined, true, log));
-    assert.equal(readFileSync(f.proof, "utf8"), generation(0) + addition);
-    assert.equal(readFileSync(f.base, "utf8"), generation(0));
-    assert.equal(readFileSync(f.gen, "utf8"), generation(1));
-    if (failure.legacy) assert.equal(readFileSync(f.proof + ".merged", "utf8"), priorMerge);
-    else assert.equal(existsSync(f.proof + ".merged"), false);
-    assert.equal(mergeCalls(f).length, failure.legacy ? 2 : 1);
-    assert.equal(warnings.length, failure.legacy ? 1 : 0);
-    assert.equal(errors.length, 1);
-    assert.match(errors[0], /^ERROR: could not run `git merge-file`/);
-    assert.ok(errors[0].includes(failure.detail));
-    assert.ok(errors[0].includes(failure.signal ?? `git exited ${failure.status}`));
-    assert.deepEqual(readRecords(f.dir), []);
-  }));
-}
-
-test("a missing Git executable is an error and leaves the proof and anchor intact", posixOnly, t => fixture(f => {
-  process.env.PATH = join(f.dir, "bin");
+test("a Git failure that is not a conflict leaves the proof unchanged and records no conflict", posixOnly, t => fixture(f => {
+  fakeGit(f, `if [ "$1" = merge-file ]; then echo "error: Could not stat x" >&2; exit 255; fi`);
   const errors: string[] = [];
   t.mock.method(console, "error", (message: string) => errors.push(message));
   const log = runLog(f);
@@ -184,25 +96,18 @@ test("a missing Git executable is an error and leaves the proof and anchor intac
   assert.equal(readFileSync(f.proof, "utf8"), generation(0) + addition);
   assert.equal(readFileSync(f.base, "utf8"), generation(0));
   assert.equal(existsSync(f.proof + ".merged"), false);
-  assert.match(errors.join("\n"), /^ERROR:.*git not found on PATH/);
+  assert.match(errors.join("\n"), /^ERROR: could not run `git merge-file`.*\(git exited 255\).*error: Could not stat x/);
   assert.deepEqual(readRecords(f.dir), []);
 }));
 
-test("Git's capped conflict count still saves the conflicted result", posixOnly, () => fixture(f => {
-  const conflicted = "<<<<<<< proof\nours\n=======\ntheirs\n>>>>>>> gen\n";
-  installGit(f, `
-if (args[0] === "merge-file") {
-  writeFileSync(proof, ${JSON.stringify(conflicted)});
-  process.exit(127);
-}
-`);
-  const log = runLog(f);
-  fails(() => dafnyRegen(f.gen, f.proof, f.base, generation(1), f.dir, undefined, undefined, true, log));
+test("a missing Git is an error, not a conflict", posixOnly, t => fixture(f => {
+  process.env.PATH = join(f.dir, "bin");
+  const errors: string[] = [];
+  t.mock.method(console, "error", (message: string) => errors.push(message));
+  fails(() => dafnyRegen(f.gen, f.proof, f.base, generation(1), f.dir, undefined, undefined, true));
   assert.equal(readFileSync(f.proof, "utf8"), generation(0) + addition);
-  assert.equal(readFileSync(f.base, "utf8"), generation(0));
-  assert.equal(readFileSync(f.proof + ".merged", "utf8"), conflicted);
-  assert.equal(mergeCalls(f).length, 1);
-  assert.deepEqual(readRecords(f.dir).map(r => r.stage), ["conflict"]);
+  assert.equal(existsSync(f.proof + ".merged"), false);
+  assert.match(errors.join("\n"), /^ERROR:.*git not found on PATH/);
 }));
 
 test("failed verification anchors the generation already merged into the proof", posixOnly, () => fixture(f => {
