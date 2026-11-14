@@ -16,9 +16,7 @@ const OUT = join(here, "..", "src", "content", "docs")
 // page title so synced pages can carry reader-facing names without editing the
 // repo files themselves.
 const DOCS = [
-  // The site homepage (index.md) is hand-written; the README and showcase
-  // sync to separate pages, preserving the README's setup and usage anchors.
-  { src: "README.md", out: "overview.md", title: "Project overview" },
+  // The site homepage (index.md) is hand-written; README links point to GitHub.
   { src: "CASE_STUDIES.md", out: "case-studies.md", title: "Case studies" },
   { src: "SUBSET.md", out: "subset.md" },
   { src: "GETTING_STARTED.md", out: "getting-started.md", title: "Getting started in an existing codebase" },
@@ -35,7 +33,6 @@ const DOCS = [
 
 // filename -> site route, for rewriting cross-doc links so site nav works.
 const ROUTES = {
-  "README.md": "/overview/",
   "CASE_STUDIES.md": "/case-studies/",
   "SUBSET.md": "/subset/",
   "GETTING_STARTED.md": "/getting-started/",

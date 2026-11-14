@@ -48,7 +48,6 @@ function rehypeRepoLinks() {
 // only touch links whose visible text IS a bare *.md filename, so intentional
 // text like `[SPEC.md §2]` or `[TOOLS.md#narrow-rules]` is left untouched.
 const LINK_NAMES = {
-  "/overview/": "Project overview",
   "/case-studies/": "Case studies",
   "/subset/": "Supported TypeScript subset",
   "/getting-started/": "Getting started in an existing codebase",
@@ -136,7 +135,6 @@ export default defineConfig({
         {
           label: "Reference",
           items: [
-            { label: "Project overview", link: "/overview/" },
             { label: "CLI (lsc)", link: "/reference/cli/" },
             { label: "Supported TypeScript subset", link: "/subset/" },
             { label: "Specification", link: "/spec/" },
