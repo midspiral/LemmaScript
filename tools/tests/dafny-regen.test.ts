@@ -59,6 +59,7 @@ test("a generated change after a large proof block preserves every other byte", 
   const help = spawnSync("git", ["merge-file", "-h"], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" } });
   assert.ifError(help.error);
   if (!(help.stdout + help.stderr).includes("--diff-algorithm")) {
+    assert.ok(!process.env.CI, "CI must run the large-proof regression on Git 2.44 or later");
     t.skip("the large-proof fix requires Git 2.44 or later; older Git uses the tested fallback");
     return;
   }
