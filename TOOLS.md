@@ -279,9 +279,9 @@ Each rule is local and semantics-preserving. The pass takes a `backend` paramete
 | Pattern | Rewrites to |
 |---------|-------------|
 | `match m.get(k) { Some(v) => sb, None => nb }` (statement-level) | `if k in m { var v := m[k]; sb } else { nb }` |
-| `let x = m.get(k); match x { Some(v) => sb, None => nb }` (when `x` not used after) | `if k in m { var v := m[k]; sb } else { nb }` |
+| `let x = m.get(k); match x { Some(v) => sb, None => nb }` (when `x` not used in arms or after) | `if k in m { var v := m[k]; sb } else { nb }` |
 
-The let-collapse rules require the bound variable to not be referenced after the match (conservative use-count check, no shadowing analysis). When the variable is referenced elsewhere, the `let` is preserved and only the inline `match` rule fires.
+The let-collapse rules require the bound variable to not be referenced in either match arm or, for the statement form, after the match (conservative reference check, no shadowing analysis). Otherwise the binding and match are preserved.
 
 The bound value `m[k]` is captured once via `let` (expression form) or `var` (statement form). Substitution would re-evaluate `m[k]` at every use, which changes semantics if the body mutates `m`.
 
