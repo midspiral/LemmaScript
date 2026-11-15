@@ -1,5 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Project, ScriptTarget } from "ts-morph";
 import { peepholeModule } from "../src/peephole.ts";
@@ -80,6 +84,38 @@ const rewrittenLookup: Expr = {
 };
 
 for (const backend of ["dafny", "lean"] as const) {
+  for (const usedIn of ["some", "none", "neither"] as const) {
+    test(`${backend} collapses a statement map-get binding only when neither arm uses it (${usedIn})`, () => {
+      const input: Module = {
+        comment: "", imports: [], options: [],
+        decls: [{
+          kind: "method", name: "lookup", typeParams: [],
+          params: [{ name: "values", type: mapType }],
+          returnType: { kind: "optional", inner: { kind: "int" } },
+          requires: [], ensures: [], decreases: null,
+          body: [
+            { kind: "let", name: "cached", type: { kind: "optional", inner: { kind: "int" } }, mutable: false, value: get },
+            { kind: "match", scrutinee: variable("cached"), arms: [
+              { pattern: pCtor("some", "value"), body: [{ kind: "return", value: usedIn === "some"
+                ? variable("cached") : { kind: "constructor", name: "some", type: "Option", args: [variable("value")] } }] },
+              { pattern: pCtor("none"), body: [{ kind: "return", value: usedIn === "none"
+                ? variable("cached") : { kind: "constructor", name: "none", type: "Option", args: [] } }] },
+            ] },
+          ],
+        }],
+      };
+      const optimized = peepholeModule(input, backend);
+      if (usedIn !== "neither") {
+        assert.deepEqual(optimized, input, "a branch still needs the original Option binding");
+      } else {
+        const decl = optimized.decls[0];
+        assert.ok(decl.kind === "method");
+        assert.equal(decl.body.length, 1, "an unused Option binding should still be removed");
+        assert.equal(decl.body[0].kind, "if");
+      }
+    });
+  }
+
   test(`${backend} rewrites nested map lookups with their existing binders and shadowing`, () => {
     const input: Expr = {
       kind: "constructor", name: "box", type: "Box", args: [
@@ -247,4 +283,19 @@ test("Dafny optimizes source record-map values and retains literal key order", (
   assert.match(text, /map\["first" := first, "second" := second\]/);
   assert.match(text, /map\["value" := \(if \(key in values\) then/);
   assert.doesNotMatch(text, /match /);
+});
+
+test("Dafny verifies a source lookup whose absent branch uses the original binding", () => {
+  const mod = peepholeModule(sourceModule("peephole-map-binding", "dafny"), "dafny");
+  const dir = mkdtempSync(join(tmpdir(), "lsc-peephole-map-binding-"));
+  try {
+    const proof = join(dir, "lookup.dfy");
+    writeFileSync(proof, emitDafnyFile(mod));
+    const result = spawnSync("dafny", ["verify", "--verification-time-limit", "10", proof],
+      { encoding: "utf8", timeout: 60_000 });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
