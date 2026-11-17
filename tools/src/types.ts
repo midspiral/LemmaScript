@@ -197,8 +197,8 @@ function tyFromTypeNode(tn: TypeNode): Ty {
     if (name === "real" && args.length === 0) return { kind: "real" };
     if (name === "int" && args.length === 0) return { kind: "int" };
     if ((name === "Array" || name === "ReadonlyArray") && args.length === 1) return { kind: "array", elem: tyFromTypeNode(args[0]) };
-    if (name === "Set" && args.length === 1) return { kind: "set", elem: tyFromTypeNode(args[0]) };
-    if ((name === "Map" || name === "Record") && args.length === 2) {
+    if ((name === "Set" || name === "ReadonlySet") && args.length === 1) return { kind: "set", elem: tyFromTypeNode(args[0]) };
+    if ((name === "Map" || name === "ReadonlyMap" || name === "Record") && args.length === 2) {
       return { kind: "map", key: tyFromTypeNode(args[0]), value: tyFromTypeNode(args[1]) };
     }
     // User-named type: include generic args in the spelled name so callers
