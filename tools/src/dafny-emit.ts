@@ -1750,11 +1750,15 @@ function resolveTy(ty: Ty): Ty {
 
 /** Constructor names come from source strings (string-union values like
  *  "spec-pure", discriminated-union tags), which may contain characters no
- *  TS identifier has; map those to `_` before the ordinary escaping. A
- *  collision after mapping fails loudly in Dafny (duplicate constructor)
- *  rather than silently merging. */
+ *  TS identifier has; hex-encode those to ensure uniqueness (e.g., "==" →
+ *  "_x3D_x3D", "!=" → "_x21_x3D"). This prevents collisions that would
+ *  otherwise fail loudly in Dafny with duplicate constructor errors. */
 function dafnyCtorName(name: string): string {
-  return escapeName(name.replace(/[^A-Za-z0-9_'?]/g, "_"));
+  // Hex-encode non-identifier characters to ensure uniqueness
+  const encoded = name.replace(/[^A-Za-z0-9_'?]/g, (char) => {
+    return `_x${char.charCodeAt(0).toString(16).toUpperCase()}`;
+  });
+  return escapeName(encoded);
 }
 
 function qualifyCtor(name: string, type?: string): string {
