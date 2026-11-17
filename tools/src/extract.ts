@@ -568,7 +568,34 @@ function extractExpr(node: Expression): RawExpr {
             ? p.getType().getText(p) : typeToString(p.getType()) } : {}),
       };
       if (Node.isArrayBindingPattern(nameNode)) {
-        throw new Error(`array binding pattern in arrow parameter not yet supported: ${nameNode.getText()}`);
+        // ([a, , c]) => e binds each named position by index, like the
+        // `const [a, , c] = arr` lowering; an elided position binds nothing.
+        if (p.getInitializer()) {
+          throw new Error(`defaulted array binding pattern in arrow parameter not yet supported: ${p.getText()}`);
+        }
+        const paramName = freshName(`_lambdaParam${paramIndex}`);
+        nameNode.getElements().forEach((el, i) => {
+          if (Node.isOmittedExpression(el)) return;
+          if (el.getDotDotDotToken()) {
+            throw new Error(`rest element in arrow parameter destructuring not yet supported: ${el.getText()}`);
+          }
+          if (el.getInitializer()) {
+            throw new Error(`default value in arrow parameter destructuring not yet supported: ${el.getText()}`);
+          }
+          const localNode = el.getNameNode();
+          if (!Node.isIdentifier(localNode)) {
+            throw new Error(`nested binding pattern in arrow parameter destructuring not yet supported: ${el.getText()}`);
+          }
+          destructureBindings.push({
+            kind: "let",
+            name: localNode.getText(),
+            mutable: false,
+            tsType: null,
+            init: { kind: "index", obj: { kind: "var", name: paramName }, idx: { kind: "num", value: i } },
+            line: p.getStartLineNumber(),
+          });
+        });
+        return { name: paramName, tsType };
       }
       if (!Node.isObjectBindingPattern(nameNode)) {
         throw new Error(`unsupported arrow parameter binding: ${p.getName()}`);
