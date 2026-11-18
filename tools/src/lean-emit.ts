@@ -506,6 +506,10 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // Same unsupported-real story as the `real` type case in tyToLean.
       throw new Error("real arithmetic is not supported by the Lean backend (needs noncomputable ℝ / Mathlib).");
 
+    case "stringIndex":
+      _needsJSString = true;
+      return `(JSString.index (${emitExpr(e.str)}) (${emitExpr(e.idx)}))`;
+
     case "index": {
       const arr = emitExpr(e.arr);
       // Parenthesize a low-precedence array expr (e.g. a function application)

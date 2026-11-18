@@ -484,6 +484,7 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `opt ? f(opt) : undefined` | match on Some/None | `match opt { case Some(v) => Some(f(v)) case None => None }` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
+| `s[i]` (string, in bounds) | `JSString.index s i` | `[s[i]]` (one-element string) |
 | `s.indexOf(sub, from)` | — (rejected) | `StringIndexOfFrom(s, sub, StringSearchPosition(s, from))`; position clamps to `[0, \|s\|]` |
 | `s.lastIndexOf(sub)` | — (rejected) | `StringLastIndexOf(s, sub)` (preamble: `-1` or a match, with no match starting later) |
 | `s.lastIndexOf(sub, from)` | — (rejected) | `StringLastIndexOfFrom(s, sub, StringSearchPosition(s, from))`; position clamps to `[0, \|s\|]` |
