@@ -12,12 +12,12 @@ method area (s : Shape) returns (res : Int)
 
 method shapes  returns (res : Array Shape)
   do
-    return Pure.shapes 
+    return Pure.shapes
 
 method oneRect  returns (res : Array Shape)
   do
-    return Pure.oneRect 
+    return Pure.oneRect
 
 method total  returns (res : Int)
   do
-    return Pure.total 
+    return Pure.total

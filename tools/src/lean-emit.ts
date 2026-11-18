@@ -466,7 +466,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // which mathlib's `List.Perm` provides (reflexivity, symmetry,
       // `perm_append_comm`, and `Perm.count_eq` for the count-invariance payoff).
       if (e.fn === "Perm" && args.length === 2) return `(${args[0]}.toList).Perm (${args[1]}.toList)`;
-      return `${e.fn} ${args.join(" ")}`;
+      return args.length ? `${e.fn} ${args.join(" ")}` : e.fn;
     }
 
     case "field": {
