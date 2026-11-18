@@ -15,6 +15,12 @@ export function beforeElement(s: string, t: string, i: number, j: number): boole
   return s[i] < t[j];
 }
 
+export function agreesAt(s: string, t: string, i: number, j: number, expected: boolean): boolean {
+  //@ requires 0 <= i && i < s.length && 0 <= j && j < t.length
+  //@ ensures \result === (expected === (s.slice(i, i + 1) === t.slice(j, j + 1)))
+  return expected === (s[i] === t[j]);
+}
+
 export function stringAt(s: string, i: number): string {
   //@ requires 0 <= i && i < s.length
   //@ ensures \result === s.slice(i, i + 1)

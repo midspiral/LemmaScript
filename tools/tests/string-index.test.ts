@@ -160,6 +160,8 @@ example : Pure.firstIsA "abc" = true := by decide
 example : Pure.firstIsA "" = false := by decide
 example : Pure.sameElement "ab" "ba" 0 1 = true := by decide
 example : Pure.sameElement "ab" "ab" 0 1 = false := by decide
+example : Pure.agreesAt "ab" "ba" 0 1 true = true := by decide
+example : Pure.agreesAt "ab" "ab" 0 1 true = false := by decide
 example : Pure.beforeElement "ab" "ab" 0 1 = true := by decide
 example : Pure.beforeElement "ab" "ab" 1 0 = false := by decide
 example : Pure.matchesElement "ab" 0 "" = false := by decide

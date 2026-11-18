@@ -415,13 +415,14 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         : _boolCtx && e.op === "∧" ? "&&"
         : _boolCtx && e.op === "∨" ? "||"
         : e.op;
-      // ↔ does not chain in Lean — a nested iff operand needs parens.
-      const childPrec = e.op === "↔" ? prec(e.op) + 1 : prec(e.op);
+      // Comparisons and ↔ do not chain in Lean. In particular, a Boolean
+      // postcondition `res = (s = t)` must keep its inner equality grouped.
+      const childPrec = ["↔", "=", "≠", "<", "≤", ">", "≥"].includes(e.op)
+        ? prec(e.op) + 1 : prec(e.op);
       // `-`, `/`, `%` are left-associative and non-associative, so an equal-
       // precedence right operand must be parenthesized: `a - (b - c)` would
       // otherwise emit as `a - b - c`, i.e. `(a - b) - c`.
-      const rightPrec = e.op === "↔" ? childPrec
-        : ["-", "/", "%"].includes(e.op) ? prec(e.op) + 1 : childPrec;
+      const rightPrec = ["-", "/", "%"].includes(e.op) ? prec(e.op) + 1 : childPrec;
       const s = `${wrapOperand(e.left, childPrec)} ${op} ${wrapOperand(e.right, rightPrec)}`;
       return (parentPrec !== undefined && prec(e.op) < parentPrec) ? `(${s})` : s;
     }
