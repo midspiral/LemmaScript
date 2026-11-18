@@ -1,5 +1,3 @@
-//@ backend dafny
-
 import { methods, extraMethods as additionalMethods, emptyMethods } from "./httpMethods.js";
 
 // Build a membership table from a shared list without duplicating its entries.

@@ -1,5 +1,3 @@
-//@ backend dafny
-
 export const methods = ["get", "post"];
 
 const firstMethods = ["get"];

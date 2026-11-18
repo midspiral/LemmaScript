@@ -1098,7 +1098,7 @@ const MAPPED_PREFIX = 281470681743360
 
 Constants are always extracted (even in `//@ verify` selective mode) so verified functions can reference them. The type is inferred from the initializer. Literal types (e.g., TypeScript inferring `281470681743360` instead of `number`) are widened to their base type.
 
-Imported constant arrays used in expressions are expanded from their defining source, including renamed imports, readonly arrays, and `as const`. Initializers may contain primitive literals, arrays, spreads, and references to other module-level constants; calls, mutable bindings, and cyclic dependencies are rejected. Empty arrays need an explicit element type, such as `readonly string[]`. This uses the same immutable collection model as local constants. See [`examples/httpMethods.ts`](examples/httpMethods.ts) and [`examples/setSpread.ts`](examples/setSpread.ts) for shared membership tables with exact membership and distinct-count proofs.
+Imported constant arrays used in expressions are expanded from their defining source, including renamed imports, readonly arrays, and `as const`. Initializers may contain primitive literals, arrays, spreads, and references to other module-level constants; calls, mutable bindings, and cyclic dependencies are rejected. Empty arrays need an explicit element type, such as `readonly string[]`. This uses the same immutable collection model as local constants. See [`examples/httpMethods.ts`](examples/httpMethods.ts) and [`examples/setSpread.ts`](examples/setSpread.ts) for shared membership tables with exact membership and distinct-count proofs in both backends.
 
 ### 6.1.3 Real Numbers
 

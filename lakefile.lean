@@ -35,6 +35,8 @@ lean_lib Examples where
     `«optionalLookup.types», `«optionalLookup.def», `«optionalLookup.proof»,
     `«iff.types», `«iff.def», `«iff.proof»,
     `«setFromArray.types», `«setFromArray.def», `«setFromArray.proof»,
+    `«httpMethods.types», `«httpMethods.def», `«httpMethods.proof»,
+    `«setSpread.types», `«setSpread.spec», `«setSpread.def», `«setSpread.proof»,
     `«templateConcat.types», `«templateConcat.def», `«templateConcat.proof»,
     `«nestedPush.types», `«nestedPush.def», `«nestedPush.proof»,
     `«discriminantTrailing.types», `«discriminantTrailing.def», `«discriminantTrailing.proof»,
