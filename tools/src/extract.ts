@@ -49,6 +49,8 @@ const _externs = new Map<string, import("./rawir.js").RawExtern>();
  *  same-file `//@ extern` contributes nothing to the output, so resolving its
  *  types would emit decls that no emitted declaration mentions. */
 const _externSigTypes: { type: Type; node: Node }[] = [];
+/** Imported literal arrays are closed data, emitted once with their source type. */
+const _importedArrays = new Map<VariableDeclaration, RawConst>();
 let _currentSourceFile: SourceFile | null = null;
 /** True only while extracting a function body. Module-level constants that
  *  reference cross-file callees (e.g., `BusEvent.define(...)` inside a
@@ -181,7 +183,7 @@ function detectCrossFileExtern(
  *  segments are joined with `arrayConcat`. Used by array-literal and Math.max/min
  *  call-arg spread.
  *  Precondition: at least one element. */
-function buildSpreadConcat(elems: readonly Node[]): RawExpr {
+function buildSpreadConcat(elems: readonly Node[], extractElement = extractExpr): RawExpr {
   const segments: RawExpr[] = [];
   let currentLiterals: RawExpr[] = [];
   for (const e of elems) {
@@ -190,9 +192,9 @@ function buildSpreadConcat(elems: readonly Node[]): RawExpr {
         segments.push({ kind: "arrayLiteral", elems: currentLiterals });
         currentLiterals = [];
       }
-      segments.push(extractExpr(e.getExpression()));
+      segments.push(extractElement(e.getExpression()));
     } else {
-      currentLiterals.push(extractExpr(e as Expression));
+      currentLiterals.push(extractElement(e as Expression));
     }
   }
   if (currentLiterals.length > 0) {
@@ -203,6 +205,53 @@ function buildSpreadConcat(elems: readonly Node[]): RawExpr {
     result = { kind: "binop", op: "arrayConcat", left: result, right: segments[i] };
   }
   return result;
+}
+
+/** Read imported array data in its defining scope. Resolve dependencies by
+ *  declaration so caller bindings cannot capture them. Calls and mutable
+ *  bindings are outside this static-data subset. */
+function extractConstantData(node: Expression, active = new Set<VariableDeclaration>()): RawExpr {
+  if (Node.isParenthesizedExpression(node) || Node.isAsExpression(node)
+      || Node.isTypeAssertion(node) || Node.isSatisfiesExpression(node)) {
+    return extractConstantData(node.getExpression(), active);
+  }
+  if (Node.isIdentifier(node)) {
+    const symbol = node.getSymbol();
+    const target = symbol?.getAliasedSymbol() ?? symbol;
+    const decl = target?.getDeclarations().find(Node.isVariableDeclaration);
+    const stmt = decl?.getVariableStatement();
+    const init = decl?.getInitializer();
+    if (!decl || !stmt || !Node.isSourceFile(stmt.getParent())
+        || stmt.getDeclarationKind() !== "const" || !init) {
+      throw new Error(`Imported constant array depends on non-constant '${node.getText()}'`);
+    }
+    if (active.has(decl)) throw new Error(`Cyclic imported constant array: '${decl.getName()}'`);
+    _validateDependency(decl.getSourceFile());
+    active.add(decl);
+    try { return extractConstantData(init, active); }
+    finally { active.delete(decl); }
+  }
+  if (Node.isArrayLiteralExpression(node)) {
+    const elems = node.getElements();
+    for (const elem of elems) {
+      if (!Node.isSpreadElement(elem)) continue;
+      const type = elem.getExpression().getType();
+      if (!type.isArray() && !type.isReadonlyArray() && !type.isTuple()) {
+        throw new Error(`Imported constant arrays only support array spreads: ${elem.getText()}`);
+      }
+    }
+    const read = (expr: Expression) => extractConstantData(expr, active);
+    return elems.some(Node.isSpreadElement)
+      ? buildSpreadConcat(elems, read)
+      : { kind: "arrayLiteral", elems: elems.map(e => read(e as Expression)) };
+  }
+  if (Node.isStringLiteral(node) || Node.isNoSubstitutionTemplateLiteral(node)
+      || Node.isNumericLiteral(node) || Node.isBigIntLiteral(node)
+      || Node.isTrueLiteral(node) || Node.isFalseLiteral(node)) return extractExpr(node);
+  if (Node.isPrefixUnaryExpression(node) && node.getOperatorToken() === SyntaxKind.MinusToken) {
+    return { kind: "unop", op: "-", expr: extractConstantData(node.getOperand(), active) };
+  }
+  throw new Error(`Unsupported imported constant array initializer: ${node.getText().slice(0, 80)}`);
 }
 
 /**
@@ -413,6 +462,31 @@ function extractExpr(node: Expression): RawExpr {
 
   // Identifier
   if (Node.isIdentifier(node)) {
+    const symbol = node.getSymbol();
+    const target = symbol?.getAliasedSymbol() ?? symbol;
+    const decl = target?.getDeclarations().find(Node.isVariableDeclaration);
+    if (decl && decl.getSourceFile() !== _currentSourceFile) {
+      const type = decl.getType();
+      if (type.isArray() || type.isReadonlyArray() || type.isTuple()) {
+        let constant = _importedArrays.get(decl);
+        if (!constant) {
+          const value = extractConstantData(node);
+          const elem = type.getNumberIndexType();
+          // A closed empty array needs a concrete element type in the backend;
+          // treating TS's never as an opaque carrier would block concatenation.
+          if (elem?.isNever()) {
+            throw new Error(`Imported constant array '${node.getText()}' needs an explicit element type (for example, readonly string[])`);
+          }
+          constant = {
+            name: freshName(`_imported${_importedArrays.size}_${decl.getName()}`),
+            tsType: `${elem ? typeToString(elem) : "unknown"}[]`,
+            value,
+          };
+          _importedArrays.set(decl, constant);
+        }
+        return { kind: "var", name: constant.name };
+      }
+    }
     return { kind: "var", name: node.getText() };
   }
 
@@ -737,7 +811,9 @@ function extractExpr(node: Expression): RawExpr {
       // new Set([a, b, c]) — set with initial elements
       if (name === "Set" && args && args.length === 1) {
         const arg = args[0] as Expression;
-        if (Node.isArrayLiteralExpression(arg)) {
+        // Only plain literals use the set-display shortcut. Let arrays with
+        // spreads take the ordinary array-to-set path below.
+        if (Node.isArrayLiteralExpression(arg) && !arg.getElements().some(Node.isSpreadElement)) {
           return { kind: "emptyCollection", collectionType: "Set", tsType, initElems: arg.getElements().map(e => extractExpr(e as Expression)) };
         }
         const argSymbol = arg.getType().getSymbol()?.getName() ?? arg.getType().getAliasSymbol()?.getName();
@@ -2301,6 +2377,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   // here), deduped by qualified name.
   _externs.clear();
   _externSigTypes.length = 0;
+  _importedArrays.clear();
   _readLines.clear();
   _skippedSpans.length = 0;
 
@@ -2754,6 +2831,9 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     }
   }
 
+  // Resolve imported constants first so local initializers can use their types.
+  constants.unshift(..._importedArrays.values());
+
   // In brownfield mode, keep dependencies of selected functions and methods.
   if (hasVerifyDirective) {
     const referencedNames = new Set<string>();
@@ -2794,6 +2874,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       if (e.kind === "record") { if (e.spread) collectNamesExpr(e.spread); e.fields.forEach(f => collectNamesExpr(f.value)); }
       if (e.kind === "recordMerge") { collectNamesExpr(e.base); collectNamesExpr(e.override); }
       if (e.kind === "arrayLiteral") { e.elems.forEach(collectNamesExpr); }
+      if (e.kind === "emptyCollection") { e.initElems?.forEach(collectNamesExpr); }
       if (e.kind === "conditional") { collectNamesExpr(e.cond); collectNamesExpr(e.then); collectNamesExpr(e.else); }
       if (e.kind === "nullish") { collectNamesExpr(e.left); collectNamesExpr(e.right); }
       if (e.kind === "nonNull") { collectNamesExpr(e.expr); }
