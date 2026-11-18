@@ -1,3 +1,8 @@
+//@ backend dafny
+
+// Regression for #258: optional fields of an inline parameter record retain
+// their types throughout a chained ??. A present zero wins over later defaults.
+
 interface Context {
   a?: number;
   b?: number;

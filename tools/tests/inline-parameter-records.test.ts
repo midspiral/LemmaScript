@@ -9,7 +9,7 @@ import { transformModuleDafny, transformModuleLean } from "../src/transform.ts";
 import { emitDafnyFile } from "../src/dafny-emit.ts";
 import { emitLeanFile, resetLeanModule } from "../src/lean-emit.ts";
 
-const fixture = readFileSync(new URL("../fixtures/inline-parameter-records.ts", import.meta.url), "utf8");
+const fixture = readFileSync(new URL("../../examples/inlineParameterRecords.ts", import.meta.url), "utf8");
 
 function extract(source: string, strict = true, dependencies: Record<string, string> = {}) {
   const project = new Project({ useInMemoryFileSystem: true, compilerOptions: {
