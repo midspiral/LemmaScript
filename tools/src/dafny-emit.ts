@@ -356,7 +356,18 @@ function emitExpr(e: Expr): string {
             needPreamble("SafeSlice");
             return `SafeSlice(${obj}, ${args[0]}, ${args[1] ?? `|${obj}|`})`;
           }
-          return args.length === 1 ? `${obj}[${args[0]}..]` : `${obj}[${args[0]}..${args[1]}]`;
+          // JS negative index: xs.slice(0, -N) → xs[0..|xs|-N].
+          // Same rewrite the string branch uses.
+          const negVal = (a: typeof e.args[0]): string | null => {
+            const v = exactIntegerLiteral(a);
+            return v !== null && v < 0n ? (-v).toString(10) : null;
+          };
+          const loN = negVal(e.args[0]);
+          const loEx = loN !== null ? `|${obj}|-${loN}` : args[0];
+          if (args.length === 1) return `${obj}[${loEx}..]`;
+          const hiN = negVal(e.args[1]);
+          const hiEx = hiN !== null ? `|${obj}|-${hiN}` : args[1];
+          return `${obj}[${loEx}..${hiEx}]`;
         }
         if (e.method === "map") {
           // Always a seq comprehension: Seq.Map would hide the element access
