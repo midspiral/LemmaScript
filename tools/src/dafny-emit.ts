@@ -180,11 +180,12 @@ function isEmittedUserName(name: string): boolean {
  *  namespace so it can't collapse onto an escaped user name. Bypasses the user
  *  map on purpose: the raw name is synthesized, so it must be freshened *away
  *  from* a same-spelled user name, not aliased onto it. Cached so a declaration
- *  and its references render identically. */
-function escapeGeneratedName(name: string): string {
+ *  and its references render identically. An optional base changes the candidate
+ *  spelling without changing the original name used as the cache key. */
+function escapeGeneratedName(name: string, base = name): string {
   const cached = _generatedDafnyNames.get(name);
   if (cached !== undefined) return cached;
-  const emitted = freshDafnyName(dafnyBaseName(name));
+  const emitted = freshDafnyName(dafnyBaseName(base));
   _generatedDafnyNames.set(name, emitted);
   _takenDafnyNames.add(emitted);
   return emitted;
@@ -1761,11 +1762,11 @@ function resolveTy(ty: Ty): Ty {
 
 /** Constructor names come from source strings (string-union values like
  *  "spec-pure", discriminated-union tags), which may contain characters no
- *  TS identifier has; map those to `_` before the ordinary escaping. A
- *  collision after mapping fails loudly in Dafny (duplicate constructor)
- *  rather than silently merging. */
+ *  TS identifier has. Sanitize only the candidate spelling, keeping the original
+ *  literal as the cache key so distinct literals cannot collapse onto one entry.
+ *  Identifier-shaped tags retain their existing source-name mapping. */
 function dafnyCtorName(name: string): string {
-  return escapeName(name.replace(/[^A-Za-z0-9_'?]/g, "_"));
+  return _userDafnyNames.get(name) ?? escapeGeneratedName(name, name.replace(/[^A-Za-z0-9_'?]/g, "_"));
 }
 
 function qualifyCtor(name: string, type?: string): string {
