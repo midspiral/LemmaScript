@@ -1169,6 +1169,8 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       let idxTy: Ty;
       if (obj.ty.kind === "array") {
         idxTy = obj.ty.elem;
+      } else if (obj.ty.kind === "string") {
+        idxTy = { kind: "string" };
       } else if (obj.ty.kind === "tuple") {
         // Tuple projection: the position must be a literal — a tuple has a
         // distinct type per slot, so a runtime index has no single result type
@@ -1267,6 +1269,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         } else if (step.kind === "index") {
           const idx = resolveExpr(step.idx, ctx);
           const idxTy: Ty = stepInTy.kind === "array" ? stepInTy.elem
+            : stepInTy.kind === "string" ? { kind: "string" }
             : stepInTy.kind === "map" ? { kind: "optional", inner: stepInTy.value }
             : { kind: "unknown" };
           chain.push({ kind: "index", idx, ty: idxTy });
