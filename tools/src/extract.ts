@@ -11,7 +11,7 @@ import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
 import { normalizeBigIntLiteral } from "./rawir.js";
-import { setUserNames, freshName } from "./names.js";
+import { setUserNames, freshName, userNames } from "./names.js";
 import { DEFAULT_OPTIONS, fileCommentLines, isOptionDirective, type LscOptions } from "./config.js";
 
 // ── Expression extraction ────────────────────────────────────
@@ -1149,7 +1149,33 @@ function extractInterface(decl: InterfaceDeclaration, extraDecls?: TypeDeclInfo[
   return extractRecord(decl.getName(), decl.getType(), decl, overrides, extraDecls);
 }
 
-function extractRecord(name: string, type: Type, locationNode: Node, overrides?: Map<string, string>, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
+/** The source annotation retains nullability even with strictNullChecks off. */
+function inlineRecordNode(node: Node | undefined): { node: import("ts-morph").TypeLiteralNode; optional: boolean } | null {
+  if (!node) return null;
+  if (Node.isParenthesizedTypeNode(node)) return inlineRecordNode(node.getTypeNode());
+  if (Node.isUnionTypeNode(node)) {
+    const isNullish = (n: Node): boolean => Node.isParenthesizedTypeNode(n) ? isNullish(n.getTypeNode()) :
+      n.getKind() === SyntaxKind.UndefinedKeyword ||
+      (Node.isLiteralTypeNode(n) && n.getLiteral().getKind() === SyntaxKind.NullKeyword);
+    const arms = node.getTypeNodes().filter(n => !isNullish(n));
+    if (arms.length !== 1) return null;
+    const inner = inlineRecordNode(arms[0]);
+    return inner ? { ...inner, optional: inner.optional || arms.length !== node.getTypeNodes().length } : null;
+  }
+  return Node.isTypeLiteral(node) && node.getMembers().every(Node.isPropertySignature)
+    ? { node, optional: false } : null;
+}
+
+interface ParameterRecordContext {
+  allocateName: (hint: string) => string;
+  typeParams: string[];
+}
+
+function recordTypeReference(name: string, typeParams: string[]): string {
+  return typeParams.length ? `${name}<${typeParams.join(", ")}>` : name;
+}
+
+function extractRecord(name: string, type: Type, locationNode: Node, overrides?: Map<string, string>, extraDecls?: TypeDeclInfo[], parameterRecord?: ParameterRecordContext): TypeDeclInfo | null {
   const props = type.getProperties();
   if (props.length === 0) return null;
   const fields: FieldInfo[] = [];
@@ -1174,10 +1200,12 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
 
     // Inline anonymous object types: ts-morph names them __type.
     // Generate a synthetic named record and reference it by name instead.
-    if (extraDecls && tsType.includes("__type")) {
-      let innerType = propType;
-      let isOptional = false;
-      if (propType.isUnion()) {
+    const inline = parameterRecord && propDecl && Node.isPropertySignature(propDecl)
+      ? inlineRecordNode(propDecl.getTypeNode()) : null;
+    if (extraDecls && (inline || tsType.includes("__type"))) {
+      let innerType = inline ? inline.node.getType() : propType;
+      let isOptional = inline ? inline.optional || !!optionalKey.optionalKey : false;
+      if (!inline && propType.isUnion()) {
         const uTypes = propType.getUnionTypes();
         const nonUndef = uTypes.filter(t => !t.isUndefined());
         if (uTypes.some(t => t.isUndefined()) && nonUndef.length === 1) {
@@ -1187,18 +1215,21 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
       }
       if (innerType.isObject() && !innerType.isArray()) {
         const fName = prop.getName();
-        const synName = name + fName.charAt(0).toUpperCase() + fName.slice(1);
-        const extracted = extractRecord(synName, innerType, locationNode, undefined, extraDecls);
+        const hint = name + fName.charAt(0).toUpperCase() + fName.slice(1);
+        const synName = parameterRecord ? parameterRecord.allocateName(hint) : hint;
+        const extracted = extractRecord(synName, innerType, locationNode, undefined, extraDecls, parameterRecord);
         if (extracted) {
           extraDecls.push(extracted);
-          tsType = isOptional ? `${synName} | undefined` : synName;
+          const ref = recordTypeReference(synName, parameterRecord?.typeParams ?? []);
+          tsType = isOptional ? `${ref} | undefined` : ref;
         }
       }
     }
 
     fields.push({ name: prop.getName(), tsType, ...optionalKey });
   }
-  return { name, kind: "record", fields };
+  return { name, kind: "record", fields,
+    ...(parameterRecord?.typeParams.length ? { typeParams: parameterRecord.typeParams } : {}) };
 }
 
 function findDiscriminant(members: Type[]): string | null {
@@ -3047,6 +3078,39 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       for (const prop of innerType.getProperties()) {
         resolveType(prop.getTypeAtLocation(f.node), f.node);
       }
+    }
+  }
+
+  // Inline parameter annotations need declarations just like anonymous return
+  // types. Without one, field lookup yields unknown and loses optionality in
+  // expressions such as `context.a ?? entry.y ?? context.b ?? 0`.
+  // Run after dependency discovery so names cannot collide with imported or
+  // synthesized types. Keep existing field/return synthesis names unchanged.
+  const recordNames = new Set([...userNames(), ...typeDecls.map(d => d.name), ...classes.map(c => c.name)]);
+  function allocateRecordName(hint: string): string {
+    let name = hint;
+    for (let suffix = 2; recordNames.has(name); suffix++) name = `${hint}${suffix}`;
+    recordNames.add(name);
+    return name;
+  }
+  for (const { node, fn, owner } of selected) {
+    const typeParams = node.getTypeParameters().map(p => p.getName());
+    const typeArgs = node.getTypeParameters().map(p => fn.typeParams.includes(p.getName())
+      ? p.getName() : p.getConstraint()?.getText() ?? p.getName());
+    for (const param of node.getParameters()) {
+      if (fn.typeAnnotations.some(a => a.name === param.getName())) continue;
+      const raw = fn.params.find(p => p.name === param.getName());
+      const inline = inlineRecordNode(param.getTypeNode());
+      if (!raw || !inline) continue; // Destructured parameters are already flattened.
+      const title = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+      const name = allocateRecordName(owner + title(fn.name) + title(raw.name));
+      const extra: TypeDeclInfo[] = [];
+      const info = extractRecord(name, inline.node.getType(), param, undefined, extra,
+        { allocateName: allocateRecordName, typeParams });
+      if (!info) continue;
+      typeDecls.push(...extra, info);
+      const ref = recordTypeReference(name, typeArgs);
+      raw.tsType = inline.optional || param.hasQuestionToken() ? `${ref} | undefined` : ref;
     }
   }
 
