@@ -25,7 +25,7 @@ def oneRect  : Array Shape :=
   xs
 
 def total  : Int :=
-  let xs := shapes 
+  let xs := shapes
   area xs[0]! + area xs[1]!
 
 end Pure

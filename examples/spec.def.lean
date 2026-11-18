@@ -29,7 +29,7 @@ method defaultConfig  returns (res : Config)
   ensures ensures_1: (res.threshold = 0 : Prop)
   ensures ensures_2: (res.enabled = true : Prop)
   do
-    return Pure.defaultConfig 
+    return Pure.defaultConfig
 
 method withThreshold (c : Config) (t : Nat) returns (res : Config)
   ensures ensures_1: (res.threshold = t : Prop)
@@ -62,13 +62,13 @@ method exactBigIntLiteral  returns (res : Int)
   ensures ensures_1: (res = 9007199254740993 : Prop)
   ensures ensures_2: (res ≠ 9007199254740992 : Prop)
   do
-    return Pure.exactBigIntLiteral 
+    return Pure.exactBigIntLiteral
 
 method exactNegativeBigIntLiteral  returns (res : Int)
   ensures ensures_1: (res = -9007199254740993 : Prop)
   ensures ensures_2: (res ≠ -9007199254740992 : Prop)
   do
-    return Pure.exactNegativeBigIntLiteral 
+    return Pure.exactNegativeBigIntLiteral
 
 method wrapOne (x : Int) returns (res : Array Int)
   ensures ensures_1: (res.size = 1 : Prop)

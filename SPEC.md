@@ -148,7 +148,7 @@ Note: `arr.includes(x)` and `arr.indexOf(x)` are supported natively — no manua
 
 User-defined types (string literal unions, discriminated unions) are generated automatically with the same name as the TS type. No annotation needed or supported for these.
 
-String-literal union members are emitted verbatim as backend constructor names — they must be valid identifiers in the target backend. Avoid operator characters like `"+"` or `"-"` (which Dafny rejects); use word names such as `"Add"`, `"Sub"` instead.
+String-literal union members become datatype constructors. LemmaScript's Dafny backend sanitizes punctuation while caching names by the original literals, appending primes (`'`) when different literals would otherwise produce the same name. Operator literals such as `"==" | "!="` therefore work directly (see [`examples/operatorUnion.ts`](examples/operatorUnion.ts)).
 
 When a variable is Nat-typed:
 - Lean: `arr[i]!` instead of `arr[i.toNat]!`
@@ -484,6 +484,7 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `opt ? f(opt) : undefined` | match on Some/None | `match opt { case Some(v) => Some(f(v)) case None => None }` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
+| [`s[i]`](examples/stringIndex.ts) (string, in bounds) | `JSString.index s i` | `[s[i]]` (one-element string) |
 | `s.indexOf(sub, from)` | — (rejected) | `StringIndexOfFrom(s, sub, StringSearchPosition(s, from))`; position clamps to `[0, \|s\|]` |
 | `s.lastIndexOf(sub)` | — (rejected) | `StringLastIndexOf(s, sub)` (preamble: `-1` or a match, with no match starting later) |
 | `s.lastIndexOf(sub, from)` | — (rejected) | `StringLastIndexOfFrom(s, sub, StringSearchPosition(s, from))`; position clamps to `[0, \|s\|]` |

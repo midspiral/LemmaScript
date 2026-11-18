@@ -24,6 +24,7 @@ export type Expr =
   | { kind: "toInt"; expr: Expr }                               // nat → int coercion
   | { kind: "toReal"; expr: Expr }                             // int/nat → real coercion
   | { kind: "index"; arr: Expr; idx: Expr }                // arr[idx]!
+  | { kind: "stringIndex"; str: Expr; idx: Expr }          // one-element string at idx (in bounds)
   | { kind: "tupleLiteral"; elems: Expr[] }                // (a, b) — heterogeneous tuple literal
   | { kind: "tupleProj"; obj: Expr; index: number; arity: number }  // projection at a 0-based position; arity is needed only by Lean, whose right-nested Prod makes the last slot asymmetric (Dafny just uses `t.index`)
   | { kind: "record"; spread: Expr | null; fields: RecordField[]; ctor?: string; ctorOf?: string }  // ctorOf: the union whose variant `ctor` is, when a datatype update needs renamed destructors
@@ -280,6 +281,7 @@ export function anyExpr(e: Expr, pred: ExprPred): boolean {
     case "app": return e.args.some(a => anyExpr(a, pred));
     case "field": return anyExpr(e.obj, pred);
     case "index": return anyExpr(e.arr, pred) || anyExpr(e.idx, pred);
+    case "stringIndex": return anyExpr(e.str, pred) || anyExpr(e.idx, pred);
     case "tupleLiteral": return e.elems.some(x => anyExpr(x, pred));
     case "tupleProj": return anyExpr(e.obj, pred);
     case "implies": return e.premises.some(p => anyExpr(p, pred)) || anyExpr(e.conclusion, pred);
