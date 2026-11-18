@@ -720,6 +720,11 @@ function emitExpr(e: Expr): string {
     case "toReal":
       return `(${emitExpr(e.expr)} as real)`;
 
+    case "stringIndex":
+      // TS indexing returns a string; Dafny's native string subscript is a
+      // char. The singleton sequence preserves the native bounds obligation.
+      return `[${emitExpr(e.str)}[${emitExpr(e.idx)}]]`;
+
     case "index": {
       const obj = emitExpr(e.arr);
       const idx = emitExpr(e.idx);

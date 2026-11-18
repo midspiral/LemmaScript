@@ -41,6 +41,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "toInt": return { ...e, expr: r(e.expr) };
     case "toReal": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
+    case "stringIndex": return { ...e, str: r(e.str), idx: r(e.idx) };
     case "tupleLiteral": return { ...e, elems: e.elems.map(r) };
     case "tupleProj": return { ...e, obj: r(e.obj) };
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
@@ -808,6 +809,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "field", obj: transformExpr(e.obj), field: e.field, datatypeField: isRecordType(e.obj.ty) };
 
     case "index": {
+      if (e.obj.ty.kind === "string") {
+        return { kind: "stringIndex", str: lowerExpr(e.obj, binds), idx: lowerExpr(e.idx, binds) };
+      }
       const idx = transformExpr(e.idx);
       if (e.obj.ty.kind === "tuple") {
         // resolve guarantees a numeric-literal index here; project at that slot.

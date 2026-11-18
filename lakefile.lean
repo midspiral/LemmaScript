@@ -38,6 +38,7 @@ lean_lib Examples where
     `«httpMethods.types», `«httpMethods.def», `«httpMethods.proof»,
     `«setSpread.types», `«setSpread.spec», `«setSpread.def», `«setSpread.proof»,
     `«templateConcat.types», `«templateConcat.def», `«templateConcat.proof»,
+    `«stringIndex.types», `«stringIndex.spec», `«stringIndex.def», `«stringIndex.proof»,
     `«nestedPush.types», `«nestedPush.def», `«nestedPush.proof»,
     `«discriminantTrailing.types», `«discriminantTrailing.def», `«discriminantTrailing.proof»,
     `«spreadMerge.types», `«spreadMerge.def»,
