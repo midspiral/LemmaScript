@@ -671,6 +671,7 @@ function emitExpr(e: Expr): string {
       if (e.fn === "JSStringLt") needPreamble("JSStringLt");
       if (e.fn === "CeilReal") needPreamble("CeilReal");
       if (e.fn === "FloorReal") needPreamble("FloorReal");
+      if (e.fn === "TruncReal") needPreamble("TruncReal");
       if (e.fn === "StringFromCharCode") needPreamble("StringFromCharCode");
       if (e.fn === "NatToString") needPreamble("NatToString");
       if (e.fn === "IntToString") { needPreamble("NatToString"); needPreamble("IntToString"); }
@@ -1175,6 +1176,13 @@ const IS_SAFE_INTEGER_REAL = `predicate IsSafeIntegerReal(x: real)
   x.Floor as real == x && -9007199254740991 <= x.Floor <= 9007199254740991
 }`;
 
+const TRUNC_REAL = `function TruncReal(x: real): (t: int)
+  ensures x >= 0.0 ==> t as real <= x < t as real + 1.0
+  ensures x < 0.0 ==> t as real - 1.0 < x <= t as real
+{
+  if x >= 0.0 then x.Floor else -((-x).Floor)
+}`;
+
 const CALLBACK_INDICES = `function CallbackIndices(n: nat): (r: seq<int>)
   ensures |r| == n
   ensures forall i :: 0 <= i < n ==> r[i] == i
@@ -1666,6 +1674,7 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["CeilReal", CEIL_REAL],
   ["FloorReal", FLOOR_REAL],
   ["IsSafeIntegerReal", IS_SAFE_INTEGER_REAL],
+  ["TruncReal", TRUNC_REAL],
   ["SeqIndexOf", SEQ_INDEX_OF],
   ["SeqFindIndex", SEQ_FIND_INDEX],
   ["SeqFindLastIndex", SEQ_FIND_LAST_INDEX],
