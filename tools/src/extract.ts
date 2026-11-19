@@ -67,9 +67,19 @@ let _destrCounter = 0;
 /** Extract the default for the shared Option lowering. When the source can
  *  be undefined, None selects this expression, including for mixed null/undefined
  *  types: the verification model deliberately conflates those values. */
-function destructuringDefault(el: Node): RawExpr | null {
+function destructuringDefault(el: Node, sourceType: Type | undefined): RawExpr | null {
   const init = Node.isBindingElement(el) ? el.getInitializer() : undefined;
-  return init ? extractExpr(init) : null;
+  if (!init) return null;
+  const dflt = extractExpr(init);
+  const parts = sourceType?.isUnion() ? sourceType.getUnionTypes() : sourceType ? [sourceType] : [];
+  // A literal null/undefined default preserves None. Other defaults can change
+  // the value or execute effects on a null input that TypeScript would preserve.
+  if (hasUndefined(sourceType) && parts.some(t => t.isNull()) &&
+      !(dflt.kind === "var" && dflt.name === "undefined")) {
+    const fileName = path.relative(process.cwd(), el.getSourceFile().getFilePath());
+    console.error(`warning: ${fileName}:${el.getStartLineNumber()}: destructuring default treats null as undefined in the verification model, but TypeScript preserves null; proofs may not hold for null inputs`);
+  }
+  return dflt;
 }
 
 function hasUndefined(t: Type | undefined): boolean {
@@ -1662,7 +1672,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
                 : { kind: "index", obj: initVar, idx: { kind: "num", value: i } };
               const arrTy = initializer.getType();
               const srcTy = arrTy.getTupleElements()[i] ?? arrTy.getArrayElementType() ?? arrTy.getNumberIndexType();
-              const dflt = isRest ? null : destructuringDefault(el);
+              const dflt = isRest ? null : destructuringDefault(el, srcTy);
               if (dflt) {
                 // `[a = d] = xs`: d when xs[i] is out of bounds or undefined.
                 const present: RawExpr = hasUndefined(srcTy) ? { kind: "nullish", left: init, right: dflt } : init;
@@ -1709,7 +1719,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
                 const srcTy = initializer.getType().getProperty(fieldName)?.getTypeAtLocation(d);
                 // Do not extract an unreachable initializer: even an expression
                 // outside the fragment is harmless when the field is defined.
-                const dflt = hasUndefined(srcTy) ? destructuringDefault(el) : null;
+                const dflt = hasUndefined(srcTy) ? destructuringDefault(el, srcTy) : null;
                 result.push({
                   kind: "let",
                   name: localName,

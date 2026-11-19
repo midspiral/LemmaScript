@@ -1,5 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Project, ScriptTarget } from "ts-morph";
 import {
@@ -127,3 +131,63 @@ test("flattened parameters use their post-default types and retain source defaul
       return a;
     }`));
 });
+
+function gen(source: string, backend: "dafny" | "lean") {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "lsc-destructuring-warning-")));
+  try {
+    writeFileSync(join(dir, "source.ts"), source);
+    const cli = fileURLToPath(new URL("../dist/lsc.js", import.meta.url));
+    const result = spawnSync(process.execPath, [cli, "gen", `--backend=${backend}`, "source.ts"], {
+      cwd: dir, encoding: "utf8", timeout: 30_000,
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(existsSync(join(dir, backend === "dafny" ? "source.dfy.gen" : "source.def.lean")));
+    return result;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// These postconditions hold in the conflated model but fail at runtime for null.
+const warningSource = String.raw`interface Input { value?: number | null }
+export function objectDefault(input: Input): number | null {
+  //@ ensures \result !== null
+  const { value: renamed = 5 } = input;
+  return renamed;
+}
+export function arrayDefault(input: (number | null | undefined)[]): number | null {
+  //@ ensures \result !== null
+  const [value = 5] = input;
+  return value;
+}
+`;
+
+for (const backend of ["dafny", "lean"] as const) {
+  test(`${backend} CLI warns when null/undefined conflation changes a destructuring default`, () => {
+    const result = gen(warningSource, backend);
+    const warnings = result.stderr.trim().split("\n");
+    assert.equal(warnings.length, 2, result.stderr);
+    for (const [i, line] of [4, 9].entries()) {
+      assert.equal(warnings[i], `warning: source.ts:${line}: destructuring default treats null as undefined in the verification model, but TypeScript preserves null; proofs may not hold for null inputs`);
+    }
+    assert.doesNotMatch(result.stdout, /warning:/);
+  });
+
+  test(`${backend} CLI does not warn for defaults that preserve the modeled behavior`, () => {
+    const result = gen(`
+interface Optional { value?: number }
+interface Nullable { value: number | null }
+interface Mixed { value?: number | null }
+export function optional(o: Optional): number { const { value = 5 } = o; return value; }
+export function nullable(o: Nullable): number | null { const { value = 5 } = o; return value; }
+export function nullDefault(o: Mixed): number | null { const { value = null } = o; return value; }
+export function undefinedDefault(o: Mixed): number | null | undefined { const { value = undefined } = o; return value; }
+export function optionalArray(xs: (number | undefined)[]): number { const [value = 5] = xs; return value; }
+export function nullableArray(xs: (number | null)[]): number | null { const [value = 5] = xs; return value; }
+export function nullArray(xs: (number | null | undefined)[]): number | null { const [value = null] = xs; return value; }
+export function undefinedArray(xs: (number | null | undefined)[]): number | null | undefined { const [value = undefined] = xs; return value; }
+`, backend);
+    assert.equal(result.stderr, "");
+  });
+}
