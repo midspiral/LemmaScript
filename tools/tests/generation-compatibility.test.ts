@@ -15,7 +15,7 @@ const projects = new SourceProjects();
 
 // These shipped examples exercise the additions-only proof boundary. Changing
 // unrelated boolean grouping or introducing unnecessary temporaries breaks it.
-for (const name of ["binarySearch", "arrayFind", "countBadPairs"]) {
+for (const name of ["binarySearch", "arrayFind", "countBadPairs", "forContinue", "spec", "todo-domain", "optionalLookup"]) {
   test(`nullish lowering preserves the existing ${name} proof baseline`, () => {
     const file = new URL(`../../examples/${name}.ts`, import.meta.url);
     const typed = narrowModule(resolveModule(extractModule(projects.load(fileURLToPath(file)))));

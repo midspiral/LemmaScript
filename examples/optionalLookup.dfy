@@ -13,6 +13,6 @@ function optionalLookup(enabled: bool, values: map<string, int>, key: string): O
 lemma optionalLookup_ensures(enabled: bool, values: map<string, int>, key: string)
   ensures (!(enabled) ==> (match optionalLookup(enabled, values, key) { case Some(i_) => false case None => true }))
   ensures (enabled ==> !((key in values)) ==> (match optionalLookup(enabled, values, key) { case Some(i_value) => (i_value == 0) case None => false }))
-  ensures (enabled ==> (key in values) ==> (var i_optional1: Option<int> := optionalLookup(enabled, values, key); (var i_optional2: int := values[key]; (match i_optional1 { case Some(i_optional3) => (i_optional3 == i_optional2) case None => false }))))
+  ensures (enabled ==> (key in values) ==> (match optionalLookup(enabled, values, key) { case Some(i_value) => (i_value == values[key]) case None => false }))
 {
 }

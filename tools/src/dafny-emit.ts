@@ -845,7 +845,7 @@ function emitStmt(s: Stmt, indent: number): string {
       }
       if (s.value.kind === "havoc" || s.value.kind === "emptyMap" || s.value.kind === "emptySet" ||
           (s.value.kind === "arrayLiteral" && s.value.elems.length === 0) ||
-          (s.type.kind !== "unknown" && needsOptionalTypeHint(s.value)))
+          (s.type.kind !== "unknown" && needsOptionalTypeHint(s.value, s.mutable)))
         return `${pad}var ${escapeName(s.name)}: ${tyToDafny(s.type)} := ${emitExpr(s.value)};`;
       return `${pad}var ${escapeName(s.name)} := ${emitExpr(s.value)};`;
     case "assign":

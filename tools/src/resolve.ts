@@ -124,10 +124,15 @@ interface Ctx {
   inLambda: boolean;
   narrowedPaths: NarrowedPath[];  // pure access path narrowing for conditional then-branches
   narrowedIndices: NarrowedIndex[];  // `k in m` atoms known-true in this scope
+  safeSpecAccesses?: NarrowedIndex[];  // lookup domains established within a specification
 }
 
 function withEnv(ctx: Ctx, env: Env | null): Ctx {
-  return { ...ctx, env };
+  if (!ctx.safeSpecAccesses?.length) return { ...ctx, env };
+  const rebound = new Set<string>();
+  for (let entry = env; entry && entry !== ctx.env; entry = entry.parent) rebound.add(entry.name);
+  return { ...ctx, env, safeSpecAccesses: ctx.safeSpecAccesses?.filter(
+    a => !rebound.has(a.obj.rootVar) && !rebound.has(a.idx.rootVar)) };
 }
 
 // ── TS type → Ty ─────────────────────────────────────────────
@@ -218,6 +223,10 @@ function conditionContext(cond: TExpr, ctx: Ctx, truth: boolean): Ctx {
   if (cond.kind === "unop" && cond.op === "!") return conditionContext(cond.expr, ctx, !truth);
   if (cond.kind === "binop" && ((truth && cond.op === "&&") || (!truth && cond.op === "||")))
     return conditionContext(cond.right, conditionContext(cond.left, ctx, truth), truth);
+  if (truth && ctx.inSpec) {
+    const access = specAccessGuard(cond);
+    if (access) ctx = { ...ctx, safeSpecAccesses: [...(ctx.safeSpecAccesses ?? []), access] };
+  }
   const fact = presentFact(cond);
   if (!fact) return truth ? collectAndChainNarrowings(cond, ctx) : ctx;
   const positive = truth !== fact.negated;
@@ -254,6 +263,28 @@ function asTExprAccessPath(e: TExpr): AccessPath | null {
     return { rootVar: inner.rootVar, fields: [...inner.fields, e.field] };
   }
   return null;
+}
+
+/** These premises make an immutable spec lookup total, so comparing it with
+ * an optional need not introduce extra evaluation bindings. */
+function specAccessGuard(e: TExpr): NarrowedIndex | null {
+  let obj: TExpr, idx: TExpr;
+  if (e.kind === "binop" && e.op === "<" && e.left.ty.kind === "nat" &&
+      e.right.kind === "field" && e.right.field === "length" && e.right.obj.ty.kind === "array") {
+    obj = e.right.obj; idx = e.left;
+  } else if (e.kind === "call" && e.builtinId === "map.has" && e.fn.kind === "field" && e.args.length === 1) {
+    obj = e.fn.obj; idx = e.args[0];
+  } else if (e.kind === "binop" && e.op === "in" && e.right.ty.kind === "map") {
+    obj = e.right; idx = e.left;
+  } else return null;
+  const objPath = asTExprAccessPath(obj), idxPath = asTExprAccessPath(idx);
+  return objPath && idxPath ? { obj: objPath, idx: idxPath } : null;
+}
+
+function safeSpecAccess(ctx: Ctx, obj: TExpr, idx: TExpr): boolean {
+  const objPath = asTExprAccessPath(obj), idxPath = asTExprAccessPath(idx);
+  return !!(ctx.inSpec && objPath && idxPath && ctx.safeSpecAccesses?.some(
+    a => accessPathsEqual(a.obj, objPath) && accessPathsEqual(a.idx, idxPath)));
 }
 
 /** Walk `e` collecting top-level `k in m` atoms where both sides are pure
@@ -1137,6 +1168,8 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
           : fn.obj.ty.kind === "array" && ["find", "findLast", "pop"].includes(fn.field) ? fn.obj.ty.elem : undefined
         : undefined;
       return { kind: "call", fn, args, ty, callKind: classifyCall(e.fn, ctx), optionalReturn,
+        ...(builtinId === "map.get" && fn.kind === "field" && args.length === 1 &&
+          safeSpecAccess(ctx, fn.obj, args[0]) ? { safeAccess: true as const } : {}),
         ...(builtinId ? { builtinId } : {}),
         ...(paramTypes ? { paramTys: paramTypes } : {}) };
     }
@@ -1184,7 +1217,8 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         if (recIdx) return recIdx;
         idxTy = { kind: "unknown" as const };
       }
-      return { kind: "index", obj, idx, ty: idxTy, optionalReturn };
+      return { kind: "index", obj, idx, ty: idxTy, optionalReturn,
+        ...(safeSpecAccess(ctx, obj, idx) ? { safeAccess: true as const } : {}) };
     }
 
     case "field": {

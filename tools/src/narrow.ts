@@ -77,13 +77,33 @@ function ruleBooleanGuard(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "binop" || e.ty.kind !== "bool" || (e.op !== "&&" && e.op !== "||")) return null;
   const fact = presentFact(e.left);
   if (!fact) return null;
+  let right = e.right;
+  // Equality already handles a single-sentinel option directly. Retain that
+  // representation when the guard merely makes the comparison redundant.
+  if (fact.scrutinee.ty.kind === "optional" && fact.scrutinee.ty.nullish !== "both" &&
+      right.kind === "binop" && (right.op === "===" || right.op === "!==")) {
+    const restore = (operand: TExpr): TExpr => exprEqual(operand, fact.scrutinee)
+      ? { ...operand, ty: fact.scrutinee.ty } : operand;
+    right = { ...right, left: restore(right.left), right: restore(right.right) };
+  }
+  // A guard needs a binder only where resolution actually refined a read.
+  // Independent checks such as !a.handle && !b.handle retain their grouping.
+  let refined = false;
+  const visit = (node: TExpr): TExpr => {
+    if (node.kind === "lambda" || exprEqual(node, fact.scrutinee) && !tyEqual(node.ty, fact.scrutinee.ty)) {
+      refined = true;
+      return node;
+    }
+    return refined ? node : recurseExpr(node, ctx, visit);
+  };
+  visit(right);
+  if (!refined) return right === e.right ? null : { ...e, right };
   const short: TExpr = { kind: "bool", value: e.op === "||", ty: { kind: "bool" } };
   const positiveExecutes = (e.op === "&&") !== fact.negated;
-  return presentMatchExpr(fact, positiveExecutes ? e.right : short, positiveExecutes ? short : e.right, e.ty, ctx);
+  return presentMatchExpr(fact, positiveExecutes ? right : short, positiveExecutes ? short : right, e.ty, ctx);
 }
 
-function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
-  const re = (x: TExpr) => walkExpr(x, ctx);
+function recurseExpr(e: TExpr, ctx: CondCtx, re = (x: TExpr): TExpr => walkExpr(x, ctx)): TExpr {
   switch (e.kind) {
     case "var": case "num": case "bigint": case "str": case "bool":
     case "havoc":

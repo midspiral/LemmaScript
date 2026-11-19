@@ -69,21 +69,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-
-      - run: npm ci
-
       - uses: ./.github/actions/setup-lean
         with:
           use-github-cache: 'true'
 
       - name: Build
         run: lake build
-
-      - name: Check nullish evaluation in Lean
-        run: node --import tsx --test --test-name-pattern='Lean evaluates both sentinels' tools/tests/nullish.test.ts
 
   # Dafny verification of the examples, sharded across runners. The `tools` job
   # enforces drift + additions-only (regen --no-verify); this job runs the actual

@@ -96,13 +96,15 @@ export type TExpr =
   | { kind: "unop"; op: string; expr: TExpr; ty: Ty }
   | { kind: "coerce"; expr: TExpr; ty: Ty }
   | { kind: "call"; fn: TExpr; args: TExpr[]; ty: Ty; callKind: CallKind;
+      /** The enclosing specification premise establishes this lookup's domain. */
+      safeAccess?: true;
       builtinId?: BuiltinId;
       /** Resolved parameter types for a named callee. Kept so nominal
        *  backends can realize TypeScript structural argument conversions. */
       paramTys?: Ty[];
       /** Payload of the binary option returned by a collection helper, before flattening. */
       optionalReturn?: Ty }
-  | { kind: "index"; obj: TExpr; idx: TExpr; ty: Ty; optionalReturn?: Ty }
+  | { kind: "index"; obj: TExpr; idx: TExpr; ty: Ty; optionalReturn?: Ty; safeAccess?: true }
   | { kind: "field"; obj: TExpr; field: string; ty: Ty;
       isDiscriminant?: boolean;             // true if this is a discriminant field access
       ofVariant?: string }                  // which union variant the field is read from, when narrowing determined it

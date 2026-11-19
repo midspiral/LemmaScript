@@ -486,6 +486,9 @@ function optionalOperands(left: TExpr, right: TExpr, binds: Stmt[] | null,
   body: (left: Expr, right: Expr) => Expr): Expr {
   const lhs = optionalBinder(), rhs = optionalBinder();
   const lv = lowerExpr(left, binds);
+  // A lifted call already has its own result binding. Reading the other
+  // operand from a variable cannot invalidate it, so aliases add no ordering.
+  if (lv.kind === "var" && right.kind === "var") return body(lv, lowerExpr(right, binds));
   if (binds) binds.push({ kind: "let", name: lhs, type: left.ty, mutable: false, value: lv });
   const rv = lowerExpr(right, binds);
   if (binds) {
@@ -761,7 +764,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           // Reading a literal or an already-typed field has no effects or
           // preconditions to preserve outside the match. Keep the direct form.
           const simple = (x: TExpr): boolean => ["var", "num", "bigint", "bool", "str"].includes(x.kind)
-            || x.kind === "field" && simple(x.obj);
+            || x.kind === "field" && simple(x.obj)
+            || x.kind === "index" && !!x.safeAccess && simple(x.obj) && simple(x.idx)
+            || x.kind === "call" && (x.builtinId === "map.has" || x.builtinId === "set.has" || !!x.safeAccess) &&
+              x.fn.kind === "field" && simple(x.fn.obj) && x.args.every(simple);
           if (!nullishOf(val.ty) && simple(val)) {
             const value = val.kind === "str" && opt.ty.inner.kind === "user"
               ? { kind: "constructor" as const, name: val.value, type: opt.ty.inner.name, args: [] }
@@ -777,7 +783,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           return optionalOperands(e.left, e.right, binds, (left, right) =>
             optionalCases(e.left === opt ? left : right, opt.ty,
               value => ({ kind: "binop", op: BOOL_OP_MAP[e.op], left: value, right: e.left === val ? left : right }),
-              () => ({ kind: "bool", value: e.op === "!==" }), optionalExprOps));
+              () => ({ kind: "bool", value: e.op === "!==" }), optionalExprOps,
+                opt.ty.kind === "optional" && opt.ty.nullish !== "both" ? matchBinder("value") : undefined));
         }
       }
       if ((e.op === "===" || e.op === "!==") && (nullishOf(e.left.ty) || nullishOf(e.right.ty))) {
@@ -813,6 +820,12 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           someBody, noneBody: e.right, ty: e.ty }, binds);
       }
       if (e.op === "||" && nullishOf(e.right.ty) && ["bool", "string", "int", "nat", "real"].includes(e.left.ty.kind)) {
+        if (e.left.kind === "var" && e.right.kind === "var" &&
+            e.ty.kind === "optional" && e.ty.nullish === e.right.name) {
+          const value = lowerExpr(e.left, binds);
+          return { kind: "if", cond: valueTruthyCond(value, e.left.ty)!,
+            then: { kind: "app", fn: "Some", args: [value] }, else: varE("undefined") };
+        }
         const name = optionalBinder();
         const value = lowerExpr(e.left, binds);
         const ref: TExpr = { kind: "var", name, ty: e.left.ty };
@@ -1497,9 +1510,10 @@ function buildPopLowering(arrName: string, arrTy: Extract<Ty, { kind: "array" }>
   const lastIdx: Expr = { kind: "binop", op: "-", left: arrLen, right: { kind: "num", value: 1 } };
   const lastElem: Expr = { kind: "index", arr: arrVar, idx: lastIdx };
   const isNonEmpty: Expr = { kind: "binop", op: ">", left: arrLen, right: { kind: "num", value: 0 } };
+  const simple = !nullishOf(arrTy.elem) && resultTy.kind === "optional" && resultTy.nullish === "undefined";
   const optValue: Expr = { kind: "if", cond: isNonEmpty,
-    then: convertOptional(lastElem, arrTy.elem, resultTy),
-    else: absentValue("undefined", resultTy) };
+    then: simple ? { kind: "app", fn: "Some", args: [lastElem] } : convertOptional(lastElem, arrTy.elem, resultTy),
+    else: simple ? varE("undefined") : absentValue("undefined", resultTy) };
   const truncated: Expr = { kind: "methodCall", obj: arrVar, objTy: arrTy, method: "slice",
     args: [{ kind: "num", value: 0 }, lastIdx], monadic: false };
   const guardedTrunc: Expr = { kind: "if", cond: isNonEmpty, then: truncated, else: arrVar };
