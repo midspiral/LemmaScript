@@ -64,17 +64,12 @@ let _validateDependency: (source: SourceFile) => void = () => {};
  *  when the initializer isn't a bare variable (single-eval temp). */
 let _destrCounter = 0;
 
-/** A destructuring default (`const { a = d } = o`, `const [a = d] = xs`) applies
- *  only when the source value is `undefined`. Option can't tell `null` from
- *  `undefined`, so a default on a source that may be `null` is rejected. */
-function destructuringDefault(el: Node, sourceTy: Type | undefined): RawExpr | null {
+/** Extract the default for the shared Option lowering. When the source can
+ *  be undefined, None selects this expression, including for mixed null/undefined
+ *  types: the verification model deliberately conflates those values. */
+function destructuringDefault(el: Node): RawExpr | null {
   const init = Node.isBindingElement(el) ? el.getInitializer() : undefined;
-  if (!init) return null;
-  const parts = sourceTy?.isUnion() ? sourceTy.getUnionTypes() : sourceTy ? [sourceTy] : [];
-  if (parts.some(t => t.isNull())) {
-    throw new Error(`default value in destructuring a value that may be null is not yet supported: ${el.getText()}`);
-  }
-  return extractExpr(init);
+  return init ? extractExpr(init) : null;
 }
 
 function hasUndefined(t: Type | undefined): boolean {
@@ -1667,7 +1662,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
                 : { kind: "index", obj: initVar, idx: { kind: "num", value: i } };
               const arrTy = initializer.getType();
               const srcTy = arrTy.getTupleElements()[i] ?? arrTy.getArrayElementType() ?? arrTy.getNumberIndexType();
-              const dflt = isRest ? null : destructuringDefault(el, srcTy);
+              const dflt = isRest ? null : destructuringDefault(el);
               if (dflt) {
                 // `[a = d] = xs`: d when xs[i] is out of bounds or undefined.
                 const present: RawExpr = hasUndefined(srcTy) ? { kind: "nullish", left: init, right: dflt } : init;
@@ -1712,14 +1707,16 @@ function extractStmts(stmts: Node[]): RawStmt[] {
                 const elTs = _eraseGenerics(typeToString(el.getType()));
                 const fieldInit: RawExpr = { kind: "field", obj: initVar, field: fieldName };
                 const srcTy = initializer.getType().getProperty(fieldName)?.getTypeAtLocation(d);
-                const dflt = destructuringDefault(el, srcTy);
+                // Do not extract an unreachable initializer: even an expression
+                // outside the fragment is harmless when the field is defined.
+                const dflt = hasUndefined(srcTy) ? destructuringDefault(el) : null;
                 result.push({
                   kind: "let",
                   name: localName,
                   mutable: s.getDeclarationKind() === "let",
                   tsType: elTs,
                   // `{ a = d } = o`: d when o.a is undefined (a field that can't be undefined ignores it).
-                  init: dflt && hasUndefined(srcTy) ? { kind: "nullish", left: fieldInit, right: dflt } : fieldInit,
+                  init: dflt ? { kind: "nullish", left: fieldInit, right: dflt } : fieldInit,
                   line,
                 });
               }
@@ -2241,13 +2238,15 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
           ? _synthArrayUnions?.find(d => d.name === declTypeName && d.kind === "record")?.fields
           : undefined;
         return nameNode.getElements().map(el => {
-          if (el.getInitializer()) {
-            throw new Error(`default value in parameter destructuring not yet supported: ${el.getText()}`);
-          }
           const name = el.getName();
-          const propType = type.getProperty(name)?.getTypeAtLocation(p);
+          const fieldName = el.getPropertyNameNode()?.getText() ?? name;
+          const propType = type.getProperty(fieldName)?.getTypeAtLocation(p);
+          // Prover parameters represent the initialized bindings. A default
+          // can remove undefined from the field's type; tsParams retains the
+          // initializer for consumers that reconstruct the TypeScript call.
+          if (el.getInitializer()) return { name, tsType: _eraseGenerics(typeToString(el.getType())) };
           if (propType) return { name, tsType: typeToString(propType) };
-          const declTy = declFields?.find(f => f.name === name)?.tsType;
+          const declTy = declFields?.find(f => f.name === fieldName)?.tsType;
           return { name, tsType: declTy ?? "unknown" };
         });
       }

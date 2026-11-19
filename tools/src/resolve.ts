@@ -1249,7 +1249,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       // (rule-chain style `ruleA(e) ?? ruleB(e) ?? null`), the result stays
       // optional — otherwise the enclosing chain level loses its optionality
       // and narrowing can't rewrite it.
-      const ty: Ty = right.ty.kind === "optional" ? right.ty : inner;
+      const ty = conditionalResultTy(inner, right.ty);
       return { kind: "nullish", left, right, ty };
     }
 

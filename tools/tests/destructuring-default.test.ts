@@ -5,6 +5,12 @@ import { Project, ScriptTarget } from "ts-morph";
 import {
   objectDefault, defaultIntoOptional, renamedDefault, arrayDefault, secondDefault,
 } from "../fixtures/destructuring-default.ts";
+import {
+  optionalDefault, nullableDefault, nullDefault, nullableArrayDefault, optionalArrayDefault,
+  nullishDefault, nullishArrayDefault, nullableParameterDefault, renamedNullableParameterDefault,
+  nullishParameterDefault, mixedDefault, mixedArrayDefault, unreachableDefault,
+  parameterDefault, renamedParameterDefault, genericParameterDefault,
+} from "../../examples/destructuringDefaults.ts";
 import { extractModule } from "../src/extract.ts";
 import { resolveModule } from "../src/resolve.ts";
 import { narrowModule } from "../src/narrow.ts";
@@ -44,6 +50,40 @@ test("destructuring defaults apply at runtime", () => {
   assert.equal(secondDefault([1]), 9);
 });
 
+test("destructuring preserves null and falsy values, and defaults only undefined", () => {
+  for (const value of [null, 0, 2]) {
+    assert.equal(nullableDefault({ value }), value);
+    assert.equal(nullableArrayDefault([value]), value);
+    assert.equal(nullableParameterDefault({ value }), value);
+    assert.equal(renamedNullableParameterDefault({ value }), value);
+    assert.equal(unreachableDefault({ value }), value);
+    assert.equal(mixedDefault({ value }), value);
+    assert.equal(mixedArrayDefault([value]), value);
+  }
+  for (const value of [undefined, 0, 2]) {
+    assert.equal(optionalDefault({ value }), value === undefined ? 5 : value);
+    assert.equal(nullDefault({ value }), value === undefined ? null : value);
+    assert.equal(optionalArrayDefault([value]), value === undefined ? 7 : value);
+  }
+  assert.equal(optionalDefault({}), 5);
+  assert.equal(nullableArrayDefault([]), 7);
+  assert.equal(optionalArrayDefault([]), 7);
+  assert.equal(mixedDefault({}), 5);
+  assert.equal(mixedDefault({ value: undefined }), 5);
+  assert.equal(mixedArrayDefault([]), 7);
+  assert.equal(mixedArrayDefault([undefined]), 7);
+});
+
+test("a null default composes with sources containing both null and undefined", () => {
+  for (const value of [undefined, null, 0, 2]) {
+    assert.equal(nullishDefault({ value }), value === undefined ? null : value);
+    assert.equal(nullishArrayDefault([value]), value === undefined ? null : value);
+    assert.equal(nullishParameterDefault({ value }), value === undefined ? null : value);
+  }
+  assert.equal(nullishDefault({}), null);
+  assert.equal(nullishArrayDefault([]), null);
+});
+
 test("Dafny keeps the default value", () => {
   const text = dafny();
   for (const name of ["objectDefault", "defaultIntoOptional", "renamedDefault"]) {
@@ -53,18 +93,37 @@ test("Dafny keeps the default value", () => {
   assert.ok(bodyOf(text, "secondDefault").includes("if (1 < |xs|) then xs[1] else 9"));
 });
 
-test("defaults that can't be modeled are rejected", () => {
-  assert.throws(extract(`
-    interface Z { a: number | null }
-    export function f(o: Z): number {
+test("mixed null and undefined defaults stay pure in the shared Option model", () => {
+  for (const binding of ["const { a = 5 } = o;", "const [a = 5] = xs;"]) {
+    const mod = resolveModule(extract(`
+    interface Z { a?: number | null }
+    export function f(o: Z, xs: (number | null | undefined)[]): number {
       //@ verify
-      const { a = 5 } = o;
+      ${binding}
       return a ?? 0;
-    }`), /may be null/);
-  assert.throws(extract(`
-    interface Q { a?: number }
-    export function f({ a = 5 }: Q): number {
-      //@ verify
+    }`)());
+    assert.equal(mod.functions.find(f => f.name === "f")?.isPure, true);
+  }
+});
+
+test("flattened parameters use their post-default types and retain source defaults", () => {
+  const mod = extract(`
+    interface Q { value?: number }
+    export function f({ value: a = 5 }: Q): number {
       return a;
-    }`), /parameter destructuring/);
+    }
+  `)();
+  const fn = mod.functions.find(f => f.name === "f")!;
+  assert.deepEqual(fn.params, [{ name: "a", tsType: "number" }]);
+  assert.deepEqual(fn.tsParams, [{ kind: "object", binds: ["a"], defaults: { a: "5" } }]);
+
+  assert.equal(parameterDefault({}), 5);
+  assert.equal(parameterDefault({ value: 0 }), 0);
+  assert.equal(renamedParameterDefault({}), 5);
+  assert.equal(renamedParameterDefault({ value: null }), null);
+  assert.equal(genericParameterDefault(5, { value: undefined }), 5);
+  assert.doesNotThrow(extract(`
+    export function f<T>(fallback: T, { a = fallback }: { a: T }): T {
+      return a;
+    }`));
 });

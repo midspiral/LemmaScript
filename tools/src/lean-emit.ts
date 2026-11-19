@@ -440,7 +440,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
 
     case "app": {
       const args = e.args.map(a =>
-        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall") ? `(${emitExpr(a)})` : emitExpr(a)
+        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall") ? `(${emitExpr(a)})` : wrapOperand(a)
       );
       // Datatype constructor (tagged by transform): Lean needs the qualified name
       // `BaseType.variant`; a bare `variant` is an unknown identifier. (Dafny keeps
