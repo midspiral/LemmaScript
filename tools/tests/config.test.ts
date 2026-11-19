@@ -145,7 +145,7 @@ for (const [directive, message] of [
   ["option", "expected //@ option <key> <value>"],
   ["option safe-slice", "expected //@ option <key> <value>"],
   ["option safe-slice true extra", "expected //@ option <key> <value>"],
-  ["option missing true", "unknown option 'missing' (known options: extern-default, safe-slice, proof-dir, string-semantics, dafny-library, run-log)"],
+  ["option missing true", "unknown option 'missing' (known options: extern-default, safe-slice, proof-dir, string-semantics, dafny-library, run-log, unread-annotations)"],
   ["option safe-slice yes", "option 'safe-slice' must be true or false"],
   ["option extern-default invalid", "option 'extern-default' must be one of: pure, impure"],
   ["option proof-dir proofs", "option 'proof-dir' is config-only"],

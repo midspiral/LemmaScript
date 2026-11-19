@@ -1,8 +1,8 @@
 /**
- * Type mapping — TS types → Lean types.
+ * Type mapping — TS type strings → backend-neutral `Ty`.
  *
- * Single source of truth for type-related decisions.
- * The transform phase imports this.
+ * Single source of truth for type-related decisions; resolve, transform, and
+ * both emitters import this.
  */
 
 // ── Type info extracted from TS ──────────────────────────────
@@ -40,6 +40,9 @@ export interface TypeDeclInfo {
   /** For alias: the underlying type string */
   aliasOf?: string;
   aliasOfTy?: Ty;  // pre-computed Ty for aliasOf
+  /** Numeric const enum: integer semantics; members exist only on value bindings.
+   * A type-only alias has an empty member list. */
+  constEnumMembers?: { name: string; value: number }[];
 }
 
 // ── TS type string → Ty (single source of truth) ───────────
@@ -118,6 +121,17 @@ function tyFromTypeNode(tn: TypeNode): Ty {
         ? { kind: "optional", inner: { kind: "string", values } }
         : { kind: "string", values };
     }
+    // Numeric literal unions have the same integer model as number, including
+    // in inline annotations and optional types with several numeric arms.
+    if (nonNullish.length >= 2 && nonNullish.every(a => {
+      if ("syntheticBool" in a) return false;
+      const ty = tyFromTypeNode(a.node);
+      return ty.kind === "int" && !ty.big;
+    })) {
+      const inner: Ty = { kind: "int" };
+      return normalized.some(a => !("syntheticBool" in a) && isNullish(a.node))
+        ? { kind: "optional", inner } : inner;
+    }
     if (nonNullish.length === 1 && normalized.length >= 2) {
       const sole = nonNullish[0];
       const inner: Ty = "syntheticBool" in sole ? { kind: "bool" } : tyFromTypeNode(sole.node);
@@ -154,8 +168,11 @@ function tyFromTypeNode(tn: TypeNode): Ty {
     return { kind: "fn", params, result };
   }
   if (Node.isLiteralTypeNode(tn)) {
-    const lk = tn.getLiteral().getKind();
+    const literal = tn.getLiteral();
+    const lk = literal.getKind();
     if (lk === SyntaxKind.TrueKeyword || lk === SyntaxKind.FalseKeyword) return { kind: "bool" };
+    if (Node.isNumericLiteral(literal) ||
+        (Node.isPrefixUnaryExpression(literal) && Node.isNumericLiteral(literal.getOperand()))) return { kind: "int" };
   }
   switch (tn.getKind()) {
     case SyntaxKind.NumberKeyword:
@@ -180,8 +197,8 @@ function tyFromTypeNode(tn: TypeNode): Ty {
     if (name === "real" && args.length === 0) return { kind: "real" };
     if (name === "int" && args.length === 0) return { kind: "int" };
     if ((name === "Array" || name === "ReadonlyArray") && args.length === 1) return { kind: "array", elem: tyFromTypeNode(args[0]) };
-    if (name === "Set" && args.length === 1) return { kind: "set", elem: tyFromTypeNode(args[0]) };
-    if ((name === "Map" || name === "Record") && args.length === 2) {
+    if ((name === "Set" || name === "ReadonlySet") && args.length === 1) return { kind: "set", elem: tyFromTypeNode(args[0]) };
+    if ((name === "Map" || name === "ReadonlyMap" || name === "Record") && args.length === 2) {
       return { kind: "map", key: tyFromTypeNode(args[0]), value: tyFromTypeNode(args[1]) };
     }
     // User-named type: include generic args in the spelled name so callers

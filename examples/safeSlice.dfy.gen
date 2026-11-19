@@ -46,3 +46,33 @@ lemma sliceNegativeBounds_ensures()
   ensures (sliceNegativeBounds() == [2, 3])
 {
 }
+
+function sliceFromNegative(): seq<int>
+{
+  SafeSlice([1, 2, 3], -1, |[1, 2, 3]|)
+}
+
+lemma sliceFromNegative_ensures()
+  ensures (sliceFromNegative() == [3])
+{
+}
+
+function sliceFromPastEnd(): seq<int>
+{
+  SafeSlice([1, 2], 5, |[1, 2]|)
+}
+
+lemma sliceFromPastEnd_ensures()
+  ensures (sliceFromPastEnd() == [])
+{
+}
+
+function dropFirst(a: seq<int>): seq<int>
+{
+  SafeSlice(a, 1, |a|)
+}
+
+lemma dropFirst_ensures(a: seq<int>)
+  ensures (|dropFirst(a)| == (if (|a| == 0) then 0 else (|a| - 1)))
+{
+}

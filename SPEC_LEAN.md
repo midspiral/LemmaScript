@@ -227,6 +227,7 @@ Practical constraints for the current Velvet 2 backend.
 - Quantifier types must be consistent within a property: don't use `k : Int` in an invariant and `k : Nat` in the ensures for the same property.
 - `arr.size` is `Nat`. No explicit `↑` coercion needed.
 - Array indexing: `arr[i]!` for `Nat`, `arr[i.toNat]!` for `Int`.
+- String indexing: `JSString.index s i` returns a one-scalar `String`. Like array reads, its Lean definition uses defaulted indexing; source-domain bounds (`0 ≤ i < s.length`) must be established by callers.
 - Recursive ghost functions on array indices should take `Nat`. Calling code should use `//@ type` for the index variable.
 - Bridge lemmas (e.g., `(i + 1).toNat = i.toNat + 1`) may be needed in `.spec.lean` when mixing Int and Nat.
 

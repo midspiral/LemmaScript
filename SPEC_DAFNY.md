@@ -66,7 +66,9 @@ Non-pure functions become Dafny `method` declarations.
 6. Verify merged `foo.dfy` unless `--no-verify`; if verification fails, advance `.dfy.base` to the new gen before exiting with failure
 7. On success, delete `.dfy.base` (gen is now the anchor), including when verification was explicitly skipped
 
-On merge conflict, the original `foo.dfy` is restored and the merged result is saved as `foo.dfy.merged` for manual inspection. Conflicts and additions-only failures retain the old anchor. A verifier failure after a clean additions-only merge instead retains the new anchor, because the proof already contains that generation; the next retry must not merge it a second time.
+On merge conflict, `foo.dfy` is left unchanged and the merged result is saved as `foo.dfy.merged` for manual inspection. Conflicts and additions-only failures retain the old anchor. A verifier failure after a clean additions-only merge instead retains the new anchor, because the proof already contains that generation; the next retry must not merge it a second time.
+
+Merges use `--diff-algorithm=minimal`, matching the additions-only check so large proof additions do not cause spurious generated-line deletions in the diff. Git versions before 2.44 fall back to the default algorithm with a warning; upgrading avoids the resulting false conflicts. Git execution errors leave the proof unchanged and retain the old anchor, but do not create `.dfy.merged` or record a verification conflict.
 
 ---
 
@@ -88,7 +90,8 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 |--------|------|---------|
 | `JSFloorDiv` | `Math.floor(a/b)` (int args) | JS-compatible floor division |
 | `FloorReal` / `CeilReal` | `Math.floor(x)` / `Math.ceil(x)` (real arg) | `real → int` via `.Floor` |
-| `MathAbs` / `MathMin` / `MathMax` | `Math.abs/min/max(a, b)` | Scalar abs/min/max |
+| `MathAbs` / `MathMin` / `MathMax` | `Math.abs/min/max` (int args) | Scalar integer abs/min/max |
+| `MathAbsReal` / `MathMinReal` / `MathMaxReal` | `Math.abs/min/max` (any real arg) | Scalar real abs/min/max; int/nat operands coerced with `as real` |
 | `MaxOfSeq` / `MinOfSeq` | `Math.max(...s)` / `Math.min(...s)` | Aggregate over a sequence (requires `\|s\| > 0`) |
 | `Pow2` / `BitAnd` | `<<` / `>>` / `&` on `bigint` | Bitwise ops as arithmetic |
 | `NatToString` / `IntToString` | `` `${n}` `` template literal (nat / signed int) | Number-to-digit-string for interpolation (`IntToString` prefixes `-`) |
@@ -98,6 +101,7 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | Helper | When | Purpose |
 |--------|------|---------|
 | `SeqIndexOf` | `arr.indexOf(x)` | First-index search (`-1` if absent) |
+| `CallbackIndices` | Array callbacks (other than `map`) that use index or source-array arguments | Ordered positions `[0, ..., n-1]`, with proved length, indexing, and membership contracts |
 | `SeqFilter` / `SeqAll` / `SeqFoldLeft` | `filter` / `every` / `reduce` with `dafny-library: local` | Local recursive collection helpers (no Dafny standard-library dependency) |
 | `SeqFindIndex` | `arr.findIndex(f)` | Predicate first-index search |
 | `SeqFind` | `arr.find(f)` | Predicate first-match search |
@@ -139,6 +143,20 @@ Unicode-scalar mode supports either; UTF-16 mode requires an explicit `local` se
 This choice does not change string semantics or control handwritten proof imports.
 Those imports must still be compatible with the selected string model (see §5).
 Both settings support file directives; see [examples/utf16.ts](examples/utf16.ts).
+
+**Indexed callbacks.** In either library mode, `CallbackIndices(n)` constructs `[0, ..., n-1]` as a `seq<int>`:
+
+```dafny
+function CallbackIndices(n: nat): (r: seq<int>)
+  ensures |r| == n
+  ensures forall i :: 0 <= i < n ==> r[i] == i
+  ensures forall i :: i in r <==> 0 <= i < n
+{
+  if n == 0 then [] else CallbackIndices(n - 1) + [n - 1]
+}
+```
+
+Callers get the length, order, and membership facts without unfolding it. The adapter binds the receiver once and iterates these positions, passing `(source[i], i, source)` (after the accumulator for `reduce`); `filter` and `find` map selected positions back to elements, and `map` skips the helper, since its `seq` comprehension already has the position in hand. An existential `some` proof may need a witness such as `assert 1 in CallbackIndices(2);` — see [examples/callbackArguments.dfy](examples/callbackArguments.dfy).
 
 ---
 

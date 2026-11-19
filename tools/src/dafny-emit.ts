@@ -3,14 +3,16 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
+import { decimalNumberLiteral, exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
-import { freshName, freshNameWhere, userNames } from "./names.js";
+import { freshNameWhere, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
 import { DEFAULT_OPTIONS, resolveOptions, type LscOptions } from "./config.js";
 
 /** Appended to a function's name for the lemma that carries its `//@ ensures`. */
 export const ENSURES_LEMMA_SUFFIX = "_ensures";
+/** `function by method` bodies delegate to a proof-defined `<name>_fun_spec`. */
+export const SPEC_FUNCTION_SUFFIX = "_fun_spec";
 
 /** Fresh binder for a comprehension wrapping the given subexpressions: `base`
  *  verbatim unless one of them references it, then primed until free. A *local*
@@ -178,11 +180,12 @@ function isEmittedUserName(name: string): boolean {
  *  namespace so it can't collapse onto an escaped user name. Bypasses the user
  *  map on purpose: the raw name is synthesized, so it must be freshened *away
  *  from* a same-spelled user name, not aliased onto it. Cached so a declaration
- *  and its references render identically. */
-function escapeGeneratedName(name: string): string {
+ *  and its references render identically. An optional base changes the candidate
+ *  spelling without changing the original name used as the cache key. */
+function escapeGeneratedName(name: string, base = name): string {
   const cached = _generatedDafnyNames.get(name);
   if (cached !== undefined) return cached;
-  const emitted = freshDafnyName(dafnyBaseName(name));
+  const emitted = freshDafnyName(dafnyBaseName(base));
   _generatedDafnyNames.set(name, emitted);
   _takenDafnyNames.add(emitted);
   return emitted;
@@ -221,6 +224,22 @@ const OP_MAP: Record<string, string> = {
   "∧": "&&", "∨": "||", "¬": "!", "↔": "<==>",
   "arrayConcat": "+",
 };
+
+/** Escape controls and line separators while preserving printable Unicode. */
+function escapeDafnyScalarString(value: string): string {
+  return value.replace(/["\\\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, char => {
+    switch (char) {
+      case '"': return '\\"';
+      case "\\": return "\\\\";
+      case "\0": return "\\0";
+      case "\n": return "\\n";
+      case "\r": return "\\r";
+      case "\t": return "\\t";
+      // Dafny has no short escapes for controls such as backspace or form feed.
+      default: return `\\U{${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}}`;
+    }
+  });
+}
 
 /** Render a JavaScript string without losing its UTF-16 representation.
  *
@@ -276,16 +295,14 @@ function wrapQuantifier(sub: Expr): string {
 function emitExpr(e: Expr): string {
   switch (e.kind) {
     case "var": return e.name === "undefined" ? "None" : escapeName(e.name);
-    case "num": return `${e.value}`;
+    case "num": return decimalNumberLiteral(e.value);
     // Already canonical decimal; Dafny's `int` is mathematical, so no `n` suffix.
     case "bigint": return e.value;
     case "bool": return e.value ? "true" : "false";
     case "str":
-      // Under the default profile the literal is written exactly as before;
-      // only the UTF-16 profile needs code-unit escapes (DESIGN_STRINGS.md §3).
       return isUtf16()
         ? `"${escapeDafnyUTF16String(e.value)}"`
-        : `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+        : `"${escapeDafnyScalarString(e.value)}"`;
 
     case "constructor": {
       // Option constructors (Some/None) may appear in inferred positions
@@ -301,6 +318,7 @@ function emitExpr(e: Expr): string {
       if (e.elems.length === 0) return `[]`;
       return `[${e.elems.map(emitExpr).join(", ")}]`;
 
+    case "arrayRange": needPreamble("CallbackIndices"); return `CallbackIndices(${emitExpr(e.length)})`;
     case "tupleLiteral": return `(${e.elems.map(emitExpr).join(", ")})`;
     case "tupleProj": return `${emitExpr(e.obj)}.${e.index}`;
 
@@ -331,16 +349,26 @@ function emitExpr(e: Expr): string {
         // No-arg slice is a full copy; Dafny seq is an immutable value type, so
         // the copy is just the seq itself (the idiom for "copy then mutate").
         if (e.method === "slice" && args.length === 0) return obj;
-        if (e.method === "slice" && args.length === 1) return `${obj}[${args[0]}..]`;
-        if (e.method === "slice" && args.length === 2) {
+        if (e.method === "slice" && (args.length === 1 || args.length === 2)) {
           // JS slice clamps both bounds; Dafny requires `0 <= lo <= hi <= |s|`.
           // Direct slice is default (matches existing case studies that wrote
           // bounded calls). Files needing JS clamping opt in via `//@ safe-slice`.
           if (_useSafeSlice) {
             needPreamble("SafeSlice");
-            return `SafeSlice(${obj}, ${args[0]}, ${args[1]})`;
+            return `SafeSlice(${obj}, ${args[0]}, ${args[1] ?? `|${obj}|`})`;
           }
-          return `${obj}[${args[0]}..${args[1]}]`;
+          // JS negative index: xs.slice(0, -N) → xs[0..|xs|-N].
+          // Same rewrite the string branch uses.
+          const negVal = (a: typeof e.args[0]): string | null => {
+            const v = exactIntegerLiteral(a);
+            return v !== null && v < 0n ? (-v).toString(10) : null;
+          };
+          const loN = negVal(e.args[0]);
+          const loEx = loN !== null ? `|${obj}|-${loN}` : args[0];
+          if (args.length === 1) return `${obj}[${loEx}..]`;
+          const hiN = negVal(e.args[1]);
+          const hiEx = hiN !== null ? `|${obj}|-${hiN}` : args[1];
+          return `${obj}[${loEx}..${hiEx}]`;
         }
         if (e.method === "map") {
           // Always a seq comprehension: Seq.Map would hide the element access
@@ -352,8 +380,9 @@ function emitExpr(e: Expr): string {
           // comprehension mentions it three times, and splicing would make
           // any closure literal inside it (e.g. a Filter predicate) three
           // distinct closures, unprovably equal through an opaque callee.
-          // Name freshness is a local IR-level check until a backend name
-          // allocator exists.
+          // Name freshness is a local IR-level check (`usesName`), not the
+          // Dafny-namespace allocator (`escapeGeneratedName`): a user identifier
+          // that *escapes* to `i_map`/`s_map` (e.g. `_map`) is still captured.
           const lam = e.args[0];
           const fresh = (base: string, taken: (n: string) => boolean): string => {
             let name = base;
@@ -364,6 +393,17 @@ function emitExpr(e: Expr): string {
             usesName(e.obj, n) || usesName(lam, n) ||
             (lam.kind === "lambda" && (lam.params.some(pp => pp.name === n) ||
               usesNameInStmts(lam.body, n)));
+          // Mapping over positions (an indexed callback): the comprehension
+          // index is the position itself, so no CallbackIndices sequence is
+          // needed. Keep the callback's declared type so the binding is `int`.
+          if (e.obj.kind === "arrayRange" && lam.kind === "lambda" && lam.params.length === 1 &&
+              lam.body.length === 1 && lam.body[0].kind === "return") {
+            const n = emitExpr(e.obj.length);
+            const idx = fresh("i_map", taken);
+            const p = lam.params[0];
+            const ty = lam.typedParams ? tyToDafny(p.type) : "int";
+            return `seq(${n}, ${idx} requires 0 <= ${idx} < ${n} => var ${escapeName(p.name)}: ${ty} := ${idx}; ${emitExpr(lam.body[0].value)})`;
+          }
           const bind = e.obj.kind !== "var";
           const s = bind ? fresh("s_map", taken) : obj;
           const idx = fresh("i_map", n => taken(n) || n === s);
@@ -447,6 +487,14 @@ function emitExpr(e: Expr): string {
             return `StringIndexOfFrom(${obj}, ${args[0]}, StringSearchPosition(${obj}, ${args[1]}))`;
           }
           return `StringIndexOf(${obj}, ${args[0]})`;
+        }
+        if (e.method === "lastIndexOf") {
+          needPreamble("StringLastIndexOf");
+          if (args.length === 2) {
+            needPreamble("StringSearchPosition");
+            return `StringLastIndexOfFrom(${obj}, ${args[0]}, StringSearchPosition(${obj}, ${args[1]}))`;
+          }
+          return `StringLastIndexOf(${obj}, ${args[0]})`;
         }
         if (e.method === "split")   { needPreamble("StringSplit"); return `StringSplit(${obj}, ${args[0]})`; }
         if (e.method === "slice") {
@@ -625,6 +673,9 @@ function emitExpr(e: Expr): string {
       if (e.fn === "MathAbs") needPreamble("MathAbs");
       if (e.fn === "MathMin") needPreamble("MathMin");
       if (e.fn === "MathMax") needPreamble("MathMax");
+      if (e.fn === "MathAbsReal") needPreamble("MathAbsReal");
+      if (e.fn === "MathMinReal") needPreamble("MathMinReal");
+      if (e.fn === "MathMaxReal") needPreamble("MathMaxReal");
       if (e.fn === "MaxOfSeq") { needPreamble("MathMax"); needPreamble("MaxOfSeq"); }
       if (e.fn === "MinOfSeq") { needPreamble("MathMin"); needPreamble("MinOfSeq"); }
       if (e.fn === "Perm") needPreamble("Perm");
@@ -664,8 +715,15 @@ function emitExpr(e: Expr): string {
       // Dafny doesn't need toNat — just emit the inner expression
       return emitExpr(e.expr);
 
+    case "toInt": return emitExpr(e.expr);
+
     case "toReal":
       return `(${emitExpr(e.expr)} as real)`;
+
+    case "stringIndex":
+      // TS indexing returns a string; Dafny's native string subscript is a
+      // char. The singleton sequence preserves the native bounds obligation.
+      return `[${emitExpr(e.str)}[${emitExpr(e.idx)}]]`;
 
     case "index": {
       const obj = emitExpr(e.arr);
@@ -738,7 +796,7 @@ function emitExpr(e: Expr): string {
     case "forall": return emitQuantifier(e, "forall");
     case "exists": return emitQuantifier(e, "exists");
 
-    case "let": return `(var ${escapeName(e.name)} := ${emitExpr(e.value)}; ${emitExpr(e.body)})`;
+    case "let": return `(var ${escapeName(e.name)}${e.type ? `: ${tyToDafny(e.type)}` : ""} := ${emitExpr(e.value)}; ${emitExpr(e.body)})`;
     case "havoc": return "*";
     // No Dafny producer: the only `default` source is the Lean return-in-loop
     // rewrite, which never runs on the Dafny path (native in-loop returns).
@@ -763,7 +821,7 @@ function emitPureExpr(e: Expr, indent: number): string {
       return lines.join("\n");
     }
     case "let":
-      return `${pad}var ${escapeName(e.name)} := ${emitExpr(e.value)};\n${emitPureExpr(e.body, indent)}`;
+      return `${pad}var ${escapeName(e.name)}${e.type ? `: ${tyToDafny(e.type)}` : ""} := ${emitExpr(e.value)};\n${emitPureExpr(e.body, indent)}`;
     default:
       return `${pad}${emitExpr(e)}`;
   }
@@ -934,10 +992,21 @@ function emitDecl(d: Decl): string {
 
     case "def-by-method": {
       const tp = d.typeParams.length > 0 ? `<${d.typeParams.join(", ")}>` : "";
-      const lines = [`function ${escapeName(d.name)}${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`];
-      for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
+      const signature = `${tp}(${paramList(d.params)}): ${tyToDafny(d.returnType)}`;
+      const requires = d.requires.map(r => `  requires ${emitExpr(r)}`);
+      // The functional specification is the proof author's to write: a bodyless
+      // `<name>_fun_spec` stub, which the .dfy completes by adding a body after its
+      // signature. The generated file parses and resolves on its own (an empty
+      // function body would not), and the proof adds lines instead of editing
+      // between generated braces.
+      const spec = escapeGeneratedName(`${d.name}${SPEC_FUNCTION_SUFFIX}`);
+      const lines = [
+        `function ${spec}${signature}`, ...requires, "",
+        `function ${escapeName(d.name)}${signature}`, ...requires,
+      ];
       if (d.decreases) lines.push(`  decreases ${emitExpr(d.decreases)}`);
       lines.push(`{`);
+      lines.push(`  ${spec}(${d.params.map(p => escapeName(p.name)).join(", ")})`);
       lines.push(`}`);
       lines.push(`by method {`);
       lines.push(emitStmts(d.methodBody, 1));
@@ -1096,6 +1165,14 @@ const CEIL_REAL = `function CeilReal(x: real): int
   else x.Floor + 1
 }`;
 
+const CALLBACK_INDICES = `function CallbackIndices(n: nat): (r: seq<int>)
+  ensures |r| == n
+  ensures forall i :: 0 <= i < n ==> r[i] == i
+  ensures forall i :: i in r <==> 0 <= i < n
+{
+  if n == 0 then [] else CallbackIndices(n - 1) + [n - 1]
+}`;
+
 const SEQ_FILTER_SOME = `function SeqFilterSome<T>(xs: seq<Option<T>>): seq<T>
   ensures |SeqFilterSome(xs)| <= |xs|
 {
@@ -1106,6 +1183,7 @@ const SEQ_FILTER_SOME = `function SeqFilterSome<T>(xs: seq<Option<T>>): seq<T>
 const SEQ_FILTER = `function SeqFilter<T(!new)>(p: T -> bool, xs: seq<T>): seq<T>
   ensures |SeqFilter(p, xs)| <= |xs|
   ensures forall x :: x in SeqFilter(p, xs) <==> x in xs && p(x)
+  ensures forall i :: 0 <= i < |SeqFilter(p, xs)| ==> SeqFilter(p, xs)[i] in xs
   decreases |xs|
 {
   if |xs| == 0 then []
@@ -1113,6 +1191,7 @@ const SEQ_FILTER = `function SeqFilter<T(!new)>(p: T -> bool, xs: seq<T>): seq<T
 }`;
 
 const SEQ_ALL = `predicate SeqAll<T>(xs: seq<T>, p: T -> bool)
+  ensures SeqAll(xs, p) <==> (forall x :: x in xs ==> p(x))
   decreases |xs|
 {
   |xs| == 0 || (p(xs[0]) && SeqAll(xs[1..], p))
@@ -1289,6 +1368,37 @@ function StringIndexOfFromN(s: string, sub: string, from: nat): int
   else StringIndexOfFromN(s, sub, from + 1)
 }`;
 
+// JS `s.lastIndexOf(sub, position)` searches backward from the clamped
+// position for the last match starting at or before it. An empty `sub` matches
+// at that position. The postconditions also state that no later match exists,
+// which is what lets callers reason about the not-found result.
+const STRING_LAST_INDEX_OF = `predicate StringMatchesAt(s: string, sub: string, j: int)
+{
+  0 <= j && j + |sub| <= |s| && s[j..j + |sub|] == sub
+}
+
+function StringLastIndexOf(s: string, sub: string): int
+  ensures StringLastIndexOf(s, sub) == -1
+       || (0 <= StringLastIndexOf(s, sub) <= |s| - |sub| && StringMatchesAt(s, sub, StringLastIndexOf(s, sub)))
+  ensures forall j {:trigger StringMatchesAt(s, sub, j)} ::
+            StringLastIndexOf(s, sub) < j ==> !StringMatchesAt(s, sub, j)
+{
+  StringLastIndexOfFrom(s, sub, |s|)
+}
+
+function StringLastIndexOfFrom(s: string, sub: string, from: nat): int
+  decreases from
+  ensures StringLastIndexOfFrom(s, sub, from) == -1
+       || (0 <= StringLastIndexOfFrom(s, sub, from) <= from
+           && StringMatchesAt(s, sub, StringLastIndexOfFrom(s, sub, from)))
+  ensures forall j {:trigger StringMatchesAt(s, sub, j)} ::
+            StringLastIndexOfFrom(s, sub, from) < j <= from ==> !StringMatchesAt(s, sub, j)
+{
+  if StringMatchesAt(s, sub, from) then from as int
+  else if from == 0 then -1
+  else StringLastIndexOfFrom(s, sub, from - 1)
+}`;
+
 // `s.split(d)` in TS returns a non-empty sequence of segments. Modeled here as
 // an axiom — defining it recursively would force StringIndexOf to grow ensures
 // clauses that callers don't need. The two ensures cover what verification
@@ -1417,6 +1527,8 @@ const STRING_REPEAT = `function StringRepeat(s: string, n: int): string
 
 const MATH_MIN = `function MathMin(a: int, b: int): int { if a <= b then a else b }`;
 const MATH_MAX = `function MathMax(a: int, b: int): int { if a >= b then a else b }`;
+const MATH_MIN_REAL = `function MathMinReal(a: real, b: real): real { if a <= b then a else b }`;
+const MATH_MAX_REAL = `function MathMaxReal(a: real, b: real): real { if a >= b then a else b }`;
 
 const MAX_OF_SEQ = `function MaxOfSeq(s: seq<int>): int
   requires |s| > 0
@@ -1481,6 +1593,7 @@ const INT_TO_STRING = `function IntToString(n: int): string
 }`;
 
 const MATH_ABS = `function MathAbs(x: int): nat { if x >= 0 then x else -x }`;
+const MATH_ABS_REAL = `function MathAbsReal(x: real): real { if x >= 0.0 then x else -x }`;
 
 // perm(a, b) — `a` and `b` are reorderings of each other (equal as multisets).
 // Transparent (Dafny unfolds it), so hand-proofs can reason with `multiset`
@@ -1532,12 +1645,14 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["SeqAll", SEQ_ALL],
   ["SeqFoldLeft", SEQ_FOLD_LEFT],
   ["SeqFilterSome", SEQ_FILTER_SOME],
+  ["CallbackIndices", CALLBACK_INDICES],
   ["SeqFind", SEQ_FIND],
   ["SeqFindLast", SEQ_FIND_LAST],
   ["SeqFlatten", SEQ_FLATTEN],
   ["SeqJoin", SEQ_JOIN],
   ["SafeSlice", SAFE_SLICE],
   ["StringIndexOf", STRING_INDEX_OF],
+  ["StringLastIndexOf", STRING_LAST_INDEX_OF],
   ["StringSearchPosition", STRING_SEARCH_POSITION],
   ["StringStartsWithAt", STRING_STARTS_WITH_AT],
   ["StringEndsWithAt", STRING_ENDS_WITH_AT],
@@ -1554,6 +1669,9 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["MathAbs", MATH_ABS],
   ["MathMin", MATH_MIN],
   ["MathMax", MATH_MAX],
+  ["MathAbsReal", MATH_ABS_REAL],
+  ["MathMinReal", MATH_MIN_REAL],
+  ["MathMaxReal", MATH_MAX_REAL],
   ["MaxOfSeq", MAX_OF_SEQ],
   ["MinOfSeq", MIN_OF_SEQ],
   ["Perm", PERM],
@@ -1649,11 +1767,11 @@ function resolveTy(ty: Ty): Ty {
 
 /** Constructor names come from source strings (string-union values like
  *  "spec-pure", discriminated-union tags), which may contain characters no
- *  TS identifier has; map those to `_` before the ordinary escaping. A
- *  collision after mapping fails loudly in Dafny (duplicate constructor)
- *  rather than silently merging. */
+ *  TS identifier has. Sanitize only the candidate spelling, keeping the original
+ *  literal as the cache key so distinct literals cannot collapse onto one entry.
+ *  Identifier-shaped tags retain their existing source-name mapping. */
 function dafnyCtorName(name: string): string {
-  return escapeName(name.replace(/[^A-Za-z0-9_'?]/g, "_"));
+  return _userDafnyNames.get(name) ?? escapeGeneratedName(name, name.replace(/[^A-Za-z0-9_'?]/g, "_"));
 }
 
 function qualifyCtor(name: string, type?: string): string {

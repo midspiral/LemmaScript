@@ -49,8 +49,10 @@ matching TS, which requires the user to bind first:
 `const v = m.get(k); if (v !== undefined) use(v)`. This avoids the
 soundness hazard of retyping based on structural equality of impure calls.
 
-Resolve does **no structural rewriting**. It does not substitute, does not
-introduce synthetic vars, does not generate `match` constructs.
+Resolve does **no structural rewriting** for narrowing: no substitution, no
+synthetic vars, no `match` generation. Its one rewriting step is
+[callback binding](TOOLS.md#callback-binding-and-lowering), which uses the
+lexical environment to bind callback parameters.
 
 **Narrow owns structural narrowing.** A separate pass between resolve and
 transform takes typed IR and rewrites optional-narrowing patterns into a

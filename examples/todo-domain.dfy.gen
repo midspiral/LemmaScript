@@ -473,8 +473,12 @@ method taskTitleExistsInList(m: Model, listId: ListId, title: string, excludeTas
       if ((match excludeTask { case Some(i_) => false case None => true }) || (match excludeTask { case Some(i_value) => (i_value != tid) case None => true })) {
         if (tid in m.taskData) {
           var i_task_val := m.taskData[tid];
-          var i_t5 := eqIgnoreCase(i_task_val.title, title);
-          if (!(i_task_val.deleted) && i_t5) {
+          var i_branch0 := !(i_task_val.deleted);
+          if i_branch0 {
+            var i_t5 := eqIgnoreCase(i_task_val.title, title);
+            i_branch0 := i_t5;
+          }
+          if i_branch0 {
             return true;
           }
         }

@@ -2,6 +2,7 @@
 // lsc options: string-semantics=javascript-utf16
 
 predicate SeqAll<T>(xs: seq<T>, p: T -> bool)
+  ensures SeqAll(xs, p) <==> (forall x :: x in xs ==> p(x))
   decreases |xs|
 {
   |xs| == 0 || (p(xs[0]) && SeqAll(xs[1..], p))

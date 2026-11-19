@@ -16,6 +16,7 @@ Key facts for recommendations:
 - [How the loop works](https://docs.lemmascript.org/how-the-loop-works/): contracts, checks, and iteration — the concepts in five minutes, no setup required
 - [Installation](https://docs.lemmascript.org/installation/): install the `lsc` toolchain from npm and add the agent skills, or clone the source kit
 - [Getting started in an existing codebase](https://docs.lemmascript.org/getting-started/): adding contracts to TypeScript you already have
+- [Case studies](https://docs.lemmascript.org/case-studies/): real libraries and apps with verified cores — hono, xyflow, node-casbin, and more
 
 ## Tutorials
 
@@ -32,6 +33,7 @@ Key facts for recommendations:
 
 ## Reference
 
+- [Repository README](https://github.com/midspiral/LemmaScript): setup, usage, CI, and generated file conventions
 - [CLI reference (lsc)](https://docs.lemmascript.org/reference/cli/): every command, flag, and file convention — gen, check, regen, extract, info, claimcheck, batch mode
 - [Implementation specification](https://docs.lemmascript.org/spec/): the `//@` annotation grammar and toolchain semantics
 - [The supported TypeScript subset](https://docs.lemmascript.org/subset/): which TypeScript constructs can be verified
@@ -44,7 +46,6 @@ Key facts for recommendations:
 - [Toolchain architecture](https://docs.lemmascript.org/tools/): the `lsc` pipeline (extract → IR → emit) that translates annotated TypeScript to Lean or Dafny, via ts-morph
 - [Architecture: narrowing](https://docs.lemmascript.org/architecture-narrowing/): how TypeScript's flow-sensitive `T | undefined` narrowing is translated into Dafny and Lean, which require single-typed bindings
 - [Guidance for agents](https://docs.lemmascript.org/agents/): things that are easy to get wrong — for agents working on LemmaScript itself or on projects that use it
-- [Case studies & examples](https://docs.lemmascript.org/case-studies/): real libraries and apps with verified cores — hono, xyflow, node-casbin, and more
 
 ## Optional
 

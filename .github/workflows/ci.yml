@@ -183,6 +183,9 @@ jobs:
             branch: session
           - repo: midspiral/eventab-lemmascript
             branch: main
+          - repo: midspiral/eventab-lemmascript
+            branch: guard
+            guard: true
           - repo: midspiral/eslint-plugin-with-lemmascript
             branch: main
           - repo: midspiral/infisical-lemmascript
@@ -218,6 +221,12 @@ jobs:
 
       - run: cd tools && npm ci
 
+      - name: Build lsc with the published guard
+        if: matrix.guard
+        run: |
+          npm ci --include=optional
+          npm run build
+
       - uses: ./.github/actions/setup-dafny
 
       - name: Regenerate and verify Dafny
@@ -238,6 +247,34 @@ jobs:
             echo "$untracked"
             exit 1
           fi
+
+      - name: Regenerate and check runtime guard
+        if: matrix.guard
+        working-directory: ../case-study
+        run: |
+          rm src/allocate.guarded.ts
+          node ../LemmaScript/tools/dist/lsc.js guard src/allocate.ts
+          git diff --exit-code -- '*.guarded.ts'
+          untracked=$(git ls-files --others --exclude-standard -- '*.guarded.ts')
+          if [ -n "$untracked" ]; then
+            echo "ERROR: Untracked generated guards:"
+            echo "$untracked"
+            exit 1
+          fi
+          if grep -n "UNENFORCED" src/*.guarded.ts; then
+            echo "ERROR: incomplete runtime guard"
+            exit 1
+          fi
+
+      - name: Check guarded runtime and UI
+        if: matrix.guard
+        working-directory: ../case-study
+        run: |
+          npm ci
+          npm run typecheck
+          npm run demo
+          npm --prefix ui ci
+          npm --prefix ui run build
 
   case-studies-lean:
     runs-on: ubuntu-latest

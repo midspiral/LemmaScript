@@ -32,9 +32,9 @@ export interface BuiltinSpec {
   /** Lowers to a pure backend expression (`x in s`, `|s|`, `s.Keys`, …) —
    *  safe inside match arms even with `callKind: "method"`. */
   pure: boolean;
-  /** Takes a lambda whose params are inferred from the receiver:
-   *  unary (elem), comparator (elem, elem), reduce (acc, elem). */
-  hof?: { shape: "unary" | "comparator" | "reduce" };
+  /** JavaScript callback convention, including arguments omitted by unary
+   *  backend collection operations. */
+  hof?: { shape: "element" | "comparator" | "reduce" };
   /** Arg positions that must be nat in Lean (array index args). */
   intArgPositions?: number[];
   /** Arg 0 is a membership key/element of the receiver collection — drives
@@ -67,22 +67,22 @@ export const BUILTINS = {
   "array.sort": { ret: self, pure: false,
     hof: { shape: "comparator" } },
   "array.filter": { ret: self, pure: false,
-    hof: { shape: "unary" } },
+    hof: { shape: "element" } },
   "array.every": { ret: BOOL, pure: false,
-    hof: { shape: "unary" } },
+    hof: { shape: "element" } },
   "array.some": { ret: BOOL, pure: false,
-    hof: { shape: "unary" } },
+    hof: { shape: "element" } },
   "array.reduce": { pure: false,
     hof: { shape: "reduce" },
     ret: (_objTy, args) => args.length === 2 ? args[1].ty : UNKNOWN },
   "array.find": { ret: optElem, pure: false,
-    hof: { shape: "unary" } },
+    hof: { shape: "element" } },
   "array.findLast": { ret: optElem, pure: false,
-    hof: { shape: "unary" } },
+    hof: { shape: "element" } },
   "array.findIndex": { ret: INT, pure: false,
-    hof: { shape: "unary" } },
+    hof: { shape: "element" } },
   "array.findLastIndex": { ret: INT,
-    pure: false, hof: { shape: "unary" } },
+    pure: false, hof: { shape: "element" } },
   "array.flat": { pure: true,
     ret: (objTy) => objTy.kind === "array" && objTy.elem.kind === "array"
       ? { kind: "array", elem: objTy.elem.elem } : UNKNOWN },
@@ -91,7 +91,7 @@ export const BUILTINS = {
     ret: (objTy) => objTy.kind === "array" && objTy.elem.kind === "string"
       ? STRING() : UNKNOWN },
   "array.map": { pure: false,
-    hof: { shape: "unary" },
+    hof: { shape: "element" },
     // Prefer the lambda's declared return type (handles multi-statement bodies
     // where body[0] is an `if`, not a `return`); fall back to the body's return.
     ret: (_objTy, args) => {
@@ -153,4 +153,19 @@ export function recognizeBuiltin(objTy: Ty, method: string): BuiltinId | null {
 
 export function builtinSpec(id: BuiltinId): BuiltinSpec {
   return BUILTINS[id];
+}
+
+/** The actual arguments passed by JavaScript, independently of which ones a
+ * callback declares or observes. Array indices are JS numbers (modeled ints). */
+export function callbackArgumentTypes(spec: BuiltinSpec, receiver: Ty, initial?: Ty): Ty[] | undefined {
+  if (!spec.hof || receiver.kind !== "array") return undefined;
+  switch (spec.hof.shape) {
+    case "element": return [receiver.elem, { kind: "int" }, receiver];
+    case "comparator": return [receiver.elem, receiver.elem];
+    case "reduce": return initial ? [initial, receiver.elem, { kind: "int" }, receiver] : undefined;
+  }
+}
+
+export function callbackBaseArity(shape: NonNullable<BuiltinSpec["hof"]>["shape"]): number {
+  return shape === "element" ? 1 : 2;
 }

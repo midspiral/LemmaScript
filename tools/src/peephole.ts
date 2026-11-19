@@ -1,8 +1,8 @@
 /**
  * Peephole — local IR-to-IR rewrites that eliminate wrap-then-unwrap ceremony.
  *
- * Opt-in via `//@ peephole` directive in the source file.
- * Runs between transform and emit. Operates on backend-neutral IR.
+ * Runs unconditionally between transform and emit. Operates on backend-neutral
+ * IR; the bool rules are Dafny-only (see `peepholeModule`).
  *
  * Rules (applied bottom-up to fixed point at each node):
  *   1. match m.get(k) { Some(v) => sb, None => nb }  →  if k in m then sb[v := m[k]] else nb
@@ -13,46 +13,8 @@
  *
  * Statement-level rule 1 also handles match-statement on m.get.
  */
-import type { Expr, Stmt, Decl, Module, MatchArm, StmtMatchArm, MatchPattern } from "./ir.js";
+import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
 import { patternCtor, patternBinders, usesName, usesNameInStmts } from "./ir.js";
-
-// ── Generic walkers (same shape as transform.ts) ─────────────
-
-function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
-  const hit = f(e);
-  if (hit) return hit;
-  const r = (x: Expr) => mapExpr(x, f);
-  switch (e.kind) {
-    case "var": case "num": case "bigint": case "bool": case "str": case "constructor":
-    case "emptyMap": case "emptySet": case "havoc": case "default": case "mapLiteral": return e;
-    case "binop": return { ...e, left: r(e.left), right: r(e.right) };
-    case "unop": return { ...e, expr: r(e.expr) };
-    case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };
-    case "app": return { ...e, args: e.args.map(r) };
-    case "field": return { ...e, obj: r(e.obj) };
-    case "toNat": return { ...e, expr: r(e.expr) };
-    case "toReal": return { ...e, expr: r(e.expr) };
-    case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
-    case "tupleLiteral": return { ...e, elems: e.elems.map(r) };
-    case "tupleProj": return { ...e, obj: r(e.obj) };
-    case "record": return { ...e, spread: e.spread ? r(e.spread) : null,
-      fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
-    case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
-    case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
-    case "match": {
-      const scr = r(e.scrutinee);
-      return { ...e, scrutinee: scr, arms: e.arms.map(a => ({ ...a, body: r(a.body) })) };
-    }
-    case "forall": return { ...e, body: r(e.body) };
-    case "exists": return { ...e, body: r(e.body) };
-    case "let": return { ...e, value: r(e.value), body: r(e.body) };
-    case "methodCall": return { ...e, obj: r(e.obj), args: e.args.map(r) };
-    case "lambda": return e;
-  }
-}
-
-// (Note: peephole rules now bind once via let/var rather than substitute,
-//  so semantics are preserved under any mutation. No substVar helpers needed.)
 
 // ── Shape detection ──────────────────────────────────────────
 
@@ -204,8 +166,8 @@ const STMT_RULES = [ruleMatchOnMapGetStmt];
 
 /** Pair rule: let x = m.get(k); match x { Some(v) => sb, None => nb }
  *  → if k in m { var v := m[k]; sb } else { nb }
- *  Requires x not referenced in any stmt after the match. Bind v once instead
- *  of substituting, to preserve semantics under mutation of m. */
+ *  Requires x not referenced in either arm or after the match. Bind v once
+ *  instead of substituting, to preserve semantics under mutation of m. */
 function tryLetMatchOnMapGet(s1: Stmt, s2: Stmt, restStmts: Stmt[]): Stmt | null {
   if (s1.kind !== "let" || s1.mutable) return null;
   const get = isMapGet(s1.value);
@@ -215,7 +177,9 @@ function tryLetMatchOnMapGet(s1: Stmt, s2: Stmt, restStmts: Stmt[]): Stmt | null
   if (!matchOnX) return null;
   const arms = getSomeNoneArms(s2.arms);
   if (!arms) return null;
-  if (usesNameInStmts(restStmts, s1.name)) return null;
+  if (usesNameInStmts(arms.someArm.body, s1.name) ||
+      usesNameInStmts(arms.noneArm.body, s1.name) ||
+      usesNameInStmts(restStmts, s1.name)) return null;
   const idx: Expr = { kind: "index", arr: get.obj, idx: get.key };
   const valTy = get.objTy.kind === "map" ? get.objTy.value : { kind: "unknown" as const };
   const someBody: Stmt[] = arms.binder
@@ -276,21 +240,26 @@ function peepholeExpr(e: Expr): Expr {
 function rewriteChildrenExpr(e: Expr): Expr {
   const r = peepholeExpr;
   switch (e.kind) {
-    case "var": case "num": case "bigint": case "bool": case "str": case "constructor":
-    case "emptyMap": case "emptySet": case "havoc": case "default": case "mapLiteral": return e;
+    case "var": case "num": case "bigint": case "bool": case "str":
+    case "emptyMap": case "emptySet": case "havoc": case "default": return e;
+    case "constructor": return { ...e, args: e.args.map(r) };
+    case "mapLiteral": return { ...e, entries: e.entries.map(en => ({ ...en, key: r(en.key), value: r(en.value) })) };
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
     case "implies": return { ...e, premises: e.premises.map(r), conclusion: r(e.conclusion) };
     case "app": return { ...e, args: e.args.map(r) };
     case "field": return { ...e, obj: r(e.obj) };
     case "toNat": return { ...e, expr: r(e.expr) };
+    case "toInt": return { ...e, expr: r(e.expr) };
     case "toReal": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
+    case "stringIndex": return { ...e, str: r(e.str), idx: r(e.idx) };
     case "tupleLiteral": return { ...e, elems: e.elems.map(r) };
     case "tupleProj": return { ...e, obj: r(e.obj) };
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null,
       fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
+    case "arrayRange": return { ...e, length: r(e.length) };
     case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
     case "match": {
       const scr = r(e.scrutinee);

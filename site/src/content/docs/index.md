@@ -3,7 +3,7 @@ title: "What is LemmaScript?"
 description: "TypeScript with syntax for contracts — an agent writes the contract and the code together, and only correct code ships."
 ---
 
-<!-- Hand-written homepage (not synced). The repo README syncs to /case-studies/. -->
+<!-- Hand-written homepage (not synced from the repo README). -->
 
 LemmaScript is **TypeScript with syntax for contracts** — the way TypeScript is
 JavaScript with syntax for types. You (or your agent) write ordinary TypeScript and

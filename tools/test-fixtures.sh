@@ -6,6 +6,9 @@ cd "$(dirname "$0")/.."
 # the current directory. Keep it off; the run-log section turns it on locally.
 export LSC_RUN_LOG=false
 
+# The guard integration tests exercise the compiled CLI that ships on npm.
+npm run build
+
 # Run executable tests before the Dafny fixture checks.
 npx tsx --test tools/tests/*.test.ts
 
@@ -55,6 +58,11 @@ cp tools/fixtures/optional-guard-order.ts "$fixture_dir/optional-guard-order.ts"
 cp tools/fixtures/optional-comparison-order.ts "$fixture_dir/optional-comparison-order.ts"
 cp tools/fixtures/destructuring-default.ts "$fixture_dir/destructuring-default.ts"
 cp tools/fixtures/spread-null-override.ts "$fixture_dir/spread-null-override.ts"
+cp tools/fixtures/optional-enum-fields.ts "$fixture_dir/optional-enum-fields.ts"
+cp tools/fixtures/class-dependencies.ts "$fixture_dir/class-dependencies.ts"
+cp tools/fixtures/const-enum.ts "$fixture_dir/const-enum.ts"
+cp tools/fixtures/numeric-union-truthiness.ts "$fixture_dir/numeric-union-truthiness.ts"
+cp examples/conditionalCalls.ts "$fixture_dir/conditional-calls.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/impure.ts"
 if ! grep -Fq 'method {:axiom} rollDie' "$fixture_dir/impure.dfy.gen"; then
@@ -72,6 +80,39 @@ npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/opt
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-comparison-order.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/destructuring-default.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/spread-null-override.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-enum-fields.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/class-dependencies.ts"
+sed 's/return this.runner.epoch !== INACTIVE;/return this.runner.epoch === INACTIVE;/' \
+  tools/fixtures/class-dependencies.ts > "$fixture_dir/class-dependencies-mutated.ts"
+expect_failure \
+  "Dafny accepted the inverted class method despite its postcondition" \
+  npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/class-dependencies-mutated.ts"
+
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/const-enum.ts"
+sed 's/return Phase.Active;/return Phase.Idle;/' \
+  tools/fixtures/const-enum.ts > "$fixture_dir/const-enum-mutated.ts"
+expect_failure \
+  "Dafny accepted the wrong const enum member despite its postcondition" \
+  npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/const-enum-mutated.ts"
+
+# Zero invalidates both original contracts. Check them individually so a
+# regression in either truthiness or negation cannot hide behind the other.
+for function_name in zTruth zNot; do
+  expect_failure \
+    "Dafny accepted the false $function_name contract for a numeric union" \
+    npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 \
+      --extra-flags="--filter-symbol=${function_name}_ensures" "$fixture_dir/numeric-union-truthiness.ts"
+done
+sed -e 's/=== 5$/=== (z !== 0 ? 5 : 6)/' -e 's/=== false$/=== (z === 0)/' \
+  tools/fixtures/numeric-union-truthiness.ts > "$fixture_dir/numeric-union-truthiness-correct.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/numeric-union-truthiness-correct.ts"
+
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/conditional-calls.ts"
+sed 's/return enabled ? checkedIncrement(enabled, 0) : -1;/return enabled ? checkedIncrement(!enabled, 0) : -1;/' \
+  examples/conditionalCalls.ts > "$fixture_dir/conditional-calls-mutated.ts"
+expect_failure \
+  "Dafny accepted a call whose precondition contradicts its selected branch" \
+  npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/conditional-calls-mutated.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/legacy-safe-slice.ts"
 if ! grep -Fq 'function SafeSlice' "$fixture_dir/legacy-safe-slice.dfy.gen"; then
@@ -300,6 +341,8 @@ fi
 
 # Run log: a real check → broken proof → fixed proof sequence is recorded with
 # member outcomes and hashes, inside a self-ignoring .lemmascript/ beside the config.
+# The repo root may already hold a local run log; only check that it is not appended to.
+root_runs_before=$(wc -l < .lemmascript/runs.jsonl 2>/dev/null || echo 0)
 run_log_dir="$fixture_dir/run-log-project"
 mkdir -p "$run_log_dir"
 echo '{}' > "$run_log_dir/lemmascript.json"
@@ -326,7 +369,11 @@ if (new Set(runs.map(r => r.tsHash)).size !== 1) fail("the .ts hash changed alth
 if (runs[1].dfyHash === runs[0].dfyHash || runs[2].dfyHash !== runs[0].dfyHash) fail("dfy hashes did not track the proof edit");
 ' "$run_log_dir/.lemmascript/runs.jsonl"
 grep -qx '\*' "$run_log_dir/.lemmascript/.gitignore"
-expect_absent .lemmascript
+root_runs_after=$(wc -l < .lemmascript/runs.jsonl 2>/dev/null || echo 0)
+if [ "$root_runs_after" != "$root_runs_before" ]; then
+  echo "ERROR: run log fixture appended to the repo-root .lemmascript/ instead of the config directory"
+  exit 1
+fi
 
 # lsc runs: a code bug in the .ts fails under regen and its removal passes, so
 # the log above now holds a proof catch (the proof edit) and a source-fix catch

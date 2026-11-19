@@ -54,7 +54,7 @@ lemma trimmed_ensures(s: string)
 
 function trimAsciiWs(): string
 {
-  StringTrim("	x\n")
+  StringTrim("\tx\n")
 }
 
 lemma trimAsciiWs_ensures()

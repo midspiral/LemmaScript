@@ -12,7 +12,7 @@ import { parseTsType, tyToCanonical } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
-import { recognizeBuiltin, builtinSpec } from "./builtins.js";
+import { recognizeBuiltin, builtinSpec, callbackArgumentTypes, callbackBaseArity } from "./builtins.js";
 import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName } from "./typedecls.js";
 import { presentFact, variantFact } from "./condition-facts.js";
 
@@ -22,6 +22,18 @@ interface Env {
   name: string;
   ty: Ty;
   parent: Env | null;
+  /** Callback bindings are lexical, so a nested declaration shadows them in
+   *  exactly the same way as ordinary parameters. */
+  onRead?: () => void;
+  /** Hygienic backend name when a parameter is referenced before initialization. */
+  emittedName?: string;
+  value?: TExpr;
+  argumentPack?: { length: number; at: (index: number) => TExpr };
+}
+
+function binding(env: Env | null, name: string): Env | undefined {
+  if (!env) return undefined;
+  return env.name === name ? env : binding(env.parent, name);
 }
 
 function lookup(env: Env | null, name: string): Ty | undefined {
@@ -32,13 +44,20 @@ function lookup(env: Env | null, name: string): Ty | undefined {
 function extend(env: Env | null, name: string, ty: Ty): Env {
   return { name, ty, parent: env };
 }
-function envKeys(env: Env | null): string[] {
-  const out: string[] = [];
-  let e = env;
-  while (e) { out.push(e.name); e = e.parent; }
-  return out;
+/** Shadow a binding with a narrowed type, keeping its callback state.
+ *  Dropping that state would let the body reference a renamed parameter by its
+ *  source name, which can silently bind an outer variable. The spread is exact
+ *  because refine always follows a read of the same variable, and that read is
+ *  what sets `emittedName`; the `argumentPack`/`value` getters are evaluated
+ *  once, but they belong to rest and beyond-arity frames, whose types (`unknown`,
+ *  `void`) are never narrowed. */
+function refine(env: Env | null, name: string, ty: Ty): Env {
+  let entry = binding(env, name);
+  if (!entry) for (let e = env; e; e = e.parent) {
+    if (e.emittedName === name) { entry = e; break; }
+  }
+  return { ...entry, name: entry?.name ?? name, ty, parent: env };
 }
-
 // ── Access paths ─────────────────────────────────────────────
 
 /** Pure access path — a chain of field accesses rooted at a variable.
@@ -76,7 +95,7 @@ interface NarrowedPath {
  *  access paths (var or field chain) so we can compare by path equality.
  *  Produced by scanning function requires, enclosing `if (k in m)` branches,
  *  `//@ assert k in m` statements, and while-loop invariants. Consumed in
- *  the index case (resolve.ts:~447) to return `obj.ty.value` (non-optional)
+ *  the `index` case of `resolveExprInner` to return `obj.ty.value` (non-optional)
  *  instead of `Option<V>` when the access is provably safe. */
 interface NarrowedIndex {
   obj: AccessPath;
@@ -123,6 +142,10 @@ function resolveTsType(tsType: string, overrides: Map<string, string>, varName?:
 /** Infer a conditional's result type after its branches have been resolved or
  *  contextually coerced. A void branch is the source-level null/undefined arm. */
 function conditionalResultTy(thenTy: Ty, elseTy: Ty): Ty {
+  if ((thenTy.kind === "int" || thenTy.kind === "nat") &&
+      (elseTy.kind === "int" || elseTy.kind === "nat")) {
+    return { ...thenTy, kind: thenTy.kind === "int" || elseTy.kind === "int" ? "int" : "nat" };
+  }
   let ty = thenTy.kind !== "unknown" ? thenTy : elseTy;
   if (thenTy.kind === "void" && elseTy.kind !== "void" && elseTy.kind !== "unknown") {
     ty = { kind: "optional", inner: elseTy };
@@ -167,8 +190,8 @@ function findSynthArrayUnion(name: string, typeDecls: TypeDeclInfo[]): TypeDeclI
   return null;
 }
 
-/** Coerce `value` to `targetTy` at an assignment-position. Mirrors TS subtyping
- *  for the two upcast shapes LS synthesizes:
+/** Coerce `value` to `targetTy` at an assignment-position. Contextually types
+ *  real literals, then mirrors TS subtyping for the upcast shapes LS synthesizes:
  *    - `T` into `optional<T>` slot  → wrap with `Some(...)`
  *    - `T[]` into a synth `T[] | U` slot → wrap with `ArrayBranch(...)`
  *    - `U`   into a synth `T[] | U` slot → wrap with `NonArrayBranch(...)`
@@ -176,6 +199,20 @@ function findSynthArrayUnion(name: string, typeDecls: TypeDeclInfo[]): TypeDeclI
  *  source is unknown, or no rule matches). */
 function coerceToTargetTy(value: TExpr, targetTy: Ty, typeDecls: TypeDeclInfo[]): TExpr {
   value = coerceStr(value, targetTy);
+  // Real targets also type integer literals, including negative literals and
+  // conditional arms. Coerce optional payloads before adding Some wrappers.
+  const payloadTy = targetTy.kind === "optional" ? targetTy.inner : targetTy;
+  if (payloadTy.kind === "real") {
+    if (value.kind === "num") {
+      value = { ...value, ty: payloadTy };
+    } else if (value.kind === "unop" && value.op === "-" && value.expr.kind === "num") {
+      value = { ...value, expr: { ...value.expr, ty: payloadTy }, ty: payloadTy };
+    } else if (value.kind === "conditional") {
+      const then_ = coerceToTargetTy(value.then, payloadTy, typeDecls);
+      const else_ = coerceToTargetTy(value.else, payloadTy, typeDecls);
+      value = { ...value, then: then_, else: else_, ty: conditionalResultTy(then_.ty, else_.ty) };
+    }
+  }
   if (value.ty.kind === "unknown" || value.ty.kind === "void") return value;
   if (targetTy.kind === "optional" && value.ty.kind !== "optional") {
     return wrapSome(value, targetTy);
@@ -300,7 +337,7 @@ function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
   const f = presentFact(cond);
   if (f && !f.negated) {
     if (f.scrutinee.kind === "var") {
-      return withEnv(ctx, extend(ctx.env, f.scrutinee.name, f.innerTy));
+      return withEnv(ctx, refine(ctx.env, f.scrutinee.name, f.innerTy));
     }
     const path = asTExprAccessPath(f.scrutinee);
     if (path) {
@@ -339,8 +376,13 @@ function findDecl(ctx: Ctx, name: string): TypeDeclInfo | undefined {
 function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new Set()): Ty {
   if (ty.kind === "user") {
     if (seen.has(ty.name)) return ty;
+    const dot = ty.name.lastIndexOf(".");
+    const enumDecl = typeDecls.find(d => d.name === ty.name.slice(0, dot));
+    if (dot > 0 && enumDecl?.constEnumMembers?.some(m => m.name === ty.name.slice(dot + 1))) return { kind: "int" };
     const decl = declOfDotted(typeDecls, ty.name);
     if (decl?.kind === "alias" && decl.aliasOfTy) {
+      // Numeric enums must behave as numbers (not truthy user objects).
+      if (decl.constEnumMembers) return { kind: "int" };
       const target = decl.aliasOfTy;
       if (target.kind === "array" || target.kind === "map" || target.kind === "set" || target.kind === "optional" || target.kind === "user") {
         return expandAlias(target, typeDecls, new Set([...seen, ty.name]));
@@ -353,6 +395,20 @@ function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new 
   if (ty.kind === "tuple") return { kind: "tuple", elems: ty.elems.map(e => expandAlias(e, typeDecls, seen)) };
   if (ty.kind === "set") return { kind: "set", elem: expandAlias(ty.elem, typeDecls, seen) };
   if (ty.kind === "map") return { kind: "map", key: expandAlias(ty.key, typeDecls, seen), value: expandAlias(ty.value, typeDecls, seen) };
+  return ty;
+}
+
+/** Numeric aliases keep their names in declarations but use their underlying
+ *  types in expressions. Optional payloads need the same treatment for zero's
+ *  falsiness; collection elements are resolved when read. */
+function numericValueType(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new Set()): Ty {
+  if (ty.kind === "optional") return { ...ty, inner: numericValueType(ty.inner, typeDecls, seen) };
+  if (ty.kind !== "user" || seen.has(ty.name)) return ty;
+  const decl = declOfDotted(typeDecls, ty.name);
+  if (decl?.kind === "alias" && decl.aliasOfTy) {
+    const target = numericValueType(decl.aliasOfTy, typeDecls, new Set([...seen, ty.name]));
+    if (target.kind === "int" || target.kind === "nat" || target.kind === "real") return target;
+  }
   return ty;
 }
 
@@ -479,9 +535,12 @@ function inferQuantVarType(varName: string, body: RawExpr, ctx: Ctx): Ty | null 
 }
 
 function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
+  if (fn.kind === "var" && binding(ctx.env, fn.name))
+    return lookup(ctx.env, fn.name)?.kind === "fn" ? "pure" : "method";
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Math") return "pure";
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Array" && fn.field === "isArray") return "pure";
   if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "String" && fn.field === "fromCharCode") return "pure";
+  if (fn.kind === "field" && fn.obj.kind === "var" && fn.obj.name === "Number" && fn.field === "isSafeInteger") return "pure";
   if (fn.kind === "var" && (ctx.inSpec || ctx.inLambda) && ctx.pureFns.has(fn.name)) return "spec-pure";
   // Effectively pure bare-name externs are function calls. Impure externs are
   // lifted to statement-level method binds so repeated invocations remain
@@ -495,7 +554,6 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
       return "method";
     }
   }
-  if (fn.kind === "var" && lookup(ctx.env, fn.name)?.kind === "fn") return "pure";
   if (fn.kind === "var" && ctx.inSpec) {
     // Not a known pure function — could be external (Lean-defined spec helper).
     // Pass through as "pure" and let Lean catch any errors.
@@ -507,10 +565,7 @@ function classifyCall(fn: RawExpr, ctx: Ctx): CallKind {
 
 // ── Call resolution helpers ─────────────────────────────────
 
-/** Infer lambda param types from array method context (map, filter, etc.)
- *  AND from function-typed parameters of named callees (e.g., a `Comparator =
- *  (a, b) => bool` parameter propagates `string, string` to the lambda's
- *  inline params). Returns updated rawArgs with inferred tsType. */
+/** Render a resolved type back to a TS type string, for lambda param inference. */
 function tyToTsStr(ty: Ty): string | undefined {
   if (ty.kind === "user") return ty.name;
   if (ty.kind === "string") return "string";
@@ -521,47 +576,14 @@ function tyToTsStr(ty: Ty): string | undefined {
   if (ty.kind === "optional") { const inner = tyToTsStr(ty.inner); return inner ? `${inner} | undefined` : undefined; }
   return undefined;
 }
+/** Infer lambda param types from function-typed parameters of named callees
+ *  (e.g., a `Comparator = (a, b) => bool` parameter propagates `string, string` to the lambda's
+ *  inline params). Returns updated rawArgs with inferred tsType. */
 function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExpr[] {
-  const hofShape = fn.kind === "field"
-    ? (id => id ? builtinSpec(id).hof?.shape : undefined)(recognizeBuiltin(fn.obj.ty, fn.field))
-    : undefined;
-  // sort's comparator takes two params, both the element type.
-  if (hofShape === "comparator" && fn.kind === "field" && fn.obj.ty.kind === "array" &&
-      rawArgs.length >= 1 && rawArgs[0].kind === "lambda" && rawArgs[0].params.length >= 1) {
-    const tsType = tyToTsStr(fn.obj.ty.elem);
-    if (tsType) {
-      const lam = rawArgs[0];
-      const updatedParams = lam.params.map(p => (p.tsType ? p : { ...p, tsType }));
-      return [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
-    }
-  }
-  // reduce's callback is (acc, elem): acc from the init arg's type, elem from the array.
-  if (hofShape === "reduce" && fn.kind === "field" && fn.obj.ty.kind === "array" && ctx &&
-      rawArgs.length >= 2 && rawArgs[0].kind === "lambda" && rawArgs[0].params.length >= 2) {
-    const accTs = tyToTsStr(resolveExpr(rawArgs[1], ctx).ty);
-    const elemTs = tyToTsStr(fn.obj.ty.elem);
-    if (accTs && elemTs) {
-      const lam = rawArgs[0];
-      const updatedParams = lam.params.map((p, i) =>
-        p.tsType || i > 1 ? p : { ...p, tsType: i === 0 ? accTs : elemTs });
-      return [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
-    }
-  }
-  if (hofShape === "unary" && fn.kind === "field" && fn.obj.ty.kind === "array" &&
-      rawArgs.length >= 1 && rawArgs[0].kind === "lambda" &&
-      rawArgs[0].params.length >= 1 && !rawArgs[0].params[0].tsType) {
-    const elemTy = fn.obj.ty.elem;
-    const tsType = tyToTsStr(elemTy);
-    if (tsType) {
-      const lam = rawArgs[0];
-      const updatedParams = [{ ...lam.params[0], tsType }, ...lam.params.slice(1)];
-      return [{ ...lam, params: updatedParams }, ...rawArgs.slice(1)];
-    }
-  }
   // Named-callee propagation: when an argument position expects a function
   // type, infer the lambda's param types from that function type. Aliases
   // (e.g., `Comparator`) are expanded via the typeDecls.
-  if (fn.kind === "var" && ctx?.fnParams.has(fn.name)) {
+  if (fn.kind === "var" && ctx?.fnParams.has(fn.name) && !binding(ctx.env, fn.name)) {
     const paramTys = ctx.fnParams.get(fn.name)!;
     return rawArgs.map((a, i) => {
       if (a.kind !== "lambda" || i >= paramTys.length) return a;
@@ -580,6 +602,162 @@ function inferLambdaParamTypes(fn: TExpr, rawArgs: RawExpr[], ctx?: Ctx): RawExp
   return rawArgs;
 }
 
+let callbackCounter = 0;
+
+function callbackDefaultState(ty: Ty, ctx: Ctx, seen = new Set<string>()): "missing" | "defined" | "optional" | "unknown" {
+  if (ty.kind === "void") return "missing";
+  if (ty.kind === "optional" || ty.kind === "unknown") return ty.kind;
+  if (ty.kind !== "user" || ty.name === "null") return "defined";
+  if (seen.has(ty.name)) return "unknown";
+  const decl = declOfDotted(ctx.typeDecls, ty.name);
+  if (decl?.kind === "alias" && decl.aliasOfTy)
+    return callbackDefaultState(decl.aliasOfTy, ctx, new Set([...seen, ty.name]));
+  return decl && decl.kind !== "opaque" ? "defined" : "unknown";
+}
+
+/** Bind an inline callback against its actual JavaScript argument list.
+ * Rest is a symbolic argument pack: observing its length or a fixed position
+ * needs no heterogeneous array. Unobserved slots disappear without inspecting
+ * identifier spellings or dropping any source computation. */
+function resolveCallback(e: Extract<RawExpr, { kind: "lambda" }>, actual: Ty[], baseArity: number, ctx: Ctx): TExpr {
+  const id = callbackCounter++;
+  const used = actual.map(() => false);
+  const defaults = actual.map(ty => callbackDefaultState(ty, ctx));
+  const slots = actual.map((ty, i) => {
+    const p = e.params[i];
+    return {
+      name: p && !p.rest && !(p.defaultValue && defaults[i] === "missing") ? p.name : freshName(`_callbackArg${id}_${i}`),
+      ty: p && !p.rest && p.tsType ? parseTsType(p.tsType)
+        : ty.kind === "nat" ? { ...ty, kind: "int" as const } : ty,
+    };
+  });
+  const read = (i: number): TExpr => {
+    if (i >= slots.length) return { kind: "var", name: "undefined", ty: { kind: "void" } };
+    used[i] = true;
+    return { kind: "var", ...slots[i] };
+  };
+  const executesDefault = (i: number) => !!e.params[i].defaultValue &&
+    (i >= actual.length || defaults[i] === "missing");
+  const ready = new Set<number>();
+  const eagerReads = new Set<number>();
+  let captures: Set<number> | undefined;
+  const prefix: TStmt[] = [];
+  const pending = new Map<number, { init: TExpr; captures: Set<number> }>();
+
+  // All parameter names are in scope before any initializer. The frames are
+  // binding identities; nested declarations shadow them through ordinary lookup.
+  let env = ctx.env;
+  const frames = e.params.map((p, i): Env => {
+    const frame: Env = {
+      name: p.name, parent: env,
+      ty: executesDefault(i) ? expandAlias(parseTsType(p.inferredTsType ?? p.tsType ?? "unknown"), ctx.typeDecls)
+        : p.rest ? { kind: "unknown" } : slots[i]?.ty ?? { kind: "void" },
+      onRead: () => {
+        captures?.add(i);
+        // A forward reference must never resolve to an outer variable if
+        // ordinary backend lowering cannot represent its initialization order.
+        if (!ready.has(i)) {
+          frame.emittedName ??= freshName(`_callbackParam${id}_${i}`);
+          // Keep the read itself: e.g. !array can later fold to false and erase
+          // an unresolved reference. An ordinary let retains the scope check.
+          if (!captures && !eagerReads.has(i)) {
+            eagerReads.add(i);
+            prefix.push({ kind: "let", name: freshName(`_callbackRead${id}_${i}`), ty: frame.ty,
+              mutable: false, init: { kind: "var", name: frame.emittedName, ty: frame.ty } });
+          }
+        }
+        if (!p.rest && !executesDefault(i) && i < actual.length) used[i] = true;
+      },
+      get argumentPack() {
+        // Folding an eager read of an uninitialized rest binding to a constant
+        // would erase a JavaScript error. Leave that read to ordinary lowering.
+        return p.rest && (ready.has(i) || captures)
+          ? { length: Math.max(0, actual.length - i), at: (k: number) => read(i + k) } : undefined;
+      },
+      get value() {
+        return !p.rest && !executesDefault(i) && i >= actual.length && (ready.has(i) || captures)
+          ? { kind: "var" as const, name: "undefined", ty: { kind: "void" as const } } : undefined;
+      },
+    };
+    env = frame;
+    return frame;
+  });
+  const emit = (i: number, init: TExpr) => {
+    const frame = frames[i];
+    prefix.push({ kind: "let", name: frame.emittedName ?? frame.name, ty: frame.ty, mutable: false, init });
+    ready.add(i);
+  };
+  const flush = () => {
+    let progress = true;
+    while (progress) {
+      progress = false;
+      for (const [i, p] of pending) {
+        if (![...p.captures].every(j => ready.has(j))) continue;
+        emit(i, p.init);
+        pending.delete(i);
+        progress = true;
+      }
+    }
+  };
+  for (const [i, p] of e.params.entries()) {
+    if (executesDefault(i)) {
+      // Only literal lambda creation is deferred; all source computations keep
+      // their order. Resolution is synchronous, so this local collector also
+      // sees reads through nested lambdas without threading capture maps in Ctx.
+      captures = p.defaultValue!.kind === "lambda" ? new Set<number>() : undefined;
+      const init = resolveExpr(p.defaultValue!, { ...ctx, env, inLambda: true });
+      const dependencies = captures;
+      captures = undefined;
+      if (!frames[i].emittedName) frames[i].ty = init.ty;
+      if (dependencies) pending.set(i, { init, captures: dependencies });
+      else emit(i, init);
+    } else {
+      // A supplied non-optional value never evaluates a default. An Option
+      // cannot distinguish null from undefined, and an unknown value may be
+      // either; dropping the initializer could erase a call obligation.
+      if (p.defaultValue && defaults[i] === "optional") {
+        throw new Error(`callback default for '${p.name}' needs a distinction between null and undefined`);
+      }
+      if (p.defaultValue && defaults[i] === "unknown") {
+        throw new Error(`callback default for '${p.name}' needs a known argument type to decide whether the initializer executes`);
+      }
+      // Supplied argument slots are backend lambda parameters. A forward source
+      // reference needs its own local binding, initialized at the right position.
+      if (frames[i].emittedName && !p.rest && i < actual.length) emit(i, read(i));
+      else ready.add(i);
+    }
+    flush();
+  }
+  // Cycles and uses before closure construction stay in ordinary lowering.
+  // Hygienic names make unsupported scope references backend errors, rather
+  // than silently capturing an unrelated outer binding. No source call moves.
+  for (const [i, p] of pending) emit(i, p.init);
+  const returnTy: Ty = e.returnTsType ? parseTsType(e.returnTsType) : { kind: "unknown" };
+  const lambdaCtx = { ...ctx, env, inLambda: true, returnTy };
+  const body = [...prefix, ...(Array.isArray(e.body) ? resolveBlock(e.body, lambdaCtx)
+    : [{ kind: "return" as const, value: resolveExpr(e.body, lambdaCtx) }])];
+  const arity = Math.max(baseArity, used.lastIndexOf(true) + 1);
+  const params = slots.slice(0, arity);
+  const ty: Ty = e.returnTsType ? { kind: "fn", params: params.map(p => p.ty), result: returnTy } : { kind: "unknown" };
+  return { kind: "lambda", params, body, ty };
+}
+
+function callbackContext(fn: TExpr, initial?: TExpr): { actual: Ty[]; baseArity: number } | undefined {
+  if (fn.kind !== "field") return undefined;
+  const id = recognizeBuiltin(fn.obj.ty, fn.field);
+  if (!id) return undefined;
+  const spec = builtinSpec(id);
+  const actual = callbackArgumentTypes(spec, fn.obj.ty, initial?.ty);
+  return actual && spec.hof ? { actual, baseArity: callbackBaseArity(spec.hof.shape) } : undefined;
+}
+
+function argumentPack(e: RawExpr, ctx: Ctx): Env["argumentPack"] {
+  const entry = e.kind === "var" ? binding(ctx.env, e.name) : undefined;
+  const pack = entry?.argumentPack;
+  if (pack) entry.onRead?.();
+  return pack;
+}
+
 /** A defined-check filter predicate: `(x) => x !== undefined` (expression or
  *  single-return body). Detected on the raw IR before narrowing rewrites it. */
 function isDefinedCheckRawLambda(raw: RawExpr): boolean {
@@ -596,7 +774,7 @@ function isDefinedCheckRawLambda(raw: RawExpr): boolean {
 
 /** Coerce call arguments to their declared parameter slots and pad missing optional args. */
 function coerceCallArgs(args: TExpr[], fn: TExpr, ctx: Ctx): TExpr[] {
-  if (fn.kind !== "var" || !ctx.fnParams.has(fn.name)) return args;
+  if (fn.kind !== "var" || binding(ctx.env, fn.name) || !ctx.fnParams.has(fn.name)) return args;
   const paramTys = ctx.fnParams.get(fn.name)!;
   args = args.map((a, i) => {
     if (i >= paramTys.length) return a;
@@ -623,6 +801,9 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
   // point in, a one-character string out.
   if (fn.obj.kind === "var" && fn.obj.name === "String" && fn.field === "fromCharCode") {
     return { kind: "string" };
+  }
+  if (fn.obj.kind === "var" && fn.obj.name === "Number" && fn.field === "isSafeInteger") {
+    return { kind: "bool" };
   }
   // Math.* numeric builtins: abs/min/max preserve the operand's numeric type
   // (real if any operand is real); floor/ceil/round/trunc return an integer.
@@ -766,11 +947,31 @@ function tryRecordIndexByEnum(obj: TExpr, idx: TExpr, ctx: Ctx): TExpr | null {
   return expr;
 }
 
+function resolveConstEnumMember(obj: RawExpr, name: string, ctx: Ctx): TExpr | undefined {
+  if (obj.kind !== "var" || lookup(ctx.env, obj.name)) return undefined;
+  const decl = ctx.typeDecls.find(d => d.name === obj.name);
+  if (!decl?.constEnumMembers) return undefined;
+  const member = decl.constEnumMembers.find(m => m.name === name);
+  if (!member) throw new Error(`Unknown const enum member ${obj.name}.${name}`);
+  return resolveExpr({ kind: "num", value: member.value }, ctx);
+}
+
 function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
+  const expr = resolveExprInner(e, ctx);
+  return { ...expr, ty: numericValueType(expr.ty, ctx.typeDecls) };
+}
+
+function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
   switch (e.kind) {
-    case "var":
+    case "var": {
       if (e.name === "undefined") return { kind: "var", name: "undefined", ty: { kind: "void" } };
-      return { kind: "var", name: e.name, ty: lookup(ctx.env, e.name) ?? { kind: "unknown" } };
+      const entry = binding(ctx.env, e.name);
+      if (entry?.argumentPack) {
+        throw new Error(`cannot materialize callback rest parameter '${e.name}'; use its length or a constant indexed read`);
+      }
+      entry?.onRead?.();
+      return entry?.value ?? { kind: "var", name: entry?.emittedName ?? e.name, ty: entry?.ty ?? { kind: "unknown" } };
+    }
 
     case "num":
       if (!Number.isInteger(e.value)) return { kind: "num", value: e.value, ty: { kind: "real" } };
@@ -842,7 +1043,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
     case "unop": {
       const expr = resolveExpr(e.expr, ctx);
-      const ty: Ty = e.op === "!" ? { kind: "bool" } : e.op === "typeof" ? { kind: "string" } : expr.ty;
+      const ty: Ty = e.op === "!" ? { kind: "bool" } : e.op === "typeof" ? { kind: "string" }
+        : e.op === "-" && expr.ty.kind === "nat" ? { ...expr.ty, kind: "int" } : expr.ty;
       return { kind: "unop", op: e.op, expr, ty };
     }
 
@@ -855,8 +1057,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         if (!ctx.inSpec) throw new Error("perm(a, b) may only be used in //@ specifications");
         const a = resolveExpr(e.args[0], ctx);
         const b = resolveExpr(e.args[1], ctx);
-        if (a.ty.kind !== "array" || b.ty.kind !== "array")
-          throw new Error(`perm(a, b) requires two array arguments (got ${a.ty.kind} and ${b.ty.kind})`);
+        // Let the backend check argument types, including calls to proof helpers.
         const fn: TExpr = { kind: "var", name: "Perm", ty: { kind: "unknown" } };
         return { kind: "call", fn, args: [a, b], ty: { kind: "bool" }, callKind: "pure" };
       }
@@ -901,14 +1102,19 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       }
       // Propagate parameter types to arguments for record literal resolution
       // (enables inline discriminated union construction in function arguments)
-      const paramTypes = fn.kind === "var" && ctx.fnParams.has(fn.name) ? ctx.fnParams.get(fn.name)! : null;
+      const paramTypes = fn.kind === "var" && !binding(ctx.env, fn.name) ? ctx.fnParams.get(fn.name) ?? null : null;
+      const initial = fn.kind === "field" && fn.field === "reduce" && rawArgs.length >= 2
+        ? resolveExpr(rawArgs[1], argCtx) : undefined;
+      const callback = callbackContext(fn, initial);
       let args = coerceCallArgs(rawArgs.map((a, i) => {
         let aCtx = argCtx;
         if (paramTypes && i < paramTypes.length &&
             (paramTypes[i].kind === "user" || paramTypes[i].kind === "array" || paramTypes[i].kind === "optional")) {
           aCtx = { ...aCtx, returnTy: paramTypes[i] };
         }
-        return resolveExpr(a, aCtx);
+        if (i === 0 && a.kind === "lambda" && callback)
+          return resolveCallback(a, callback.actual, callback.baseArity, aCtx);
+        return i === 1 && initial ? initial : resolveExpr(a, aCtx);
       }), fn, ctx);
       // Array method `.with(i, v)`: coerce the value arg to the element type
       // so `arr[i] = v` on `(T|null)[]` wraps `T` → `Some(T)` (and similarly
@@ -919,14 +1125,16 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       }
       let ty = inferMethodReturnTy(fn, args, ctx);
       // For same-file function calls, use the known return type
-      if (ty.kind === "unknown" && fn.kind === "var" && ctx.fnReturns.has(fn.name)) {
+      if (ty.kind === "unknown" && fn.kind === "var" && !binding(ctx.env, fn.name) && ctx.fnReturns.has(fn.name)) {
         ty = ctx.fnReturns.get(fn.name)!;
       }
-      // Call through a function-typed value: its fn type carries the result
-      if (ty.kind === "unknown" && fn.kind === "var") {
-        const varTy = lookup(ctx.env, fn.name);
-        if (varTy?.kind === "fn") ty = varTy.result;
+      // BigInt(n) / Number(n) between integer types: identity on the model's int.
+      if (ty.kind === "unknown" && fn.kind === "var" && (fn.name === "BigInt" || fn.name === "Number") &&
+          args.length === 1 && (args[0].ty.kind === "int" || args[0].ty.kind === "nat")) {
+        ty = fn.name === "BigInt" ? { kind: "int", big: true } : { kind: "int" };
       }
+      // Call through a function-typed value: its fn type carries the result
+      if (ty.kind === "unknown" && fn.ty.kind === "fn") ty = fn.ty.result;
       // filterMap: `seqOfOption.filter(x => x !== undefined)` (a defined-check,
       // typically with an `x is T` type guard) drops the Nones AND unwraps to
       // seq<T>. Rewrite to a synthetic `filterSome` call lowered to the proven
@@ -944,6 +1152,14 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "index": {
+      const pack = argumentPack(e.obj, ctx);
+      if (pack && e.idx.kind === "num" && Number.isInteger(e.idx.value) && e.idx.value >= 0) {
+        return pack.at(e.idx.value);
+      }
+      if (e.idx.kind === "str") {
+        const member = resolveConstEnumMember(e.obj, e.idx.value, ctx);
+        if (member) return member;
+      }
       const obj = resolveExpr(e.obj, ctx);
       const idx = resolveExpr(e.idx, ctx);
       // Map bracket access: default to Option<V>. But if the enclosing scope has a
@@ -953,6 +1169,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       let idxTy: Ty;
       if (obj.ty.kind === "array") {
         idxTy = obj.ty.elem;
+      } else if (obj.ty.kind === "string") {
+        idxTy = { kind: "string" };
       } else if (obj.ty.kind === "tuple") {
         // Tuple projection: the position must be a literal — a tuple has a
         // distinct type per slot, so a runtime index has no single result type
@@ -978,6 +1196,10 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "field": {
+      const pack = argumentPack(e.obj, ctx);
+      if (pack && e.field === "length") return { kind: "num", value: pack.length, ty: { kind: "nat" } };
+      const member = resolveConstEnumMember(e.obj, e.field, ctx);
+      if (member) return member;
       const obj = resolveExpr(e.obj, ctx);
       let isDiscriminant = false;
       let ty: Ty = { kind: "unknown" };
@@ -1047,6 +1269,7 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
         } else if (step.kind === "index") {
           const idx = resolveExpr(step.idx, ctx);
           const idxTy: Ty = stepInTy.kind === "array" ? stepInTy.elem
+            : stepInTy.kind === "string" ? { kind: "string" }
             : stepInTy.kind === "map" ? { kind: "optional", inner: stepInTy.value }
             : { kind: "unknown" };
           chain.push({ kind: "index", idx, ty: idxTy });
@@ -1068,7 +1291,11 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
             const fakeObj: TExpr = { kind: "var", name: "_chain_recv", ty: priorInTy };
             const fakeFn: TExpr = { kind: "field", obj: fakeObj, field: lastField.name, ty: lastField.ty };
             rawArgs = inferLambdaParamTypes(fakeFn, rawArgs);
-            const args = rawArgs.map(a => resolveExpr(a, ctx));
+            const initial = lastField.name === "reduce" && rawArgs.length >= 2 ? resolveExpr(rawArgs[1], ctx) : undefined;
+            const callback = callbackContext(fakeFn, initial);
+            const args = rawArgs.map((a, i) => i === 0 && a.kind === "lambda" && callback
+              ? resolveCallback(a, callback.actual, callback.baseArity, ctx)
+              : i === 1 && initial ? initial : resolveExpr(a, ctx));
             callTy = inferMethodReturnTy(fakeFn, args, ctx);
             callKind = "method";
             const builtinId = recognizeBuiltin(priorInTy, lastField.name);
@@ -1212,6 +1439,8 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
       const params = e.params.map(p => ({
         name: p.name,
         ty: p.tsType ? parseTsType(p.tsType) : { kind: "unknown" as const },
+        ...(p.rest ? { rest: true as const } : {}),
+        ...(p.defaultValue ? { defaultValue: resolveExpr(p.defaultValue, ctx) } : {}),
       }));
       // Extend env with lambda params
       let lambdaEnv = ctx.env;
@@ -1246,17 +1475,17 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
 
       // Truthiness — cond itself is optional (`opt ? a : b`), only for simple vars.
       if (cond.ty.kind === "optional" && cond.kind === "var") {
-        thenCtx = withEnv(thenCtx, extend(thenCtx.env, cond.name, cond.ty.inner));
+        thenCtx = withEnv(thenCtx, refine(thenCtx.env, cond.name, cond.ty.inner));
       }
 
       // Single === undefined check narrows the else-branch.
       const single = negatedVarPresence(cond);
       if (single) {
-        elseCtx = withEnv(elseCtx, extend(elseCtx.env, single.varName, single.innerTy));
+        elseCtx = withEnv(elseCtx, refine(elseCtx.env, single.varName, single.innerTy));
       }
       if (!single && cond.kind === "binop" && cond.op === "||") {
         for (const n of collectEarlyReturnNarrowings(cond)) {
-          elseCtx = withEnv(elseCtx, extend(elseCtx.env, n.varName, n.innerTy));
+          elseCtx = withEnv(elseCtx, refine(elseCtx.env, n.varName, n.innerTy));
         }
       }
       // Map-index narrowing: `k in m` in the cond narrows the then-branch; `!(k in m)`
@@ -1326,7 +1555,7 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     if (s.kind === "if" && s.then.length > 0 && isTerminatorKind(s.then[s.then.length - 1].kind) && s.else.length === 0) {
       if (typed.kind === "if") {
         for (const n of collectEarlyReturnNarrowings(typed.cond)) {
-          env = extend(env, n.varName, n.innerTy);
+          env = refine(env, n.varName, n.innerTy);
         }
         const nv = negatedVariantCheck(typed.cond);
         if (nv) narrowedPaths = [...narrowedPaths, nv];
@@ -1409,6 +1638,11 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     }
 
     case "assign": {
+      const entry = binding(ctx.env, s.target);
+      if (entry?.argumentPack || entry?.value) {
+        throw new Error(`assignment to callback binding '${s.target}' requires materializing its argument value`);
+      }
+      entry?.onRead?.();
       const targetTy = lookup(ctx.env, s.target) ?? { kind: "unknown" as const };
       // Propagate the target's type as returnTy, mirroring the annotated-let
       // case, so record/union literals and array literals in the RHS resolve
@@ -1416,7 +1650,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       const valueCtx = (targetTy.kind === "user" || targetTy.kind === "array" || targetTy.kind === "optional")
         ? { ...ctx, returnTy: targetTy } : ctx;
       const value = coerceToTargetTy(resolveExpr(s.value, valueCtx), targetTy, ctx.typeDecls);
-      return [{ kind: "assign", target: s.target, value }, ctx.env];
+      return [{ kind: "assign", target: entry?.emittedName ?? s.target, value }, ctx.env];
     }
 
     case "return": {
@@ -1443,7 +1677,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       let elseCtx = ctx;
       const single = negatedVarPresence(resolvedCond);
       if (single) {
-        elseCtx = withEnv(ctx, extend(ctx.env, single.varName, single.innerTy));
+        elseCtx = withEnv(ctx, refine(ctx.env, single.varName, single.innerTy));
       }
       // Narrow map index access across `k in m` / `!(k in m)` in the cond:
       // positive atoms (from `k in m` or &&-chains containing it) → then-branch;
@@ -1591,6 +1825,7 @@ function collectCallsExpr(e: RawExpr, fns: Set<string>, out: Set<string>): void 
       return;
     case "arrayLiteral": for (const el of e.elems) collectCallsExpr(el, fns, out); return;
     case "lambda":
+      for (const p of e.params) if (p.defaultValue) collectCallsExpr(p.defaultValue, fns, out);
       if (Array.isArray(e.body)) collectCallsStmts(e.body, fns, out);
       else collectCallsExpr(e.body, fns, out);
       return;
@@ -1699,25 +1934,6 @@ function computePureFns(functions: RawFunction[], externDecls: import("./rawir.j
   return new Set(functions.map(fn => fn.name).filter(name => !nonPure.has(name)));
 }
 
-function hasReturnInLoop(stmts: RawStmt[]): boolean {
-  for (const s of stmts) {
-    if ((s.kind === "while" || s.kind === "forof") && containsReturn(s.body)) return true;
-    if (s.kind === "if" && (hasReturnInLoop(s.then) || hasReturnInLoop(s.else))) return true;
-    if (s.kind === "switch" && (s.cases.some(c => hasReturnInLoop(c.body)) || hasReturnInLoop(s.defaultBody))) return true;
-  }
-  return false;
-}
-
-function containsReturn(stmts: RawStmt[]): boolean {
-  for (const s of stmts) {
-    if (s.kind === "return") return true;
-    if (s.kind === "if" && (containsReturn(s.then) || containsReturn(s.else))) return true;
-    if ((s.kind === "while" || s.kind === "forof") && containsReturn(s.body)) return true;
-    if (s.kind === "switch" && (s.cases.some(c => containsReturn(c.body)) || containsReturn(s.defaultBody))) return true;
-  }
-  return false;
-}
-
 // ── Resolve function / module ────────────────────────────────
 
 function resolveFunction(
@@ -1771,10 +1987,10 @@ function resolveFunction(
 }
 
 function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map(), externs: Map<string, ExternSignature> = new Map(), moduleConstants: Map<string, Ty> = new Map()): import("./typedir.js").TClass {
-  const fields = cls.fields.map(f => ({ name: f.name, ty: parseTsType(f.tsType) }));
+  const fields = cls.fields.map(f => ({ name: f.name, ty: expandAlias(parseTsType(f.tsType), typeDecls) }));
   // Create a synthetic record type for 'this' so field access resolves
   const thisType: Ty = { kind: "user", name: cls.name };
-  const thisDecl: TypeDeclInfo = { name: cls.name, kind: "record", fields: cls.fields.map(f => ({ name: f.name, tsType: f.tsType, type: parseTsType(f.tsType) })) };
+  const thisDecl: TypeDeclInfo = { name: cls.name, kind: "record", fields: cls.fields.map((f, i) => ({ name: f.name, tsType: f.tsType, type: fields[i].ty })) };
   const allTypeDecls = [...typeDecls, thisDecl];
 
   const methods = cls.methods.map(fn =>
@@ -1808,6 +2024,8 @@ function precomputeFieldTypesInner(typeDecls: TypeDeclInfo[]) {
 }
 
 export function resolveModule(raw: RawModule): TModule {
+  callbackCounter = 0;
+  mergeBinder = 0;
   _warnedRefEq.clear();
   precomputeFieldTypes(raw.typeDecls);
   const pureFns = computePureFns(raw.functions, raw.externs ?? []);
@@ -1843,32 +2061,36 @@ export function resolveModule(raw: RawModule): TModule {
     }
     const baseCtx: Ctx = { env, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: sig.returnTy, pureFns, fnParams, fnReturns, externs, inSpec: true, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
     const ensuresCtx: Ctx = { ...baseCtx, env: extend(env, "\\result", sig.returnTy), allowResult: true };
-    const requires = ext.requires.map(s => {
-      try { return resolveSpec(s, baseCtx); } catch { return null; }
-    }).filter((e): e is TExpr => e !== null);
-    const ensures = ext.ensures.map(s => {
-      try { return resolveSpec(s, ensuresCtx); } catch { return null; }
-    }).filter((e): e is TExpr => e !== null);
+    const resolveClauses = (kind: "requires" | "ensures", ctx: Ctx) => ext[kind].map(s => {
+      try {
+        return resolveSpec(s, ctx);
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        throw new Error(`extern ${ext.qualified}: //@ ${kind} ${s}: ${reason}`);
+      }
+    });
     return {
       qualified: ext.qualified,
       flat: ext.flat,
       typeParams: ext.typeParams,
       params: ext.params.map((p, i) => ({ name: p.name, ty: sig.params[i] })),
       returnTy: sig.returnTy,
-      requires,
-      ensures,
+      requires: resolveClauses("requires", baseCtx),
+      ensures: resolveClauses("ensures", ensuresCtx),
       impure: ext.impure,
     };
   });
   const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
   const constants = (raw.constants ?? []).map(c => {
-    const ty = expandAlias(parseTsType(c.tsType), raw.typeDecls);
+    const declaredTy = expandAlias(parseTsType(c.tsType), raw.typeDecls);
     // Propagate the declared type into the value's resolution context so that
     // record literals on map-typed constants (e.g. `Record<string, number>`)
     // get their `ty` set to `map<...>` rather than `user("...")`.
-    const valueCtx: Ctx = { ...emptyCtx, returnTy: ty };
-    const value = coerceToTargetTy(resolveExpr(c.value, valueCtx), ty, raw.typeDecls);
-    return { name: c.name, ty, value };
+    const valueCtx: Ctx = { ...emptyCtx, returnTy: declaredTy };
+    const value = resolveExpr(c.value, valueCtx);
+    // TypeScript's number defaults to int, but fractional initializers need real.
+    const ty = declaredTy.kind === "int" && value.ty.kind === "real" ? value.ty : declaredTy;
+    return { name: c.name, ty, value: coerceToTargetTy(value, ty, raw.typeDecls) };
   });
   const moduleConstants = new Map<string, Ty>(constants.map(c => [c.name, c.ty]));
 

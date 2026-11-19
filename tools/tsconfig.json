@@ -4,6 +4,8 @@
     "module": "node16",
     "moduleResolution": "node16",
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "esModuleInterop": true,
     "outDir": "dist",
     "rootDir": "src"

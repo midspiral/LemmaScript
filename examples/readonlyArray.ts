@@ -14,6 +14,5 @@ export function firstOrZero(xs: readonly number[]): number {
 
 export function lengthOf<T>(xs: ReadonlyArray<T>): number {
   //@ ensures \result === xs.length
-  //@ type T
   return xs.length;
 }

@@ -6,7 +6,7 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { anyExpr, usesNameInDecl, patternBinders } from "./ir.js";
+import { anyExpr, decimalNumberLiteral, usesNameInDecl, patternBinders } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshName, freshNameWhere } from "./names.js";
 
@@ -309,7 +309,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
   switch (e.kind) {
     // `undefined` is the IR's spelling of the absent optional (mirrors dafny-emit's None)
     case "var": return e.name === "undefined" ? "none" : escapeName(e.name);
-    case "num": return `${e.value}`;
+    case "num": return decimalNumberLiteral(e.value);
     // Already canonical decimal; Lean's `Int` is mathematical, so no `n` suffix.
     case "bigint": return e.value;
     case "bool": return e.value ? "true" : "false";
@@ -323,13 +323,14 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       const head = e.type ? `${e.type}.${leanCtorName(e.name)}` : `.${leanCtorName(e.name)}`;
       if (!e.args || e.args.length === 0) return head;
       const args = e.args.map(a =>
-        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall") ? `(${emitExpr(a)})` : emitExpr(a)
+        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall" || a.kind === "if") ? `(${emitExpr(a)})` : emitExpr(a)
       );
       return `${head} ${args.join(" ")}`;
     }
     case "arrayLiteral":
       if (e.elems.length === 0) return `#[]`;
       return `#[${e.elems.map(el => emitExpr(el)).join(", ")}]`;
+    case "arrayRange": return `((Array.range ${emitExpr(e.length)}).map Int.ofNat)`;
     case "tupleLiteral":
       return `(${e.elems.map(el => emitExpr(el)).join(", ")})`;
     case "tupleProj": {
@@ -373,7 +374,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "lambda": {
-      const params = e.params.map(p => p.name).join(" ");
+      const params = e.params.map(p => e.typedParams ? `(${p.name} : ${tyToLean(p.type)})` : p.name).join(" ");
       // Single return statement → expression lambda
       if (e.body.length === 1 && e.body[0].kind === "return") {
         return `(fun ${params} => ${emitExpr(e.body[0].value)})`;
@@ -414,13 +415,14 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         : _boolCtx && e.op === "∧" ? "&&"
         : _boolCtx && e.op === "∨" ? "||"
         : e.op;
-      // ↔ does not chain in Lean — a nested iff operand needs parens.
-      const childPrec = e.op === "↔" ? prec(e.op) + 1 : prec(e.op);
+      // Comparisons and ↔ do not chain in Lean. In particular, a Boolean
+      // postcondition `res = (s = t)` must keep its inner equality grouped.
+      const childPrec = ["↔", "=", "≠", "<", "≤", ">", "≥"].includes(e.op)
+        ? prec(e.op) + 1 : prec(e.op);
       // `-`, `/`, `%` are left-associative and non-associative, so an equal-
       // precedence right operand must be parenthesized: `a - (b - c)` would
       // otherwise emit as `a - b - c`, i.e. `(a - b) - c`.
-      const rightPrec = e.op === "↔" ? childPrec
-        : ["-", "/", "%"].includes(e.op) ? prec(e.op) + 1 : childPrec;
+      const rightPrec = ["-", "/", "%"].includes(e.op) ? prec(e.op) + 1 : childPrec;
       const s = `${wrapOperand(e.left, childPrec)} ${op} ${wrapOperand(e.right, rightPrec)}`;
       return (parentPrec !== undefined && prec(e.op) < parentPrec) ? `(${s})` : s;
     }
@@ -464,7 +466,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // which mathlib's `List.Perm` provides (reflexivity, symmetry,
       // `perm_append_comm`, and `Perm.count_eq` for the count-invariance payoff).
       if (e.fn === "Perm" && args.length === 2) return `(${args[0]}.toList).Perm (${args[1]}.toList)`;
-      return `${e.fn} ${args.join(" ")}`;
+      return args.length ? `${e.fn} ${args.join(" ")}` : e.fn;
     }
 
     case "field": {
@@ -498,10 +500,16 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       return wrap ? `(${inner}).toNat` : `${inner}.toNat`;
     }
 
+    case "toInt": return `(Int.ofNat ${emitExpr(e.expr)})`;
+
     case "toReal":
       // A real value reached the Lean backend via coercion (e.g. number `/`).
       // Same unsupported-real story as the `real` type case in tyToLean.
       throw new Error("real arithmetic is not supported by the Lean backend (needs noncomputable ℝ / Mathlib).");
+
+    case "stringIndex":
+      _needsJSString = true;
+      return `(JSString.index (${emitExpr(e.str)}) (${emitExpr(e.idx)}))`;
 
     case "index": {
       const arr = emitExpr(e.arr);
@@ -532,7 +540,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "forall": return `∀ ${e.var} : ${tyToLean(e.type)}, ${emitExpr(e.body)}`;
     case "exists": return `∃ ${e.var} : ${tyToLean(e.type)}, ${emitExpr(e.body)}`;
 
-    case "let": return `let ${e.name} := ${emitExpr(e.value)}\n${emitExpr(e.body)}`;
+    case "let": return `let ${e.name}${e.type ? ` : ${tyToLean(e.type)}` : ""} := ${emitExpr(e.value)}\n${emitExpr(e.body)}`;
     default: throw new Error(`Unsupported Lean expression: ${(e as Expr).kind}`);
   }
 }
@@ -559,7 +567,6 @@ function isPropValued(e: Expr): boolean {
 // ── Statement emission ──────────────────────────────────────
 
 function emitStmts(stmts: Stmt[], indent: number): string {
-  const pad = "  ".repeat(indent);
   return stmts.map(s => emitStmt(s, indent)).join("\n");
 }
 
@@ -875,7 +882,7 @@ function emitPureExpr(e: Expr, indent: number): string {
       return lines.join("\n");
     }
     case "let":
-      return `${pad}let ${e.name} := ${emitExpr(e.value)}\n${emitPureExpr(e.body, indent)}`;
+      return `${pad}let ${e.name}${e.type ? ` : ${tyToLean(e.type)}` : ""} := ${emitExpr(e.value)}\n${emitPureExpr(e.body, indent)}`;
     default:
       return `${pad}${emitExpr(e)}`;
   }

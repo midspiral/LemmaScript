@@ -2,7 +2,7 @@
  * Dafny backend commands: gen, check, regen.
  */
 
-import { existsSync, readFileSync, writeFileSync, copyFileSync, unlinkSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from "fs";
 import { execFileSync } from "child_process";
 import path from "path";
 import { DEFAULT_OPTIONS, parseOptionValue, type LscOptions } from "./config.js";
@@ -192,23 +192,50 @@ export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, t
 
   // 5. If gen changed, three-way merge
   if (text !== anchor) {
-    const savedDfy = readFileSync(dfyPath, "utf-8");
     if (!existsSync(basePath)) writeFileSync(basePath, anchor);
     const mergedPath = dfyPath + ".merged";
     console.log("Gen changed. Three-way merging...");
+    // -p prints the merge instead of writing it, so the proof file changes
+    // only after a clean merge.
+    const merge = (flags: string[]) => execFileSync(
+      "git", ["merge-file", "-p", ...flags, "--", dfyPath, basePath, genPath],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: Infinity },
+    );
+    let merged: string;
     try {
-      execFileSync("git", ["merge-file", dfyPath, basePath, genPath], { stdio: "pipe" });
-      console.log(`Merged: ${path.basename(dfyPath)}`);
+      try {
+        // Match the additions-only check: the default diff can misalign
+        // unchanged generated lines after a large inserted proof block.
+        merged = merge(["--diff-algorithm=minimal"]);
+      } catch (e: any) {
+        // The other arguments are fixed, so a usage error (129) means this
+        // Git predates the option (2.44).
+        if (e?.status !== 129) throw e;
+        console.warn("WARNING: this Git does not support git merge-file --diff-algorithm; retrying with the default algorithm. " +
+          "Upgrade to Git 2.44 or later to avoid false conflicts after large proof additions.");
+        merged = merge([]);
+      }
     } catch (e: any) {
-      if (e.status > 0) {
-        copyFileSync(dfyPath, mergedPath);
-        writeFileSync(dfyPath, savedDfy);
+      // Git returns a conflict count capped at 127. Usage errors, fatal
+      // errors and interrupted/failed processes are not merge conflicts.
+      if (e?.status >= 1 && e.status <= 127) {
+        writeFileSync(mergedPath, e.stdout);
         console.error(`CONFLICT: ${path.basename(dfyPath)} — merge had conflicts, dfy restored. See ${path.basename(mergedPath)}`);
         log?.finish({ stage: "conflict", exit: 1, dfyPath });
-        process.exit(1);
+      } else {
+        const reason = e?.code === "ENOENT" ? " (git not found on PATH)"
+          : e?.code != null ? ` (${e.code})`
+          : e?.signal != null ? ` (signal ${e.signal})`
+          : typeof e?.status === "number" ? ` (git exited ${e.status})` : "";
+        const detail = typeof e?.stderr === "string" ? e.stderr.trim() : "";
+        console.error(`ERROR: could not run \`git merge-file\` for ${path.basename(dfyPath)}${reason}; dfy restored` +
+          `${detail ? `: ${detail}` : "."}`);
+        log?.discard();
       }
-      throw e;
+      process.exit(1);
     }
+    writeFileSync(dfyPath, merged);
+    console.log(`Merged: ${path.basename(dfyPath)}`);
   }
 
   // 6. Check gen invariant (unconditional)

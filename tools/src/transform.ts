@@ -5,14 +5,15 @@
  * No type lookups, no string parsing, no re-inference.
  */
 
-import type { TExpr, TStmt, TFunction, TModule, Ty } from "./typedir.js";
+import type { TExpr, TStmt, TModule, Ty } from "./typedir.js";
 import { tyEqual } from "./typedir.js";
-import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, StmtMatchArm, ConstDecl, MatchPattern } from "./ir.js";
+import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
 import { anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
+import { lowerIndexedCallback } from "./callback-lowering.js";
 import { isFalsyCapableTy } from "./condition-facts.js";
 import { declOf, declOfKind, declOfTy, unionDeclOfTy, declWithVariant, tyBaseName } from "./typedecls.js";
 
@@ -37,12 +38,15 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "app": return { ...e, args: e.args.map(r) };
     case "field": return { ...e, obj: r(e.obj) };
     case "toNat": return { ...e, expr: r(e.expr) };
+    case "toInt": return { ...e, expr: r(e.expr) };
     case "toReal": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
+    case "stringIndex": return { ...e, str: r(e.str), idx: r(e.idx) };
     case "tupleLiteral": return { ...e, elems: e.elems.map(r) };
     case "tupleProj": return { ...e, obj: r(e.obj) };
     case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(fi => ({ ...fi, value: r(fi.value) })) };
     case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
+    case "arrayRange": return { ...e, length: r(e.length) };
     case "if": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
     case "match": {
       const scr = r(e.scrutinee);
@@ -464,7 +468,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
 
   switch (e.kind) {
     case "var": return { kind: "var", name: e.name };
-    case "num": return { kind: "num", value: e.value };
+    case "num": {
+      const literal: Expr = { kind: "num", value: e.value };
+      return e.ty.kind === "real" && Number.isInteger(e.value)
+        ? { kind: "toReal", expr: literal } : literal;
+    }
     case "bigint": return { kind: "bigint", value: e.value };
     case "bool": return { kind: "bool", value: e.value };
 
@@ -476,8 +484,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // Only `num` folds. A `bigint` payload is a string, so negating it here
       // would coerce through `Number` and round: `-9007199254740993n` stays a
       // structural `unop("-", bigint(...))` and is negated by the emitter.
+      // Keep the resolved type so a contextually real literal retains its cast.
       if (e.op === "-" && e.expr.kind === "num")
-        return { kind: "num", value: -e.expr.value };
+        return lowerExpr({ ...e.expr, value: -e.expr.value, ty: e.ty }, binds);
       // String truthiness: !str → str == ""
       if (e.op === "!" && e.expr.ty.kind === "string")
         return { kind: "binop", op: "=", left: lowerExpr(e.expr, binds), right: { kind: "str", value: "" } };
@@ -513,6 +522,22 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.op === "==>") {
         const { premises, conclusion } = flattenImpl(e);
         return { kind: "implies", premises: premises.map(transformExpr), conclusion: transformExpr(conclusion) };
+      }
+      // Boolean connectives evaluate the RHS only if the left operand selects
+      // it. Keep lifted calls in that branch instead of hoisting them eagerly.
+      if ((e.op === "&&" || e.op === "||") && e.left.ty.kind === "bool" && e.right.ty.kind === "bool") {
+        const left = lowerExpr(e.left, binds);
+        const rightBinds: Stmt[] | null = binds ? [] : null;
+        const right = lowerExpr(e.right, rightBinds);
+        if (binds && rightBinds?.length) {
+          const name = freshName(`_branch${_branchCounter++}`);
+          const value: Expr = { kind: "var", name };
+          binds.push({ kind: "let", name, type: { kind: "bool" }, mutable: true, value: left });
+          binds.push({ kind: "if", cond: e.op === "&&" ? value : { kind: "unop", op: "¬", expr: value },
+            then: [...rightBinds, { kind: "assign", target: name, value: right }], else: [] });
+          return value;
+        }
+        return { kind: "binop", op: OP_MAP[e.op], left, right };
       }
       // Discriminant check: x.discriminant === "foo" → x = .foo (before generic string literal comparison)
       if ((e.op === "===" || e.op === "!==") && e.left.kind === "field" && e.left.isDiscriminant && e.right.kind === "str") {
@@ -784,6 +809,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "field", obj: transformExpr(e.obj), field: e.field, datatypeField: isRecordType(e.obj.ty) };
 
     case "index": {
+      if (e.obj.ty.kind === "string") {
+        return { kind: "stringIndex", str: lowerExpr(e.obj, binds), idx: lowerExpr(e.idx, binds) };
+      }
       const idx = transformExpr(e.idx);
       if (e.obj.ty.kind === "tuple") {
         // resolve guarantees a numeric-literal index here; project at that slot.
@@ -825,14 +853,34 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           e.fn.field === "fromCharCode" && e.args.length === 1) {
         return { kind: "app", fn: "StringFromCharCode", args: [lowerExpr(e.args[0], binds)] };
       }
-      // Math.abs/min/max → preamble functions
+      // Number.isSafeInteger(n) on an integer: a bigint is never a safe integer
+      // in JS, so the result is false. A `number` is an unbounded integer in the
+      // model, so the JS bound -(2^53 - 1) <= n <= 2^53 - 1 must be stated.
+      if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Number" &&
+          e.fn.field === "isSafeInteger" && e.args.length === 1 && isIntegral(e.args[0].ty)) {
+        if (e.args[0].ty.kind === "int" && e.args[0].ty.big) return { kind: "bool", value: false };
+        const n = lowerExpr(e.args[0], binds);
+        const max = 9007199254740991;
+        return {
+          kind: "binop", op: "∧",
+          left: { kind: "binop", op: "≤", left: { kind: "num", value: -max }, right: n },
+          right: { kind: "binop", op: "≤", left: n, right: { kind: "num", value: max } },
+        };
+      }
+      // Math.abs/min/max preserve the resolved numeric type. Mixed operands
+      // need explicit int/nat→real coercions, just like real binary operations.
       if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math") {
-        if (e.fn.field === "abs" && e.args.length === 1)
-          return { kind: "app", fn: "MathAbs", args: [lowerExpr(e.args[0], binds)] };
-        if (e.fn.field === "min" && e.args.length === 2)
-          return { kind: "app", fn: "MathMin", args: e.args.map(a => lowerExpr(a, binds)) };
-        if (e.fn.field === "max" && e.args.length === 2)
-          return { kind: "app", fn: "MathMax", args: e.args.map(a => lowerExpr(a, binds)) };
+        const fn = e.fn.field === "abs" && e.args.length === 1 ? "MathAbs"
+          : e.fn.field === "min" && e.args.length === 2 ? "MathMin"
+          : e.fn.field === "max" && e.args.length === 2 ? "MathMax" : null;
+        if (fn) {
+          const real = e.ty.kind === "real";
+          const args = e.args.map((arg): Expr => {
+            const lowered = lowerExpr(arg, binds);
+            return real && isIntegral(arg.ty) ? { kind: "toReal", expr: lowered } : lowered;
+          });
+          return { kind: "app", fn: real ? `${fn}Real` : fn, args };
+        }
       }
       // Math.ceil(x): CeilReal on real args, identity on int
       if (e.fn.kind === "field" && e.fn.field === "ceil" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1) {
@@ -906,7 +954,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         }
         // Check if any lambda arg has monadic body
         const needsMonadic = _opts.monadic && args.some(a => a.kind === "lambda" && isMonadicBody(a.body));
-        const result: Expr = { kind: "methodCall", obj: recv, objTy: e.fn.obj.ty, method, args, monadic: needsMonadic };
+        const indexed = spec?.hof ? lowerIndexedCallback(recv, e.fn.obj.ty, method, args,
+          spec.hof.shape, needsMonadic, _callbackCounter++) : null;
+        const result: Expr = indexed ?? { kind: "methodCall", obj: recv, objTy: e.fn.obj.ty, method, args, monadic: needsMonadic };
         // Monadic HOF call is itself monadic — lift via binds like a method call
         if (_opts.monadic && needsMonadic && binds) {
           const name = freshName(`_t${_liftCounter++}`);
@@ -1025,6 +1075,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "arrayLiteral", elems: e.elems.map(el => lowerExpr(el, binds)) };
 
     case "lambda": {
+      if (e.params.some(p => p.rest || p.defaultValue)) {
+        throw new Error("lambda rest/default bindings require a known callback argument list");
+      }
       // Pass the module typeDecls (not []), so type lookups inside the lambda
       // body — e.g. a `switch`'s variant fields — resolve. A bare `[]` left a
       // discriminated-union switch in a lambda with binderless patterns.
@@ -1053,11 +1106,24 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // negation forms (`!s` → `s == ""`).  Optional conds are already
       // rewritten to someMatch by narrow.ts.
       const cond = lowerExpr(asCondition(e.cond), binds);
-      let thenExpr = lowerExpr(e.then, binds);
-      let elseExpr = lowerExpr(e.else, binds);
+      const thenBinds: Stmt[] | null = binds ? [] : null;
+      const elseBinds: Stmt[] | null = binds ? [] : null;
+      let thenExpr = lowerExpr(e.then, thenBinds);
+      let elseExpr = lowerExpr(e.else, elseBinds);
       if (e.ty.kind === "optional") {
         thenExpr = wrapOptionalBranch(thenExpr, e.then);
         elseExpr = wrapOptionalBranch(elseExpr, e.else);
+      }
+      if (binds && (thenBinds?.length || elseBinds?.length)) {
+        const name = freshName(`_branch${_branchCounter++}`);
+        // Both arms assign before the result is read. This initializer is not
+        // observable and supplies no assumption about the selected result.
+        binds.push({ kind: "let", name, type: e.ty, mutable: true,
+          value: { kind: _opts.backend === "dafny" ? "havoc" : "default", type: e.ty } });
+        binds.push({ kind: "if", cond,
+          then: [...(thenBinds ?? []), { kind: "assign", target: name, value: thenExpr }],
+          else: [...(elseBinds ?? []), { kind: "assign", target: name, value: elseExpr }] });
+        return { kind: "var", name };
       }
       return { kind: "if", cond, then: thenExpr, else: elseExpr };
     }
@@ -1611,6 +1677,9 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
 }
 
 let _liftCounter = 0;
+let _callbackCounter = 0;
+// Branch results must not renumber the existing lifted-call temporaries.
+let _branchCounter = 0;
 
 function liftMethodCalls(e: TExpr): { binds: Stmt[]; expr: Expr } {
   const binds: Stmt[] = [];
@@ -1669,7 +1738,6 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           const idxName = freshName(`_${param}_idx`);
           const idx: Expr = { kind: "var", name: idxName };
           const arrSize: Expr = { kind: "field", obj: arrIR, field: "size" };
-          const elemVar: Expr = { kind: "var", name: param };
           const keyIR = transformExpr(keyExpr);
           const valIR = transformExpr(valExpr);
           const mapSet: Expr = { kind: "methodCall", obj: { kind: "var", name: s.name }, objTy: s.ty, method: "set", args: [keyIR, valIR], monadic: false };
@@ -1837,11 +1905,6 @@ interface Chain {
   typeName: string;
   cases: { variant: string; body: TStmt[] }[];
   fallthrough: TStmt[];
-}
-
-/** Apply an expression transform to all expressions in a statement (convenience wrapper). */
-function mapStmtExprs(s: Stmt, r: (e: Expr) => Expr): Stmt {
-  return mapStmt(s, e => r(e));
 }
 
 /** Build match arms from variant cases — shared by imperative and pure paths.
@@ -2127,25 +2190,6 @@ function projectStructuralCallArgsInTStmts(
   }));
 }
 
-/** Replace obj.field → replacement var in typed IR expressions (before lowering).
- *  Mirrors replaceFieldsInTStmts but operates on a single TExpr tree. */
-function replaceFieldInTExpr(
-  expr: TExpr, objName: string,
-  replacements: { fieldName: string; newName: string; fallbackTy: Ty }[]
-): TExpr {
-  if (replacements.length === 0) return expr;
-  return mapTExpr(expr, e => {
-    if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === objName) {
-      const r = replacements.find(r => r.fieldName === e.field);
-      if (r) {
-        const ty = e.ty.kind !== "unknown" ? e.ty : r.fallbackTy;
-        return { kind: "var", name: r.newName, ty } as TExpr;
-      }
-    }
-    return null;
-  });
-}
-
 /** A pure access path — chain of field accesses rooted at a var. */
 interface AccessPath { rootVar: string; fields: string[] }
 
@@ -2182,16 +2226,6 @@ function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, b
     matchesAccessPath(e, path)
       ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
   ));
-}
-
-/** Unwrap optional type on match-bound variables in TExpr.
- *  After replaceFieldInTExpr, the replaced variable carries the original optional
- *  type from the field declaration. The match binding unwraps it to the inner type. */
-function fixBoundType(expr: TExpr, boundName: string): TExpr {
-  return mapTExpr(expr, e =>
-    e.kind === "var" && e.name === boundName && e.ty.kind === "optional"
-      ? { ...e, ty: e.ty.inner } as TExpr : null
-  );
 }
 
 
@@ -2458,6 +2492,8 @@ export function transformModuleDafny(mod: TModule): { typesFile: Module | null; 
 export function transformModule(mod: TModule, specImport?: string, moduleBaseOverride?: string): { typesFile: Module | null; defFile: Module } {
   _forofCounters.clear();
   _liftCounter = 0;
+  _callbackCounter = 0;
+  _branchCounter = 0;
   _typeDecls = mod.typeDecls;
   _neededKindHelpers = new Map();
   _pureDefNames = new Set(mod.functions.filter(f => f.isPure).map(f => f.name));
@@ -2642,6 +2678,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
     }
   };
   const knownTypeNames = new Set<string>(typeDecls.map(d => (d as { name: string }).name));
+  for (const cls of mod.classes ?? []) knownTypeNames.add(cls.name);
   const allTypeParams = new Set<string>();
   // Exclude type params from the *source* decls — the transformed IR drops
   // them for aliases (`type Step<S, A> = …`), and a generic alias's params

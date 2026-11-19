@@ -48,7 +48,7 @@ export type RawExpr =
   | { kind: "record"; spread: RawExpr | null; fields: { name: string; value: RawExpr }[] }
   | { kind: "recordMerge"; base: RawExpr; override: RawExpr }   // { ...base, ...override } — field-wise merge; resolve expands to a record using the result type's fields
   | { kind: "arrayLiteral"; elems: RawExpr[] }
-  | { kind: "lambda"; params: { name: string; tsType?: string }[]; body: RawExpr | RawStmt[]; returnTsType?: string }
+  | { kind: "lambda"; params: RawLambdaParam[]; body: RawExpr | RawStmt[]; returnTsType?: string }
   | { kind: "conditional"; cond: RawExpr; then: RawExpr; else: RawExpr }  // ternary ? :
   | { kind: "optChain"; obj: RawExpr; chain: RawChainStep[] }   // obj?.field, obj?.foo(), obj?.[i], obj?.foo.bar — single-eval
   | { kind: "nullish"; left: RawExpr; right: RawExpr }   // a ?? b — single-eval; narrow rewrites to someMatch
@@ -62,6 +62,16 @@ export type RawExpr =
   | { kind: "havoc"; tsType: string }
 
 // ── Statements ───────────────────────────────────────────────
+
+/** Preserve source binding operations until a call supplies its arguments. */
+export interface RawLambdaParam {
+  name: string;
+  tsType?: string;
+  /** Parameter-scope type, available before default initializers are resolved. */
+  inferredTsType?: string;
+  rest?: true;
+  defaultValue?: RawExpr;
+}
 
 export interface RawLet {
   // tsType: explicit source annotation when present (`const x: T = ...`),

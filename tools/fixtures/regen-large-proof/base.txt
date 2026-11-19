@@ -1,0 +1,32 @@
+  decreases |path|
+  var nodes := machine.nodes;
+  var selections := parallelSelections(machine, snapshot, event);
+    var selected := selections[0];
+    var result := selected.evaluation.result;
+          var updated := apply(snapshot.context, selected.evaluation);
+          var entered := runLifecycle(nodes, (if reenter then [selected.id] else []), updated.context, event, false);
+          ParallelStep(ParallelSnapshot(snapshot.active, entered.context), false, (updated.reused && entered.reused), (updated.effects + entered.effects))
+        else
+          var plan := parallelPlan(machine, snapshot.active, selected.id, i_target_val, reenter);
+          var exited := runLifecycle(nodes, plan.exits, snapshot.context, event, true);
+          var updated := apply(exited.context, selected.evaluation);
+          var entered := runLifecycle(nodes, plan.entries, updated.context, event, false);
+          ParallelStep(ParallelSnapshot(plan.active, entered.context), false, ((exited.reused && updated.reused) && entered.reused), ((exited.effects + updated.effects) + entered.effects))
+      case None =>
+        var updated := apply(snapshot.context, selected.evaluation);
+        var entered := runLifecycle(nodes, (if reenter then [selected.id] else []), updated.context, event, false);
+        ParallelStep(ParallelSnapshot(snapshot.active, entered.context), false, (updated.reused && entered.reused), (updated.effects + entered.effects))
+    }
+      }
+  }
+}
+  (overlaps(conflictExits(machine, active, candidate), conflictExits(machine, active, kept)) && !(below(candidate.node.path, kept.node.path)))
+  decreases |kept|
+  decreases |pending|
+    var first := pending[0];
+      var exits := conflictExits(machine, active, first);
+
+  decreases |selections|
+{
+    var entries := SeqFilter((id: string) => plansEnter(plans, id), machine.order);
+    var updated := applyAll(exited.context, kept);

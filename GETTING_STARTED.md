@@ -126,4 +126,4 @@ To add your project to LemmaScript's own case-study matrix, open a PR adding an 
 - [SPEC_DAFNY.md](SPEC_DAFNY.md) — Dafny-specific behavior.
 - [AGENTS.md](AGENTS.md) — gotchas before turning an agent loose.
 - [examples/](examples) — small, complete LemmaScript files.
-- [README.md](README.md) — the case-study list.
+- [CASE_STUDIES.md](CASE_STUDIES.md) — the case-study list.
