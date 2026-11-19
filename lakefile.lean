@@ -41,6 +41,7 @@ lean_lib Examples where
     `«discriminantTrailing.types», `«discriminantTrailing.def», `«discriminantTrailing.proof»,
     `«spreadMerge.types», `«spreadMerge.def»,
     `«recordIndexByEnum.types», `«recordIndexByEnum.def»,
+    `«inlineLocalRecords.types», `«inlineLocalRecords.def», `«inlineLocalRecords.proof»,
     `«leftPad.def», `«leftPad.proof»,
     `«swap.def»,
     `«andChainStmt.types», `«andChainStmt.def»,

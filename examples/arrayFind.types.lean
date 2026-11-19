@@ -11,7 +11,7 @@ deriving Repr, Inhabited, DecidableEq
 namespace Pure
 
 def lookup (entries : Array Entry) (key : String) : Int :=
-  let e := entries.find? (fun x => x.key = key)
+  let e : Option Entry := entries.find? (fun x => x.key = key)
   match (match e with | .some _oc0_val => Option.some _oc0_val.val | .none => Option.none) with
   | .some _oc1_val =>
     _oc1_val
