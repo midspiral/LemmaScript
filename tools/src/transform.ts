@@ -15,6 +15,7 @@ import { freshName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
 import { lowerIndexedCallback } from "./callback-lowering.js";
 import { isFalsyCapableTy } from "./condition-facts.js";
+import { needsRecordType } from "./lean-inference.js";
 import { declOf, declOfKind, declOfTy, unionDeclOfTy, declWithVariant, tyBaseName } from "./typedecls.js";
 
 // ── Generic IR walkers ──────────────────────────────────────
@@ -265,8 +266,8 @@ function isRecordType(ty: Ty): boolean {
 }
 
 /** Lean cannot infer a record literal's type from its field names. */
-function leanRecordLetType(ty: Ty): { type?: Ty } {
-  return _opts.backend === "lean" && isRecordType(ty.kind === "optional" ? ty.inner : ty)
+function leanRecordLetType(ty: Ty, value: Expr): { type?: Ty } {
+  return _opts.backend === "lean" && isRecordType(ty.kind === "optional" ? ty.inner : ty) && needsRecordType(value)
     ? { type: ty } : {};
 }
 
@@ -342,7 +343,7 @@ function flattenLambdaBody(stmts: Stmt[]): Expr | null {
   if (first.kind === "return") return first.value;
   if (first.kind === "let" && !first.mutable) {
     const body = flattenLambdaBody(rest);
-    return body === null ? null : { kind: "let", name: first.name, ...leanRecordLetType(first.type), value: first.value, body };
+    return body === null ? null : { kind: "let", name: first.name, ...leanRecordLetType(first.type, first.value), value: first.value, body };
   }
   if (first.kind === "if") {
     const thenTerminates = flattenLambdaBody(first.then);
@@ -2255,7 +2256,8 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
       case "let": {
         const restExpr = transformPureBody(rest, typeDecls);
         if (!restExpr) return null;
-        return { kind: "let", name: s.name, ...leanRecordLetType(s.ty), value: transformExpr(s.init), body: restExpr };
+        const value = transformExpr(s.init);
+        return { kind: "let", name: s.name, ...leanRecordLetType(s.ty, value), value, body: restExpr };
       }
       case "if": {
         // Append rest to both branches so nested ifs that fall through

@@ -164,3 +164,49 @@ export function caller(n: number): number {
   assert.doesNotMatch(types + defs, /Pure\.mk/);
   assert.match(lean("export function ordinary(n: number): number { return n; }").types, /namespace Pure\n/);
 });
+
+test("Lean keeps inferred record bindings stable for calls, projections, and known branches", () => {
+  const { types } = lean(`
+interface Item { k: number }
+interface Box { item: Item }
+type Action = | { kind: "give"; item: Item };
+function identity(item: Item): Item { return item; }
+export function views(old: Item, items: Item[], box: Box, flag: boolean): number {
+  const alias = old;
+  const field = box.item;
+  const indexed = items[0];
+  const call = identity(old);
+  const argument = identity({ k: old.k });
+  const chosen = flag ? old : { k: 0 };
+  const reversed = flag ? { k: 0 } : old;
+  const spread: Item = { ...old, k: 1 };
+  return alias.k + field.k + indexed.k + call.k + argument.k + chosen.k + reversed.k + spread.k;
+}
+export function payload(action: Action): number {
+  switch (action.kind) { case "give": { const item = action.item; return item.k; } }
+}
+export function mapped(items: Item[]): number[] {
+  return items.map(item => { const alias = item; return alias.k; });
+}
+`);
+  for (const name of ["alias", "field", "indexed", "call", "argument", "chosen", "reversed", "spread", "item"]) {
+    assert.match(types, new RegExp(`let ${name} :=`));
+    assert.doesNotMatch(types, new RegExp(`let ${name} : `));
+  }
+});
+
+test("Lean retains context for fresh record branches and absent optional branches", () => {
+  for (const init of [
+    "flag ? { k: n } : { k: 0 }",
+    "flag ? { k: n } : undefined",
+    "flag ? undefined : { k: n }",
+  ]) {
+    const optional = init.includes("undefined");
+    const { types } = lean(`interface Item { k: number }
+export function fresh(n: number, flag: boolean): number {
+  const item: Item${optional ? " | undefined" : ""} = ${init};
+  return ${optional ? "item?.k ?? -1" : "item.k"};
+}`);
+    assert.match(types, new RegExp(`let item : ${optional ? "Option " : ""}Item :=`));
+  }
+});
