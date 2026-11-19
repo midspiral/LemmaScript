@@ -3,7 +3,7 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { anyExpr, decimalNumberLiteral, exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
+import { needsOptionalTypeHint, decimalNumberLiteral, exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshNameWhere, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
@@ -845,7 +845,7 @@ function emitStmt(s: Stmt, indent: number): string {
       }
       if (s.value.kind === "havoc" || s.value.kind === "emptyMap" || s.value.kind === "emptySet" ||
           (s.value.kind === "arrayLiteral" && s.value.elems.length === 0) ||
-          (s.type.kind !== "unknown" && anyExpr(s.value, e => e.kind === "constructor" && e.type === "Option" && e.name === "none")))
+          (s.type.kind !== "unknown" && needsOptionalTypeHint(s.value)))
         return `${pad}var ${escapeName(s.name)}: ${tyToDafny(s.type)} := ${emitExpr(s.value)};`;
       return `${pad}var ${escapeName(s.name)} := ${emitExpr(s.value)};`;
     case "assign":

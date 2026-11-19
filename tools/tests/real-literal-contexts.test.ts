@@ -110,7 +110,7 @@ test("Dafny casts contextual real literals, including folded negatives and optio
     "value := (-1 as real);",
     "Some((0 as real))",
     "Some((-1 as real))",
-    "withDefault(Option.Some((-1 as real)))",
+    "withDefault(Some((-1 as real)))",
     "[(0 as real), (-1 as real)]",
   ]) assert.ok(output.includes(expected), `missing ${expected}\n${output}`);
   assert.doesNotMatch(output, /Some\(Some\(/);

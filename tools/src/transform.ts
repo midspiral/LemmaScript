@@ -9,7 +9,7 @@ import type { TExpr, TStmt, TModule, Ty } from "./typedir.js";
 import { tyEqual } from "./typedir.js";
 import { optional, nullishOf, includesNullish, joinTypes } from "./nullish.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
-import { anyExpr, anyExprInStmts, usesName, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
+import { needsOptionalTypeHint, anyExprInStmts, usesName, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
@@ -422,9 +422,9 @@ function optionalCases<R>(expr: Expr, ty: Ty,
   value: (expr: Expr, ty: Ty) => R, absent: (tag: "null" | "undefined") => R,
   ops: { match: (expr: Expr, binder: string, some: R, none: R) => R;
     choose: (expr: Expr, yes: R, no: R) => R;
-    evaluated: (expr: Expr, ty: Ty, body: R) => R }): R {
+    evaluated: (expr: Expr, ty: Ty, body: R) => R }, binderHint?: string): R {
   if (ty.kind === "optional") {
-    const binder = optionalBinder();
+    const binder = binderHint ?? optionalBinder();
     const some = ty.nullish === "both"
       ? optionalCases(varE(binder), optional(ty.inner, "null"), value, absent, ops)
       : value(varE(binder), ty.inner);
@@ -466,6 +466,11 @@ function absentValue(tag: "null" | "undefined", target: Ty): Expr {
  * by its type even when both backends can encode that singleton as Unit. */
 function convertOptional(expr: Expr, from: Ty, to: Ty): Expr {
   if (tyEqual(from, to) || from.kind === "unknown" || to.kind === "unknown") return expr;
+  // Payload subtyping (e.g. nat to int) does not change a single option's
+  // representation. Collection helpers with an optional payload still need
+  // the flattening below.
+  if (from.kind === "optional" && to.kind === "optional" && from.nullish === to.nullish &&
+      !nullishOf(from.inner) && !nullishOf(to.inner)) return expr;
   if (from.kind === "optional" || from.kind === "nullish" || from.kind === "void") {
     return optionalCases(expr, from, (v, ty) => convertOptional(v, ty, to), tag => absentValue(tag, to), optionalExprOps);
   }
@@ -526,35 +531,44 @@ function optionalBranch(e: OptionalMatch, actual: Expr, actualTy: Ty, positive: 
 
 function lowerOptionalMatch(e: Extract<TExpr, { kind: "someMatch" }>, binds: Stmt[] | null): Expr {
   const scrutinee = lowerExpr(e.scrutinee, binds);
-  const branch = (actual: Expr, actualTy: Ty, positive: boolean) => {
+  type Branch = { expr: Expr; hasEffects: boolean; assign: (target: string) => Stmt[] };
+  const lower = (actual: Expr, actualTy: Ty, positive: boolean): Branch => {
     const b = optionalBranch(e, actual, actualTy, positive);
     const body = positive ? e.someBody : e.noneBody;
     const replaced = b.path ? replacePathInTExpr(body, b.path, b.binder, b.binderTy) : body;
-    return { ...b, replaced };
+    const local: Stmt[] | null = binds ? [] : null;
+    const result = convertOptional(lowerExpr(replaced, local), replaced.ty, e.ty);
+    return { expr: bindOptionalExpr(b, result), hasEffects: !!local?.length,
+      assign: target => bindOptionalStmts(b, [...(local ?? []), { kind: "assign", target, value: result }]) };
   };
-  if (binds) {
+  const lowered = refinementCases<Branch>(scrutinee, e,
+    (actual, ty) => lower(actual, ty, true),
+    tag => lower(unit(), { kind: "nullish", nullish: tag }, !includesNullish(e.excluded ?? "both", tag)), {
+      match: (expr, binder, some, none) => ({
+        expr: optionalExprOps.match(expr, binder, some.expr, none.expr),
+        hasEffects: some.hasEffects || none.hasEffects,
+        assign: target => optionalStmtOps.match(expr, binder, some.assign(target), none.assign(target)),
+      }),
+      choose: (expr, yes, no) => ({
+        expr: optionalExprOps.choose(expr, yes.expr, no.expr),
+        hasEffects: yes.hasEffects || no.hasEffects,
+        assign: target => optionalStmtOps.choose(expr, yes.assign(target), no.assign(target)),
+      }),
+      evaluated: (expr, ty, body) => ({
+        expr: optionalExprOps.evaluated(expr, ty, body.expr), hasEffects: body.hasEffects,
+        assign: target => optionalStmtOps.evaluated(expr, ty, body.assign(target)),
+      }),
+    });
+  // A pure optional expression stays an expression even inside a method. Only
+  // branch-local effects require a mutable result and statement-level matches.
+  if (binds && lowered.hasEffects) {
     const target = optionalBinder();
     binds.push({ kind: "let", name: target, type: e.ty, mutable: true,
       value: { kind: _opts.backend === "dafny" ? "havoc" : "default", type: e.ty } });
-    const lower = (actual: Expr, ty: Ty, positive: boolean): Stmt[] => {
-      const b = branch(actual, ty, positive);
-      const local: Stmt[] = [];
-      const result = convertOptional(lowerExpr(b.replaced, local), b.replaced.ty, e.ty);
-      return bindOptionalStmts(b, [...local, { kind: "assign", target, value: result }]);
-    };
-    binds.push(...refinementCases(scrutinee, e,
-      (actual, ty) => lower(actual, ty, true),
-      tag => lower(unit(), { kind: "nullish", nullish: tag }, !includesNullish(e.excluded ?? "both", tag)), optionalStmtOps));
+    binds.push(...lowered.assign(target));
     return varE(target);
   }
-  const lower = (actual: Expr, ty: Ty, positive: boolean): Expr => {
-    const b = branch(actual, ty, positive);
-    const body = convertOptional(lowerExpr(b.replaced, null), b.replaced.ty, e.ty);
-    return bindOptionalExpr(b, body);
-  };
-  return refinementCases(scrutinee, e,
-    (actual, ty) => lower(actual, ty, true),
-    tag => lower(unit(), { kind: "nullish", nullish: tag }, !includesNullish(e.excluded ?? "both", tag)), optionalExprOps);
+  return lowered.expr;
 }
 
 function lowerOptionalStmts(s: Extract<TStmt, { kind: "someMatch" }>, rest: TStmt[], typeDecls: TypeDeclInfo[], pure: boolean): Expr | Stmt[] | null {
@@ -638,7 +652,14 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
 
   switch (e.kind) {
     case "var": return e.name === "null" || e.name === "undefined" ? unit() : { kind: "var", name: e.name };
-    case "coerce": return convertOptional(lowerExpr(e.expr, binds), e.expr.ty, e.ty);
+    case "coerce": {
+      const value = lowerExpr(e.expr, binds);
+      if (e.ty.kind === "optional" && e.ty.nullish !== "both") {
+        if (!nullishOf(e.expr.ty)) return { kind: "app", fn: "Some", args: [value] };
+        if (e.expr.kind === "var" && e.expr.name === e.ty.nullish) return varE("undefined");
+      }
+      return convertOptional(value, e.expr.ty, e.ty);
+    }
     case "num": {
       const literal: Expr = { kind: "num", value: e.value };
       return e.ty.kind === "real" && Number.isInteger(e.value)
@@ -669,7 +690,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         return optionalCases(lowerExpr(e.expr, binds), e.expr.ty, (v, ty) => {
           const truthy = valueTruthyCond(v, ty);
           return truthy ? { kind: "unop", op: "¬", expr: truthy } : { kind: "bool", value: false };
-        }, () => ({ kind: "bool", value: true }), optionalExprOps);
+        }, () => ({ kind: "bool", value: true }), optionalExprOps,
+          e.expr.ty.kind === "optional" && e.expr.ty.nullish !== "both" ? matchBinder("value") : undefined);
       }
       // Number truthiness: !n → n == 0
       if (e.op === "!" && (e.expr.ty.kind === "int" || e.expr.ty.kind === "nat"))
@@ -729,12 +751,32 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if ((e.op === "===" || e.op === "!==") &&
           (e.left.ty.kind === "optional") !== (e.right.ty.kind === "optional")) {
         const [opt, val] = e.left.ty.kind === "optional" ? [e.left, e.right] : [e.right, e.left];
+        if (opt.ty.kind === "optional" && opt.ty.nullish !== "both") {
+          if (val.kind === "var" && val.name === opt.ty.nullish) {
+            return { kind: "match", scrutinee: lowerExpr(opt, binds), arms: [
+              { pattern: pCtor("some", "_"), body: { kind: "bool", value: e.op === "!==" } },
+              { pattern: pCtor("none"), body: { kind: "bool", value: e.op === "===" } },
+            ] };
+          }
+          // Reading a literal or an already-typed field has no effects or
+          // preconditions to preserve outside the match. Keep the direct form.
+          const simple = (x: TExpr): boolean => ["var", "num", "bigint", "bool", "str"].includes(x.kind)
+            || x.kind === "field" && simple(x.obj);
+          if (!nullishOf(val.ty) && simple(val)) {
+            const value = val.kind === "str" && opt.ty.inner.kind === "user"
+              ? { kind: "constructor" as const, name: val.value, type: opt.ty.inner.name, args: [] }
+              : lowerExpr(val, binds);
+            return optionalCases(lowerExpr(opt, binds), opt.ty,
+              v => ({ kind: "binop", op: BOOL_OP_MAP[e.op], left: v, right: value }),
+              () => ({ kind: "bool", value: e.op === "!==" }), optionalExprOps, matchBinder("value"));
+          }
+        }
         if (!nullishOf(val.ty)) {
           // Compare payloads directly. Besides keeping the absent case explicit,
           // this exposes sequence equality to the verifier's extensionality rule.
           return optionalOperands(e.left, e.right, binds, (left, right) =>
             optionalCases(e.left === opt ? left : right, opt.ty,
-              value => ({ kind: "binop", op: e.op === "===" ? "=" : "≠", left: value, right: e.left === val ? left : right }),
+              value => ({ kind: "binop", op: BOOL_OP_MAP[e.op], left: value, right: e.left === val ? left : right }),
               () => ({ kind: "bool", value: e.op === "!==" }), optionalExprOps));
         }
       }
@@ -759,10 +801,14 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         });
       }
       if (e.op === "||" && nullishOf(e.left.ty)) {
-        const binder = optionalBinder();
+        if (e.left.ty.kind === "optional" && e.left.ty.nullish !== "both" &&
+            !isFalsyCapableTy(e.left.ty.inner) && e.right.kind === "var" && e.right.name === e.left.ty.nullish)
+          return lowerExpr(e.left, binds);
+        const binder = e.left.ty.kind === "optional" && e.left.ty.nullish !== "both" ? matchBinder("value") : optionalBinder();
         const inner = e.left.ty.kind === "optional" ? e.left.ty.inner : e.left.ty;
         const value: TExpr = { kind: "var", name: binder, ty: inner };
-        const someBody: TExpr = { kind: "conditional", cond: value, then: value, else: e.right, ty: e.ty };
+        const someBody: TExpr = isFalsyCapableTy(inner)
+          ? { kind: "conditional", cond: value, then: value, else: e.right, ty: e.ty } : value;
         return lowerOptionalMatch({ kind: "someMatch", scrutinee: e.left, binder, binderTy: inner,
           someBody, noneBody: e.right, ty: e.ty }, binds);
       }
@@ -1212,7 +1258,13 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // Pass the module typeDecls (not []), so type lookups inside the lambda
       // body — e.g. a `switch`'s variant fields — resolve. A bare `[]` left a
       // discriminated-union switch in a lambda with binderless patterns.
-      const pureBody = transformPureBody(e.body, _typeDecls);
+      let hasEffects = false;
+      for (const stmt of e.body) mapTStmt(stmt, expr => {
+        if (expr.kind === "call" && (expr.callKind === "method" ||
+            expr.builtinId !== undefined && !builtinSpec(expr.builtinId).pure)) hasEffects = true;
+        return null;
+      });
+      const pureBody = hasEffects ? null : transformPureBody(e.body, _typeDecls);
       const body: Stmt[] = pureBody ? [{ kind: "return", value: pureBody }] : transformStmts(e.body, _typeDecls);
       // Flatten an if/let/return-shaped multi-statement body into a single
       // `return <expr>` so both backends' single-return-lambda fast path emits
@@ -2336,7 +2388,7 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
         if (!restExpr) return null;
         const value = transformExpr(s.init);
         // None alone (including inside an array) cannot determine its payload type.
-        const type = s.ty.kind !== "unknown" && anyExpr(value, e => e.kind === "constructor" && e.type === "Option" && e.name === "none")
+        const type = s.ty.kind !== "unknown" && needsOptionalTypeHint(value)
           ? s.ty : undefined;
         return { kind: "let", name: s.name, type, value, body: restExpr };
       }

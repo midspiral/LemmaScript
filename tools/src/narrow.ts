@@ -58,11 +58,19 @@ function walkExpr(e: TExpr, ctx: CondCtx): TExpr {
   // Associate boolean guard chains to the right so each check encloses the
   // expressions whose types it refines, including a chain followed by a read.
   if (e.kind === "binop" && e.ty.kind === "bool" && (e.op === "&&" || e.op === "||") &&
-      e.left.kind === "binop" && e.left.op === e.op) {
+      e.left.kind === "binop" && e.left.op === e.op && hasPresenceGuard(e.left, e.op)) {
     return walkExpr({ ...e, left: e.left.left, right: { ...e, left: e.left.right } }, ctx);
   }
   const r = recurseExpr(e, ctx);
   return ruleNullishIndex(r, ctx) ?? ruleNullish(r, ctx) ?? ruleOptChainIndex(r, ctx) ?? ruleOptChain(r, ctx) ?? ruleBooleanGuard(r, ctx) ?? ruleImplOptional(r, ctx) ?? ruleImplArrayIsArray(r, ctx) ?? ruleConditionalArrayIsArray(r, ctx) ?? ruleConditionalAndArrayIsArray(r, ctx) ?? ruleConditionalAndOptional(r, ctx) ?? ruleConditionalOptionalSimple(r, ctx) ?? ruleConditionalInMap(r, ctx) ?? ruleConditionalOptionalTruthy(r, ctx) ?? r;
+}
+
+/** Ordinary boolean grouping is part of the generated proof baseline. Only
+ * reassociate a prefix when it introduces an optional refinement. */
+function hasPresenceGuard(e: TExpr, op: string): boolean {
+  return e.kind === "binop" && e.op === op
+    ? hasPresenceGuard(e.left, op) || hasPresenceGuard(e.right, op)
+    : presentFact(e) !== null;
 }
 
 function ruleBooleanGuard(e: TExpr, ctx: CondCtx): TExpr | null {
@@ -135,6 +143,15 @@ function walkStmts(stmts: TStmt[], ctx: CondCtx): TStmt[] {
     if (consumed) {
       result.push(walkStmt(consumed, ctx));
       return result;
+    }
+    // Preserve the condition's scope before its boolean children are lowered.
+    // A method in the guard needs the statement form of the narrowed initializer.
+    const methodGuard = s.kind === "let" && s.init.kind === "conditional" &&
+      containsMethodCall(s.init.cond) && !containsMethodCall(s.init.else)
+      ? ruleLetCondAndOptional(s, ctx) : null;
+    if (methodGuard) {
+      for (const x of methodGuard) result.push(walkStmt(x, ctx));
+      continue;
     }
     // walkStmt first — narrow's expression rules may rewrite the let init from
     // `conditional` to `someMatch`, in which case the let-cond desugar shouldn't fire.
@@ -563,16 +580,13 @@ function containsMethodCall(e: TExpr): boolean {
  *  guarded-ternary position.
  *  → `someMatch x { Some(_x_val) => if rest then a else b, None => b }`.
  *  Walks the inner conditional back through narrow so chained checks become
- *  nested someMatches. Does NOT fire if the guard `rest` contains method
- *  calls — transform lifts those out of the match arm, breaking the binder
- *  scope. The original transform's let-desugar handles those by lifting to
- *  a mutable var first. */
+ *  nested someMatches. Transform keeps any method calls local to their
+ *  selected match arm. Let initializers use the statement form above. */
 function ruleConditionalAndOptional(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "conditional") return null;
   const extracted = leadingPresent(e.cond);
   if (!extracted) return null;
   const { check, restCond } = extracted;
-  if (containsMethodCall(restCond)) return null;
   const innerCond: TExpr = {
     kind: "conditional",
     cond: restCond, then: e.then, else: e.else, ty: e.ty,

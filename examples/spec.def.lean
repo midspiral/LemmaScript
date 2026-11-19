@@ -236,7 +236,9 @@ method ocChain (o : Option Outer) returns (res : Option Int)
 
 method ocMethodCall (s : Option (Std.HashSet String)) (k : String) returns (res : Option Bool)
   ensures ensures_1: ((match s with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) : Prop)
-  ensures ensures_2: ((match s with | .some _s_val => (match res with | .some _value => _value == _s_val.contains k | .none => false) | .none => true) : Prop)
+  ensures ensures_2: ((match s with | .some _s_val => let _optional41 : Option Bool := res
+let _optional42 : Bool := _s_val.contains k
+(match _optional41 with | .some _optional43 => _optional43 == _optional42 | .none => false) | .none => true) : Prop)
   do
     return Pure.ocMethodCall s k
 

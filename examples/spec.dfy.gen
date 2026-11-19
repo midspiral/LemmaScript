@@ -365,7 +365,7 @@ function ocMethodCall(s: Option<set<string>>, k: string): Option<bool>
 
 lemma ocMethodCall_ensures(s: Option<set<string>>, k: string)
   ensures ((match s { case Some(i_) => false case None => true }) ==> (match ocMethodCall(s, k) { case Some(i_) => false case None => true }))
-  ensures (match s { case Some(i_s_val) => (match ocMethodCall(s, k) { case Some(i_value) => (i_value == (k in i_s_val)) case None => false }) case None => true })
+  ensures (match s { case Some(i_s_val) => (var i_optional12: Option<bool> := ocMethodCall(s, k); (var i_optional13: bool := (k in i_s_val); (match i_optional12 { case Some(i_optional14) => (i_optional14 == i_optional13) case None => false }))) case None => true })
 {
 }
 

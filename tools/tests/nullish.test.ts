@@ -111,6 +111,37 @@ test("partial narrowing, either check order, and disjunctive early returns verif
   assert.equal(result.status, 0, result.output + result.text);
 });
 
+test("a method in a ternary guard keeps the selected value in its narrowed scope", () => {
+  const result = verify(String.raw`
+function positive(x: number): boolean {
+  //@ ensures \result === (x > 0)
+  let result = x > 0;
+  return result;
+}
+function fallback(take: boolean): number {
+  //@ requires take
+  //@ ensures \result === 7
+  let result = 7;
+  return result;
+}
+export function choose(x: number | null | undefined): number {
+  //@ ensures x === null || x === undefined ==> \result === 7
+  //@ ensures x !== null && x !== undefined && x > 0 ==> \result === x
+  //@ ensures x !== null && x !== undefined && x <= 0 ==> \result === 7
+  const chosen = x !== undefined && x !== null && positive(x) ? x : 7;
+  return chosen;
+}
+export function chooseCall(x: number | null | undefined): number {
+  //@ ensures x === null || x === undefined ==> \result === 7
+  //@ ensures x !== null && x !== undefined && x > 0 ==> \result === x
+  const chosen = x !== undefined && x !== null && positive(x)
+    ? x : fallback(x === undefined || x === null || x <= 0);
+  return chosen;
+}
+`);
+  assert.equal(result.status, 0, result.output + result.text);
+});
+
 test("coalescing and optional chaining preserve the correct sentinel", () => {
   const result = verify(String.raw`
 interface Box { value: number | null }
@@ -242,7 +273,10 @@ export function popWiden(): boolean {
   assert.equal(result.status, 0, result.output + result.text);
 });
 
-test("Lean evaluates both sentinels and partial narrowing independently", () => {
+const leanProbe = spawnSync("lean", ["--version"], { encoding: "utf8", timeout: 10_000 });
+test("Lean evaluates both sentinels and partial narrowing independently", {
+  skip: (leanProbe.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT",
+}, () => {
   const dir = mkdtempSync(join(tmpdir(), "lsc-nullish-lean-"));
   try {
     const text = generate(narrowing, "lean") + `

@@ -9,6 +9,8 @@ set_option velvet.semantics.termination "total"
 method optionalLookup (enabled : Bool) (values : Std.HashMap String Int) (key : String) returns (res : Option Int)
   ensures ensures_1: (¬(enabled) → (match res with | .some _ => false | .none => true) : Prop)
   ensures ensures_2: (enabled → ¬(values.contains key) → (match res with | .some _value => _value == 0 | .none => false) : Prop)
-  ensures ensures_3: (enabled → values.contains key → (match res with | .some _value => _value == values.get! key | .none => false) : Prop)
+  ensures ensures_3: (enabled → values.contains key → let _optional4 : Option Int := res
+let _optional5 : Int := values.get! key
+(match _optional4 with | .some _optional6 => _optional6 == _optional5 | .none => false) : Prop)
   do
     return Pure.optionalLookup enabled values key

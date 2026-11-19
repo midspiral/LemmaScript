@@ -85,7 +85,7 @@ method countPositivesNonNested(grid: seq<seq<int>>) returns (res: int)
 
 method lastPresent(xs: seq<Option<int>>) returns (res: Option<int>)
 {
-  var cur := None;
+  var cur: Option<int> := None;
   var i_x_idx := 0;
   while i_x_idx < |xs|
     invariant (i_x_idx <= |xs|)
@@ -104,7 +104,7 @@ method lastPresent(xs: seq<Option<int>>) returns (res: Option<int>)
 
 method lastBeforeGap(xs: seq<Option<int>>) returns (res: Option<int>)
 {
-  var cur := None;
+  var cur: Option<int> := None;
   var i_x_idx := 0;
   while i_x_idx < |xs|
     invariant (i_x_idx <= |xs|)
