@@ -13,6 +13,7 @@ import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawG
 import { normalizeBigIntLiteral } from "./rawir.js";
 import { setUserNames, freshName } from "./names.js";
 import { DEFAULT_OPTIONS, fileCommentLines, isOptionDirective, type LscOptions } from "./config.js";
+import { checkAsyncFragment, fulfillmentType, isAsyncFunction } from "./async-check.js";
 
 // ── Expression extraction ────────────────────────────────────
 
@@ -142,9 +143,9 @@ function detectCrossFileExtern(
     t.getText(callee, ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope | ts.TypeFormatFlags.NoTruncation);
   const params = sig.getParameters().map(p => ({
     name: p.getName(),
-    tsType: externTypeText(p.getTypeAtLocation(callee)),
+    tsType: fulfillmentText(p.getTypeAtLocation(callee), externTypeText),
   }));
-  const returnType = externTypeText(sig.getReturnType());
+  const returnType = fulfillmentText(sig.getReturnType(), externTypeText);
   for (const p of sig.getParameters()) {
     sigTypesOut.push({ type: p.getTypeAtLocation(callee), node: callee });
   }
@@ -174,6 +175,13 @@ function detectCrossFileExtern(
   const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
   const impure = externIsImpure(externalDecl, qualified);
   return { qualified, flat, typeParams, params, returnType, requires, ensures, impure };
+}
+
+/** An extern's promise-typed result or parameter is modeled by its fulfillment
+ *  value; checkAsyncFragment requires every such call to be awaited. */
+function fulfillmentText(t: Type, print: (t: Type) => string): string {
+  const ft = fulfillmentType(t);
+  return ft === "void" ? "void" : print(ft);
 }
 
 /** Build a concat-tree from a mixed list of literal and SpreadElement nodes.
@@ -354,6 +362,9 @@ function _eraseGenerics(tsType: string): string {
 }
 
 function extractExpr(node: Expression): RawExpr {
+  // `await e` denotes e's fulfillment value; checkAsyncFragment has already
+  // confined it to positions where a rejection ends the path (SPEC §4.5).
+  if (Node.isAwaitExpression(node)) return extractExpr(node.getExpression());
   // Havoc key matching: replace matching calls or new expressions with havoc expression
   if (_havocKey && (Node.isCallExpression(node) || Node.isNewExpression(node))) {
     const fnExpr = node.getExpression();
@@ -2059,6 +2070,12 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     if (Node.isExpressionStatement(s)) {
       const expr = s.getExpression();
+      // `await v;` on a plain value is only a suspension point: nothing to model.
+      if (Node.isAwaitExpression(expr)) {
+        let operand: Node = expr.getExpression();
+        while (Node.isParenthesizedExpression(operand)) operand = operand.getExpression();
+        if (!Node.isCallExpression(operand)) continue;
+      }
       // //@ havoc before `x = e` — discard the RHS, assign a nondeterministic
       // value of x's type. Only applies to plain `=` with an identifier LHS;
       // compound assigns, `arr[i] = v`, and `x++` fall through to desugaring.
@@ -2077,7 +2094,9 @@ function extractStmts(stmts: Node[]): RawStmt[] {
     }
 
     if (Node.isThrowStatement(s)) {
-      result.push({ kind: "throw", line });
+      const owner = s.getFirstAncestor(a => Node.isFunctionDeclaration(a) || Node.isMethodDeclaration(a)
+        || Node.isArrowFunction(a) || Node.isFunctionExpression(a));
+      result.push(owner && isAsyncFunction(owner) ? { kind: "throw", line, rejects: true } : { kind: "throw", line });
       continue;
     }
 
@@ -2151,6 +2170,10 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
   }
 
   const body = fn.getBody();
+  const isAsync = isAsyncFunction(fn);
+  checkAsyncFragment(fn as never, (fn as any).getName?.() ?? "<anonymous>", {
+    isHavocked: stmt => !!havocDirective(stmt),
+  });
 
   // Expression-body arrow: wrap in implicit return
   let extractedBody: RawStmt[];
@@ -2221,8 +2244,20 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
       // and aliases are preserved. Non-union nodes use the syntactic text;
       // when no annotation is present, fall back to the computed type
       // (e.g., `eof = false` infers `boolean` from the default value).
-      const tn = p.getTypeNode();
-      const resolved = tn && annotationTypeText(tn, p.getType());
+      let tn = p.getTypeNode();
+      let pType = p.getType();
+      // An async function's `Promise<T>` parameter is modeled by its
+      // fulfillment value (SPEC §4.5); checkAsyncFragment confines its uses.
+      if (isAsync && !p.hasQuestionToken()) {
+        const ft = fulfillmentType(pType);
+        if (ft === "void") return [{ name: p.getName(), tsType: "void" }];
+        if (ft !== pType) {
+          pType = ft;
+          const arg = tn && Node.isTypeReference(tn) ? tn.getTypeArguments()[0] : undefined;
+          tn = arg;
+        }
+      }
+      const resolved = tn && annotationTypeText(tn, pType);
       let tsType: string;
       if (resolved) {
         tsType = _eraseGenerics(resolved);
@@ -2231,20 +2266,16 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
       } else if (tn) {
         tsType = _eraseGenerics(tn.getText());
       } else {
-        tsType = _eraseGenerics(typeToString(p.getType()));
+        tsType = _eraseGenerics(typeToString(pType));
       }
       if (p.hasQuestionToken()) tsType = `${tsType} | undefined`;
       return [{ name: p.getName(), tsType }];
     }),
     returnType: (() => {
-      // `async` with no `await`: the `Promise<T>` wrapper is just the calling
-      // convention (the body returns T-typed values), so unwrap to T. Gated on
-      // no `await` — that's the suspension point we can't model, and it only
-      // type-checks inside `async`, so the gate is self-justifying. With `await`
-      // present we leave `Promise<...>` (unmodellable) rather than atomize it.
-      const isAsync = (fn as { isAsync?: () => boolean }).isAsync?.() ?? false;
-      const noAwait = fn.getDescendantsOfKind(SyntaxKind.AwaitExpression).length === 0;
-      if (isAsync && noAwait) {
+      // An async function's result is modeled by its fulfillment value:
+      // `Promise<T>` → T. `ensures` therefore describes fulfillment, and a
+      // `throw` (rejection) owes no postcondition (SPEC §4.5).
+      if (isAsync) {
         const args = fn.getReturnType().getTypeArguments();
         if (args.length === 1) {
           if (args[0].isAny()) return "unknown";
@@ -2274,6 +2305,7 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
     autohavoc: false,  // set in extractModule (file-level directive or per-function)
     typeAnnotations,
     body: extractedBody,
+    ...isAsync && body?.getFirstDescendantByKind(SyntaxKind.AwaitExpression) ? { awaits: true } : {},
     line: fn.getStartLineNumber(),
   };
 }
@@ -2564,9 +2596,9 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     // becomes `AgentMessage`, not `import("/abs/path").AgentMessage`.
     const params = sig.getParameters().map(p => ({
       name: p.getName(),
-      tsType: typeToString(p.getTypeAtLocation(f.node)),
+      tsType: fulfillmentText(p.getTypeAtLocation(f.node), typeToString),
     }));
-    const returnType = typeToString(sig.getReturnType());
+    const returnType = fulfillmentText(sig.getReturnType(), typeToString);
     const annots = collectFunctionAnnotations(f.node);
     const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
     const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);

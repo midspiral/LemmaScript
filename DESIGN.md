@@ -128,7 +128,7 @@ LemmaScript verifies a subset of TypeScript chosen for clean, well-defined seman
 
 ### Not yet supported
 
-- `await` / true async (an `async` function with no `await` is supported)
+- Async shared state across `await` (stateless async functions are supported on Dafny; see [SPEC §4.5](SPEC.md#45-async-functions-dafny))
 
 ### Excluded (by design)
 

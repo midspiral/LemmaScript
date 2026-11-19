@@ -818,7 +818,7 @@ When the bound variable IS used after the match, the `let` is preserved and the 
 | `while (c) { ... }` | `while c' invariant ... do ...` | `while c' invariant ... { ... }` |
 | `x = f(a, b)` (method call) | `x ← f a b` | `x := f(a, b);` |
 | `break` | `break` | `break;` |
-| `throw new Error(...)` | — | `assert false;` |
+| `throw new Error(...)` | — | `assert false;` (in an async function: `assume {:axiom} false;`, §4.5) |
 | `switch` / discriminant if-chain | `match` | `match` |
 
 All expressions `e` above are translated using the spec expression rules (§3).
@@ -962,6 +962,23 @@ method bodies; arbitrary structural assignments and casts are not synthesized.
 **Switch fall-through:** a non-empty `case` must end in `break`/`return`/`throw` — C-style fall-through into the next case's body is rejected. Empty `case A: case B: body` stacking (leading labels sharing the next body) is supported.
 
 **Enum-like types** (string literal unions, no data fields) stay as `if` with constructor equality. Only discriminated unions with data fields trigger the if-chain → match transformation.
+
+### 4.5 Async Functions (Dafny)
+
+An async function is verified as a sequential function over fulfillment values: `Promise<T>` in its signature becomes `T`, `await e` denotes `e`'s fulfillment value, and `ensures` describes fulfillment (`\result` is the fulfilled value). A `throw` rejects the returned promise; a rejected path owes no postcondition, so it is emitted as `assume {:axiom} false;` rather than the synchronous `assert false;`. Partial correctness only: neither fulfillment nor termination is promised.
+
+```typescript
+async function approve(request: Request): Promise<Mode> {
+  //@ ensures \result === request.effective || rank(\result) > rank(request.effective)
+  const { requested, effective } = request;           // read before the first await
+  if (rank(requested) <= rank(effective)) throw new Error("not wider");
+  const outcome = await askUser(requested);           // //@ extern //@ impure async I/O
+  if (outcome !== "allowed-once") throw new Error("denied");
+  return requested;
+}
+```
+
+This is exact only when nothing can interfere across a suspension, so `lsc` rejects code outside that fragment. Every promise-valued call is awaited where it is created (or returned from an async function), so a rejection ends the caller's path at that call. `await` is a whole declaration initializer, assignment right-hand side, return value, or statement, and awaits a call, a promise parameter, or a non-thenable value. A promise parameter denotes its fulfillment value, in specifications too. A reference-typed value (an array, record, or map) may not be read after an await that follows its binding, since another task may mutate it meanwhile; a fresh, non-escaping local copy (`[...xs]`) is exempt, and a loop that awaits must iterate such a copy. Async methods may not use `this`, and async callbacks are unsupported. Specifications over parameters refer to their values at the call. Lean rejects `await` and async `throw`.
 
 ---
 
@@ -1517,6 +1534,6 @@ Each phase (and the three intermediate representations — Raw IR, Typed IR, IR)
 
 The following TS features are not yet handled by the toolchain:
 
-- `await` / true async — a `Promise<T>`-returning function with an `await` in its body is unmodellable. An `async` function with **no** `await` is supported: its `Promise<T>` return type is unwrapped to `T` (the wrapper is just calling convention), so the body verifies normally.
+- Async shared state: `this` in async methods, reference values read across an `await`, async callbacks, `Promise.all`/`race`, `.then`, and `try`/`catch` around an `await`. The supported fragment is described in §4.5 (Dafny only).
 - **IEEE 754 semantics.** `number` is modeled as a mathematical integer (or, where annotated, an exact `real` — §6.1.3), never as a double, so double-specific behavior is outside the model and *not* covered by a proof: there is no 53-bit precision bound (`2**53 + 1 !== 2**53` is provable in the model, false at runtime), Dafny's `real` is exact rather than rounding (`0.1 + 0.2 == 0.3` verifies), `NaN`/`Infinity`/`-0` have no representation (a possibly-zero divisor is a proof obligation, not `Infinity`), and bitwise operators on `number` get the unbounded lowering of §6.1.1 with no int32 wrap. The pieces that *are* JS-faithful are called out where they occur: real `/` (§6.1.3), `JSRem` for `%`, `JSTruncDiv` for `bigint /`, `JSFloorDiv` for `Math.floor(a / b)`. `**`, `>>>`, and `Math.round`/`trunc`/`sqrt`/`pow` have no lowering at all.
 - Error reporting (mapping prover errors to TS source locations)
