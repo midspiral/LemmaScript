@@ -117,3 +117,18 @@ test("Lean still rejects real Math arithmetic", () => {
     emitLeanFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
   }, /real arithmetic is not supported by the Lean backend/);
 });
+
+test("Math.trunc and Math.round keep a nat argument nat, so Lean needs no toNat", () => {
+  const src = `
+export function at(xs: number[], i: number): number {
+  //@ type i nat
+  //@ requires i < xs.length
+  return xs[Math.trunc(i)] + xs[Math.round(i)];
+}
+`;
+  const { typesFile, defFile } = transformModuleLean(sourceModule(src));
+  resetLeanModule();
+  const lean = emitLeanFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
+  assert.doesNotMatch(lean, /toNat/);
+  assert.match(lean, /xs\[i\]!/);
+});
