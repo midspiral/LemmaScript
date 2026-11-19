@@ -1,7 +1,8 @@
 //@ backend dafny
 
 // Regression for #258: optional fields of an inline parameter record retain
-// their types throughout a chained ??. A present zero wins over later defaults.
+// their types throughout a chained ??. Zero is a valid value;
+// only null and undefined trigger a fallback.
 
 interface Context {
   a?: number;
