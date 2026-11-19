@@ -20,7 +20,8 @@
  * declarations takes a `CondCtx`; nothing module-level.
  */
 
-import type { TExpr, TStmt, Ty } from "./typedir.js";
+import type { TExpr, TStmt, Ty, Nullish } from "./typedir.js";
+import { excludeNullish, includesNullish, nullishOf } from "./nullish.js";
 import { freshName, freshNameWhere, isUserName } from "./names.js";
 import type { TypeDecls } from "./typedecls.js";
 import { unionDeclOfTy, discriminantOf } from "./typedecls.js";
@@ -62,6 +63,8 @@ export interface PresentFact {
   negated: boolean;
   binder: string;
   truthiness: boolean;
+  /** Alternatives eliminated in the positive branch; its binder may still be optional. */
+  excluded?: Nullish;
 }
 
 /** Pure access paths: the raw var root followed by its field names;
@@ -122,19 +125,26 @@ export function presentFact(cond: TExpr): PresentFact | null {
   // Explicit `e === undefined` / `e !== undefined` — a pure presence check,
   // independent of the inner value (so NOT a truthiness form).
   let e: TExpr | null = null;
-  if (cond.right.kind === "var" && cond.right.name === "undefined") e = cond.left;
-  if (cond.left.kind === "var" && cond.left.name === "undefined") e = cond.right;
-  if (!e || e.ty.kind !== "optional") return null;
+  let excluded: Nullish = "undefined";
+  if (cond.right.kind === "var" && (cond.right.name === "undefined" || cond.right.name === "null")) {
+    e = cond.left; excluded = cond.right.name;
+  }
+  if (cond.left.kind === "var" && (cond.left.name === "undefined" || cond.left.name === "null")) {
+    e = cond.right; excluded = cond.left.name;
+  }
+  if (!e || (e.ty.kind !== "optional" && e.ty.kind !== "nullish")) return null;
+  if (!includesNullish(e.ty.nullish, excluded)) return null;
   const hint = binderHintFor(e);
   if (hint === null) return null;
-  return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binder: freshName(hint), truthiness: false };
+  return { scrutinee: e, innerTy: excludeNullish(e.ty, excluded), excluded,
+    negated: cond.op === "===", binder: freshName(hint), truthiness: false };
 }
 
 /** Which types have falsy values in JS (`0`, `""`, `false`); everything else
  *  (array, user type, …) is always truthy. The single home of that set —
  *  transform's `valueTruthyCond` gates on it too. */
 export const isFalsyCapableTy = (ty: Ty): boolean =>
-  ["int", "nat", "string", "bool"].includes(ty.kind);
+  ["int", "nat", "real", "string", "bool"].includes(ty.kind);
 
 // `Some(0)` / `Some("")` / `Some(false)` are falsy, so a truthiness check
 // (`if (o)`, `!o`, `o ? :`) over a nullable primitive must still test the bound
@@ -193,7 +203,7 @@ export function flattenOr(e: TExpr): TExpr[] {
  *  `x` is Some). `residual` is the guard it still contributes once `x` is Some
  *  (`!v` for a falsy-capable `!x`; `v.chain !== lit` for an optchain compare;
  *  null otherwise). */
-export type NoneDetector = { scrutinee: TExpr; innerTy: Ty; binder: string; residual: TExpr | null };
+export type NoneDetector = { scrutinee: TExpr; innerTy: Ty; binder: string; residual: TExpr | null; excluded?: Nullish };
 
 export function noneDetector(leaf: TExpr, ctx: CondCtx): NoneDetector | null {
   // `x?.chain !== lit` — `undefined !== lit` is true when x is None.
@@ -205,6 +215,7 @@ export function noneDetector(leaf: TExpr, ctx: CondCtx): NoneDetector | null {
       const unwrapped = applyChain({ kind: "var", name: binder, ty: oc.obj.ty.inner }, oc.chain);
       restoreDiscriminantFlag(unwrapped, ctx.decls);
       const lit = leaf.left === oc ? leaf.right : leaf.left;
+      if (lit.ty.kind === "unknown" || (nullishOf(lit.ty) && includesNullish(nullishOf(lit.ty)!, "undefined"))) return null;
       return { scrutinee: oc.obj, innerTy: oc.obj.ty.inner, binder, residual: { kind: "binop", op: "!==", left: unwrapped, right: lit, ty: { kind: "bool" } } };
     }
   }
@@ -215,7 +226,7 @@ export function noneDetector(leaf: TExpr, ctx: CondCtx): NoneDetector | null {
     const residual: TExpr | null = canBeFalsy(f)
       ? { kind: "unop", op: "!", expr: { kind: "var", name: f.binder, ty: f.innerTy }, ty: { kind: "bool" } }
       : null;
-    return { scrutinee: f.scrutinee, innerTy: f.innerTy, binder: f.binder, residual };
+    return { scrutinee: f.scrutinee, innerTy: f.innerTy, binder: f.binder, residual, excluded: f.excluded };
   }
   return null;
 }
@@ -228,9 +239,9 @@ type OptChain = Extract<TExpr, { kind: "optChain" }>;
 export function applyChain(body: TExpr, chain: OptChain["chain"]): TExpr {
   for (const step of chain) {
     if (step.kind === "field") body = { kind: "field", obj: body, field: step.name, ty: step.ty };
-    else if (step.kind === "index") body = { kind: "index", obj: body, idx: step.idx, ty: step.ty };
+    else if (step.kind === "index") body = { kind: "index", obj: body, idx: step.idx, ty: step.ty, optionalReturn: step.optionalReturn };
     else body = { kind: "call", fn: body, args: step.args, ty: step.ty, callKind: step.callKind,
-      ...(step.builtinId ? { builtinId: step.builtinId } : {}) };
+      ...(step.builtinId ? { builtinId: step.builtinId } : {}), optionalReturn: step.optionalReturn };
   }
   return body;
 }
@@ -414,7 +425,7 @@ export function presentMatchStmts(f: PresentFact, some: TStmt[], none: TStmt[], 
   f = bindPresentFact(f, ctx);
   return {
     kind: "someMatch",
-    scrutinee: f.scrutinee, binderTy: f.innerTy,
+    scrutinee: f.scrutinee, binderTy: f.innerTy, excluded: f.excluded,
     binder: f.binder,
     someBody: canBeFalsy(f) ? [{ kind: "if", cond: bound(f), then: some, else: none }] : some,
     noneBody: none,
@@ -426,7 +437,7 @@ export function presentMatchExpr(f: PresentFact, some: TExpr, none: TExpr, ty: T
   f = bindPresentFact(f, ctx);
   return {
     kind: "someMatch",
-    scrutinee: f.scrutinee, binderTy: f.innerTy,
+    scrutinee: f.scrutinee, binderTy: f.innerTy, excluded: f.excluded,
     binder: f.binder,
     someBody: canBeFalsy(f) ? { kind: "conditional", cond: bound(f), then: some, else: none, ty } : some,
     noneBody: none,

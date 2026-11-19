@@ -8,7 +8,7 @@
 import path from "path";
 import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
-import { initTypeParser } from "./types.js";
+import { initTypeParser, parseTsType } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
 import { normalizeBigIntLiteral } from "./rawir.js";
 import { setUserNames, freshName } from "./names.js";
@@ -767,9 +767,9 @@ function extractExpr(node: Expression): RawExpr {
     }
   }
 
-  // null → undefined (both map to None in backends)
+  // Keep null distinct from undefined through the shared frontend.
   if (Node.isNullLiteral(node)) {
-    return { kind: "var", name: "undefined" };
+    return { kind: "var", name: "null" };
   }
 
   // `typeof X` — only meaningful in a `typeof X === "string"` discriminator over
@@ -1308,7 +1308,7 @@ function typeToString(type: Type): string {
     // A genuine multi-member union with no tagged-union shape LS can model →
     // a single opaque type. (See _synthOpaque.) Preserve an outer optional.
     const opaque = _synthOpaque(real);
-    return real.length === parts.length ? opaque : `${opaque} | undefined`;
+    return [opaque, ...parts.filter(p => p === "null" || p === "undefined")].join(" | ");
   }
   if (type.isTuple()) {
     return `[${type.getTupleElements().map(t => typeToString(t)).join(", ")}]`;
@@ -3009,9 +3009,11 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     let innerType: Type | null = null;
     let wrapOptional = false;
     const sourceReturnText = fn.returnType ?? "";
-    const sourceHadNullish = / \| (null|undefined)$/.test(sourceReturnText)
-      || sourceReturnText.includes(" | null ") || sourceReturnText.includes(" | undefined ")
-      || sourceReturnText.includes(" | null|") || sourceReturnText.includes(" | undefined|");
+    const sourceReturnTy = sourceReturnText ? parseTsType(sourceReturnText) : null;
+    const sourceHadNullish = sourceReturnTy?.kind === "optional";
+    const nullishSuffix = sourceHadNullish
+      ? sourceReturnTy.nullish === "both" ? "null | undefined" : sourceReturnTy.nullish
+      : retType.getUnionTypes().filter(t => t.isNull() || t.isUndefined()).map(typeToString).join(" | ");
     const sym = retType.getSymbol();
     if ((sym?.getName() === "__type" || sym?.getName() === "__object") && retType.isObject() && !retType.isArray()) {
       innerType = retType;
@@ -3033,7 +3035,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       // Try typeToString first — it resolves collapsed single-variant unions
       const resolved = typeToString(innerType);
       if (resolved !== "__type" && !resolved.includes("__type") && knownTypes.has(resolved)) {
-        fn.returnType = wrapOptional ? `${resolved} | undefined` : resolved;
+        fn.returnType = wrapOptional ? `${resolved} | ${nullishSuffix}` : resolved;
         continue;
       }
       const synName = f.owner + fn.name.charAt(0).toUpperCase() + fn.name.slice(1) + "Result";
@@ -3042,7 +3044,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
         const info = extractRecord(synName, innerType, f.node, undefined, extra);
         if (info) { typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(synName); }
       }
-      fn.returnType = wrapOptional ? `${synName} | undefined` : synName;
+      fn.returnType = wrapOptional ? `${synName} | ${nullishSuffix}` : synName;
       // Also resolve imported types referenced in the return type's fields
       for (const prop of innerType.getProperties()) {
         resolveType(prop.getTypeAtLocation(f.node), f.node);

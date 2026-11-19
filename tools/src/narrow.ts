@@ -37,6 +37,8 @@
 import type { TModule, TFunction, TStmt, TExpr } from "./typedir.js";
 import { isTerminatorKind } from "./typedir.js";
 import { builtinSpec } from "./builtins.js";
+import { UNDEFINED, excludeNullish, unionNullish, nullishOf, includesNullish } from "./nullish.js";
+import { tyEqual } from "./typedir.js";
 import {
   type CondCtx, type PresentFact, type NoneDetector,
   presentFact, leadingPresent, leadingIsArray, flattenOr, noneDetector,
@@ -49,18 +51,65 @@ import {
 // ── Walkers ──────────────────────────────────────────────────
 
 function walkExpr(e: TExpr, ctx: CondCtx): TExpr {
+  // Materialize a condition's scope before walking its boolean children;
+  // otherwise lowering the premise first hides the fact from its consumer.
+  const guarded = ruleImplOptional(e, ctx) ?? ruleConditionalAndOptional(e, ctx) ?? ruleConditionalOptionalSimple(e, ctx);
+  if (guarded) return recurseExpr(guarded, ctx);
+  // Associate boolean guard chains to the right so each check encloses the
+  // expressions whose types it refines, including a chain followed by a read.
+  if (e.kind === "binop" && e.ty.kind === "bool" && (e.op === "&&" || e.op === "||") &&
+      e.left.kind === "binop" && e.left.op === e.op && hasPresenceGuard(e.left, e.op)) {
+    return walkExpr({ ...e, left: e.left.left, right: { ...e, left: e.left.right } }, ctx);
+  }
   const r = recurseExpr(e, ctx);
-  return ruleNullish(r, ctx) ?? ruleNullishIndex(r) ?? ruleOptChainIndex(r) ?? ruleOptChain(r, ctx) ?? ruleImplOptional(r, ctx) ?? ruleImplArrayIsArray(r, ctx) ?? ruleConditionalArrayIsArray(r, ctx) ?? ruleConditionalAndArrayIsArray(r, ctx) ?? ruleConditionalAndOptional(r, ctx) ?? ruleConditionalOptionalSimple(r, ctx) ?? ruleConditionalInMap(r, ctx) ?? ruleConditionalOptionalTruthy(r, ctx) ?? r;
+  return ruleNullishIndex(r, ctx) ?? ruleNullish(r, ctx) ?? ruleOptChainIndex(r, ctx) ?? ruleOptChain(r, ctx) ?? ruleBooleanGuard(r, ctx) ?? ruleImplOptional(r, ctx) ?? ruleImplArrayIsArray(r, ctx) ?? ruleConditionalArrayIsArray(r, ctx) ?? ruleConditionalAndArrayIsArray(r, ctx) ?? ruleConditionalAndOptional(r, ctx) ?? ruleConditionalOptionalSimple(r, ctx) ?? ruleConditionalInMap(r, ctx) ?? ruleConditionalOptionalTruthy(r, ctx) ?? r;
 }
 
-function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
-  const re = (x: TExpr) => walkExpr(x, ctx);
+/** Ordinary boolean grouping is part of the generated proof baseline. Only
+ * reassociate a prefix when it introduces an optional refinement. */
+function hasPresenceGuard(e: TExpr, op: string): boolean {
+  return e.kind === "binop" && e.op === op
+    ? hasPresenceGuard(e.left, op) || hasPresenceGuard(e.right, op)
+    : presentFact(e) !== null;
+}
+
+function ruleBooleanGuard(e: TExpr, ctx: CondCtx): TExpr | null {
+  if (e.kind !== "binop" || e.ty.kind !== "bool" || (e.op !== "&&" && e.op !== "||")) return null;
+  const fact = presentFact(e.left);
+  if (!fact) return null;
+  let right = e.right;
+  // Equality already handles a single-sentinel option directly. Retain that
+  // representation when the guard merely makes the comparison redundant.
+  if (fact.scrutinee.ty.kind === "optional" && fact.scrutinee.ty.nullish !== "both" &&
+      right.kind === "binop" && (right.op === "===" || right.op === "!==")) {
+    const restore = (operand: TExpr): TExpr => exprEqual(operand, fact.scrutinee)
+      ? { ...operand, ty: fact.scrutinee.ty } : operand;
+    right = { ...right, left: restore(right.left), right: restore(right.right) };
+  }
+  // A guard needs a binder only where resolution actually refined a read.
+  // Independent checks such as !a.handle && !b.handle retain their grouping.
+  let refined = false;
+  const visit = (node: TExpr): TExpr => {
+    if (node.kind === "lambda" || exprEqual(node, fact.scrutinee) && !tyEqual(node.ty, fact.scrutinee.ty)) {
+      refined = true;
+      return node;
+    }
+    return refined ? node : recurseExpr(node, ctx, visit);
+  };
+  visit(right);
+  if (!refined) return right === e.right ? null : { ...e, right };
+  const short: TExpr = { kind: "bool", value: e.op === "||", ty: { kind: "bool" } };
+  const positiveExecutes = (e.op === "&&") !== fact.negated;
+  return presentMatchExpr(fact, positiveExecutes ? right : short, positiveExecutes ? short : right, e.ty, ctx);
+}
+
+function recurseExpr(e: TExpr, ctx: CondCtx, re = (x: TExpr): TExpr => walkExpr(x, ctx)): TExpr {
   switch (e.kind) {
     case "var": case "num": case "bigint": case "str": case "bool":
     case "havoc":
       return e;
     case "binop": return { ...e, left: re(e.left), right: re(e.right) };
-    case "unop": return { ...e, expr: re(e.expr) };
+    case "unop": case "coerce": return { ...e, expr: re(e.expr) };
     case "call": return { ...e, fn: re(e.fn), args: e.args.map(re) };
     case "index": return { ...e, obj: re(e.obj), idx: re(e.idx) };
     case "field": return { ...e, obj: re(e.obj) };
@@ -76,7 +125,7 @@ function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
     case "nullish": return { ...e, left: re(e.left), right: re(e.right) };
     case "forall": return { ...e, body: re(e.body) };
     case "exists": return { ...e, body: re(e.body) };
-    case "someMatch": return { ...e, someBody: re(e.someBody), noneBody: re(e.noneBody) };
+    case "someMatch": return { ...e, scrutinee: re(e.scrutinee), someBody: re(e.someBody), noneBody: re(e.noneBody) };
     case "tagMatch": return { ...e, scrutinee: re(e.scrutinee),
       cases: e.cases.map(c => ({ ...c, body: re(c.body) })),
       fallthrough: e.fallthrough ? re(e.fallthrough) : null };
@@ -84,6 +133,8 @@ function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
 }
 
 function walkStmt(s: TStmt, ctx: CondCtx): TStmt {
+  const guarded = ruleIfAndOptional(s, ctx) ?? ruleIfOptionalSimple(s, ctx) ?? ruleExprStmtAndOptional(s, ctx);
+  if (guarded) return recurseStmt(guarded, ctx);
   // Recurse into children first, then try rules at this node.
   const r = recurseStmt(s, ctx);
   // Optional narrowing fires before Array.isArray narrowing: in a chain like
@@ -112,6 +163,15 @@ function walkStmts(stmts: TStmt[], ctx: CondCtx): TStmt[] {
     if (consumed) {
       result.push(walkStmt(consumed, ctx));
       return result;
+    }
+    // Preserve the condition's scope before its boolean children are lowered.
+    // A method in the guard needs the statement form of the narrowed initializer.
+    const methodGuard = s.kind === "let" && s.init.kind === "conditional" &&
+      containsMethodCall(s.init.cond) && !containsMethodCall(s.init.else)
+      ? ruleLetCondAndOptional(s, ctx) : null;
+    if (methodGuard) {
+      for (const x of methodGuard) result.push(walkStmt(x, ctx));
+      continue;
     }
     // walkStmt first — narrow's expression rules may rewrite the let init from
     // `conditional` to `someMatch`, in which case the let-cond desugar shouldn't fire.
@@ -214,7 +274,13 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | 
     const d = noneDetector(leaf, ctx);
     if (!d) { residualLeaves.push(leaf); continue; }
     const key = d.binder;  // memoized by full path, not by the ambiguous hint
-    if (seen.has(key)) return null;  // two detectors on one optional: rare; leave to other rules
+    if (seen.has(key)) {
+      const prior = detectors.find(d => d.binder === key)!;
+      prior.excluded = unionNullish(prior.excluded ?? "both", d.excluded ?? "both");
+      prior.innerTy = excludeNullish(prior.scrutinee.ty, prior.excluded);
+      if (d.residual) residualLeaves.push(d.residual);
+      continue;
+    }
     seen.add(key);
     detectors.push(d);
     if (d.residual) residualLeaves.push(d.residual);
@@ -226,7 +292,7 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | 
     : [{ kind: "if", cond: residualLeaves.reduce((a, b): TExpr => ({ kind: "binop", op: "||", left: a, right: b, ty: { kind: "bool" } })), then: s.then, else: [] }, ...rest];
   for (let i = detectors.length - 1; i >= 0; i--) {
     const d = detectors[i]!;
-    inner = [{ kind: "someMatch", scrutinee: d.scrutinee, binderTy: d.innerTy, binder: d.binder, someBody: inner, noneBody: s.then }];
+    inner = [{ kind: "someMatch", scrutinee: d.scrutinee, binderTy: d.innerTy, binder: d.binder, excluded: d.excluded, someBody: inner, noneBody: s.then }];
   }
   return inner[0];
 }
@@ -248,6 +314,7 @@ function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[], ctx: CondCtx): 
   const oc = c.left.kind === "optChain" ? c.left : c.right.kind === "optChain" ? c.right : null;
   if (!oc || oc.kind !== "optChain" || oc.obj.ty.kind !== "optional") return null;
   const lit = c.left === oc ? c.right : c.left;
+  if (lit.ty.kind === "unknown" || (nullishOf(lit.ty) && includesNullish(nullishOf(lit.ty)!, "undefined"))) return null;
   const innerTy = oc.obj.ty.inner;
   const binder = freshPathBinder(oc.obj, ctx);
   if (binder === null) return null;
@@ -300,7 +367,7 @@ function ruleImplOptional(e: TExpr, ctx: CondCtx): TExpr | null {
   check = bindPresentFact(check, ctx);
   return {
     kind: "someMatch",
-    scrutinee: check.scrutinee, binderTy: check.innerTy,
+    scrutinee: check.scrutinee, binderTy: check.innerTy, excluded: check.excluded,
     binder: check.binder,
     someBody: walkExpr(innerBody, ctx),
     noneBody: { kind: "bool", value: true, ty: { kind: "bool" } },
@@ -314,8 +381,8 @@ function ruleImplOptional(e: TExpr, ctx: CondCtx): TExpr | null {
  *  semantics (`??` tests null/undefined, not falsiness) — no falsy gate. */
 function ruleNullish(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "nullish") return null;
-  if (e.left.ty.kind !== "optional") return null;
-  const innerTy = e.left.ty.inner;
+  if (!nullishOf(e.left.ty)) return null;
+  const innerTy = excludeNullish(e.left.ty, "both");
   const binder = freshOcBinder(ctx);
   return {
     kind: "someMatch",
@@ -328,16 +395,15 @@ function ruleNullish(e: TExpr, ctx: CondCtx): TExpr | null {
 
 /** Driver (expression): `arr[i] ?? right` — in-bounds fact in nullish
  *  position. Under noUncheckedIndexedAccess `arr[i]` is `T | undefined`,
- *  undefined exactly when out of bounds, so
- *  → `(0 <= i && i < arr.length) ? arr[i] : right`. The guarded `then`
- *  keeps the seq index in bounds for the backend. (Map index is already
- *  optional-typed and handled by ruleNullish above.) */
-function ruleNullishIndex(e: TExpr): TExpr | null {
+ *  → `(0 <= i && i < arr.length) ? (arr[i] ?? right) : right`. The guarded
+ *  `then` also checks any nullish alternatives admitted by the element type.
+ *  Map index is already optional-typed and handled by ruleNullish. */
+function ruleNullishIndex(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "nullish") return null;
   if (e.left.kind !== "index") return null;
   if (e.left.obj.ty.kind !== "array") return null;
   const cond = arrayBoundsCond(e.left.obj, e.left.idx);
-  return { kind: "conditional", cond, then: e.left, else: e.right, ty: e.ty };
+  return { kind: "conditional", cond, then: ruleNullish(e, ctx) ?? e.left, else: e.right, ty: e.ty };
 }
 
 /** Driver (expression): `arr[i]?.<chain>` — in-bounds fact in optChain
@@ -346,13 +412,13 @@ function ruleNullishIndex(e: TExpr): TExpr | null {
  *  conditional's optional type makes transform wrap the in-bounds chain
  *  result in Some and the OOB branch in None. (ruleOptChain itself bails
  *  here: an array index is typed as the non-optional element type.) */
-function ruleOptChainIndex(e: TExpr): TExpr | null {
+function ruleOptChainIndex(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "optChain") return null;
   if (e.obj.kind !== "index") return null;
   if (e.obj.obj.ty.kind !== "array") return null;
   const cond = arrayBoundsCond(e.obj.obj, e.obj.idx);
-  const body = applyChain(e.obj, e.chain); // arr[i] — in bounds under `cond`
-  const undef: TExpr = { kind: "var", name: "undefined", ty: { kind: "void" } };
+  const body = ruleOptChain(e, ctx) ?? applyChain(e.obj, e.chain); // arr[i] — in bounds under `cond`
+  const undef: TExpr = { kind: "var", name: "undefined", ty: UNDEFINED };
   return { kind: "conditional", cond, then: body, else: undef, ty: e.ty };
 }
 
@@ -369,9 +435,9 @@ function ruleOptionalIndexBinding(s: TStmt): TStmt | null {
   const init = s.init;
   if (init.kind !== "index") return null;
   if (init.obj.ty.kind !== "array") return null;
-  if (init.ty.kind === "optional") return null;  // array-of-optionals: not a flag artifact
+  if (tyEqual(init.ty, s.ty)) return null;
   const cond = arrayBoundsCond(init.obj, init.idx);
-  const undef: TExpr = { kind: "var", name: "undefined", ty: { kind: "void" } };
+  const undef: TExpr = { kind: "var", name: "undefined", ty: UNDEFINED };
   const guarded: TExpr = { kind: "conditional", cond, then: init, else: undef, ty: s.ty };
   return { ...s, init: guarded };
 }
@@ -386,7 +452,7 @@ function ruleOptChain(e: TExpr, ctx: CondCtx): TExpr | null {
   const innerTy = e.obj.ty.inner;
   const binder = freshOcBinder(ctx);
   const body = applyChain({ kind: "var", name: binder, ty: innerTy }, e.chain);
-  const noneBody: TExpr = { kind: "var", name: "undefined", ty: { kind: "void" } };
+  const noneBody: TExpr = { kind: "var", name: "undefined", ty: UNDEFINED };
   return {
     kind: "someMatch",
     scrutinee: e.obj, binder, binderTy: innerTy,
@@ -508,7 +574,7 @@ function containsMethodCall(e: TExpr): boolean {
     case "havoc":
       return false;
     case "binop": return containsMethodCall(e.left) || containsMethodCall(e.right);
-    case "unop": return containsMethodCall(e.expr);
+    case "unop": case "coerce": return containsMethodCall(e.expr);
     case "call": return containsMethodCall(e.fn) || e.args.some(containsMethodCall);
     case "index": return containsMethodCall(e.obj) || containsMethodCall(e.idx);
     case "field": return containsMethodCall(e.obj);
@@ -534,16 +600,13 @@ function containsMethodCall(e: TExpr): boolean {
  *  guarded-ternary position.
  *  → `someMatch x { Some(_x_val) => if rest then a else b, None => b }`.
  *  Walks the inner conditional back through narrow so chained checks become
- *  nested someMatches. Does NOT fire if the guard `rest` contains method
- *  calls — transform lifts those out of the match arm, breaking the binder
- *  scope. The original transform's let-desugar handles those by lifting to
- *  a mutable var first. */
+ *  nested someMatches. Transform keeps any method calls local to their
+ *  selected match arm. Let initializers use the statement form above. */
 function ruleConditionalAndOptional(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "conditional") return null;
   const extracted = leadingPresent(e.cond);
   if (!extracted) return null;
   const { check, restCond } = extracted;
-  if (containsMethodCall(restCond)) return null;
   const innerCond: TExpr = {
     kind: "conditional",
     cond: restCond, then: e.then, else: e.else, ty: e.ty,

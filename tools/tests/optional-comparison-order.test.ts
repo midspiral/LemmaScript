@@ -21,10 +21,10 @@ function fixture() {
   return narrowModule(resolveModule(extractModule(source)));
 }
 
-// The matched value is bound on the left, so `x op opt` must become `v op' x`
-// with the operator mirrored; `opt op x` keeps it.
+// The null guard now narrows its right operand before comparison lowering.
+// Preserve the source order when comparing against the extracted payload.
 const expected: [string, string][] = [
-  ["belowOrUnset", ">"], ["atMostOrUnset", ">="], ["aboveOrUnset", "<"], ["atLeastOrUnset", "<="], ["optionalOnLeft", ">"],
+  ["belowOrUnset", "<"], ["atMostOrUnset", "<="], ["aboveOrUnset", ">"], ["atLeastOrUnset", ">="], ["optionalOnLeft", ">"],
 ];
 
 const LEAN_OP: Record<string, string> = { ">=": "≥", "<=": "≤" };
@@ -45,20 +45,20 @@ test("comparisons with an optional on the right keep their runtime meaning", () 
   assert.equal(optionalOnLeft(1, 5), true);
 });
 
-test("Dafny mirrors the operator when the optional is on the right", () => {
+test("Dafny preserves operand order after the null guard", () => {
   const { typesFile, defFile } = transformModuleDafny(fixture());
   const text = emitDafnyFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
   for (const [name, op] of expected) {
-    assert.ok(bodyOf(text, `function ${name}(`).includes(`(i_value ${op} x)`), name);
+    assert.ok(bodyOf(text, `function ${name}(`).includes(name === "optionalOnLeft" ? `(i_opt_val ${op} x)` : `(x ${op} i_opt_val)`), name);
   }
 });
 
-test("Lean mirrors the operator when the optional is on the right", () => {
+test("Lean preserves operand order after the null guard", () => {
   resetLeanModule();
   const { typesFile } = transformModuleLean(fixture());
   assert.ok(typesFile);
   const text = emitLeanFile(typesFile);
   for (const [name, op] of expected) {
-    assert.ok(bodyOf(text, `def ${name} `).includes(`_value ${LEAN_OP[op] ?? op} x`), name);
+    assert.ok(bodyOf(text, `def ${name} `).includes(name === "optionalOnLeft" ? `_opt_val ${LEAN_OP[op] ?? op} x` : `x ${LEAN_OP[op] ?? op} _opt_val`), name);
   }
 });

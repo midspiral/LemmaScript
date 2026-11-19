@@ -84,6 +84,8 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | `SetToSeq` | `for (x of set)`, map/record iteration | Convert set to sequence for iteration |
 | `SetFromSeq` | `new Set(arr)` | Build a deduplicated set from a sequence (`set x \| x in s`) |
 
+`T | null` and `T | undefined` each use one `Option<T>` with distinct frontend tags. `T | null | undefined` uses `Option<Option<T>>`: `None` is undefined, `Some(None)` is null, and `Some(Some(v))` is a value. Narrowing and coercions translate between these representations; a missing map lookup adds only undefined.
+
 **Numeric:**
 
 | Helper | When | Purpose |

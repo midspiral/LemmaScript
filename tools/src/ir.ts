@@ -57,6 +57,19 @@ export const pWild = (): MatchPattern => ({ kind: "wild" });
 export const pCtor = (c: string, ...binders: string[]): MatchPattern => ({ kind: "ctor", ctor: c, binders });
 export const pLiteral = (value: string): MatchPattern => ({ kind: "literal", value });
 
+/** An absent-only initializer cannot infer its option payload. A concrete
+ * Some arm or a typed call already supplies that information. */
+export function needsOptionalTypeHint(e: Expr, mutable = false): boolean {
+  // Existing mutable None bindings infer their payload from later assignments.
+  if (e.kind === "var" && e.name === "undefined") return !mutable;
+  if (e.kind === "constructor" && e.type === "Option")
+    return e.name === "none" || e.args.every(x => needsOptionalTypeHint(x));
+  if (e.kind === "arrayLiteral") return e.elems.length > 0 && e.elems.every(x => needsOptionalTypeHint(x));
+  if (e.kind === "if") return needsOptionalTypeHint(e.then) && needsOptionalTypeHint(e.else);
+  if (e.kind === "match") return e.arms.every(a => needsOptionalTypeHint(a.body));
+  return false;
+}
+
 // Named payload records for the shapes repeated across IR nodes. Purely
 // structural — identical to the object-literal types they replace, so
 // construction sites are unaffected.
