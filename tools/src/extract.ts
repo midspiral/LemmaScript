@@ -64,6 +64,28 @@ let _validateDependency: (source: SourceFile) => void = () => {};
  *  when the initializer isn't a bare variable (single-eval temp). */
 let _destrCounter = 0;
 
+/** Extract the default for the shared Option lowering. When the source can
+ *  be undefined, None selects this expression, including for mixed null/undefined
+ *  types: the verification model deliberately conflates those values. */
+function destructuringDefault(el: Node, sourceType: Type | undefined): RawExpr | null {
+  const init = Node.isBindingElement(el) ? el.getInitializer() : undefined;
+  if (!init) return null;
+  const dflt = extractExpr(init);
+  const parts = sourceType?.isUnion() ? sourceType.getUnionTypes() : sourceType ? [sourceType] : [];
+  // A literal null/undefined default preserves None. Other defaults can change
+  // the value or execute effects on a null input that TypeScript would preserve.
+  if (hasUndefined(sourceType) && parts.some(t => t.isNull()) &&
+      !(dflt.kind === "var" && dflt.name === "undefined")) {
+    const fileName = path.relative(process.cwd(), el.getSourceFile().getFilePath());
+    console.error(`warning: ${fileName}:${el.getStartLineNumber()}: destructuring default treats null as undefined in the verification model, but TypeScript preserves null; proofs may not hold for null inputs`);
+  }
+  return dflt;
+}
+
+function hasUndefined(t: Type | undefined): boolean {
+  return !!t && (t.isUndefined() || (t.isUnion() && t.getUnionTypes().some(u => u.isUndefined())));
+}
+
 /** Register the call's callee as a cross-file extern if applicable, then
  *  walk the source declaration's body for nested cross-file calls (so the
  *  lifted `requires`/`ensures` see all the symbols they reference). Idempotent
@@ -1643,11 +1665,21 @@ function extractStmts(stmts: Node[]): RawStmt[] {
               const name = inner.getText();
               const isRest = !!el.getDotDotDotToken();
               const elTs = _eraseGenerics(typeToString(el.getType()));
-              const init: RawExpr = isRest
+              let init: RawExpr = isRest
                 ? { kind: "call",
                     fn: { kind: "field", obj: initVar, field: "slice" },
                     args: [{ kind: "num", value: i }] }
                 : { kind: "index", obj: initVar, idx: { kind: "num", value: i } };
+              const arrTy = initializer.getType();
+              const srcTy = arrTy.getTupleElements()[i] ?? arrTy.getArrayElementType() ?? arrTy.getNumberIndexType();
+              const dflt = isRest ? null : destructuringDefault(el, srcTy);
+              if (dflt) {
+                // `[a = d] = xs`: d when xs[i] is out of bounds or undefined.
+                const present: RawExpr = hasUndefined(srcTy) ? { kind: "nullish", left: init, right: dflt } : init;
+                init = { kind: "conditional",
+                  cond: { kind: "binop", op: "<", left: { kind: "num", value: i }, right: { kind: "field", obj: initVar, field: "length" } },
+                  then: present, else: dflt };
+              }
               result.push({ kind: "let", name, mutable: s.getDeclarationKind() === "let", tsType: elTs, init, line });
             }
             continue;
@@ -1683,12 +1715,18 @@ function extractStmts(stmts: Node[]): RawStmt[] {
                 const propNode = el.getPropertyNameNode();
                 const fieldName = propNode ? propNode.getText() : localName;
                 const elTs = _eraseGenerics(typeToString(el.getType()));
+                const fieldInit: RawExpr = { kind: "field", obj: initVar, field: fieldName };
+                const srcTy = initializer.getType().getProperty(fieldName)?.getTypeAtLocation(d);
+                // Do not extract an unreachable initializer: even an expression
+                // outside the fragment is harmless when the field is defined.
+                const dflt = hasUndefined(srcTy) ? destructuringDefault(el, srcTy) : null;
                 result.push({
                   kind: "let",
                   name: localName,
                   mutable: s.getDeclarationKind() === "let",
                   tsType: elTs,
-                  init: { kind: "field", obj: initVar, field: fieldName },
+                  // `{ a = d } = o`: d when o.a is undefined (a field that can't be undefined ignores it).
+                  init: dflt ? { kind: "nullish", left: fieldInit, right: dflt } : fieldInit,
                   line,
                 });
               }
@@ -2211,9 +2249,14 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
           : undefined;
         return nameNode.getElements().map(el => {
           const name = el.getName();
-          const propType = type.getProperty(name)?.getTypeAtLocation(p);
+          const fieldName = el.getPropertyNameNode()?.getText() ?? name;
+          const propType = type.getProperty(fieldName)?.getTypeAtLocation(p);
+          // Prover parameters represent the initialized bindings. A default
+          // can remove undefined from the field's type; tsParams retains the
+          // initializer for consumers that reconstruct the TypeScript call.
+          if (el.getInitializer()) return { name, tsType: _eraseGenerics(typeToString(el.getType())) };
           if (propType) return { name, tsType: typeToString(propType) };
-          const declTy = declFields?.find(f => f.name === name)?.tsType;
+          const declTy = declFields?.find(f => f.name === fieldName)?.tsType;
           return { name, tsType: declTy ?? "unknown" };
         });
       }

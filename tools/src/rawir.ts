@@ -189,7 +189,8 @@ export interface RawParam {
 }
 
 /** One original TS parameter, before `params` flattens it for the provers
- *  (destructured object → N scalars, rest → one). `params == tsParams.flatMap(p => p.binds)`. */
+ *  (destructured object → N initialized scalar bindings, rest → one).
+ *  `params == tsParams.flatMap(p => p.binds)`. */
 export interface RawTsParam {
   kind: "simple" | "object" | "rest";
   binds: string[];   // spec-param names (entries in `params`) this TS parameter contributes

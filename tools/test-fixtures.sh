@@ -56,6 +56,8 @@ cp tools/fixtures/optional-binder-collisions.ts "$fixture_dir/optional-binder-co
 cp tools/fixtures/unpaired-surrogate.ts "$fixture_dir/unpaired.ts"
 cp tools/fixtures/optional-guard-order.ts "$fixture_dir/optional-guard-order.ts"
 cp tools/fixtures/optional-comparison-order.ts "$fixture_dir/optional-comparison-order.ts"
+cp tools/fixtures/destructuring-default.ts "$fixture_dir/destructuring-default.ts"
+cp examples/destructuringDefaults.ts "$fixture_dir/destructuring-defaults-nullable.ts"
 cp tools/fixtures/spread-null-override.ts "$fixture_dir/spread-null-override.ts"
 cp tools/fixtures/optional-enum-fields.ts "$fixture_dir/optional-enum-fields.ts"
 cp tools/fixtures/class-dependencies.ts "$fixture_dir/class-dependencies.ts"
@@ -77,6 +79,13 @@ expect_failure \
   npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/impure.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-guard-order.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-comparison-order.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/destructuring-default.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/destructuring-defaults-nullable.ts"
+sed 's/const { value: result = 5 } = options;/const result = options.value ?? 5;/' \
+  examples/destructuringDefaults.ts > "$fixture_dir/destructuring-defaults-coalesced.ts"
+expect_failure \
+  "Dafny accepted replacing null with a destructuring default" \
+  npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/destructuring-defaults-coalesced.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/spread-null-override.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-enum-fields.ts"
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/class-dependencies.ts"
