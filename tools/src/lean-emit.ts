@@ -35,6 +35,7 @@ function tyToLean(ty: Ty): string {
     case "bool": return "Bool";
     case "string": return "String";
     case "void": return "Unit";
+    case "nullish": return ty.nullish === "both" ? "Bool" : "Unit";
     case "array": {
       const elem = tyToLean(ty.elem);
       return elem.includes(" ") ? `Array (${elem})` : `Array ${elem}`;
@@ -58,7 +59,8 @@ function tyToLean(ty: Ty): string {
       return elem.includes(" ") ? `Std.HashSet (${elem})` : `Std.HashSet ${elem}`;
     }
     case "optional": {
-      const inner = tyToLean(ty.inner);
+      const payload = tyToLean(ty.inner);
+      const inner = ty.nullish === "both" ? `Option (${payload})` : payload;
       return inner.includes(" ") ? `Option (${inner})` : `Option ${inner}`;
     }
     case "user": return ty.name;
@@ -323,7 +325,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       const head = e.type ? `${e.type}.${leanCtorName(e.name)}` : `.${leanCtorName(e.name)}`;
       if (!e.args || e.args.length === 0) return head;
       const args = e.args.map(a =>
-        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall" || a.kind === "if") ? `(${emitExpr(a)})` : emitExpr(a)
+        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall" || a.kind === "if" || a.kind === "let" || a.kind === "constructor" && a.args.length > 0) ? `(${emitExpr(a)})` : emitExpr(a)
       );
       return `${head} ${args.join(" ")}`;
     }
@@ -396,7 +398,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // `x = Type.Ctor` is ill-typed. The Bool result coerces to Prop in spec
       // positions, mirroring how the backend already treats decidable atoms.
       // Nullary constructors (enums) keep the cheap `DecidableEq` comparison.
-      if ((e.op === "=" || e.op === "≠") && e.right.kind === "constructor") {
+      if ((e.op === "=" || e.op === "≠") && e.right.kind === "constructor" && e.right.args.length === 0) {
         const rhs = e.right; // capture the narrowed node so it survives into the closure below
         const ctor = rhs.type ? _unionCtors.get(rhs.type)?.find(c => c.name === rhs.name) : undefined;
         if (ctor && ctor.fields.length > 0) {

@@ -35,9 +35,13 @@ function emit(source: string, dependencies: Record<string, string> = {}) {
 
 test("both backends preserve the enum in every optional record field", () => {
   const { dafny, lean } = emit(fixture);
-  for (const name of ["previous", "scheduled", "hint", "fallback", "retryHint"]) {
+  for (const name of ["previous", "scheduled", "hint"]) {
     assert.ok(dafny.includes(`${name}: Option<Phase>`), name);
     assert.ok(lean.includes(`${name} : Option Phase`), name);
+  }
+  for (const name of ["fallback", "retryHint"]) {
+    assert.ok(dafny.includes(`${name}: Option<Option<Phase>>`), name);
+    assert.ok(lean.includes(`${name} : Option (Option (Phase))`), name);
   }
   assert.match(dafny, /current: Phase/);
   assert.match(dafny, /timeline: seq<Phase>/);
@@ -113,7 +117,7 @@ test("uninstantiated generic fields keep their type parameter", () => {
   const typed = resolveModule(extract("interface Cell<T> { value: T | null; hint?: T }"));
   const cell = typed.typeDecls.find(d => d.name === "Cell")!;
   for (const field of cell.fields!) {
-    assert.deepEqual(field.type, { kind: "optional", inner: { kind: "user", name: "T" } });
+    assert.deepEqual(field.type, { kind: "optional", nullish: field.name === "value" ? "null" : "undefined", inner: { kind: "user", name: "T" } });
   }
 });
 

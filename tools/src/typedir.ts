@@ -21,14 +21,18 @@ export type Ty =
   | { kind: "real" }
   | { kind: "string"; values?: string[] }   // values: members of an inline string-union (`"a" | "b"`), kept for record-index-by-enum
   | { kind: "void" }
+  | { kind: "nullish"; nullish: Nullish }
   | { kind: "array"; elem: Ty }
   | { kind: "tuple"; elems: Ty[] }           // heterogeneous fixed-arity tuple (`[A, B]`); homogeneous tuples lower to `array`
   | { kind: "map"; key: Ty; value: Ty }
   | { kind: "set"; elem: Ty }
-  | { kind: "optional"; inner: Ty }
+  | { kind: "optional"; inner: Ty; nullish: Nullish }
   | { kind: "user"; name: string }
   | { kind: "fn"; params: Ty[]; result: Ty }
   | { kind: "unknown" }
+
+/** The nullish alternatives admitted by a type. */
+export type Nullish = "null" | "undefined" | "both";
 
 /** True for an int/nat that came from a TS `bigint` (integer division semantics). */
 export function isBigInt(ty: Ty): boolean {
@@ -50,7 +54,8 @@ export function tyEqual(a: Ty, b: Ty): boolean {
       const bm = b as typeof a;
       return tyEqual(a.key, bm.key) && tyEqual(a.value, bm.value);
     }
-    case "optional": return tyEqual(a.inner, (b as typeof a).inner);
+    case "optional": return a.nullish === (b as typeof a).nullish && tyEqual(a.inner, (b as typeof a).inner);
+    case "nullish": return a.nullish === (b as typeof a).nullish;
     case "user":     return a.name === (b as typeof a).name;
     case "fn": {
       const bf = b as typeof a;
@@ -76,8 +81,8 @@ export type CallKind = "pure" | "method" | "spec-pure" | "unknown"
  *  classification off the stamp instead of re-recognizing by spelling. */
 export type TChainStep =
   | { kind: "field"; name: string; ty: Ty }
-  | { kind: "call"; args: TExpr[]; ty: Ty; callKind: CallKind; builtinId?: BuiltinId }
-  | { kind: "index"; idx: TExpr; ty: Ty };
+  | { kind: "call"; args: TExpr[]; ty: Ty; callKind: CallKind; builtinId?: BuiltinId; optionalReturn?: Ty }
+  | { kind: "index"; idx: TExpr; ty: Ty; optionalReturn?: Ty };
 
 // ── Expressions ──────────────────────────────────────────────
 
@@ -89,12 +94,15 @@ export type TExpr =
   | { kind: "bool"; value: boolean; ty: Ty }
   | { kind: "binop"; op: string; left: TExpr; right: TExpr; ty: Ty }
   | { kind: "unop"; op: string; expr: TExpr; ty: Ty }
+  | { kind: "coerce"; expr: TExpr; ty: Ty }
   | { kind: "call"; fn: TExpr; args: TExpr[]; ty: Ty; callKind: CallKind;
       builtinId?: BuiltinId;
       /** Resolved parameter types for a named callee. Kept so nominal
        *  backends can realize TypeScript structural argument conversions. */
-      paramTys?: Ty[] }
-  | { kind: "index"; obj: TExpr; idx: TExpr; ty: Ty }
+      paramTys?: Ty[];
+      /** Payload of the binary option returned by a collection helper, before flattening. */
+      optionalReturn?: Ty }
+  | { kind: "index"; obj: TExpr; idx: TExpr; ty: Ty; optionalReturn?: Ty }
   | { kind: "field"; obj: TExpr; field: string; ty: Ty;
       isDiscriminant?: boolean;             // true if this is a discriminant field access
       ofVariant?: string }                  // which union variant the field is read from, when narrowing determined it
@@ -104,7 +112,7 @@ export type TExpr =
   | { kind: "conditional"; cond: TExpr; then: TExpr; else: TExpr; ty: Ty }
   | { kind: "optChain"; obj: TExpr; chain: TChainStep[]; ty: Ty }
   | { kind: "nullish"; left: TExpr; right: TExpr; ty: Ty }
-  | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
+  | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty; excluded?: Nullish;
       someBody: TExpr; noneBody: TExpr; ty: Ty }
   | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
       cases: { variant: string; body: TExpr }[];
@@ -142,7 +150,7 @@ export type TStmt =
   | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
   | { kind: "ghostAssign"; target: string; value: TExpr }
   | { kind: "assert"; expr: TExpr; assumed?: boolean }
-  | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
+  | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty; excluded?: Nullish;
       someBody: TStmt[]; noneBody: TStmt[] }
   | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
       cases: { variant: string; body: TStmt[] }[];

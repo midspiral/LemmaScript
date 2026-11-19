@@ -3,7 +3,7 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { decimalNumberLiteral, exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
+import { anyExpr, decimalNumberLiteral, exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshNameWhere, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
@@ -46,11 +46,12 @@ function tyToDafny(ty: Ty): string {
     case "bool": return "bool";
     case "string": return "string";
     case "void": return "()";
+    case "nullish": return ty.nullish === "both" ? "bool" : "()";
     case "array": return `seq<${tyToDafny(ty.elem)}>`;
     case "tuple": return `(${ty.elems.map(tyToDafny).join(", ")})`;
     case "map": return `map<${tyToDafny(ty.key)}, ${tyToDafny(ty.value)}>`;
     case "set": return `set<${tyToDafny(ty.elem)}>`;
-    case "optional": { needPreamble("OptionType"); return `Option<${tyToDafny(ty.inner)}>`; }
+    case "optional": { needPreamble("OptionType"); return ty.nullish === "both" ? `Option<Option<${tyToDafny(ty.inner)}>>` : `Option<${tyToDafny(ty.inner)}>`; }
     case "user": return escapeName(ty.name);
     case "fn": return `(${ty.params.map(tyToDafny).join(", ")}) -> ${tyToDafny(ty.result)}`;
     // Out-of-subset (`any`/`unknown`); opaque so real ops on it fail loudly
@@ -608,7 +609,7 @@ function emitExpr(e: Expr): string {
     case "binop": {
       // Discriminant check: x == .Ctor → x.Ctor?
       const op = mapOp(e.op);
-      if ((op === "==" || op === "!=") && e.right.kind === "constructor") {
+      if ((op === "==" || op === "!=") && e.right.kind === "constructor" && e.right.args.length === 0 && e.right.type !== "Option") {
         const ctorName = dafnyCtorName(e.right.name.replace(/^\./, ""));
         const pred = `${emitExpr(e.left)}.${ctorName}?`;
         return op === "!=" ? `(!${pred})` : pred;
@@ -843,7 +844,8 @@ function emitStmt(s: Stmt, indent: number): string {
         return `${pad}var ${escapeName(s.name)}: ${tyToDafny(resolveTy(s.type))} := map[${entries.join(", ")}];`;
       }
       if (s.value.kind === "havoc" || s.value.kind === "emptyMap" || s.value.kind === "emptySet" ||
-          (s.value.kind === "arrayLiteral" && s.value.elems.length === 0))
+          (s.value.kind === "arrayLiteral" && s.value.elems.length === 0) ||
+          (s.type.kind !== "unknown" && anyExpr(s.value, e => e.kind === "constructor" && e.type === "Option" && e.name === "none")))
         return `${pad}var ${escapeName(s.name)}: ${tyToDafny(s.type)} := ${emitExpr(s.value)};`;
       return `${pad}var ${escapeName(s.name)} := ${emitExpr(s.value)};`;
     case "assign":
@@ -1757,7 +1759,7 @@ function buildRecordCtorMap(decls: Decl[]) {
 /** Resolve a Ty to a Dafny-safe type, falling back to string for undeclared user types. */
 function resolveTy(ty: Ty): Ty {
   if (ty.kind === "user" && !_declaredTypes.has(ty.name)) return { kind: "string" };
-  if (ty.kind === "optional") return { kind: "optional", inner: resolveTy(ty.inner) };
+  if (ty.kind === "optional") return { ...ty, inner: resolveTy(ty.inner) };
   if (ty.kind === "array") return { kind: "array", elem: resolveTy(ty.elem) };
   if (ty.kind === "tuple") return { kind: "tuple", elems: ty.elems.map(resolveTy) };
   if (ty.kind === "map") return { kind: "map", key: resolveTy(ty.key), value: resolveTy(ty.value) };

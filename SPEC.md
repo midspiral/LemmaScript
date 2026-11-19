@@ -532,7 +532,7 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `expr \|\| default` (on array) | `expr` (arrays are always truthy) | `expr` (arrays are always truthy) |
 | `expr?.method(args)` | — | `if key in map { ... }` |
 | `expr as T` | stripped | stripped |
-| `null` | `none` | `None` (same as `undefined`) |
+| `null` / `undefined` | distinct cases, encoded according to the optional type (§6) | distinct cases, encoded according to the optional type (§6) |
 | `//@ skip` (before statement) | — | statement omitted from model |
 | `new Map(arr.map(fn))` | — | loop building `map[]` |
 | `[a, b, c]` | `#[a, b, c]` | `[a, b, c]` |
@@ -658,7 +658,7 @@ Lambda bodies can be expressions (`(x) => x + 1`) or statement blocks (`(x) => {
 
 Flat object destructuring in a lambda parameter is supported, including aliases (`({ id, hidden: isHidden }) => ...`). It remains one callback parameter and lowers to immutable field bindings inside the lambda. Array patterns, nested object patterns, defaults, and rest properties are rejected during extraction with an explicit unsupported-pattern error.
 
-**Callback arguments.** Inline array callbacks receive JavaScript's actual arguments: `(element, index, array)` for `map`, `filter`, `some`, `every`, and the `find` family; `(acc, element, index, array)` for `reduce` with an initial value; `(a, b)` for sort comparators. Unused trailing parameters cost nothing; only callbacks that read the index or array are lowered to iterate over positions (Dafny's `CallbackIndices`, [SPEC_DAFNY.md §4](SPEC_DAFNY.md#4-helper-preambles)). A rest parameter is symbolic: `rest.length` and `rest[k]` for constant `k` resolve against the argument list, including inside nested closures, but returning, passing, or mutating the rest array is rejected. A default runs only when JavaScript omits the argument. All parameters are in scope in default initializers, and a literal default closure may capture a later parameter. Rest/default parameters outside these callback positions, and defaults on optional-typed slots (which would need an `undefined` check), are rejected.
+**Callback arguments.** Inline array callbacks receive JavaScript's actual arguments: `(element, index, array)` for `map`, `filter`, `some`, `every`, and the `find` family; `(acc, element, index, array)` for `reduce` with an initial value; `(a, b)` for sort comparators. Unused trailing parameters cost nothing; only callbacks that read the index or array are lowered to iterate over positions (Dafny's `CallbackIndices`, [SPEC_DAFNY.md §4](SPEC_DAFNY.md#4-helper-preambles)). A rest parameter is symbolic: `rest.length` and `rest[k]` for constant `k` resolve against the argument list, including inside nested closures, but returning, passing, or mutating the rest array is rejected. A default runs when JavaScript omits the argument or supplies `undefined`; a supplied `null` is preserved. All parameters are in scope in default initializers, and a literal default closure may capture a later parameter. Optional callback slots use an `undefined` check before the initializer. Rest/default parameters outside these callback positions, and defaults whose argument type is unknown, are rejected.
 
 ```ts
 a.every((x, i) => x <= b[i]);                 // i is the position
@@ -732,9 +732,9 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 **`Map.get` returns `Option`** in code context (since the key may not exist). In spec context (annotations), `map.get(k)` emits direct access without an Option wrapper, matching how specs reason about map contents.
 
-**Optional narrowing.** All these patterns narrow the optional to its inner type in the appropriate scope:
+**Optional narrowing.** The optional type records whether it admits `null`, `undefined`, or both. A check removes only the tested alternative: for `x: T | null | undefined`, `x !== undefined` leaves `T | null`; checking `x !== null` as well exposes `T`. These patterns refine the appropriate scope:
 
-- Equality: `v !== undefined`, `v === undefined` (early return)
+- Equality: `v !== undefined`, `v !== null`, and the corresponding equality checks (including early returns)
 - Truthiness: `if (v)`, `if (!v)`, `opt ? a : b`
 - Composition: `v && rest` or `rest && v` (optional check on either side) — in an `if`/`?:` condition or as a bare statement (`v !== undefined && v.f()`, the `if`-less guard idiom)
 - Disjunctive early return: `a === undefined || b === undefined`, `!x || x.f !== v`, `x?.t !== 'm' || x.g`
@@ -742,7 +742,7 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 - Optional chaining: `obj?.field`, `obj?.foo()`, `obj?.[i]`, chained `obj?.a?.b?.c` and `obj?.a.b.c`
 - Nullish coalescing: `x ?? default`; array index `arr[i] ?? default` (undefined ⟺ out of bounds under `noUncheckedIndexedAccess`) → `(0 <= i && i < arr.length) ? arr[i] : default`
 
-The narrow pass (`narrow.ts`) detects these on the typed IR and rewrites them into a single `someMatch` IR node with a fresh binder. Transform lowers `someMatch` into Dafny `match` Some/None (or `if .Some? { ... .value ... }` after the peephole pass).
+The narrow pass (`narrow.ts`) records the excluded nullish alternatives in `someMatch`; its branch binder can remain optional. Transform performs the representation conversion in that branch. `??` excludes both alternatives, while optional chaining produces `undefined` on short circuit and preserves nullish values returned by the selected field or call.
 
 Following TS, the equality/truthiness/`&&`/`||`/`==>` patterns fire only for pure access paths (`x`, `obj.field`, `a.b.c.d`); method-call results must be bound first (`const v = m.get(k); if (v !== undefined) ...`). The `obj?.<chain>` and `x ?? d` forms are exceptions: extract emits dedicated single-evaluation IR nodes (`optChain`, `nullish`), so any expression on the left is allowed.
 
@@ -826,7 +826,7 @@ All expressions `e` above are translated using the spec expression rules (§3).
 
 **`const` collections:** `const` declarations of Array, Map, or Set types become mutable bindings in both backends, since TS mutates these in place but the backends require reassignment.
 
-**Uninitialized `let`:** `let x: T;` (no initializer) emits a type-appropriate default — `[]` for `T[]`, `map[]`/`{}` for `Map`/`Set`, `None` for `T | undefined` (and `null | T`), `0`/`false`/`""` for primitives. Other types fall through to Dafny's `default`, which won't compile — initialize at the declaration or annotate with `T | undefined`.
+**Uninitialized `let`:** `let x: T;` (no initializer) emits a type-appropriate default — `[]` for `T[]`, `map[]`/`{}` for `Map`/`Set`, `None` for types admitting `undefined`, `0`/`false`/`""` for primitives. Nullable-only declarations need an explicit initializer. Other types fall through to Dafny's `default`, which won't compile — initialize at the declaration or annotate with `T | undefined`.
 
 **For-of loops** are desugared to indexed loops: `for idx in [:bound]` (Lean) or `while idx < bound` (Dafny) with an auto-generated index variable `_varName_idx`. A bound invariant `_varName_idx ≤ bound` is automatically prepended to the user's invariants. When multiple for-of loops use the same variable name, the index is disambiguated with a suffix: `_id_idx`, `_id_idx2`, etc.
 
@@ -1041,6 +1041,8 @@ Dafny then verifies that the `by method` block computes `tagNameExists_fun_spec`
 | `Map<K, V>` | `Std.HashMap K' V'` | `map<K', V'>` |
 | `Set<T>` | `Std.HashSet T'` | `set<T'>` |
 | `T \| undefined` | `Option T'` | `Option<T'>` |
+| `T \| null` | `Option T'` | `Option<T'>` |
+| `T \| null \| undefined` | `Option (Option T')` | `Option<Option<T'>>` |
 | `true \| false \| undefined` | `Option Bool` | `Option<bool>` |
 | `Record<K, V>` | `Std.HashMap K' V'` | `map<K', V'>` |
 | `(a: T1, b: T2) => R` (function type) | — | `(T1, T2) -> R` (typically used in a `type Foo = (...) => R` alias; lambda params passed to a callee with a `Foo`-typed parameter get inferred types) |
@@ -1051,6 +1053,8 @@ Dafny then verifies that the `by method` block computes `tagNameExists_fun_spec`
 | `<T>` / `<T extends U>` (unbounded, or union/intersection bound) | `T` kept as type param (bound dropped) | `T` kept as type param (bound dropped) |
 | `A \| B` (union param) | field intersection type | field intersection type |
 | Anything else | Pass through | Pass through |
+
+For an optional admitting one nullish value, `None` denotes that value. With both, outer `None` denotes `undefined`, `Some(None)` denotes `null`, and `Some(Some(v))` denotes `v`. Conversions preserve those identities when widening or narrowing; nested source unions are flattened. A standalone nullish singleton uses unit, and `null | undefined` uses a boolean tag (`true` for `null`).
 
 For the Dafny backend, `string` uses Unicode-scalar semantics by default.
 To use JavaScript's UTF-16 code-unit model, select
