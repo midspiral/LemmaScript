@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dafnyCheckDiff } from "../src/dafny-commands.ts";
+import { lexDafny } from "../src/dafny-proof-additions.ts";
 
 /** Run the additions-only check on a generated/proof pair, returning its verdict and diagnostics. */
 function check(gen: string, proof: string): { ok: boolean; errors: string } {
@@ -131,6 +132,40 @@ test("ignores comment text in a generated header", () => {
 
 test("primes in identifiers are not character literals", () => {
   accepts(method, insertAfter(method, "r := c + 1;", "  ghost var r' := r; assert r' == r;\n"));
+});
+
+test("identifiers may start with a prime or question mark, as in Dafny", () => {
+  // Dafny 4.11 resolves `var ?assume := 1;` and `var 'assume := 1;`.
+  accepts(method, insertAfter(method, "r := c + 1;", "  ghost var ?assume, 'assume := 1, 2;\n"));
+  assert.deepEqual(lexDafny("?'a' ?x 'y ?'\"'").map(t => t.text), ["?'a'", "?x", "'y", "?'", "\"\""]);
+});
+
+// Line breaks other than \n
+
+test("rejects added lines containing \\r, U+2028 or U+2029", () => {
+  // Dafny ends the `//` comment at the \r, so the assume would be live.
+  for (const br of ["\r", "\u2028", "\u2029"]) {
+    rejects(method, insertAfter(method, "r := c + 1;", `  // note${br}  assume false;\n`), /line breaks/, 6);
+  }
+  rejects(method, insertAfter(method, "r := c + 1;", "  x;\r// lsc options: string-semantics=unicode-scalar\n"), /lsc options/, 6);
+});
+
+// Generated lines must keep their meaning
+
+const trusted = "method M(t: string) returns (r: int)\n{\n  var c: string := *;\n  assume {:axiom} (|c| <= |t|);\n  return |c|;\n}\n";
+
+test("rejects moving a generated assume line into a shadowing scope", () => {
+  // The earlier copy takes the match; the real line is commented out.
+  const proof = trusted.replace("  assume {:axiom} (|c| <= |t|);\n",
+    "  if true { var c: string := \"\";\n  assume {:axiom} (|c| <= |t|);\n  }\n  /*\n  assume {:axiom} (|c| <= |t|);\n  */\n");
+  rejects(trusted, proof, /repeat a generated assume/, 8);
+});
+
+test("rejects added comments or strings that disable generated lines", () => {
+  rejects(method, insertAfter(insertAfter(method, "requires c >= 0", "/*\n"), "ensures r > c", "*/\n"),
+    /changes how this generated line is read/, 4);
+  rejects(method, insertAfter(insertAfter(method, "requires c >= 0", "  var s := @\"\n"), "ensures r > c", "\";\n"),
+    /changes how this generated line is read/, 4);
 });
 
 // Added lsc options header
