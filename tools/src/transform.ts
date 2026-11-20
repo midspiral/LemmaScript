@@ -867,6 +867,12 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           right: { kind: "binop", op: "≤", left: n, right: { kind: "num", value: max } },
         };
       }
+      // Number.isSafeInteger(x) on a real: check integrality and safe range via
+      // a preamble predicate.
+      if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Number" &&
+          e.fn.field === "isSafeInteger" && e.args.length === 1 && e.args[0].ty.kind === "real") {
+        return { kind: "app", fn: "IsSafeIntegerReal", args: [lowerExpr(e.args[0], binds)] };
+      }
       // Math.abs/min/max preserve the resolved numeric type. Mixed operands
       // need explicit int/nat→real coercions, just like real binary operations.
       if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math") {

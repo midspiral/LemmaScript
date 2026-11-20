@@ -673,6 +673,7 @@ function emitExpr(e: Expr): string {
       if (e.fn === "MathAbs") needPreamble("MathAbs");
       if (e.fn === "MathMin") needPreamble("MathMin");
       if (e.fn === "MathMax") needPreamble("MathMax");
+      if (e.fn === "IsSafeIntegerReal") needPreamble("IsSafeIntegerReal");
       if (e.fn === "MathAbsReal") needPreamble("MathAbsReal");
       if (e.fn === "MathMinReal") needPreamble("MathMinReal");
       if (e.fn === "MathMaxReal") needPreamble("MathMaxReal");
@@ -1165,6 +1166,11 @@ const CEIL_REAL = `function CeilReal(x: real): int
   else x.Floor + 1
 }`;
 
+const IS_SAFE_INTEGER_REAL = `predicate IsSafeIntegerReal(x: real)
+{
+  x.Floor as real == x && -9007199254740991 <= x.Floor <= 9007199254740991
+}`;
+
 const CALLBACK_INDICES = `function CallbackIndices(n: nat): (r: seq<int>)
   ensures |r| == n
   ensures forall i :: 0 <= i < n ==> r[i] == i
@@ -1638,6 +1644,7 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["JSStringLt", JS_STRING_LT],
   ["CeilReal", CEIL_REAL],
   ["FloorReal", FLOOR_REAL],
+  ["IsSafeIntegerReal", IS_SAFE_INTEGER_REAL],
   ["SeqIndexOf", SEQ_INDEX_OF],
   ["SeqFindIndex", SEQ_FIND_INDEX],
   ["SeqFindLastIndex", SEQ_FIND_LAST_INDEX],
