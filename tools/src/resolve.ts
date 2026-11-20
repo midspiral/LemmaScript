@@ -218,6 +218,7 @@ function coerceToTargetTy(value: TExpr, targetTy: Ty, typeDecls: TypeDeclInfo[])
     return wrapSome(value, targetTy);
   }
   if (targetTy.kind === "user") {
+    if (value.ty.kind === "user" && value.ty.name === targetTy.name) return value;
     const synth = findSynthArrayUnion(targetTy.name, typeDecls);
     if (synth && synth.variants && synth.variants.length === 2) {
       const arrVariant = synth.variants.find(v => v.name === "ArrayBranch");
