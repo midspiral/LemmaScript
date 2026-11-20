@@ -41,16 +41,22 @@ Character-sensitive helpers use the selected Dafny character representation.
 | Length, indexing, slicing, `charCodeAt`, search offsets | Scalar positions and values | Code-unit positions and values |
 | Concatenation, equality, prefixes/suffixes, `repeat`, `trim*` | Preserves the operation's meaning on well-formed scalar strings | Preserves the operation's meaning on code-unit strings |
 | `String.fromCharCode(n)` | Requires a Unicode scalar value | Requires `0 <= n < 0x10000`; wrapping is not modeled |
-| `toLowerCase`, `toUpperCase` | ASCII letter conversion; non-ASCII letters unchanged | Same restriction |
+| `toLowerCase`, `toUpperCase` | Axiomatic; specified only for all-ASCII input | Same restriction |
 | `split(d)` | Existing axiomatic helper; requires a nonempty delimiter | Same helper and restriction |
 
 These claims are limited to the supported fragment and its preconditions. Selecting
 UTF-16 does not add regular expressions, normalization, locale-aware operations,
 or unrestricted JavaScript argument coercions. `split` remains a trusted axiom.
 
-Case conversion handles ASCII letters only, leaves non-ASCII letters unchanged,
-and preserves length. It can differ from JavaScript: `"ß".toUpperCase()` is
-`"SS"` in JavaScript.
+JavaScript case conversion applies the full Unicode mapping, which changes
+non-ASCII letters and can change the length: `"ß".toUpperCase()` is `"SS"`, and
+`"İ".toLowerCase()` has length 2. `StringToLower`/`StringToUpper` are therefore
+axioms whose only guarantee is the all-ASCII case: when `StringIsAscii(s)`, the
+result is the A-Z/a-z mapping, which keeps the length. Other input has an
+unconstrained but deterministic result, so a proof that depends on the converted
+text needs an ASCII precondition such as
+`forall(i: nat, i < s.length ==> s.charCodeAt(i) < 128)`.
+See [#312](https://github.com/midspiral/LemmaScript/issues/312).
 
 `stdlib` emits `Std.Collections.Seq.Filter/All/FoldLeft`; `local` emits the
 recursive `SeqFilter/SeqAll/SeqFoldLeft` helpers on demand. The choice is visible
