@@ -453,6 +453,25 @@ function buildNestedFieldUpdate(recv: TExpr, newVal: Expr): { root: string; valu
   return null;
 }
 
+/** Promote every spread segment before concatenation, preserving evaluation
+ *  order. A seq<int> needs elementwise conversion; it cannot be cast to real. */
+function lowerMinMaxSequence(e: TExpr, real: boolean, binds: Stmt[] | null): Expr {
+  if (e.kind === "binop" && e.op === "arrayConcat") {
+    return { kind: "binop", op: "arrayConcat",
+      left: lowerMinMaxSequence(e.left, real, binds),
+      right: lowerMinMaxSequence(e.right, real, binds) };
+  }
+  if (e.kind === "arrayLiteral") {
+    return { kind: "arrayLiteral", elems: e.elems.map(el => {
+      const value = lowerExpr(el, binds);
+      return real && isIntegral(el.ty) ? { kind: "toReal", expr: value } : value;
+    }) };
+  }
+  const value = lowerExpr(e, binds);
+  return real && e.ty.kind === "array" && isIntegral(e.ty.elem)
+    ? { kind: "app", fn: "SeqIntToReal", args: [value] } : value;
+}
+
 function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
   // Monadic lifting: extract embedded method calls to let-binds.
   // `callKind: "method"` means a global var-fn call (classifyCall returns
@@ -829,6 +848,12 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     }
 
     case "call": {
+      if (_opts.backend === "dafny" && e.fn.kind === "var" &&
+          (e.fn.name === "MaxOfSeq" || e.fn.name === "MinOfSeq") && e.args.length === 1) {
+        const real = e.ty.kind === "real";
+        return { kind: "app", fn: real ? `${e.fn.name}Real` : e.fn.name,
+          args: [lowerMinMaxSequence(e.args[0], real, binds)] };
+      }
       // Array.isArray(x) on a synth array-union (discriminant "__isArray__")
       // → constructor predicate `x.ArrayBranch?`. Used in spec ensures and
       // anywhere `Array.isArray` escapes the narrowing rule (narrow rewrites
@@ -888,16 +913,22 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // Math.abs/min/max preserve the resolved numeric type. Mixed operands
       // need explicit int/nat→real coercions, just like real binary operations.
       if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math") {
+        const minMax = (e.fn.field === "min" || e.fn.field === "max") &&
+          (e.args.length === 2 || (_opts.backend === "dafny" && e.args.length >= 1));
         const fn = e.fn.field === "abs" && e.args.length === 1 ? "MathAbs"
-          : e.fn.field === "min" && e.args.length === 2 ? "MathMin"
-          : e.fn.field === "max" && e.args.length === 2 ? "MathMax" : null;
+          : minMax ? (e.fn.field === "min" ? "MathMin" : "MathMax") : null;
         if (fn) {
           const real = e.ty.kind === "real";
           const args = e.args.map((arg): Expr => {
             const lowered = lowerExpr(arg, binds);
             return real && isIntegral(arg.ty) ? { kind: "toReal", expr: lowered } : lowered;
           });
-          return { kind: "app", fn: real ? `${fn}Real` : fn, args };
+          const helper = real ? `${fn}Real` : fn;
+          // Unary min/max is identity. Fold positional arguments through the
+          // binary helpers so scalar bounds need no sequence/index proofs.
+          return minMax
+            ? args.slice(1).reduce<Expr>((acc, arg) => ({ kind: "app", fn: helper, args: [acc, arg] }), args[0])
+            : { kind: "app", fn: helper, args };
         }
       }
       // Math.ceil(x): CeilReal on real args, identity on int

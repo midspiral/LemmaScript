@@ -478,6 +478,9 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `Math.abs(x)` (int arg) | `MathAbs(x)` | `MathAbs(x)` (preamble: `if x >= 0 then x else -x`) |
 | `Math.min(a, b)` (int args) | `MathMin(a, b)` | `MathMin(a, b)` (preamble: `if a <= b then a else b`) |
 | `Math.max(a, b)` (int args) | `MathMax(a, b)` | `MathMax(a, b)` (preamble: `if a >= b then a else b`) |
+| `Math.min(a)` / `Math.max(a)` | — | Identity (numeric, non-bigint operand) |
+| `Math.min(a, b, c, ...)` / `Math.max(a, b, c, ...)` | — | Left fold through binary helpers; result is `real` if any operand is real, `nat` if all are nat, otherwise `int` |
+| `Math.min()` / `Math.max()`, or any bigint operand | — | Rejected: infinities are outside the numeric model; JavaScript throws on bigint operands |
 | `Math.abs(x)` (real arg) | — | `MathAbsReal(x)` → `real` |
 | `Math.min(a, b)` / `Math.max(a, b)` (either arg real) | — | `MathMinReal(a, b)` / `MathMaxReal(a, b)` → `real`; int/nat operands coerced with `as real` |
 | `Number.isSafeInteger(n)` (integer arg) | `-9007199254740991 ≤ n ∧ n ≤ 9007199254740991` | `-9007199254740991 <= n && n <= 9007199254740991`; `false` for a bigint argument; real arguments are rejected |
@@ -504,6 +507,7 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `s.endsWith(p, end)` | — | `StringEndsWithAt(s, p, end)`; exclusive end clamps to `[0, \|s\|]` |
 | `s.length` | `s.length` | `\|s\|` |
 | `Math.max(...s)` / `Math.min(...s)` | — | `MaxOfSeq(s)` / `MinOfSeq(s)` (requires `\|s\| > 0`) |
+| `Math.max(a, ...s, ...)` / `Math.min(a, ...s, ...)` (any real operand/segment) | — | `MaxOfSeqReal` / `MinOfSeqReal` over concatenated sequences; integral segments converted elementwise to real; only the combined sequence must be nonempty |
 | `perm(a, b)` (spec-only) | — | `Perm(a, b)` (preamble: `predicate Perm<T(==)>(a, b) { multiset(a) == multiset(b) }`) |
 | `arr.map((x) => e)` | `arr.map (fun x => e)` | `seq(\|arr\|, i requires 0 <= i < \|arr\| => var x := arr[i]; e)` (§3.7) |
 | `arr.filter((x) => e)` | `arr.filter (fun x => e)` | `Std.Collections.Seq.Filter((x) => e, arr)` |

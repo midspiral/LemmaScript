@@ -796,6 +796,41 @@ function coerceCallArgs(args: TExpr[], fn: TExpr, ctx: Ctx): TExpr[] {
   return args;
 }
 
+/** Join Math.min/max operands without losing bigint or depending on their order. */
+function minMaxNumericTy(types: Ty[], name: string): Ty {
+  for (const ty of types) {
+    if (isBigInt(ty)) throw new Error(`${name} does not accept bigint operands (JavaScript throws TypeError)`);
+    if (ty.kind !== "int" && ty.kind !== "nat" && ty.kind !== "real")
+      throw new Error(`${name} requires numeric operands, got ${tyToCanonical(ty)}`);
+  }
+  return types.some(ty => ty.kind === "real") ? { kind: "real" }
+    : types.length > 0 && types.every(ty => ty.kind === "nat") ? { kind: "nat" } : { kind: "int" };
+}
+
+/** Resolve the concat tree built by extract for Math.min/max spreads. Numeric
+ *  literal segments are sequences even when their elements mix int/nat/real;
+ *  ordinary array inference would turn those into heterogeneous tuples.
+ *  Empty literals contribute no operand type to the surrounding concat. */
+function resolveMinMaxSequence(raw: RawExpr, ctx: Ctx, name: string): { expr: TExpr; types: Ty[] } {
+  if (raw.kind === "binop" && raw.op === "arrayConcat") {
+    const left = resolveMinMaxSequence(raw.left, ctx, name);
+    const right = resolveMinMaxSequence(raw.right, ctx, name);
+    const types = [...left.types, ...right.types];
+    return { expr: { kind: "binop", op: "arrayConcat", left: left.expr, right: right.expr,
+      ty: { kind: "array", elem: minMaxNumericTy(types, name) } }, types };
+  }
+  if (raw.kind === "arrayLiteral") {
+    const elems = raw.elems.map(e => resolveExpr(e, ctx));
+    const types = elems.map(e => e.ty);
+    return { expr: { kind: "arrayLiteral", elems,
+      ty: { kind: "array", elem: minMaxNumericTy(types, name) } }, types };
+  }
+  const expr = resolveExpr(raw, ctx);
+  if (expr.ty.kind !== "array") throw new Error(`${name} spread requires a numeric array`);
+  minMaxNumericTy([expr.ty.elem], name);
+  return { expr, types: [expr.ty.elem] };
+}
+
 /** Infer return type for collection/string method calls. */
 function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
   if (fn.kind !== "field") return { kind: "unknown" };
@@ -816,8 +851,11 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
   // (real if any operand is real); floor/ceil/round/trunc return an integer.
   if (fn.obj.kind === "var" && fn.obj.name === "Math") {
     if (fn.field === "abs" && args.length === 1) return args[0].ty;
-    if ((fn.field === "min" || fn.field === "max") && args.length >= 1)
-      return args.some(a => a.ty.kind === "real") ? { kind: "real" } : args[0].ty;
+    if (fn.field === "min" || fn.field === "max") {
+      if (args.length === 0)
+        throw new Error(`Math.${fn.field}() with zero arguments returns ${fn.field === "max" ? "-Infinity" : "Infinity"}, which is not supported by the numeric model`);
+      return minMaxNumericTy(args.map(a => a.ty), `Math.${fn.field}`);
+    }
     if (["floor", "ceil", "round", "trunc"].includes(fn.field)) return { kind: "int" };
   }
   const objTy = fn.obj.ty;
@@ -1056,6 +1094,16 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "call": {
+      // Extract rewrites spread min/max calls to a single sequence argument.
+      if (e.fn.kind === "var" && (e.fn.name === "MaxOfSeq" || e.fn.name === "MinOfSeq") && e.args.length === 1) {
+        const name = e.fn.name === "MaxOfSeq" ? "Math.max" : "Math.min";
+        const { expr, types } = resolveMinMaxSequence(e.args[0], ctx, name);
+        // Integral spreads retain the existing int helper/result, including
+        // empty literals (whose nonemptiness obligation will fail verification).
+        const ty: Ty = minMaxNumericTy(types, name).kind === "real" ? { kind: "real" } : { kind: "int" };
+        return { kind: "call", fn: { kind: "var", name: e.fn.name, ty: { kind: "unknown" } },
+          args: [expr], ty, callKind: "pure" };
+      }
       // perm(a, b): spec-only permutation predicate — true iff `a` and `b` are
       // reorderings of each other (equal as multisets). Lowers to the `Perm`
       // preamble (Dafny `multiset(a) == multiset(b)`; Lean `a.toList ~ b.toList`).
