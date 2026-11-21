@@ -1101,8 +1101,11 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         // Integral spreads retain the existing int helper/result, including
         // empty literals (whose nonemptiness obligation will fail verification).
         const ty: Ty = minMaxNumericTy(types, name).kind === "real" ? { kind: "real" } : { kind: "int" };
+        // Integral helpers keep their historical call classification so method
+        // temporaries in existing proof files remain byte-identical. Real calls
+        // use the specialized lowering that promotes their sequence segments.
         return { kind: "call", fn: { kind: "var", name: e.fn.name, ty: { kind: "unknown" } },
-          args: [expr], ty, callKind: "pure" };
+          args: [expr], ty, callKind: ty.kind === "real" ? "pure" : classifyCall(e.fn, ctx) };
       }
       // perm(a, b): spec-only permutation predicate — true iff `a` and `b` are
       // reorderings of each other (equal as multisets). Lowers to the `Perm`

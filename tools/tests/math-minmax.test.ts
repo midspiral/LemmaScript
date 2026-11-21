@@ -174,11 +174,11 @@ test("min/max evaluate positional and spread arguments once in source order", ()
   for (const [name, expected] of [["positional", [1, 2, 3]], ["single", [4]], ["spread", [5, 6, 7, 8]]] as const) {
     const decl = defFile.decls.find(d => d.kind === "method" && d.name === name);
     assert.ok(decl?.kind === "method", name);
-    const args = decl.body.filter(s => s.kind === "let-bind").map(s => {
-      assert.ok(s.value.kind === "app");
+    const args = decl.body.flatMap(s => {
+      if (s.kind !== "let-bind" || s.value.kind !== "app" || !["mark", "list"].includes(s.value.fn)) return [];
       const arg = s.value.args[0];
       assert.ok(arg.kind === "num");
-      return arg.value;
+      return [arg.value];
     });
     assert.deepEqual(args, expected, name);
   }
@@ -188,6 +188,22 @@ test("existing integer-spread output stays byte-identical", () => {
   const source = readFileSync(new URL("../../examples/maxSpread.ts", import.meta.url), "utf8");
   const generated = readFileSync(new URL("../../examples/maxSpread.dfy.gen", import.meta.url), "utf8");
   assert.equal(emitSource(source, "maxSpread.ts"), generated);
+});
+
+test("integer spreads preserve temporary bindings in generated methods", () => {
+  const output = emitSource(`export function clippedRange(scores: number[]): number {
+    let range = 0;
+    const high = Math.max(...scores, 0);
+    const low = Math.min(...scores, 0);
+    range = high - low;
+    return range;
+  }`);
+  // These generated lines are part of existing proofs' additions-only base,
+  // even though the sequence helpers themselves are pure Dafny functions.
+  assert.ok(output.includes(`  var i_t0 := MaxOfSeq((scores + [0]));
+  var high := i_t0;
+  var i_t1 := MinOfSeq((scores + [0]));
+  var low := i_t1;`), output);
 });
 
 test("the example executes as TypeScript and verifies through the compiled CLI", () => {
