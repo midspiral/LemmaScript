@@ -1157,45 +1157,36 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
   const fields: FieldInfo[] = [];
   for (const prop of props) {
     const propDecl = prop.getDeclarations()[0];
-    const optionalKey = propDecl && (propDecl as any).hasQuestionToken?.() ? { optionalKey: true } : {};
+    // Symbol optionality also covers mapped types such as Partial<T>, whose
+    // original property declaration need not have a question token.
+    const optionalKey = prop.isOptional() ? { optionalKey: true } : {};
     const override = overrides?.get(prop.getName());
     if (override) { fields.push({ name: prop.getName(), tsType: override, ...optionalKey }); continue; }
 
     const propType = prop.getTypeAtLocation(locationNode);
     let tsType = typeToString(propType);
     tsType = declaredTypeTextIfBetter(propDecl, tsType);
-    // Optional property: `foo?: T` reports as `T` (ts-morph strips the
-    // `| undefined` from a question-token type). Add it back so the field
-    // resolves to `Optional<T>`.
-    if (optionalKey.optionalKey) {
-      // Normalize checker output that puts `undefined` first, then ensure
-      // exactly one trailing `| undefined`.
-      if (tsType.startsWith("undefined | ")) tsType = `${tsType.slice("undefined | ".length)} | undefined`;
-      else if (!tsType.includes(" | undefined")) tsType = `${tsType} | undefined`;
-    }
-
     // Inline anonymous object types: ts-morph names them __type.
     // Generate a synthetic named record and reference it by name instead.
     if (extraDecls && tsType.includes("__type")) {
-      let innerType = propType;
-      let isOptional = false;
-      if (propType.isUnion()) {
-        const uTypes = propType.getUnionTypes();
-        const nonUndef = uTypes.filter(t => !t.isUndefined());
-        if (uTypes.some(t => t.isUndefined()) && nonUndef.length === 1) {
-          innerType = nonUndef[0];
-          isOptional = true;
-        }
-      }
+      const innerType = propType.getNonNullableType();
       if (innerType.isObject() && !innerType.isArray()) {
         const fName = prop.getName();
         const synName = name + fName.charAt(0).toUpperCase() + fName.slice(1);
         const extracted = extractRecord(synName, innerType, locationNode, undefined, extraDecls);
         if (extracted) {
           extraDecls.push(extracted);
-          tsType = isOptional ? `${synName} | undefined` : synName;
+          tsType = propType.isNullable() ? `${synName} | undefined` : synName;
         }
       }
+    }
+
+    // Apply key optionality AFTER naming the payload. With
+    // exactOptionalPropertyTypes, `foo?: T` has declared type T, but reading
+    // an absent key still yields undefined. Synthesis must not erase that.
+    if (optionalKey.optionalKey) {
+      if (tsType.startsWith("undefined | ")) tsType = `${tsType.slice("undefined | ".length)} | undefined`;
+      else if (!tsType.includes(" | undefined")) tsType = `${tsType} | undefined`;
     }
 
     fields.push({ name: prop.getName(), tsType, ...optionalKey });

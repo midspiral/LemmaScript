@@ -11,6 +11,38 @@ function moduleWith(...decls: Decl[]): Module {
   return { comment: "", imports: [], options: [], decls };
 }
 
+const api: Decl = { kind: "structure", name: "Api", fields: [
+  { name: "name", type: { kind: "string" } },
+  { name: "fallback", type: { kind: "user", name: "ApiFallback" } },
+], deriving: [] };
+const apiFallback: Decl = { kind: "structure", name: "ApiFallback", fields: [
+  { name: "value", type: { kind: "optional", inner: { kind: "string" } } },
+], deriving: [] };
+
+test("a resolved record with a missing field reports its own constructor, not an unrelated optional record", () => {
+  const file = moduleWith(apiFallback, api, { kind: "const", name: "noFallback",
+    type: { kind: "user", name: "Api" }, value: { kind: "record", spread: null, ctor: "Api",
+      fields: [{ name: "name", value: { kind: "str", value: "service" } }] } });
+  assert.throws(() => emitDafnyFile(file, "api.ts"),
+    /Dafny emission failed for 'noFallback' in api\.ts:.*Api.*missing required field 'fallback'/);
+});
+
+test("record emission refuses to silently discard an unknown field", () => {
+  const file = moduleWith(apiFallback, { kind: "const", name: "typo",
+    type: { kind: "user", name: "ApiFallback" }, value: { kind: "record", spread: null, ctor: "ApiFallback",
+      fields: [{ name: "vale", value: { kind: "str", value: "service" } }] } });
+  assert.throws(() => emitDafnyFile(file, "api.ts"), /ApiFallback.*unknown field 'vale'/);
+});
+
+test("structural matching requires every supplied field to belong to the record", () => {
+  const file = moduleWith(apiFallback, { kind: "const", name: "untyped",
+    type: { kind: "unknown" }, value: { kind: "record", spread: null,
+      fields: [{ name: "name", value: { kind: "str", value: "service" } }] } });
+  const output = emitDafnyFile(file);
+  assert.doesNotMatch(output, /:= ApiFallback\(/);
+  assert.match(output, /"service"/);
+});
+
 const numbers = moduleWith({ kind: "const", name: "answer", type: { kind: "int" }, value: { kind: "num", value: 42 } });
 const stringType: Decl = { kind: "type-alias", name: "Text", target: { kind: "string" } };
 

@@ -750,21 +750,19 @@ function emitExpr(e: Expr): string {
         });
         return `${emitExpr(e.spread)}.(${updates.join(", ")})`;
       }
-      // Match constructor by field names — prefer exact match over first-field heuristic
-      let ctorName: string | undefined;
-      if (e.fields.length > 0) {
+      // The resolved type owns the constructor, including for an empty
+      // literal. Structural inference is only a fallback for untyped records.
+      let ctorName = e.ctor;
+      if (!ctorName && e.fields.length > 0) {
         const fieldNames = new Set(e.fields.map(f => f.name));
         const matches: string[] = [];
         for (const [name, fields] of _structureDecls) {
-          if (fields.length >= e.fields.length && fields.every(f => fieldNames.has(f.name) || f.type.kind === "optional")) {
+          if (e.fields.every(f => fields.some(sf => sf.name === f.name)) &&
+              fields.every(f => fieldNames.has(f.name) || f.type.kind === "optional")) {
             matches.push(name);
           }
         }
-        // When several datatypes share this field-name set (e.g. Event vs
-        // SparseEvent), disambiguate by the resolved record type carried from
-        // transform; otherwise take the sole structural match.
-        if (e.ctor && matches.includes(e.ctor)) ctorName = e.ctor;
-        else if (matches.length > 0) ctorName = matches[0];
+        if (matches.length > 0) ctorName = matches[0];
         if (!ctorName) ctorName = _recordCtors.get(e.fields[0].name);
       }
       if (ctorName) {
@@ -773,13 +771,18 @@ function emitExpr(e: Expr): string {
         // positional order. Pad missing optional fields with None.
         if (structFields) {
           const provided = new Map(e.fields.map(f => [f.name, f]));
+          for (const f of e.fields) {
+            if (!structFields.some(sf => sf.name === f.name)) {
+              throw new Error(`Cannot construct ${ctorName}: unknown field '${f.name}'. Check the record's declared type.`);
+            }
+          }
           const vals = structFields.map(sf => {
             const f = provided.get(sf.name);
             if (f) return emitExpr(f.value);
             if (sf.type.kind === "optional") { needPreamble("OptionType"); return "None"; }
-            return `/* missing: ${sf.name} */`;
+            throw new Error(`Cannot construct ${ctorName}: missing required field '${sf.name}'. Check the record's declared type and optional (?) fields.`);
           });
-          return `${ctorName}(${vals.join(", ")})`;
+          return `${escapeName(ctorName)}(${vals.join(", ")})`;
         }
         const vals = e.fields.map(f => emitExpr(f.value));
         return `${ctorName}(${vals.join(", ")})`;
