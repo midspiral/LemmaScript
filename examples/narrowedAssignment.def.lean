@@ -14,11 +14,8 @@ method assignDefined (p : Option Int) returns (res : Int)
     if h_o : (o).isSome = true then
       let _o_val := (o).get h_o
       o := some 5
-      if h_o : (o).isSome = true then
-        let _o_val' := (o).get h_o
-        return _o_val'
-      else
-        pure ()
+      let _o_val' : Int := (match o with | .some _o_val' => _o_val' | .none => (default : Int))
+      return _o_val'
     else
       pure ()
     return 0
@@ -31,11 +28,8 @@ method assignFromSelf (p : Option Int) returns (res : Int)
     if h_o : (o).isSome = true then
       let _o_val := (o).get h_o
       o := some (_o_val + 2)
-      if h_o : (o).isSome = true then
-        let _o_val' := (o).get h_o
-        return _o_val'
-      else
-        pure ()
+      let _o_val' : Int := (match o with | .some _o_val' => _o_val' | .none => (default : Int))
+      return _o_val'
     else
       return 0
 
@@ -49,11 +43,8 @@ method assignInNestedIf (p : Option Int) (c : Bool) returns (res : Int)
       let _o_val := (o).get h_o
       if c then
         o := some (_o_val + 1)
-      if h_o : (o).isSome = true then
-        let _o_val' := (o).get h_o
-        return _o_val'
-      else
-        pure ()
+      let _o_val' : Int := (match o with | .some _o_val' => _o_val' | .none => (default : Int))
+      return _o_val'
     else
       pure ()
     return 0

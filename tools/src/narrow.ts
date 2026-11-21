@@ -129,10 +129,10 @@ function walkStmts(stmts: TStmt[], ctx: CondCtx): TStmt[] {
 }
 
 /** Re-bind narrowed variables after a statement that assigned them a defined
- *  value (resolve's `renarrow`): wrap the rest of the block in a fresh match,
- *  so later reads see the new value through a new binder instead of the
- *  binder that holds the old one (#342). The None arm is unreachable: the
- *  value was just assigned, or every continuing branch left it defined.
+ *  value (resolve's `renarrow`): a `let` marked `rebinds` binds the present
+ *  value under a fresh name, so later reads see the new value instead of the
+ *  binder that holds the old one (#342). A `let` has no None arm to fill, so
+ *  the re-bind can sit in tail position of a value-returning method.
  *  Returns the replacement for `[s, ...rest]`, or null. */
 function ruleRenarrowAfterAssign(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt[] | null {
   let plain: TStmt;
@@ -149,16 +149,16 @@ function ruleRenarrowAfterAssign(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt[]
     return null;
   }
   if (rest.length === 0) return [plain];
-  const body = rebinds.reduceRight<TStmt[]>((inner, r) => {
-    const scrutinee: TExpr = { kind: "var", name: r.target, ty: r.declaredTy };
+  const lets = rebinds.map((r): TStmt => {
+    const init: TExpr = { kind: "var", name: r.target, ty: r.declaredTy };
     // Reserve the shared name first: the enclosing check that narrowed the
     // variable mints it after this (the walk is bottom-up), and it should
     // keep the name it has without the assignment.
-    freshPathBinder(scrutinee, ctx);
-    const binder = freshUnsharedPathBinder(scrutinee, ctx)!;
-    return [{ kind: "someMatch", scrutinee, binder, binderTy: r.innerTy, someBody: inner, noneBody: [] }];
-  }, rest);
-  return [plain, ...body];
+    freshPathBinder(init, ctx);
+    const name = freshUnsharedPathBinder(init, ctx)!;
+    return { kind: "let", name, ty: r.innerTy, mutable: false, init, rebinds: r.target };
+  });
+  return [plain, ...lets, ...rest];
 }
 
 function recurseStmt(s: TStmt, ctx: CondCtx): TStmt {

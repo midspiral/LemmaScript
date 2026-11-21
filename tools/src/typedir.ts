@@ -120,7 +120,13 @@ export type TExpr =
 // ── Statements ───────────────────────────────────────────────
 
 export type TStmt =
-  | { kind: "let"; name: string; ty: Ty; mutable: boolean; init: TExpr }
+  | { kind: "let"; name: string; ty: Ty; mutable: boolean; init: TExpr;
+      /** Set by narrow when this `let` re-binds the presence-narrowed
+       *  variable it names after an assignment kept it defined (#342).
+       *  `init` reads the variable at its optional type; transform unwraps
+       *  it and reads `name` for the variable in the rest of the block,
+       *  until the next write to it. */
+      rebinds?: string }
   | { kind: "assign"; target: string; value: TExpr;
       /** Set when `target` is a presence-narrowed variable assigned a defined
        *  value: it stays present, so narrow re-binds it for the rest of the

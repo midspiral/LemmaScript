@@ -10,12 +10,8 @@ method assignDefined(p: Option<int>) returns (res: int)
   match o {
     case Some(i_o_val) =>
       o := Some(5);
-      match o {
-        case Some(i_o_val') =>
-          return i_o_val';
-        case None =>
-
-      }
+      var i_o_val' := o.value;
+      return i_o_val';
     case None =>
 
   }
@@ -30,12 +26,8 @@ method assignFromSelf(p: Option<int>) returns (res: int)
   match o {
     case Some(i_o_val) =>
       o := Some((i_o_val + 2));
-      match o {
-        case Some(i_o_val') =>
-          return i_o_val';
-        case None =>
-
-      }
+      var i_o_val' := o.value;
+      return i_o_val';
     case None =>
       return 0;
   }
@@ -52,12 +44,8 @@ method assignInNestedIf(p: Option<int>, c: bool) returns (res: int)
       if c {
         o := Some((i_o_val + 1));
       }
-      match o {
-        case Some(i_o_val') =>
-          return i_o_val';
-        case None =>
-
-      }
+      var i_o_val' := o.value;
+      return i_o_val';
     case None =>
 
   }

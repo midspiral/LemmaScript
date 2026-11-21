@@ -1688,10 +1688,29 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
       i++;
       continue;
     }
+    if (s.kind === "let" && s.rebinds !== undefined) {
+      result.push({ kind: "let", name: s.name, type: s.ty, mutable: false, value: rebindValue(s) });
+      const path: AccessPath = { rootVar: s.rebinds, fields: [] };
+      result.push(...transformStmts(replacePathInTStmts(stmts.slice(i + 1), path, s.name, s.ty), typeDecls));
+      return result;
+    }
     result.push(...transformStmt(s, typeDecls));
     i++;
   }
   return result;
+}
+
+/** The initializer for narrow's re-bind `let` (#342). resolve has
+ *  established that the variable is present here. Dafny reads `.value`, which
+ *  makes Dafny prove that. Lean has no destructor whose precondition the
+ *  verifier checks, so it matches with a `default` None arm that cannot run. */
+function rebindValue(s: TStmt & { kind: "let" }): Expr {
+  const opt = transformExpr(s.init);
+  if (_opts.backend === "dafny") return { kind: "field", obj: opt, field: "value", datatypeField: true };
+  return { kind: "match", scrutinee: opt, arms: [
+    { pattern: pCtor("some", s.name), body: { kind: "var", name: s.name } },
+    { pattern: pCtor("none"), body: { kind: "default", type: s.ty } },
+  ] };
 }
 
 let _liftCounter = 0;
@@ -2312,9 +2331,12 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
     switch (s.kind) {
       case "return": return transformExpr(s.value);
       case "let": {
-        const restExpr = transformPureBody(rest, typeDecls);
+        const after = s.rebinds === undefined ? rest
+          : replacePathInTStmts(rest, { rootVar: s.rebinds, fields: [] }, s.name, s.ty);
+        const restExpr = transformPureBody(after, typeDecls);
         if (!restExpr) return null;
-        return { kind: "let", name: s.name, value: transformExpr(s.init), body: restExpr };
+        const value = s.rebinds === undefined ? transformExpr(s.init) : rebindValue(s);
+        return { kind: "let", name: s.name, value, body: restExpr };
       }
       case "if": {
         // Append rest to both branches so nested ifs that fall through
