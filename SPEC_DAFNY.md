@@ -17,6 +17,8 @@ The `.dfy.gen` extension prevents Dafny tooling from auto-verifying it.
 
 The diff between gen and dfy must be **additions only** — the LLM may insert helper lemmas, ghost predicates, assert statements, and loop invariants, but may not modify generated lines.
 
+Added lines may not contain `assume` statements or `{:axiom}` / `@Axiom` attributes; occurrences inside comments, strings, and character literals are ignored. Added lines also may not introduce an `// lsc options:` line, since verifier options are read from that header.
+
 `"proof-dir": "proofs"` in `lemmascript.json` relocates the complete Dafny
 artifact set while preserving the pair: a source `src/search/foo.ts` under that
 config uses `proofs/src/search/foo.dfy.gen` and `proofs/src/search/foo.dfy`.
@@ -121,7 +123,7 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | `StringStartsWithAt` / `StringEndsWithAt` | Explicit positions in `startsWith` / `endsWith`, respectively | Test a prefix or suffix at the clamped position |
 | `StringSplit` | `s.split(d)` | Axiomatic split (`1 <= \|res\| <= \|s\| + 1`) |
 | `StringTrim` | `s.trim()` / `s.trimEnd()` / `s.trimStart()` | Trim (also provides `StringTrimRight` / `StringTrimLeft`); strips the full ECMAScript whitespace set via `IsJSWhitespace`, not just `' '` |
-| `StringToLower` / `StringToUpper` | `s.toLowerCase()` / `s.toUpperCase()` | Case folding |
+| `StringToLower` / `StringToUpper` | `s.toLowerCase()` / `s.toUpperCase()` | Axiomatic case conversion: equals `AsciiToLower(s)` / `AsciiToUpper(s)` when `StringIsAscii(s)`, otherwise unconstrained |
 
 **String semantics.** Set `string-semantics` in `lemmascript.json` or a file's
 `//@ option` directive (SPEC.md §7.6). Proofs depend on the selected model:
@@ -131,7 +133,7 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | `"unicode-scalar"` (default) | Strings are Unicode scalar sequences. `.length`, indexing, `slice`, `charCodeAt`, and `indexOf` can differ from JavaScript for characters such as emoji. Unpaired surrogates are unsupported. |
 | `"javascript-utf16"` | Strings are UTF-16 code-unit sequences. `.length`, indexing, `slice`, and `charCodeAt` use JavaScript code-unit positions and values; indexing and slicing retain the fragment's bounds obligations. Requires `"dafny-library": "local"`. |
 
-Both profiles support ASCII-only case conversion. `String.fromCharCode` requires
+In both profiles, case conversion is specified only for ASCII input. `String.fromCharCode` requires
 a Unicode scalar in the default profile, or `0 <= n < 0x10000` in UTF-16 mode.
 Generated files record every UTF-16 selection in their header;
 the default profile adds no `string-semantics` setting.

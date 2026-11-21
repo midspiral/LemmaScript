@@ -750,9 +750,11 @@ function extractExpr(node: Expression): RawExpr {
     }
   }
 
-  // As-expression: expr as T — strip the type assertion
   if (Node.isAsExpression(node)) {
-    return extractExpr(node.getExpression());
+    const expr = extractExpr(node.getExpression());
+    return expr.kind === "record" && !expr.spread
+      ? { ...expr, assertedTsType: typeToString(node.getType()) }
+      : expr;
   }
 
   // delete obj[key] → map delete expression

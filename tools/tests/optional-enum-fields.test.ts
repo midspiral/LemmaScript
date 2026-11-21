@@ -160,3 +160,20 @@ export type Envelope = { tag: "live"; payload: Payload } | { tag: "archived"; pa
 ` });
   assert.deepEqual(raw.typeDecls.map(d => d.name), ["Envelope"]);
 });
+
+test("Dafny resolves asserted tagged records on both sides of a comparison", () => {
+  const { dafny } = emit(`
+type Action = "Send" | "Dial";
+type Details = { amount: number };
+type Request = { tag: "SendAction"; action: Action } | { tag: "Pay"; details: Details };
+//@ pure
+export function isSend(request: Request): boolean {
+  return request === ({ tag: "SendAction", action: "Send" } as Request);
+}
+//@ pure
+export function differs(request: Request, details: Details): boolean {
+  return ({ tag: "Pay", details } as Request) !== request;
+}`);
+  assert.match(dafny, /\(request == SendAction\(Action\.Send\)\)/);
+  assert.match(dafny, /\(Pay\(details\) != request\)/);
+});

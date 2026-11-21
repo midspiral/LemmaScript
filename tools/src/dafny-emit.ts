@@ -528,8 +528,12 @@ function emitExpr(e: Expr): string {
         if (e.method === "trim")    { needPreamble("StringTrim"); return `StringTrim(${obj})`; }
         if (e.method === "trimEnd") { needPreamble("StringTrim"); return `StringTrimRight(${obj})`; }
         if (e.method === "trimStart") { needPreamble("StringTrim"); return `StringTrimLeft(${obj})`; }
-        if (e.method === "toLowerCase") { needPreamble("StringToLower"); return `StringToLower(${obj})`; }
-        if (e.method === "toUpperCase") { needPreamble("StringToUpper"); return `StringToUpper(${obj})`; }
+        if (e.method === "toLowerCase") {
+          needPreamble("StringIsAscii"); needPreamble("StringToLower"); return `StringToLower(${obj})`;
+        }
+        if (e.method === "toUpperCase") {
+          needPreamble("StringIsAscii"); needPreamble("StringToUpper"); return `StringToUpper(${obj})`;
+        }
         if (e.method === "includes") {
           needPreamble("StringIndexOf");
           if (args.length === 2) {
@@ -1479,27 +1483,44 @@ function StringTrim(s: string): string
 // `unicode-scalar` profile verifies under: byte-identical to what was always emitted.
 const STRING_TRIM_SCALAR = STRING_TRIM.replace(/\\u([0-9A-F]{4})/g, "\\U{$1}");
 
-const STRING_TO_LOWER = `function StringToLower(s: string): string
-  ensures |StringToLower(s)| == |s|
+// `s.toLowerCase()` / `s.toUpperCase()` apply JavaScript's full Unicode case
+// mapping (UnicodeData plus SpecialCasing): non-ASCII letters change and the
+// length can change ("ß".toUpperCase() is "SS", "İ".toLowerCase() has length 2).
+// The helpers are therefore axioms that fix only the all-ASCII case, where
+// JavaScript maps exactly A-Z <-> a-z and leaves every other character alone.
+// Any other input has an unconstrained (but deterministic) result.
+const STRING_IS_ASCII = `predicate StringIsAscii(s: string)
+{
+  forall i :: 0 <= i < |s| ==> (s[i] as int) < 128
+}`;
+
+const STRING_TO_LOWER = `function AsciiToLower(s: string): string
+  ensures |AsciiToLower(s)| == |s|
   decreases |s|
 {
   if |s| == 0 then ""
   else
     var c := s[0];
     var lower := if 'A' <= c <= 'Z' then (c - 'A' + 'a') as char else c;
-    [lower] + StringToLower(s[1..])
-}`;
+    [lower] + AsciiToLower(s[1..])
+}
 
-const STRING_TO_UPPER = `function StringToUpper(s: string): string
-  ensures |StringToUpper(s)| == |s|
+function {:axiom} StringToLower(s: string): string
+  ensures StringIsAscii(s) ==> StringToLower(s) == AsciiToLower(s)`;
+
+const STRING_TO_UPPER = `function AsciiToUpper(s: string): string
+  ensures |AsciiToUpper(s)| == |s|
   decreases |s|
 {
   if |s| == 0 then ""
   else
     var c := s[0];
     var upper := if 'a' <= c <= 'z' then (c - 'a' + 'A') as char else c;
-    [upper] + StringToUpper(s[1..])
-}`;
+    [upper] + AsciiToUpper(s[1..])
+}
+
+function {:axiom} StringToUpper(s: string): string
+  ensures StringIsAscii(s) ==> StringToUpper(s) == AsciiToUpper(s)`;
 
 // `String.fromCharCode(n)` — the inverse of `s.charCodeAt(i)`'s `(s[i] as int)`
 // in the UTF-16 code-unit model selected by dafny-commands.ts. LemmaScript
@@ -1667,6 +1688,7 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["SeqSort", SEQ_SORT],
   ["SeqSortBy", SEQ_SORT_BY],
   ["StringTrim", () => isUtf16() ? STRING_TRIM : STRING_TRIM_SCALAR],
+  ["StringIsAscii", STRING_IS_ASCII],
   ["StringToLower", STRING_TO_LOWER],
   ["StringToUpper", STRING_TO_UPPER],
   ["StringFromCharCode", () => isUtf16() ? STRING_FROM_CHAR_CODE : STRING_FROM_CHAR_CODE_SCALAR],

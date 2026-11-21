@@ -494,8 +494,8 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `s.trim()` | — | `StringTrim(s)` |
 | `s.trimEnd()` / `s.trimStart()` | — | `StringTrimRight(s)` / `StringTrimLeft(s)` |
 | `s.split(d)` (requires `\|d\| > 0`) | — | `StringSplit(s, d)` (axiomatic preamble: `1 <= \|res\| <= \|s\| + 1`) |
-| `s.toLowerCase()` | — | `StringToLower(s)` |
-| `s.toUpperCase()` | — | `StringToUpper(s)` |
+| [`s.toLowerCase()`](examples/asciiCase.ts) | — | `StringToLower(s)` (axiomatic preamble: specified only for ASCII `s`) |
+| [`s.toUpperCase()`](examples/asciiCase.ts) | — | `StringToUpper(s)` (axiomatic preamble: specified only for ASCII `s`) |
 | `s.includes(sub)` | — | `StringIndexOf(s, sub) >= 0` |
 | `s.startsWith(p)` | — | `\|s\| >= \|p\| && s[..\|p\|] == p` |
 | `s.endsWith(p)` | — | `\|s\| >= \|p\| && s[\|s\|-\|p\|..] == p` |
@@ -531,7 +531,7 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `expr \|\| default` (on number) | if nonzero | `if expr != 0 then expr else default` |
 | `expr \|\| default` (on array) | `expr` (arrays are always truthy) | `expr` (arrays are always truthy) |
 | `expr?.method(args)` | — | `if key in map { ... }` |
-| `expr as T` | stripped | stripped |
+| `expr as T` | stripped | Preserves named union types on tagged record literals; otherwise stripped ([example](examples/taggedRecordComparisons.ts)) |
 | `null` | `none` | `None` (same as `undefined`) |
 | `//@ skip` (before statement) | — | statement omitted from model |
 | `new Map(arr.map(fn))` | — | loop building `map[]` |

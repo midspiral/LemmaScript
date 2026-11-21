@@ -218,6 +218,7 @@ function coerceToTargetTy(value: TExpr, targetTy: Ty, typeDecls: TypeDeclInfo[])
     return wrapSome(value, targetTy);
   }
   if (targetTy.kind === "user") {
+    if (value.ty.kind === "user" && value.ty.name === targetTy.name) return value;
     const synth = findSynthArrayUnion(targetTy.name, typeDecls);
     if (synth && synth.variants && synth.variants.length === 2) {
       const arrVariant = synth.variants.find(v => v.name === "ArrayBranch");
@@ -1316,7 +1317,10 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
 
     case "record": {
       const spread = e.spread ? resolveExpr(e.spread, ctx) : null;
-      const ty = spread ? spread.ty : { kind: "unknown" as const };
+      const asserted = e.assertedTsType && expandAlias(parseTsType(e.assertedTsType), ctx.typeDecls);
+      const assertedUnion = asserted && asserted.kind === "user" &&
+        declOfKind(ctx.typeDecls, asserted.name, "discriminated-union");
+      const ty = spread ? spread.ty : assertedUnion ? asserted : { kind: "unknown" as const };
       // Record literal in map-typed context (e.g. `const M: Record<string, V> = {a: ...}`):
       // attach the map type so transform/emit can produce a map literal.
       if (!spread && ctx.returnTy.kind === "map") {
