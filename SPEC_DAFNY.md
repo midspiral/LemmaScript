@@ -100,7 +100,7 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | `Pow2` / `BitAnd` | `<<` / `>>` / `&` on `bigint` | Bitwise ops as arithmetic |
 | `NatToString` / `IntToString` | `` `${n}` `` template literal (nat / signed int) | Number-to-digit-string for interpolation (`IntToString` prefixes `-`) |
 
-`Math.trunc` and `Math.round` are the identity on `int`/`nat` arguments. `Math.round` rounds halfway ties toward `+Infinity` (`Math.round(-2.5) == -2`). These lowerings use exact reals, unlike binary64 JS: there is no `-0`, `NaN`, or `Infinity`, and `x + 0.5` is not rounded, so `Math.round(0.49999999999999994)` is `0` here and `1` in JS. `bigint` arguments and calls without exactly one argument are compile errors.
+`Math.trunc` and `Math.round` are the identity on `int`/`nat` arguments. `Math.round` rounds halfway ties toward `+Infinity` (`Math.round(-2.5) == -2`). These lowerings use exact reals, so there is no `-0`, `NaN`, or `Infinity`. JS `Math.round` returns the nearest integer without rounding `x + 0.5`, so it agrees with `FloorReal(x + 0.5)` on every finite double (`Math.round(0.49999999999999994)` is `0` in both). A `bigint` argument is a compile error.
 
 **Sequence:**
 

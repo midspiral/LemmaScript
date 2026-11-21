@@ -1155,7 +1155,7 @@ function TruncReal(x: real): (t: int)
 }
 ```
 
-`Math.round` rounds halfway ties toward `+Infinity`, as JS does (`Math.round(-2.5) == -2`). `x + 0.5` is exact real arithmetic, so `Math.round(0.49999999999999994)` is `0` in the model but `1` in binary64 JS. A `bigint` argument (a JS `TypeError`), a call without exactly one argument, and a `real` argument on Lean are compile errors.
+`Math.round` rounds halfway ties toward `+Infinity`, as JS does (`Math.round(-2.5) == -2`). JS defines `Math.round` as the nearest integer without computing `x + 0.5` in binary64, so on any finite double it agrees with the exact `FloorReal(x + 0.5)`: `Math.round(0.49999999999999994)` is `0` in both, although `Math.floor(0.49999999999999994 + 0.5)` is `1` in JS. The model and JS can still differ when the argument expression itself rounds in binary64 (`Math.round(0.5 - 1e-17)` is `1` in JS and `0` in the model), as with any `real` arithmetic. A `bigint` argument (a JS `TypeError`) and a `real` argument on Lean are compile errors.
 
 **Cross-file types:** When a verified function references a type imported from another file (e.g., `Module` from `../types`), `lsc` automatically resolves the type via ts-morph and generates the corresponding backend type declaration. Resolution is recursive — types referenced by resolved types are also extracted (e.g., resolving `Claim` also extracts `ClaimStatus`, `EmbeddedDecision`). Both record types and type aliases (string unions, discriminated unions) are resolved. `lsc` discovers the nearest `tsconfig.json` for module resolution. Built-in types (`Map`, `Set`, `Array`, etc.) are excluded.
 
