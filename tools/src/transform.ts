@@ -853,25 +853,34 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           e.fn.field === "fromCharCode" && e.args.length === 1) {
         return { kind: "app", fn: "StringFromCharCode", args: [lowerExpr(e.args[0], binds)] };
       }
-      // Number.isSafeInteger(n) on an integer: a bigint is never a safe integer
-      // in JS, so the result is false. A `number` is an unbounded integer in the
-      // model, so the JS bound -(2^53 - 1) <= n <= 2^53 - 1 must be stated.
+      // Keep unsupported arguments out of the generic method-call path so the
+      // diagnostic names Number.isSafeInteger and the unsupported input.
       if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Number" &&
-          e.fn.field === "isSafeInteger" && e.args.length === 1 && isIntegral(e.args[0].ty)) {
-        if (e.args[0].ty.kind === "int" && e.args[0].ty.big) return { kind: "bool", value: false };
-        const n = lowerExpr(e.args[0], binds);
-        const max = 9007199254740991;
-        return {
-          kind: "binop", op: "∧",
-          left: { kind: "binop", op: "≤", left: { kind: "num", value: -max }, right: n },
-          right: { kind: "binop", op: "≤", left: n, right: { kind: "num", value: max } },
-        };
-      }
-      // Number.isSafeInteger(x) on a real: check integrality and safe range via
-      // a preamble predicate.
-      if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Number" &&
-          e.fn.field === "isSafeInteger" && e.args.length === 1 && e.args[0].ty.kind === "real") {
-        return { kind: "app", fn: "IsSafeIntegerReal", args: [lowerExpr(e.args[0], binds)] };
+          e.fn.field === "isSafeInteger") {
+        if (e.args.length !== 1)
+          throw new Error(`Number.isSafeInteger expects exactly one argument (got ${e.args.length}).`);
+        const arg = e.args[0];
+        if (isIntegral(arg.ty)) {
+          // A bigint is never a safe integer in JS. A number is an unbounded
+          // integer in the model, so the 2^53 - 1 bound must be explicit.
+          if (arg.ty.kind === "int" && arg.ty.big) return { kind: "bool", value: false };
+          const n = lowerExpr(arg, binds);
+          const max = 9007199254740991;
+          return {
+            kind: "binop", op: "∧",
+            left: { kind: "binop", op: "≤", left: { kind: "num", value: -max }, right: n },
+            right: { kind: "binop", op: "≤", left: n, right: { kind: "num", value: max } },
+          };
+        }
+        if (arg.ty.kind === "real") {
+          // Fractional literals can lose their type in the backend IR, so
+          // reject Lean here even when no real parameter or cast is emitted.
+          if (_opts.backend === "lean")
+            throw new Error("Number.isSafeInteger: real arithmetic is not supported by the Lean backend (needs noncomputable ℝ / Mathlib).");
+          return { kind: "app", fn: "IsSafeIntegerReal", args: [lowerExpr(arg, binds)] };
+        }
+        const type = arg.ty.kind === "user" ? arg.ty.name : arg.ty.kind;
+        throw new Error(`Unsupported Number.isSafeInteger argument type: ${type}; expected number or bigint (narrow unions and optionals first).`);
       }
       // Math.abs/min/max preserve the resolved numeric type. Mixed operands
       // need explicit int/nat→real coercions, just like real binary operations.
