@@ -154,6 +154,8 @@ export interface RawForOf {
 
 export interface RawThrow {
   kind: "throw";
+  /** Inside an async function: rejects the returned promise (SPEC §4.5). */
+  rejects?: boolean;
   line: number;
 }
 
@@ -212,6 +214,7 @@ export interface RawFunction {
   autohavoc: boolean;      // //@ autohavoc — abstract unmodellable exprs to havoc (file-level or per-fn)
   typeAnnotations: { name: string; type: string }[];
   body: RawStmt[];
+  awaits?: boolean;        // async function whose body contains `await` (SPEC §4.5)
   line: number;
 }
 

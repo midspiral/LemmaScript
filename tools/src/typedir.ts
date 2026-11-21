@@ -138,7 +138,7 @@ export type TStmt =
       defaultBody: TStmt[] }
   | { kind: "forof"; names: string[]; nameTypes: Ty[]; iterable: TExpr;
       invariants: TExpr[]; doneWith: TExpr | null; body: TStmt[] }
-  | { kind: "throw" }
+  | { kind: "throw"; rejects?: boolean }
   | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
   | { kind: "ghostAssign"; target: string; value: TExpr }
   | { kind: "assert"; expr: TExpr; assumed?: boolean }
@@ -173,6 +173,7 @@ export interface TFunction {
   isPure: boolean;          // no while, no mutable let
   forcePure: boolean;       // //@ pure — emit function by method if body can't be pure
   autohavoc: boolean;       // //@ autohavoc — abstract unmodellable exprs to havoc
+  awaits?: boolean;         // async function with `await` — Dafny only (SPEC §4.5)
   body: TStmt[];
 }
 

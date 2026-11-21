@@ -1876,6 +1876,12 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       }];
 
     case "throw":
+      // Async: the returned promise rejects. `ensures` describes fulfillment,
+      // so this path owes nothing further (SPEC §4.5).
+      if (s.rejects) {
+        if (_opts.backend !== "dafny") throw new Error("throw in an async function (rejection) is supported only by the Dafny backend");
+        return [{ kind: "assert", expr: { kind: "bool", value: false }, assumed: true }];
+      }
       return [{ kind: "assert", expr: { kind: "bool", value: false } }];
 
     case "forof":
@@ -2515,6 +2521,10 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   _typeDecls = mod.typeDecls;
   _neededKindHelpers = new Map();
   _pureDefNames = new Set(mod.functions.filter(f => f.isPure).map(f => f.name));
+  if (_opts.backend !== "dafny") {
+    const awaiting = [...mod.functions, ...(mod.classes ?? []).flatMap(c => c.methods)].find(f => f.awaits);
+    if (awaiting) throw new Error(`${awaiting.name}: await is supported only by the Dafny backend (SPEC §4.5)`);
+  }
   const typeDecls = mod.typeDecls.map(transformTypeDecl);
 
   // Module-level constants

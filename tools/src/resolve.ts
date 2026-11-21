@@ -1752,7 +1752,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     }
 
     case "throw":
-      return [{ kind: "throw" }, ctx.env];
+      return [s.rejects ? { kind: "throw", rejects: true } : { kind: "throw" }, ctx.env];
 
     case "switch":
       return [{
@@ -1803,6 +1803,8 @@ function isSyntacticallyPure(stmts: RawStmt[]): boolean {
     if (containsHavoc(s)) return false;
     switch (s.kind) {
       case "while": case "forof": return false;
+      // A rejection ends the fulfillment path: `assume false`, a method statement.
+      case "throw": if (s.rejects) return false; break;
       case "let": if (s.mutable) return false; break;
       case "if": if (!isSyntacticallyPure(s.then) || !isSyntacticallyPure(s.else)) return false; break;
       case "switch": if (!s.cases.every(c => isSyntacticallyPure(c.body)) || !isSyntacticallyPure(s.defaultBody)) return false; break;
@@ -1992,6 +1994,7 @@ function resolveFunction(
     isPure: opts?.forcePure !== undefined ? opts.forcePure : pureFns.has(fn.name),
     forcePure: fn.pure,
     autohavoc: fn.autohavoc,
+    ...fn.awaits ? { awaits: true } : {},
     body: resolveBlock(fn.body, bodyCtx),
   };
 }
