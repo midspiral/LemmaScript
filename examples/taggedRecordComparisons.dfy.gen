@@ -8,7 +8,7 @@ datatype Delivery = queued(channel: Channel, recipient: Recipient) | sent(channe
 
 function usesEmailChannel(delivery: Delivery): bool
 {
-  (delivery.channel == ("queued", "email", Recipient("")).channel)
+  (delivery.channel == queued(Channel.email, Recipient("")).channel)
 }
 
 lemma usesEmailChannel_ensures(delivery: Delivery)
@@ -18,7 +18,7 @@ lemma usesEmailChannel_ensures(delivery: Delivery)
 
 function hasDifferentRecipient(delivery: Delivery, recipient: Recipient): bool
 {
-  (("queued", "email", recipient).recipient.address != delivery.recipient.address)
+  (queued(Channel.email, recipient).recipient.address != delivery.recipient.address)
 }
 
 lemma hasDifferentRecipient_ensures(delivery: Delivery, recipient: Recipient)
