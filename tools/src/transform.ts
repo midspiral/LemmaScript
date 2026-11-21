@@ -932,14 +932,13 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       //   - integral arg → identity
       //   - real arg (Dafny only) → TruncReal(x) / FloorReal(x + 0.5); JS
       //     rounds halfway ties toward +Infinity
-      // Anything else would fall through to a raw `Math.trunc(...)` call, so
-      // bigint args (a JS TypeError), other arities, and non-numeric or Lean
-      // real args are rejected here.
+      // A bigint argument (a JS TypeError) would otherwise lower to the
+      // identity, and a Lean real argument has no lowering, so both are
+      // rejected. Other calls fall through to the unsupported-call error.
       if (e.fn.kind === "field" && (e.fn.field === "trunc" || e.fn.field === "round") &&
-          e.fn.obj.kind === "var" && e.fn.obj.name === "Math") {
+          e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1 &&
+          (isIntegral(e.args[0].ty) || e.args[0].ty.kind === "real")) {
         const name = `Math.${e.fn.field}`;
-        if (e.args.length !== 1)
-          throw new Error(`${name} expects exactly one argument, got ${e.args.length}`);
         const arg = e.args[0];
         if (isBigInt(arg.ty))
           throw new Error(`${name} does not accept a bigint argument (JavaScript throws TypeError)`);
@@ -948,8 +947,6 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           return { kind: "app", fn: "JSTruncDiv", args: [lowerExpr(arg.left, binds), lowerExpr(arg.right, binds)] };
         }
         if (isIntegral(arg.ty)) return lowerExpr(arg, binds);
-        if (arg.ty.kind !== "real")
-          throw new Error(`${name} expects a numeric argument, got ${arg.ty.kind}`);
         if (_opts.backend !== "dafny")
           throw new Error("real arithmetic is not supported by the Lean backend (needs noncomputable ℝ / Mathlib).");
         const x = lowerExpr(arg, binds);

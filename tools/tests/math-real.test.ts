@@ -28,6 +28,12 @@ function emitSource(text: string): string {
   return emitDafnyFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] }, "math.ts");
 }
 
+function emitLeanSource(text: string): string {
+  const { typesFile, defFile } = transformModuleLean(sourceModule(text));
+  resetLeanModule();
+  return emitLeanFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
+}
+
 test("integer Math output stays byte-identical", () => {
   const output = emitSource(`
 export function magnitude(n: number): number { return Math.abs(n); }
@@ -126,9 +132,34 @@ export function at(xs: number[], i: number): number {
   return xs[Math.trunc(i)] + xs[Math.round(i)];
 }
 `;
-  const { typesFile, defFile } = transformModuleLean(sourceModule(src));
-  resetLeanModule();
-  const lean = emitLeanFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
+  const lean = emitLeanSource(src);
   assert.doesNotMatch(lean, /toNat/);
   assert.match(lean, /xs\[i\]!/);
+});
+
+test("Math.trunc and Math.round reject a bigint argument on both backends", () => {
+  for (const fn of ["trunc", "round"]) {
+    const src = `export function f(x: bigint): number { return Math.${fn}(x as unknown as number); }`;
+    const expected = new RegExp(`Math\\.${fn} does not accept a bigint argument`);
+    assert.throws(() => emitSource(src), expected);
+    assert.throws(() => emitLeanSource(src), expected);
+  }
+});
+
+test("Lean rejects Math.trunc and Math.round on a real argument", () => {
+  for (const fn of ["trunc", "round"]) {
+    const src = `
+export function f(x: number): number {
+  //@ type x real
+  return Math.${fn}(x);
+}
+`;
+    assert.throws(() => emitLeanSource(src), /real arithmetic is not supported by the Lean backend/);
+  }
+});
+
+test("Math.trunc on a non-numeric argument reaches the unsupported-call error", () => {
+  const src = `export function f(s: string): number { return Math.trunc(s as unknown as number); }`;
+  assert.throws(() => emitSource(src), /Unsupported Dafny method call: \.trunc\(\)/);
+  assert.throws(() => emitLeanSource(src), /Unsupported Lean method call: \.trunc\(\)/);
 });
