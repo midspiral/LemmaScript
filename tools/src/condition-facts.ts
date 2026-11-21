@@ -195,16 +195,24 @@ export function flattenOr(e: TExpr): TExpr[] {
  *  null otherwise). */
 export type NoneDetector = { scrutinee: TExpr; innerTy: Ty; binder: string; residual: TExpr | null };
 
+/** Values that can be discarded without dropping calls or proof obligations.
+ *  Even a pure call, field/index read, or arithmetic expression may require
+ *  a precondition, a valid receiver/index, or a nonzero divisor. */
+export function isAtomicValue(e: TExpr): boolean {
+  return ["var", "num", "bigint", "str", "bool"].includes(e.kind);
+}
+
 export function noneDetector(leaf: TExpr, ctx: CondCtx): NoneDetector | null {
   // `x?.chain !== lit` — `undefined !== lit` is true when x is None.
   if (leaf.kind === "binop" && leaf.op === "!==") {
     const oc = leaf.left.kind === "optChain" ? leaf.left : leaf.right.kind === "optChain" ? leaf.right : null;
     if (oc && oc.kind === "optChain" && oc.obj.ty.kind === "optional") {
+      const lit = leaf.left === oc ? leaf.right : leaf.left;
+      if (!isAtomicValue(lit)) return null;
       const binder = freshPathBinder(oc.obj, ctx);
       if (binder === null) return null;
       const unwrapped = applyChain({ kind: "var", name: binder, ty: oc.obj.ty.inner }, oc.chain);
       restoreDiscriminantFlag(unwrapped, ctx.decls);
-      const lit = leaf.left === oc ? leaf.right : leaf.left;
       return { scrutinee: oc.obj, innerTy: oc.obj.ty.inner, binder, residual: { kind: "binop", op: "!==", left: unwrapped, right: lit, ty: { kind: "bool" } } };
     }
   }

@@ -41,7 +41,7 @@ import {
   type CondCtx, type PresentFact, type NoneDetector,
   presentFact, leadingPresent, leadingIsArray, flattenOr, noneDetector,
   bindPresentFact, freshPathBinder, binderHintForMapAccess, freshOcBinder,
-  applyChain, restoreDiscriminantFlag, arrayBoundsCond, exprEqual,
+  applyChain, restoreDiscriminantFlag, arrayBoundsCond, exprEqual, isAtomicValue,
   isArrayFact, typeofStringFact, variantFact, negVariantFact,
   presentMatchStmts, presentMatchExpr,
 } from "./condition-facts.js";
@@ -208,18 +208,41 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | 
   if (leaves.length < 2) return null;
 
   const detectors: NoneDetector[] = [];
+  const byLeaf = leaves.map(leaf => noneDetector(leaf, ctx));
   const residualLeaves: TExpr[] = [];
   const seen = new Set<string>();
-  for (const leaf of leaves) {
-    const d = noneDetector(leaf, ctx);
+  let ordered = false;
+  for (const [i, leaf] of leaves.entries()) {
+    const d = byLeaf[i];
     if (!d) { residualLeaves.push(leaf); continue; }
     const key = d.binder;  // memoized by full path, not by the ambiguous hint
     if (seen.has(key)) return null;  // two detectors on one optional: rare; leave to other rules
     seen.add(key);
+    if (residualLeaves.length > 0) ordered = true;
     detectors.push(d);
     if (d.residual) residualLeaves.push(d.residual);
   }
   if (detectors.length === 0) return null;
+
+  // A later None detector must not bypass an earlier disjunct's calls or
+  // proof obligations. Keep those guards in source order, with each later
+  // detector inside the preceding guard's false branch.
+  if (ordered) {
+    let tail = rest;
+    for (let i = leaves.length - 1; i >= 0; i--) {
+      const d = byLeaf[i];
+      if (!d) {
+        tail = [{ kind: "if", cond: leaves[i], then: s.then, else: tail }];
+      } else {
+        const someBody: TStmt[] = d.residual
+          ? [{ kind: "if", cond: d.residual, then: s.then, else: tail }]
+          : tail;
+        tail = [{ kind: "someMatch", scrutinee: d.scrutinee, binderTy: d.innerTy,
+          binder: d.binder, someBody, noneBody: s.then }];
+      }
+    }
+    return tail[0];
+  }
 
   let inner: TStmt[] = residualLeaves.length === 0
     ? rest
@@ -248,6 +271,9 @@ function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[], ctx: CondCtx): 
   const oc = c.left.kind === "optChain" ? c.left : c.right.kind === "optChain" ? c.right : null;
   if (!oc || oc.kind !== "optChain" || oc.obj.ty.kind !== "optional") return null;
   const lit = c.left === oc ? c.right : c.left;
+  // The None arm skips this operand. Calls and partial expressions must stay
+  // in the ordinary comparison, where both operands are evaluated.
+  if (!isAtomicValue(lit)) return null;
   const innerTy = oc.obj.ty.inner;
   const binder = freshPathBinder(oc.obj, ctx);
   if (binder === null) return null;

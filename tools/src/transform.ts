@@ -14,7 +14,7 @@ import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
 import { lowerIndexedCallback } from "./callback-lowering.js";
-import { isFalsyCapableTy } from "./condition-facts.js";
+import { isAtomicValue, isFalsyCapableTy } from "./condition-facts.js";
 import { declOf, declOfKind, declOfTy, unionDeclOfTy, declWithVariant, tyBaseName } from "./typedecls.js";
 
 // ── Generic IR walkers ──────────────────────────────────────
@@ -205,6 +205,8 @@ let _typeDecls: TypeDeclInfo[] = [];
  *  in a higher-order position resolves to the monadic method, so it must be
  *  redirected to the pure mirror. Set once per module transform. */
 let _pureDefNames: Set<string> = new Set();
+
+let _comparisonCounter = 0;
 
 /** Discriminated unions whose tag is read as a *value* (`x.kind` compared
  *  to another union's tag, passed as an argument, …). Each gets a generated
@@ -601,12 +603,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (["===", "!==", ">=", "<=", ">", "<"].includes(e.op) &&
           (e.left.ty.kind === "optional") !== (e.right.ty.kind === "optional")) {
         const [optSide, valSide] = e.left.ty.kind === "optional" ? [e.left, e.right] : [e.right, e.left];
-        const optExpr = lowerExpr(optSide, binds);
         // x === undefined → None?, x !== undefined → Some?
         if (valSide.kind === "var" && valSide.name === "undefined") {
           const isNone = e.op === "===";
           return {
-            kind: "match", scrutinee: optExpr,
+            kind: "match", scrutinee: lowerExpr(optSide, binds),
             arms: [
               { pattern: pCtor("some", "_"), body: { kind: "bool", value: !isNone } },
               { pattern: pCtor("none"), body: { kind: "bool", value: isNone } },
@@ -617,22 +618,36 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         // constructor (`o === "red"` → `Some(v) => v == Color.red`), mirroring the
         // non-optional string-literal rule above.
         const innerTy = optSide.ty.kind === "optional" ? optSide.ty.inner : optSide.ty;
-        const valExpr: Expr = valSide.kind === "str" && innerTy.kind === "user"
-          ? { kind: "constructor", name: valSide.value, type: innerTy.name, args: [] }
-          : lowerExpr(valSide, binds);
+        // A comparison evaluates both operands even when the optional is None.
+        // Bind complex operands in source order before the match: leaving a
+        // pure call in the Some arm would silently skip its preconditions.
+        const eager = !isAtomicValue(valSide);
+        const values: { name: string; value: Expr }[] = [];
+        const operands = [e.left, e.right].map(arg => {
+          const value: Expr = arg === valSide && valSide.kind === "str" && innerTy.kind === "user"
+            ? { kind: "constructor", name: valSide.value, type: innerTy.name, args: [] }
+            : lowerExpr(arg, binds);
+          if (!eager || isAtomicValue(arg) || value.kind === "var") return value;
+          const name = freshName(`_cmp${_comparisonCounter++}`);
+          if (binds) binds.push({ kind: "let", name, type: arg.ty, mutable: false, value });
+          else values.push({ name, value });
+          return { kind: "var", name } as Expr;
+        });
+        const [optExpr, valExpr] = e.left === optSide ? operands : [operands[1], operands[0]];
         // The bound value goes on the left, so mirror the operator when the
         // optional was on the right: `x < opt` → `Some(v) => v > x`.
         const op = e.left.ty.kind === "optional" ? e.op : MIRROR_OP[e.op] ?? e.op;
         const cmpOp = BOOL_OP_MAP[op] ?? op;
         const noneVal = e.op === "!==" ? true : false;
         const bound = matchBinder("value");
-        return {
+        const comparison: Expr = {
           kind: "match", scrutinee: optExpr,
           arms: [
             { pattern: pCtor("some", bound), body: { kind: "binop", op: cmpOp, left: { kind: "var", name: bound }, right: valExpr } },
             { pattern: pCtor("none"), body: { kind: "bool", value: noneVal } },
           ],
         };
+        return values.reduceRight<Expr>((body, value) => ({ kind: "let", ...value, body }), comparison);
       }
       // || undefined on optional → identity (no-op: x || undefined = x) when the
       // inner type is always truthy. When it can be falsy, JS still drops the
@@ -2593,6 +2608,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   _liftCounter = 0;
   _callbackCounter = 0;
   _branchCounter = 0;
+  _comparisonCounter = 0;
   _typeDecls = mod.typeDecls;
   _neededKindHelpers = new Map();
   _pureDefNames = new Set(mod.functions.filter(f => f.isPure).map(f => f.name));
