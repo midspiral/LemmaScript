@@ -123,6 +123,16 @@ interface Ctx {
   inLambda: boolean;
   narrowedPaths: NarrowedPath[];  // pure access path narrowing for conditional then-branches
   narrowedIndices: NarrowedIndex[];  // `k in m` atoms known-true in this scope
+  /** Presence narrowings from an enclosing `while` guard. Each ends at the
+   *  first statement that assigns its root variable; `declaredTy` (bare
+   *  variables only) is the type to restore and to check assignments against. */
+  loopNarrowings?: LoopNarrowing[];
+}
+
+interface LoopNarrowing {
+  root: string;
+  declaredTy?: Ty;
+  path?: AccessPath;
 }
 
 function withEnv(ctx: Ctx, env: Env | null): Ctx {
@@ -362,6 +372,50 @@ function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
     }
   }
   return ctx;
+}
+
+/** The source name of a resolved variable: an inlined callback parameter
+ *  reads under its `emittedName`, but assignments target the source name. */
+function sourceName(env: Env | null, name: string): string {
+  if (binding(env, name)) return name;
+  for (let e = env; e; e = e.parent) if (e.emittedName === name) return e.name;
+  return name;
+}
+
+/** Narrow a `while` body by the positive presence checks in its resolved
+ *  guard — the same `&&`-chain facts narrow's `ruleWhilePresent` matches.
+ *  Each narrowing is recorded in `loopNarrowings` so `resolveBlock` can end
+ *  it where the body assigns the variable. Discriminant checks are left
+ *  alone: no loop driver rewrites them. */
+function collectWhileNarrowings(cond: TExpr, ctx: Ctx): Ctx {
+  if (cond.kind === "binop" && cond.op === "&&") {
+    return collectWhileNarrowings(cond.right, collectWhileNarrowings(cond.left, ctx));
+  }
+  const f = presentFact(cond);
+  const path = f && !f.negated ? asTExprAccessPath(f.scrutinee) : null;
+  if (!f || !path) return ctx;
+  const root = sourceName(ctx.env, path.rootVar);
+  const loopNarrowings = ctx.loopNarrowings ?? [];
+  if (path.fields.length === 0) {
+    return { ...ctx, env: refine(ctx.env, root, f.innerTy),
+      loopNarrowings: [...loopNarrowings, { root, declaredTy: lookup(ctx.env, root) }] };
+  }
+  return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: f.innerTy }],
+    loopNarrowings: [...loopNarrowings, { root, path }] };
+}
+
+/** Does any statement in `stmts` (at any depth) assign `root` or a path
+ *  rooted at it? Lambdas are separate scopes and are not searched. */
+function assignsRoot(stmts: RawStmt[], root: string): boolean {
+  return stmts.some(s => {
+    switch (s.kind) {
+      case "assign": return s.target.split(/[.[]/, 1)[0] === root;
+      case "if": return assignsRoot(s.then, root) || assignsRoot(s.else, root);
+      case "while": case "forof": return assignsRoot(s.body, root);
+      case "switch": return s.cases.some(c => assignsRoot(c.body, root)) || assignsRoot(s.defaultBody, root);
+      default: return false;
+    }
+  });
 }
 
 /** TS reference types that become value types in Dafny/Lean — const bindings need mutable var. */
@@ -1550,11 +1604,29 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
   let env = ctx.env;
   let narrowedIndices = ctx.narrowedIndices;
   let narrowedPaths = ctx.narrowedPaths;
+  let loopNarrowings = ctx.loopNarrowings;
+  // End the loop narrowings whose root `s` assigns: restore the declared type
+  // and drop field-path narrowings under that root.
+  const endLoopNarrowings = (s: RawStmt) => {
+    if (!loopNarrowings?.length) return;
+    const ended = loopNarrowings.filter(n => assignsRoot([s], n.root));
+    if (ended.length === 0) return;
+    loopNarrowings = loopNarrowings.filter(n => !ended.includes(n));
+    for (const n of ended) {
+      if (n.declaredTy) env = refine(env, n.root, n.declaredTy);
+      if (n.path) narrowedPaths = narrowedPaths.filter(p => !accessPathsEqual(p.path, n.path!));
+    }
+  };
   for (const s of stmts) {
-    const currentCtx = { ...ctx, env, narrowedIndices, narrowedPaths };
+    // A nested loop that assigns the root reaches its guard and body again
+    // with the assigned value, so the narrowing ends before it.
+    if (s.kind === "while" || s.kind === "forof") endLoopNarrowings(s);
+    const currentCtx = { ...ctx, env, narrowedIndices, narrowedPaths, loopNarrowings };
     const [typed, nextEnv] = resolveStmt(s, currentCtx);
     result.push(typed);
     env = nextEnv;
+    if (s.kind === "let") loopNarrowings = loopNarrowings?.filter(n => n.root !== s.name);
+    else endLoopNarrowings(s);
     // Flow narrowing: if (x === undefined) { return } narrows x for rest of block.
     // Also handles compound: if (x === undefined || y === undefined) { return }
     // Any terminator counts (return/throw/break/continue — same set as narrow's
@@ -1653,7 +1725,10 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         throw new Error(`assignment to callback binding '${s.target}' requires materializing its argument value`);
       }
       entry?.onRead?.();
-      const targetTy = lookup(ctx.env, s.target) ?? { kind: "unknown" as const };
+      // A loop-narrowed variable keeps its declared optional type for
+      // assignment: the body may store `undefined` or a present value.
+      const loopDeclaredTy = ctx.loopNarrowings?.find(n => n.root === s.target)?.declaredTy;
+      const targetTy = loopDeclaredTy ?? lookup(ctx.env, s.target) ?? { kind: "unknown" as const };
       // Propagate the target's type as returnTy, mirroring the annotated-let
       // case, so record/union literals and array literals in the RHS resolve
       // to their named datatypes.
@@ -1700,12 +1775,13 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     case "while": {
       const whileSpecCtx = { ...ctx, inSpec: true };
       const resolvedInvariants = resolveSpecs(s.invariants, whileSpecCtx);
+      const cond = resolveExpr(s.cond, ctx);
       // Invariants hold at the top of the body, so any `k in m` atoms among them
-      // narrow map index access in the body.
-      const bodyCtx = withInAtoms(ctx, resolvedInvariants.flatMap(extractInAtoms));
+      // narrow map index access in the body. So do the guard's presence checks.
+      const bodyCtx = withInAtoms(collectWhileNarrowings(cond, ctx), resolvedInvariants.flatMap(extractInAtoms));
       return [{
         kind: "while",
-        cond: resolveExpr(s.cond, ctx),
+        cond,
         invariants: resolvedInvariants,
         decreases: s.decreases ? resolveSpec(s.decreases, whileSpecCtx) : null,
         doneWith: s.doneWith ? resolveSpec(s.doneWith, whileSpecCtx) : null,

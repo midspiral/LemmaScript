@@ -93,7 +93,7 @@ function walkStmt(s: TStmt, ctx: CondCtx): TStmt {
   // array rule fires; independent narrows commute, so the order is harmless.)
   // && rules fire before the simple rule because they produce nested ifs whose
   // inner shape doesn't match the simple rule directly.
-  return ruleIfAndOptional(r, ctx) ?? ruleIfAndArrayIsArray(r, ctx) ?? ruleIfOptionalSimple(r, ctx) ?? ruleExprStmtAndOptional(r, ctx) ?? ruleOptionalIndexBinding(r) ?? r;
+  return ruleIfAndOptional(r, ctx) ?? ruleIfAndArrayIsArray(r, ctx) ?? ruleIfOptionalSimple(r, ctx) ?? ruleExprStmtAndOptional(r, ctx) ?? ruleWhilePresent(r, ctx) ?? ruleOptionalIndexBinding(r) ?? r;
 }
 
 function walkStmts(stmts: TStmt[], ctx: CondCtx): TStmt[] {
@@ -549,6 +549,39 @@ function ruleConditionalAndOptional(e: TExpr, ctx: CondCtx): TExpr | null {
     cond: restCond, then: e.then, else: e.else, ty: e.ty,
   };
   return presentMatchExpr(check, walkExpr(innerCond, ctx), e.else, e.ty, ctx);
+}
+
+/** Driver: `while (x !== undefined && rest) body` — positive presence facts
+ *  in loop-guard position. Every positive fact in the `&&` chain is peeled:
+ *  → `while (someMatch x { Some(_x_val) => rest, None => false })
+ *       { someMatch x { Some(_x_val) => body, None => {} } }`.
+ *  The guard holds at the top of every iteration, so the body match never
+ *  takes its None arm. The body may reassign `x`; resolve types the reads
+ *  after that assignment as optional, and `narrowedReadsOnly` keeps them off
+ *  the binder. Skips residuals with method calls, like the ternary driver. */
+function ruleWhilePresent(s: TStmt, ctx: CondCtx): TStmt | null {
+  if (s.kind !== "while") return null;
+  const facts: PresentFact[] = [];
+  let rest: TExpr | null = s.cond;
+  for (let ex = leadingPresent(rest); ex; ex = leadingPresent(rest)) {
+    facts.push(ex.check);
+    rest = ex.restCond;
+  }
+  const last = presentFact(rest);
+  if (last && !last.negated) { facts.push(last); rest = null; }
+  if (facts.length === 0) return null;
+  if (rest && containsMethodCall(rest)) return null;
+  const boolTy = { kind: "bool" } as const;
+  const falseExpr: TExpr = { kind: "bool", value: false, ty: boolTy };
+  const cond = facts.reduceRight<TExpr>(
+    (inner, f) => presentMatchExpr(f, inner, falseExpr, boolTy, ctx),
+    rest ?? { kind: "bool", value: true, ty: boolTy });
+  const body = facts.reduceRight<TStmt[]>((inner, f) => {
+    const b = bindPresentFact(f, ctx);
+    return [{ kind: "someMatch", scrutinee: b.scrutinee, binder: b.binder, binderTy: b.innerTy,
+      someBody: inner, noneBody: [], narrowedReadsOnly: true }];
+  }, s.body);
+  return { ...s, cond, body };
 }
 
 // ── Variant drivers (discriminants and synth array-unions) ──
