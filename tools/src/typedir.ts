@@ -143,7 +143,11 @@ export type TStmt =
   | { kind: "ghostAssign"; target: string; value: TExpr }
   | { kind: "assert"; expr: TExpr; assumed?: boolean }
   | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
-      someBody: TStmt[]; noneBody: TStmt[] }
+      someBody: TStmt[]; noneBody: TStmt[];
+      /** Replace only the scrutinee reads that resolve typed as non-optional.
+       *  Set for a `while` body, which may reassign the scrutinee: reads after
+       *  the assignment keep the variable's current value. */
+      narrowedReadsOnly?: true }
   | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
       cases: { variant: string; body: TStmt[] }[];
       fallthrough: TStmt[] }

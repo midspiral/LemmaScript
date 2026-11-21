@@ -1865,15 +1865,17 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       return [...binds, { kind: "if", cond, then: transformStmts(s.then, typeDecls), else: transformStmts(s.else, typeDecls) }];
     }
 
-    case "while":
+    case "while": {
+      const cond = asCondition(s.cond);
       return [{
         kind: "while",
-        cond: transformExpr(asCondition(s.cond)),
+        cond: (_opts.backend === "dafny" ? presenceGuardDafny(cond) : null) ?? transformExpr(cond),
         invariants: s.invariants.map(transformExpr),
         decreasing: s.decreases ? transformExpr(s.decreases) : null,
         doneWith: s.doneWith ? transformExpr(s.doneWith) : null,
         body: eliminateTopLevelContinue(transformStmts(s.body, typeDecls)),
       }];
+    }
 
     case "throw":
       return [{ kind: "assert", expr: { kind: "bool", value: false } }];
@@ -1896,7 +1898,9 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     case "someMatch": {
       const path = asTAccessPath(s.scrutinee);
       if (path) {
-        const replaced = replacePathInTStmts(s.someBody, path, s.binder, s.binderTy);
+        const replaced = s.narrowedReadsOnly
+          ? replaceNarrowedPathInTStmts(s.someBody, path, s.binder, s.binderTy)
+          : replacePathInTStmts(s.someBody, path, s.binder, s.binderTy);
         const someBody = transformStmts(replaced, typeDecls);
         const noneBody = transformStmts(s.noneBody, typeDecls);
         const scrutinee: Expr = path.fields.length === 0 ? varE(path.rootVar) : transformExpr(s.scrutinee);
@@ -2244,6 +2248,35 @@ function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, b
     matchesAccessPath(e, path)
       ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
   ));
+}
+
+/** Like `replacePathInTStmts`, but keeps reads that resolve left optional:
+ *  those follow an assignment to the path, so the binder would be stale. */
+function replaceNarrowedPathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, binderTy: Ty): TStmt[] {
+  return stmts.map(s => mapTStmt(s, e =>
+    matchesAccessPath(e, path) && e.ty.kind !== "optional"
+      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
+  ));
+}
+
+/** Dafny `while` guard from narrow's `ruleWhilePresent`:
+ *  `match x { Some(v) => E, None => false }` → `x.Some? && E[v := x.value]`.
+ *  Dafny infers a loop's termination measure from comparisons in its guard,
+ *  such as `x.value < |a|`, but not from inside a `match`. Nested presence
+ *  matches in `E` lower the same way. */
+function presenceGuardDafny(e: TExpr): Expr | null {
+  if (e.kind !== "someMatch" || e.noneBody.kind !== "bool" || e.noneBody.value !== false) return null;
+  const path = asTAccessPath(e.scrutinee);
+  if (!path) return null;
+  const scrutinee = transformExpr(e.scrutinee);
+  const someBody = replacePathInTExpr(e.someBody, path, e.binder, e.binderTy);
+  const inner = presenceGuardDafny(someBody) ?? transformExpr(someBody);
+  const value: Expr = { kind: "field", obj: scrutinee, field: "value", datatypeField: true };
+  return {
+    kind: "binop", op: "&&",
+    left: { kind: "binop", op: "==", left: scrutinee, right: { kind: "constructor", name: "some", args: [] } },
+    right: replaceVar(inner, e.binder, value),
+  };
 }
 
 

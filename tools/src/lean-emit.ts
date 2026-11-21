@@ -666,7 +666,10 @@ function emitStmt(s: Stmt, indent: number): string {
 
     case "while": {
       // Guard is computational (Bool); invariants / done_with are Prop.
-      const lines = [`${pad}while ${emitExpr(s.cond)}`];
+      // A match guard (a narrowed presence check) gets a Bool ascription so
+      // a Prop arm such as `v > 0` elaborates against the Bool `false` arm.
+      const cond = emitExpr(s.cond);
+      const lines = [`${pad}while ${s.cond.kind === "match" ? `(${cond} : Bool)` : cond}`];
       const prevBoolCtx = _boolCtx;
       _boolCtx = false;
       for (const inv of s.invariants) lines.push(`${pad}  invariant invariant_${++_invariantIndex}: (${emitExpr(inv)} : Prop)`);
