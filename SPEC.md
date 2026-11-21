@@ -734,7 +734,8 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 **Optional narrowing.** All these patterns narrow the optional to its inner type in the appropriate scope:
 
-- Equality: `v !== undefined`, `v === undefined` (early return)
+- Equality: `v !== undefined`, `v === undefined` (early return), in either operand order. The loose forms `v != null`, `v != undefined`, `v == null` and `v == undefined` are the same checks: extract rewrites `==`/`!=` as `===`/`!==`, and `null` and `undefined` both model as `None`.
+- Negation: `!c` for any check `c` here tests the opposite, so `!(v === undefined)` narrows like `v !== undefined` and `!!v` like `v`.
 - Truthiness: `if (v)`, `if (!v)`, `opt ? a : b`
 - Composition: `v && rest` or `rest && v` (optional check on either side) — in an `if`/`?:` condition or as a bare statement (`v !== undefined && v.f()`, the `if`-less guard idiom)
 - Disjunctive early return: `a === undefined || b === undefined`, `!x || x.f !== v`, `x?.t !== 'm' || x.g`
