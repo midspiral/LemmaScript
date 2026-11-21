@@ -2240,10 +2240,58 @@ function replacePathInTExpr(expr: TExpr, path: AccessPath, binder: string, binde
 }
 
 function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, binderTy: Ty): TStmt[] {
-  return stmts.map(s => mapTStmt(s, e =>
-    matchesAccessPath(e, path)
-      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
-  ));
+  const out: TStmt[] = [];
+  for (let i = 0; i < stmts.length; i++) {
+    const s = stmts[i];
+    if (!stmtWritesPath(s, path)) {
+      out.push(mapTStmt(s, e =>
+        matchesAccessPath(e, path) ? { kind: "var", name: binder, ty: binderTy } as TExpr : null));
+      continue;
+    }
+    // The binder holds the value from before this write, so substitution
+    // stops here (#342): reads after it see the variable, which narrow has
+    // re-bound when it is still defined.
+    out.push(replacePathUpToWrite(s, path, binder, binderTy), ...stmts.slice(i + 1));
+    return out;
+  }
+  return out;
+}
+
+/** Substitute in the parts of `s` that run before its write to `path`. */
+function replacePathUpToWrite(s: TStmt, path: AccessPath, binder: string, binderTy: Ty): TStmt {
+  const r = (e: TExpr) => replacePathInTExpr(e, path, binder, binderTy);
+  const block = (b: TStmt[]) => replacePathInTStmts(b, path, binder, binderTy);
+  switch (s.kind) {
+    case "assign": case "ghostAssign": return { ...s, value: r(s.value) };
+    case "if": return { ...s, cond: r(s.cond), then: block(s.then), else: block(s.else) };
+    case "switch": return { ...s, expr: r(s.expr),
+      cases: s.cases.map(c => ({ ...c, body: block(c.body) })), defaultBody: block(s.defaultBody) };
+    case "someMatch": return { ...s, scrutinee: r(s.scrutinee), someBody: block(s.someBody), noneBody: block(s.noneBody) };
+    case "tagMatch": return { ...s, scrutinee: r(s.scrutinee),
+      cases: s.cases.map(c => ({ ...c, body: block(c.body) })), fallthrough: block(s.fallthrough) };
+    // A loop body runs again after its write; resolve rejects writes inside
+    // a loop to a narrowing from outside it.
+    default: return s;
+  }
+}
+
+/** Whether `s` assigns `path`, a prefix of it, or a path below it. */
+function stmtWritesPath(s: TStmt, path: AccessPath): boolean {
+  const writes = (target: string) => {
+    const [rootVar, ...fields] = target.split("[")[0].split(".").map(p => p.trim());
+    const n = Math.min(fields.length, path.fields.length);
+    return rootVar === path.rootVar && fields.slice(0, n).every((f, i) => f === path.fields[i]);
+  };
+  const any = (b: TStmt[]) => b.some(t => stmtWritesPath(t, path));
+  switch (s.kind) {
+    case "assign": case "ghostAssign": return writes(s.target);
+    case "if": return any(s.then) || any(s.else);
+    case "while": case "forof": return any(s.body);
+    case "switch": return s.cases.some(c => any(c.body)) || any(s.defaultBody);
+    case "someMatch": return any(s.someBody) || any(s.noneBody);
+    case "tagMatch": return s.cases.some(c => any(c.body)) || any(s.fallthrough);
+    default: return false;
+  }
 }
 
 
