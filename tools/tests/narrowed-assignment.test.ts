@@ -8,8 +8,9 @@ import { Project, ScriptTarget } from "ts-morph";
 import { extractModule } from "../src/extract.ts";
 import { resolveModule } from "../src/resolve.ts";
 import { narrowModule } from "../src/narrow.ts";
-import { transformModuleDafny } from "../src/transform.ts";
+import { transformModuleDafny, transformModuleLean } from "../src/transform.ts";
 import { emitDafnyFile } from "../src/dafny-emit.ts";
+import { emitLeanFile, resetLeanModule } from "../src/lean-emit.ts";
 import { peepholeModule } from "../src/peephole.ts";
 import * as runtime from "../../examples/narrowedAssignment.ts";
 
@@ -17,14 +18,18 @@ import * as runtime from "../../examples/narrowedAssignment.ts";
 // `!== undefined` must end the narrowing instead of leaving reads bound to the
 // stale match binder.
 
-function generate(source: string): string {
+function generate(source: string, backend: "dafny" | "lean" = "dafny"): string {
   const project = new Project({ compilerOptions: { strict: true, target: ScriptTarget.ESNext,
     lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true } });
   const file = project.createSourceFile("narrowed.ts", source);
   const diagnostics = project.getPreEmitDiagnostics();
   assert.equal(diagnostics.length, 0, project.formatDiagnosticsWithColorAndContext(diagnostics));
-  const { typesFile, defFile } = transformModuleDafny(narrowModule(resolveModule(extractModule(file))));
-  return emitDafnyFile(peepholeModule({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] }, "dafny"));
+  const module = narrowModule(resolveModule(extractModule(file)));
+  const { typesFile, defFile } = (backend === "dafny" ? transformModuleDafny : transformModuleLean)(module);
+  const output = peepholeModule({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] }, backend);
+  if (backend === "dafny") return emitDafnyFile(output);
+  resetLeanModule();
+  return emitLeanFile(output);
 }
 
 function verify(text: string) {
@@ -57,6 +62,55 @@ test("narrowed-assignment example agrees with JavaScript", () => {
   assert.equal(runtime.assignUndefined(undefined), 0);
   assert.equal(runtime.compareAfterUndefined(3), 1);
   assert.equal(runtime.compareAfterUndefined(undefined), 0);
+  assert.equal(runtime.clearInExitingBranch(3, true), 1);
+  assert.equal(runtime.clearInExitingBranch(3, false), 4);
+  assert.equal(runtime.clearInExitingBranch(undefined, false), 0);
+  assert.equal(runtime.assignAndReturnInBranch(3, true), 5);
+  assert.equal(runtime.assignAndReturnInBranch(3, false), 3);
+  assert.equal(runtime.assignAndReturnInBranch(undefined, true), 0);
+  assert.equal(runtime.replaceOwnerInExitingBranch({ v: 3 }, true), 0);
+  assert.equal(runtime.replaceOwnerInExitingBranch({ v: 3 }, false), 4);
+  assert.equal(runtime.replaceOwnerInExitingBranch({}, false), 0);
+  assert.equal(runtime.rebindGeneric(3, 8), 8);
+  assert.equal(runtime.rebindGeneric(undefined, 8), undefined);
+});
+
+test("a write in a branch that always exits leaves the narrowing in place after it", () => {
+  const text = generate(`
+export function nestedExit(p: number | undefined, a: boolean, b: boolean): number {
+  //@ ensures p !== undefined && !a ==> \\result === p + 1
+  let o = p;
+  if (o !== undefined) {
+    if (a) {
+      o = undefined;
+      if (b) {
+        return 1;
+      } else {
+        return 2;
+      }
+    }
+    return o + 1;
+  }
+  return 0;
+}
+`);
+  const result = verify(text);
+  assert.equal(result.status, 0, `${result.output}\n${text}`);
+});
+
+test("Lean re-binds fall back to the earlier binder, which needs no Inhabited", () => {
+  const text = generate(`
+export function rebind<T>(p: T | undefined, q: T): T | undefined {
+  let o = p;
+  if (o !== undefined) {
+    o = q;
+    return o;
+  }
+  return undefined;
+}
+`, "lean");
+  assert.doesNotMatch(text, /default/, text);
+  assert.match(text, /\| \.none => _o_val\)/, text);
 });
 
 test("a read after reassigning a narrowed path sees the assigned value", () => {

@@ -2,6 +2,8 @@
 
 datatype Option<T> = None | Some(value: T)
 
+datatype Box = Box(v: Option<int>)
+
 method assignDefined(p: Option<int>) returns (res: int)
   ensures (match p { case Some(i_p_val) => (res == 5) case None => true })
   ensures ((match p { case Some(i_) => false case None => true }) ==> (res == 0))
@@ -117,4 +119,77 @@ method compareAfterUndefined(p: Option<int>) returns (res: int)
 
   }
   return t;
+}
+
+method clearInExitingBranch(p: Option<int>, c: bool) returns (res: int)
+  ensures (match p { case Some(i_p_val) => (c ==> (res == 1)) case None => true })
+  ensures (match p { case Some(i_p_val) => (!(c) ==> (res == (i_p_val + 1))) case None => true })
+  ensures ((match p { case Some(i_) => false case None => true }) ==> (res == 0))
+{
+  var o := p;
+  match o {
+    case Some(i_o_val) =>
+      if c {
+        o := None;
+        return 1;
+      }
+      return (i_o_val + 1);
+    case None =>
+
+  }
+  return 0;
+}
+
+method assignAndReturnInBranch(p: Option<int>, c: bool) returns (res: int)
+  ensures (match p { case Some(i_p_val) => (c ==> (res == 5)) case None => true })
+  ensures (match p { case Some(i_p_val) => (!(c) ==> (res == i_p_val)) case None => true })
+  ensures ((match p { case Some(i_) => false case None => true }) ==> (res == 0))
+{
+  var o := p;
+  match o {
+    case Some(i_o_val) =>
+      if c {
+        o := Some(5);
+        var i_o_val' := o.value;
+        return i_o_val';
+      }
+      return i_o_val;
+    case None =>
+
+  }
+  return 0;
+}
+
+method replaceOwnerInExitingBranch(p: Box, c: bool) returns (res: int)
+  ensures (match p.v { case Some(i_p_v_val) => (c ==> (res == 0)) case None => true })
+  ensures (match p.v { case Some(i_p_v_val) => (!(c) ==> (res == (i_p_v_val + 1))) case None => true })
+{
+  var b := p;
+  match b.v {
+    case Some(i_b_v_val) =>
+      if c {
+        b := Box(None);
+        return 0;
+      }
+      return (i_b_v_val + 1);
+    case None =>
+
+  }
+  return 0;
+}
+
+method rebindGeneric<T>(p: Option<T>, q: T) returns (res: Option<T>)
+  ensures (match p { case Some(i_p_val) => (match res { case Some(i_value) => (i_value == q) case None => false }) case None => true })
+  ensures ((match p { case Some(i_) => false case None => true }) ==> (match res { case Some(i_) => false case None => true }))
+{
+  var o := p;
+  match o {
+    case Some(i_o_val) =>
+      o := Some(q);
+      var i_o_val' := o.value;
+      return Some(i_o_val');
+    case None =>
+
+  }
+  return None;
 }
