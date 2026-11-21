@@ -93,21 +93,16 @@ export function bindPresentFact(f: PresentFact, ctx: CondCtx): PresentFact {
   return { ...f, binder: freshPathBinder(f.scrutinee, ctx)! };
 }
 
-/** Detect optional checks: `e !== undefined`, `e === undefined`, `!e`, or a
- *  bare optional `e` — for a pure-access-path optional-typed `e`. `!e` and
- *  bare `e` are truthiness forms. `!!c` is the same check as `c`. Following
- *  TS, only pure access paths narrow; complex scrutinees return null. */
+/** Detect optional checks: `e !== undefined`, `e === undefined`, or a bare
+ *  optional `e` — for a pure-access-path optional-typed `e` — and `!c` for any
+ *  such check `c`, which tests the opposite. Bare `e` and `!e` are truthiness
+ *  forms. Extract has already rewritten `==`/`!=` as `===`/`!==` and `null` as
+ *  `undefined`. Following TS, only pure access paths narrow; complex
+ *  scrutinees return null. */
 export function presentFact(cond: TExpr): PresentFact | null {
-  if (cond.kind === "unop" && cond.op === "!" && cond.expr.kind === "unop" && cond.expr.op === "!")
-    return presentFact(cond.expr.expr);
-  // `!e` where e is optional — a truthiness form: false iff e is absent OR its
-  // inner value is itself falsy (so `Some(0)`/`Some("")` count as falsy too).
-  if (cond.kind === "unop" && cond.op === "!" && cond.expr.ty.kind === "optional") {
-    const e = cond.expr;
-    const innerTy = cond.expr.ty.inner;
-    const hint = binderHintFor(e);
-    if (hint === null) return null;
-    return { scrutinee: e, innerTy, negated: true, binder: freshName(hint), truthiness: true };
+  if (cond.kind === "unop" && cond.op === "!") {
+    const f = presentFact(cond.expr);
+    return f && { ...f, negated: !f.negated };
   }
   if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) {
     // Bare optional truthiness: `if (e)` where e: T | undefined — true iff e is

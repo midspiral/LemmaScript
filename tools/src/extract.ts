@@ -353,6 +353,8 @@ function _eraseGenerics(tsType: string): string {
   return tsType;
 }
 
+const LOOSE_TO_STRICT: Record<string, string> = { "==": "===", "!=": "!==" };
+
 function extractExpr(node: Expression): RawExpr {
   // Havoc key matching: replace matching calls or new expressions with havoc expression
   if (_havocKey && (Node.isCallExpression(node) || Node.isNewExpression(node))) {
@@ -521,7 +523,10 @@ function extractExpr(node: Expression): RawExpr {
     if (op === "??") {
       return { kind: "nullish", left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
     }
-    return { kind: "binop", op, left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
+    // Loose equality lowers like strict equality (SPEC: `==` ↦ `=`): TS rejects
+    // comparisons whose types do not overlap, and `null` and `undefined` both
+    // model as `None`. One spelling lets every narrowing rule see `!= null`.
+    return { kind: "binop", op: LOOSE_TO_STRICT[op] ?? op, left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
   }
 
   // Prefix unary: !x, -x
