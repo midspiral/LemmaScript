@@ -51,5 +51,6 @@ lean_lib Examples where
     `«forContinue.types», `«forContinue.def», `«forContinue.proof»,
     `«arrayFind.types», `«arrayFind.def»,
     `«ctorName.types», `«ctorName.def»,
-    `«switchEnumField.types», `«switchEnumField.def», `«switchEnumField.proof»
+    `«switchEnumField.types», `«switchEnumField.def», `«switchEnumField.proof»,
+    `«mathTruncRound.types», `«mathTruncRound.def», `«mathTruncRound.proof»
   ]
