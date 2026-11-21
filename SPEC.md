@@ -1145,14 +1145,14 @@ function CeilReal(x: real): int {
 
 ### 6.2 String Literals as Constructors
 
-When a variable has a user-defined type, string literal comparisons map to constructor equality:
+When the expected type is a named string-literal union (e.g., `type State = "idle" | "connecting"`), string literals map to constructors and comparisons map to constructor equality:
 
 | TypeScript | Lean | Dafny |
 |-----------|------|-------|
 | `state === "idle"` | `state = .idle` | `state.idle?` |
 | `"connecting"` (as value) | `.connecting` | `State.connecting` |
 
-The same coercion applies wherever a string literal appears in a user-type context: ternary branches, record fields, return values, and variable assignments.
+The same coercion applies in ternary branches, record fields, return values, call arguments, and variable assignments, including through aliases and optional payloads.
 
 ### 6.3 Discriminated Unions
 
