@@ -6,7 +6,7 @@
  */
 
 import type { TExpr, TStmt, TModule, Ty } from "./typedir.js";
-import { isBigInt, tyEqual } from "./typedir.js";
+import { isBigInt, tyEqual, blockExits } from "./typedir.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
 import { anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
@@ -2267,13 +2267,29 @@ function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, b
         matchesAccessPath(e, path) ? { kind: "var", name: binder, ty: binderTy } as TExpr : null));
       continue;
     }
+    out.push(replacePathUpToWrite(s, path, binder, binderTy));
+    // A write only in branches that exit leaves the binder valid afterwards.
+    if (!writeReachesAfter(s, path)) continue;
     // The binder holds the value from before this write, so substitution
     // stops here (#342): reads after it see the variable, which narrow has
     // re-bound when it is still defined.
-    out.push(replacePathUpToWrite(s, path, binder, binderTy), ...stmts.slice(i + 1));
+    out.push(...stmts.slice(i + 1));
     return out;
   }
   return out;
+}
+
+/** Whether a write by `s` to `path` can still be in effect after `s`. A write
+ *  in a branch that always exits cannot. break and continue leave the
+ *  narrowing's scope too: resolve rejects writes inside a loop or switch to a
+ *  narrowing made outside it. */
+function writeReachesAfter(s: TStmt, path: AccessPath): boolean {
+  const reaches = (b: TStmt[]) => !blockExits(b) && b.some(t => writeReachesAfter(t, path));
+  switch (s.kind) {
+    case "if": return reaches(s.then) || reaches(s.else);
+    case "someMatch": return reaches(s.someBody) || reaches(s.noneBody);
+    default: return stmtWritesPath(s, path);
+  }
 }
 
 /** Substitute in the parts of `s` that run before its write to `path`. */

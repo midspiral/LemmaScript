@@ -168,6 +168,25 @@ export function isTerminatorKind(kind: string): boolean {
   return kind === "return" || kind === "throw" || kind === "break" || kind === "continue";
 }
 
+interface ExitShape {
+  kind: string;
+  then?: readonly ExitShape[]; else?: readonly ExitShape[];
+  someBody?: readonly ExitShape[]; noneBody?: readonly ExitShape[];
+}
+
+/** Whether control never falls off the end of `stmts`: it ends in a
+ *  terminator, or in an `if` (or narrow's `someMatch` for one) whose
+ *  branches both do. Resolve and transform share this on raw and typed IR so
+ *  they agree on which writes can reach the statements after a branch (#342). */
+export function blockExits(stmts: readonly ExitShape[]): boolean {
+  const last = stmts[stmts.length - 1];
+  if (!last) return false;
+  if (isTerminatorKind(last.kind)) return true;
+  if (last.kind === "if") return blockExits(last.then ?? []) && blockExits(last.else ?? []);
+  if (last.kind === "someMatch") return blockExits(last.someBody ?? []) && blockExits(last.noneBody ?? []);
+  return false;
+}
+
 // ── Top-level ────────────────────────────────────────────────
 
 export interface TParam {

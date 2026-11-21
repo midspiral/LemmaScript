@@ -8,7 +8,7 @@
 import path from "path";
 import type { RawExpr, RawStmt, RawFunction, RawModule } from "./rawir.js";
 import type { Ty, TExpr, TStmt, TFunction, TModule, TParam, CallKind } from "./typedir.js";
-import { isBigInt, tyEqual, isTerminatorKind } from "./typedir.js";
+import { isBigInt, tyEqual, isTerminatorKind, blockExits } from "./typedir.js";
 import { parseTsType, tyToCanonical } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
@@ -1579,6 +1579,16 @@ function writtenTargets(stmts: RawStmt[]): { target: string; line: number }[] {
   });
 }
 
+/** The writes in `stmts` that can still be in effect after them. A write in
+ *  a branch that always exits (return, throw, break, continue) cannot:
+ *  control after the branch never passes through it. */
+function reachingWrites(stmts: RawStmt[]): { target: string; line: number }[] {
+  if (blockExits(stmts)) return [];
+  return stmts.flatMap(s => s.kind === "if"
+    ? [...reachingWrites(s.then), ...reachingWrites(s.else)]
+    : writtenTargets([s]));
+}
+
 /** The access path an assignment target writes: `b.v` → b, [v]; for an
  *  element write (`xs[i] = v`, `a[i].f = v`) the path stops before the first
  *  index, since everything under it may change. */
@@ -1657,7 +1667,7 @@ function resolveBlockFlow(stmts: RawStmt[], ctx: Ctx): { stmts: TStmt[]; env: En
     // Transform stops substituting the match binder at the same statements.
     // Variant narrowings are left alone.
     const kept = typed.kind === "if" ? (typed.renarrow ?? []).map(r => r.target) : [];
-    for (const w of writtenTargets([s])) {
+    for (const w of reachingWrites([s])) {
       const t = targetPath(w.target);
       narrowedPaths = narrowedPaths.filter(n => n.variant !== undefined || !pathsOverlap(n.path, t));
       const keptHere = (s.kind === "assign" && s.target === t.rootVar) ||
@@ -1702,7 +1712,7 @@ function resolveBlockFlow(stmts: RawStmt[], ctx: Ctx): { stmts: TStmt[]; env: En
  *  that continues past it (TypeScript keeps them narrowed). Narrow re-binds
  *  each one after the `if`. */
 function renarrowsAfterIf(s: RawStmt & { kind: "if" }, ctx: Ctx, continuing: (Env | null)[]): { target: string; declaredTy: Ty; innerTy: Ty }[] {
-  const names = new Set(writtenTargets([s]).map(w => w.target).filter(t => t === targetPath(t).rootVar));
+  const names = new Set(reachingWrites([s]).map(w => w.target).filter(t => t === targetPath(t).rootVar));
   const out: { target: string; declaredTy: Ty; innerTy: Ty }[] = [];
   for (const name of names) {
     const entry = binding(ctx.env, name);
@@ -1835,8 +1845,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       elseCtx = withInAtoms(elseCtx, extractInAtomsNegated(resolvedCond));
       const thenFlow = resolveBlockFlow(s.then, thenCtx);
       const elseFlow = resolveBlockFlow(s.else, elseCtx);
-      const exits = (b: RawStmt[]) => b.length > 0 && isTerminatorKind(b[b.length - 1].kind);
-      const continuing = [...(exits(s.then) ? [] : [thenFlow.env]), ...(exits(s.else) ? [] : [elseFlow.env])];
+      const continuing = [...(blockExits(s.then) ? [] : [thenFlow.env]), ...(blockExits(s.else) ? [] : [elseFlow.env])];
       const renarrow = renarrowsAfterIf(s, ctx, continuing);
       return [{
         kind: "if", cond: resolvedCond, then: thenFlow.stmts, else: elseFlow.stmts,
