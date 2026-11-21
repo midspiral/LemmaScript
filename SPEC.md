@@ -494,8 +494,8 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `s.trim()` | — | `StringTrim(s)` |
 | `s.trimEnd()` / `s.trimStart()` | — | `StringTrimRight(s)` / `StringTrimLeft(s)` |
 | `s.split(d)` (requires `\|d\| > 0`) | — | `StringSplit(s, d)` (axiomatic preamble: `1 <= \|res\| <= \|s\| + 1`) |
-| `s.toLowerCase()` | — | `StringToLower(s)` |
-| `s.toUpperCase()` | — | `StringToUpper(s)` |
+| [`s.toLowerCase()`](examples/asciiCase.ts) | — | `StringToLower(s)` (axiomatic preamble: specified only for ASCII `s`) |
+| [`s.toUpperCase()`](examples/asciiCase.ts) | — | `StringToUpper(s)` (axiomatic preamble: specified only for ASCII `s`) |
 | `s.includes(sub)` | — | `StringIndexOf(s, sub) >= 0` |
 | `s.startsWith(p)` | — | `\|s\| >= \|p\| && s[..\|p\|] == p` |
 | `s.endsWith(p)` | — | `\|s\| >= \|p\| && s[\|s\|-\|p\|..] == p` |
