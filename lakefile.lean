@@ -36,6 +36,7 @@ lean_lib Examples where
     `«iff.types», `«iff.def», `«iff.proof»,
     `«setFromArray.types», `«setFromArray.def», `«setFromArray.proof»,
     `«templateConcat.types», `«templateConcat.def», `«templateConcat.proof»,
+    `«stringIndex.types», `«stringIndex.spec», `«stringIndex.def», `«stringIndex.proof»,
     `«nestedPush.types», `«nestedPush.def», `«nestedPush.proof»,
     `«discriminantTrailing.types», `«discriminantTrailing.def», `«discriminantTrailing.proof»,
     `«spreadMerge.types», `«spreadMerge.def»,

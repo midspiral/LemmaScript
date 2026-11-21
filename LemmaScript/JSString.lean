@@ -5,6 +5,12 @@
 
 namespace JSString
 
+/-- String element access in the scalar model, for `0 ≤ i < s.length`.
+    As with generated array indexing, the Lean definition uses a defaulted
+    read; callers must establish the bounds of the supported source domain. -/
+def index (s : String) (i : Int) : String :=
+  String.singleton (s.toList[i.toNat]!)
+
 /-- JS `String.indexOf(sub)`: character index of first occurrence, or -1. -/
 def indexOf (s : String) (sub : String) : Int :=
   go s.toList sub.toList 0

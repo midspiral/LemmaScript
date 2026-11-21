@@ -484,6 +484,7 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `opt ? f(opt) : undefined` | match on Some/None | `match opt { case Some(v) => Some(f(v)) case None => None }` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
+| [`s[i]`](examples/stringIndex.ts) (string, in bounds) | `JSString.index s i` | `[s[i]]` (one-element string) |
 | `s.indexOf(sub, from)` | — (rejected) | `StringIndexOfFrom(s, sub, StringSearchPosition(s, from))`; position clamps to `[0, \|s\|]` |
 | `s.lastIndexOf(sub)` | — (rejected) | `StringLastIndexOf(s, sub)` (preamble: `-1` or a match, with no match starting later) |
 | `s.lastIndexOf(sub, from)` | — (rejected) | `StringLastIndexOfFrom(s, sub, StringSearchPosition(s, from))`; position clamps to `[0, \|s\|]` |
@@ -493,8 +494,8 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `s.trim()` | — | `StringTrim(s)` |
 | `s.trimEnd()` / `s.trimStart()` | — | `StringTrimRight(s)` / `StringTrimLeft(s)` |
 | `s.split(d)` (requires `\|d\| > 0`) | — | `StringSplit(s, d)` (axiomatic preamble: `1 <= \|res\| <= \|s\| + 1`) |
-| `s.toLowerCase()` | — | `StringToLower(s)` |
-| `s.toUpperCase()` | — | `StringToUpper(s)` |
+| [`s.toLowerCase()`](examples/asciiCase.ts) | — | `StringToLower(s)` (axiomatic preamble: specified only for ASCII `s`) |
+| [`s.toUpperCase()`](examples/asciiCase.ts) | — | `StringToUpper(s)` (axiomatic preamble: specified only for ASCII `s`) |
 | `s.includes(sub)` | — | `StringIndexOf(s, sub) >= 0` |
 | `s.startsWith(p)` | — | `\|s\| >= \|p\| && s[..\|p\|] == p` |
 | `s.endsWith(p)` | — | `\|s\| >= \|p\| && s[\|s\|-\|p\|..] == p` |

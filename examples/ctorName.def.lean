@@ -17,4 +17,4 @@ method specPure (depth : Int) returns (res : CallKind)
 
 method plain  returns (res : CallKind)
   do
-    return Pure.plain 
+    return Pure.plain
