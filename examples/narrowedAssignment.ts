@@ -30,6 +30,16 @@ export function assignInNestedIf(p: number | undefined, c: boolean): number {
   return 0;
 }
 
+export function assignInBranchAtTail(p: number | undefined, c: boolean): number {
+  //@ ensures p !== undefined && c ==> \result === p + 1
+  //@ ensures p !== undefined && !c ==> \result === p
+  //@ ensures p === undefined ==> \result === 0
+  let o = p;
+  if (o === undefined) return 0;
+  if (c) { o = o + 1; }
+  return o;
+}
+
 export function assignUndefinedInBranch(p: number | undefined, c: boolean): number {
   //@ ensures p !== undefined && c ==> \result === 9
   //@ ensures p !== undefined && !c ==> \result === p

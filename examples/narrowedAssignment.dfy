@@ -52,6 +52,24 @@ method assignInNestedIf(p: Option<int>, c: bool) returns (res: int)
   return 0;
 }
 
+method assignInBranchAtTail(p: Option<int>, c: bool) returns (res: int)
+  ensures (match p { case Some(i_p_val) => (c ==> (res == (i_p_val + 1))) case None => true })
+  ensures (match p { case Some(i_p_val) => (!(c) ==> (res == i_p_val)) case None => true })
+  ensures ((match p { case Some(i_) => false case None => true }) ==> (res == 0))
+{
+  var o := p;
+  match o {
+    case Some(i_o_val) =>
+      if c {
+        o := Some((i_o_val + 1));
+      }
+      var i_o_val' := o.value;
+      return i_o_val';
+    case None =>
+      return 0;
+  }
+}
+
 method assignUndefinedInBranch(p: Option<int>, c: bool) returns (res: int)
   ensures (match p { case Some(i_p_val) => (c ==> (res == 9)) case None => true })
   ensures (match p { case Some(i_p_val) => (!(c) ==> (res == i_p_val)) case None => true })

@@ -49,6 +49,21 @@ method assignInNestedIf (p : Option Int) (c : Bool) returns (res : Int)
       pure ()
     return 0
 
+method assignInBranchAtTail (p : Option Int) (c : Bool) returns (res : Int)
+  ensures ensures_1: ((match p with | .some _p_val => c → res = _p_val + 1 | .none => true) : Prop)
+  ensures ensures_2: ((match p with | .some _p_val => ¬(c) → res = _p_val | .none => true) : Prop)
+  ensures ensures_3: ((match p with | .some _ => false | .none => true) → res = 0 : Prop)
+  do
+    let mut o : Option Int := p
+    if h_o : (o).isSome = true then
+      let _o_val := (o).get h_o
+      if c then
+        o := some (_o_val + 1)
+      let _o_val' : Int := (match o with | .some _o_val' => _o_val' | .none => (default : Int))
+      return _o_val'
+    else
+      return 0
+
 method assignUndefinedInBranch (p : Option Int) (c : Bool) returns (res : Int)
   ensures ensures_1: ((match p with | .some _p_val => c → res = 9 | .none => true) : Prop)
   ensures ensures_2: ((match p with | .some _p_val => ¬(c) → res = _p_val | .none => true) : Prop)

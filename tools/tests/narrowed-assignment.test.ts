@@ -47,6 +47,9 @@ test("narrowed-assignment example agrees with JavaScript", () => {
   assert.equal(runtime.assignInNestedIf(3, true), 4);
   assert.equal(runtime.assignInNestedIf(3, false), 3);
   assert.equal(runtime.assignInNestedIf(undefined, true), 0);
+  assert.equal(runtime.assignInBranchAtTail(3, true), 4);
+  assert.equal(runtime.assignInBranchAtTail(3, false), 3);
+  assert.equal(runtime.assignInBranchAtTail(undefined, true), 0);
   assert.equal(runtime.assignUndefinedInBranch(3, true), 9);
   assert.equal(runtime.assignUndefinedInBranch(3, false), 3);
   assert.equal(runtime.assignUndefinedInBranch(undefined, false), 0);
