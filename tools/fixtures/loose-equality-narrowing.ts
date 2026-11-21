@@ -18,6 +18,11 @@ export function ifNegatedStrict(o: number | undefined, x: number): number {
   return 0;
 }
 
+export function ifNegatedStrictReversed(o: number | undefined, x: number): number {
+  if (!(undefined === o)) return o - x;
+  return 0;
+}
+
 export function ifReversed(o: number | undefined, x: number): number {
   if (null != o) return o - x;
   return 0;
@@ -98,4 +103,27 @@ type Color = "red" | "green";
 
 export function looseColor(c: Color): boolean {
   return c == "red";
+}
+
+export type OptBox = { val?: number };
+export type SolidBox = { val: number };
+
+export function optChainNotNull(x: OptBox | undefined): number {
+  if (x?.val != null) return 1;
+  return 2;
+}
+
+export function optChainOrNotNull(x: OptBox | undefined, flag: boolean): number {
+  if (x?.val != null || flag) return 1;
+  return 2;
+}
+
+export function optChainNeqOpt(x: SolidBox | undefined, other: number | undefined): number {
+  if (x?.val != other) return 1;
+  return 2;
+}
+
+export function optChainNeqLiteral(x: SolidBox | undefined): number {
+  if (x?.val != 42) return -1;
+  return x.val;
 }

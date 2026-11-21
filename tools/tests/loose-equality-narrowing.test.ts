@@ -40,7 +40,7 @@ function verify(text: string) {
 // Functions of `(o, x)` that return `o - x` when `o` is present. `0` is
 // present, so these are presence checks, not truthiness checks.
 const presence = [
-  "ifLooseNull", "ifLooseUndefined", "ifNegatedStrict", "ifReversed",
+  "ifLooseNull", "ifLooseUndefined", "ifNegatedStrict", "ifNegatedStrictReversed", "ifReversed",
   "ternaryLooseNull", "ternaryLooseUndefined", "ternaryNegatedStrict",
   "earlyLooseNull", "earlyLooseUndefined", "earlyReversed", "earlyNegatedStrict",
   "ternaryEqNull", "ternaryEqUndefined",
@@ -63,6 +63,22 @@ test("JavaScript: loose null checks and !(o === undefined) test presence", () =>
     assert.deepEqual([fn(a, undefined), fn(a, 1), fn(a, -1), fn(a, 3)], [0, 20, 0, 0], name);
   }
   assert.deepEqual([fixture.looseColor("red"), fixture.looseColor("green")], [true, false]);
+  assert.deepEqual(
+    [fixture.optChainNotNull(undefined), fixture.optChainNotNull({}), fixture.optChainNotNull({ val: 0 })],
+    [2, 2, 1],
+  );
+  assert.deepEqual(
+    [fixture.optChainOrNotNull(undefined, false), fixture.optChainOrNotNull(undefined, true), fixture.optChainOrNotNull({ val: 0 }, false)],
+    [2, 1, 1],
+  );
+  assert.deepEqual(
+    [fixture.optChainNeqOpt(undefined, undefined), fixture.optChainNeqOpt(undefined, 5), fixture.optChainNeqOpt({ val: 5 }, 5)],
+    [2, 1, 2],
+  );
+  assert.deepEqual(
+    [fixture.optChainNeqLiteral(undefined), fixture.optChainNeqLiteral({ val: 42 }), fixture.optChainNeqLiteral({ val: 7 })],
+    [-1, 42, -1],
+  );
 });
 
 test("Dafny narrows optionals under loose null checks and !(o === undefined)", () => {
@@ -88,6 +104,13 @@ lemma ${name}Values()
     `
 lemma looseColorValues()
   ensures looseColor(Color.red) && !looseColor(Color.green)
+{}
+
+lemma optChainLooseValues()
+  ensures optChainNotNull(None) == 2 && optChainNotNull(Some(OptBox(None))) == 2 && optChainNotNull(Some(OptBox(Some(0)))) == 1
+  ensures optChainOrNotNull(None, false) == 2 && optChainOrNotNull(None, true) == 1 && optChainOrNotNull(Some(OptBox(Some(0))), false) == 1
+  ensures optChainNeqOpt(None, None) == 2 && optChainNeqOpt(None, Some(5)) == 1 && optChainNeqOpt(Some(SolidBox(5)), Some(5)) == 2
+  ensures optChainNeqLiteral(None) == -1 && optChainNeqLiteral(Some(SolidBox(42))) == 42 && optChainNeqLiteral(Some(SolidBox(7))) == -1
 {}
 `,
   ].join("");
