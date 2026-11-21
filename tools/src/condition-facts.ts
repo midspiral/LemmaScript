@@ -89,6 +89,14 @@ export function freshPathBinder(e: TExpr, ctx: CondCtx): string | null {
   return hint === null ? null : freshBinder(ctx, hint, JSON.stringify(["path", ...pathParts(e)!]));
 }
 
+/** A binder for `e` that no other detection shares. Re-binding a variable
+ *  after an assignment needs a name distinct from the binder that still holds
+ *  the old value. */
+export function freshUnsharedPathBinder(e: TExpr, ctx: CondCtx): string | null {
+  const hint = binderHintFor(e);
+  return hint === null ? null : freshBinder(ctx, hint);
+}
+
 export function bindPresentFact(f: PresentFact, ctx: CondCtx): PresentFact {
   return { ...f, binder: freshPathBinder(f.scrutinee, ctx)! };
 }

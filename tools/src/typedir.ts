@@ -121,12 +121,19 @@ export type TExpr =
 
 export type TStmt =
   | { kind: "let"; name: string; ty: Ty; mutable: boolean; init: TExpr }
-  | { kind: "assign"; target: string; value: TExpr }
+  | { kind: "assign"; target: string; value: TExpr;
+      /** Set when `target` is a presence-narrowed variable assigned a defined
+       *  value: it stays present, so narrow re-binds it for the rest of the
+       *  block (#342). */
+      renarrow?: { declaredTy: Ty; innerTy: Ty } }
   | { kind: "return"; value: TExpr }
   | { kind: "break" }
   | { kind: "continue" }
   | { kind: "expr"; expr: TExpr }
-  | { kind: "if"; cond: TExpr; then: TStmt[]; else: TStmt[] }
+  | { kind: "if"; cond: TExpr; then: TStmt[]; else: TStmt[];
+      /** Narrowed variables the branches assign but leave defined; narrow
+       *  re-binds them after the `if` (#342). */
+      renarrow?: { target: string; declaredTy: Ty; innerTy: Ty }[] }
   | { kind: "while"; cond: TExpr;
       invariants: TExpr[];       // resolved from //@ annotation strings
       decreases: TExpr | null;
