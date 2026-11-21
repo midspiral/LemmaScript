@@ -6,7 +6,7 @@
  */
 
 import type { TExpr, TStmt, TModule, Ty } from "./typedir.js";
-import { tyEqual } from "./typedir.js";
+import { isBigInt, tyEqual } from "./typedir.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
 import { anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
@@ -858,7 +858,19 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // model, so the JS bound -(2^53 - 1) <= n <= 2^53 - 1 must be stated.
       if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Number" &&
           e.fn.field === "isSafeInteger" && e.args.length === 1 && isIntegral(e.args[0].ty)) {
-        if (e.args[0].ty.kind === "int" && e.args[0].ty.big) return { kind: "bool", value: false };
+        if (isBigInt(e.args[0].ty)) {
+          // The result is false, but JS still evaluates the argument. Keep
+          // lifted method calls and pure expressions' proof obligations.
+          const value = lowerExpr(e.args[0], binds);
+          const result: Expr = { kind: "bool", value: false };
+          if (value.kind === "var" || value.kind === "bigint") return result;
+          const name = freshName("_safeIntegerArg");
+          if (binds) {
+            binds.push({ kind: "let", name, type: e.args[0].ty, mutable: false, value });
+            return result;
+          }
+          return { kind: "let", name, type: e.args[0].ty, value, body: result };
+        }
         const n = lowerExpr(e.args[0], binds);
         const max = 9007199254740991;
         return {
