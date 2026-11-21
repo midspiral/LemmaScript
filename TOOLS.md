@@ -214,6 +214,9 @@ Throughout, `e !== undefined` includes equivalent forms: `undefined !== e`, bare
 | `e !== undefined && rest` (bare expression statement — the `if`-less guard idiom) | `someMatch e { Some(_e_val) => rest;, None => {} }` |
 | `if (a === undefined \|\| b === undefined \|\| ...) terminate; rest` | nested `someMatch` for each var, deepest body is rest |
 | `let x = (e_opt && rest) ? a : b` (statement, impure-OK guard) | `var x := b; someMatch e_opt { Some(_v) => { if rest { x := a } } }` |
+| `while (e !== undefined && rest) S` (pure rest) | `while (someMatch e { Some(_e_val) => rest, None => false }) { someMatch e { Some(_e_val) => S, None => {} } }` |
+
+The `while` rule peels every leading presence check, so `while (a !== undefined && b !== undefined && rest)` nests one match per variable in both the guard and the body. A narrowing ends at the first statement of the body that assigns the variable (or, for a field path, its root): resolve types later reads as optional, so transform substitutes the binder only into reads typed as the unwrapped value. This is stricter than TypeScript, which keeps `i` narrowed after `i = i + 1`; such a read is optional in the generated code and fails to type-check until it is re-checked. The Dafny backend lowers the guard to `e.Some? && rest[_e_val := e.value]`, because Dafny can infer a `decreases` clause from that shape and not from a `match`. Lean ascribes `Bool` to the guard's `match`, which makes the loop condition decidable.
 
 **Statement-level rules — discriminated-union narrowing** (emit `tagMatch` IR)
 
