@@ -193,7 +193,12 @@ export function flattenOr(e: TExpr): TExpr[] {
  *  `x` is Some). `residual` is the guard it still contributes once `x` is Some
  *  (`!v` for a falsy-capable `!x`; `v.chain !== lit` for an optchain compare;
  *  null otherwise). */
-export type NoneDetector = { scrutinee: TExpr; innerTy: Ty; binder: string; residual: TExpr | null };
+export type NoneDetector = {
+  scrutinee: TExpr; innerTy: Ty; binder: string; residual: TExpr | null;
+  /** Evaluation before the optional check, or on its otherwise-skipped None arm. */
+  before?: TStmt[];
+  onNone?: TStmt[];
+};
 
 /** Values that can be discarded without dropping calls or proof obligations.
  *  Even a pure call, field/index read, or arithmetic expression may require
@@ -207,13 +212,30 @@ export function noneDetector(leaf: TExpr, ctx: CondCtx): NoneDetector | null {
   if (leaf.kind === "binop" && leaf.op === "!==") {
     const oc = leaf.left.kind === "optChain" ? leaf.left : leaf.right.kind === "optChain" ? leaf.right : null;
     if (oc && oc.kind === "optChain" && oc.obj.ty.kind === "optional") {
-      const lit = leaf.left === oc ? leaf.right : leaf.left;
-      if (!isAtomicValue(lit)) return null;
+      const other = leaf.left === oc ? leaf.right : leaf.left;
+      if (["optional", "unknown", "void"].includes(other.ty.kind) ||
+          (other.kind === "var" && other.name === "undefined")) return null;
       const binder = freshPathBinder(oc.obj, ctx);
       if (binder === null) return null;
       const unwrapped = applyChain({ kind: "var", name: binder, ty: oc.obj.ty.inner }, oc.chain);
       restoreDiscriminantFlag(unwrapped, ctx.decls);
-      return { scrutinee: oc.obj, innerTy: oc.obj.ty.inner, binder, residual: { kind: "binop", op: "!==", left: unwrapped, right: lit, ty: { kind: "bool" } } };
+      let value = other;
+      const evaluation: Pick<NoneDetector, "before" | "onNone"> = {};
+      if (!isAtomicValue(other)) {
+        const name = freshBinder(ctx, "_guard");
+        const binding: TStmt = { kind: "let", name, ty: other.ty, mutable: false, init: other };
+        if (leaf.left === other) {
+          // A left operand must run before the optional chain, on either path.
+          evaluation.before = [binding];
+          value = { kind: "var", name, ty: other.ty };
+        } else {
+          // The Some residual evaluates the right operand after the chain.
+          // The None arm must evaluate it too, before taking the early exit.
+          evaluation.onNone = [binding];
+        }
+      }
+      return { scrutinee: oc.obj, innerTy: oc.obj.ty.inner, binder, ...evaluation,
+        residual: { kind: "binop", op: "!==", left: unwrapped, right: value, ty: { kind: "bool" } } };
     }
   }
   // `!x` / `x === undefined`.

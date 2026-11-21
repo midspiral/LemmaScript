@@ -87,7 +87,9 @@ export type TExpr =
   | { kind: "bigint"; value: string; ty: Ty }   // exact integer, canonical decimal
   | { kind: "str"; value: string; ty: Ty }
   | { kind: "bool"; value: boolean; ty: Ty }
-  | { kind: "binop"; op: string; left: TExpr; right: TExpr; ty: Ty }
+  | { kind: "binop"; op: string; left: TExpr; right: TExpr; ty: Ty;
+      /** Proof annotations retain their logical lowering, without executable evaluation temporaries. */
+      inSpec?: true }
   | { kind: "unop"; op: string; expr: TExpr; ty: Ty }
   | { kind: "call"; fn: TExpr; args: TExpr[]; ty: Ty; callKind: CallKind;
       builtinId?: BuiltinId;

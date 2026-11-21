@@ -41,7 +41,7 @@ import {
   type CondCtx, type PresentFact, type NoneDetector,
   presentFact, leadingPresent, leadingIsArray, flattenOr, noneDetector,
   bindPresentFact, freshPathBinder, binderHintForMapAccess, freshOcBinder,
-  applyChain, restoreDiscriminantFlag, arrayBoundsCond, exprEqual, isAtomicValue,
+  applyChain, arrayBoundsCond, exprEqual,
   isArrayFact, typeofStringFact, variantFact, negVariantFact,
   presentMatchStmts, presentMatchExpr,
 } from "./condition-facts.js";
@@ -110,7 +110,7 @@ function walkStmts(stmts: TStmt[], ctx: CondCtx): TStmt[] {
     }
     const consumed = ruleEarlyReturnOrChain(s, rest, ctx) ?? ruleEarlyReturnConsume(s, rest, ctx) ?? ruleEarlyReturnOptChainCompare(s, rest, ctx);
     if (consumed) {
-      result.push(walkStmt(consumed, ctx));
+      for (const stmt of Array.isArray(consumed) ? consumed : [consumed]) result.push(walkStmt(stmt, ctx));
       return result;
     }
     // walkStmt first — narrow's expression rules may rewrite the let init from
@@ -199,7 +199,7 @@ function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | 
  *  value guards reading a narrowed `x` directly, plus the detectors' Some-case
  *  residuals — become a trailing early-return. Sound: reaching `rest` means
  *  every disjunct was false, so every detected optional is present. */
-function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | null {
+function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt[] | null {
   if (s.kind !== "if") return null;
   if (rest.length === 0) return null;
   if (s.then.length === 0 || s.else.length !== 0 || !isTerminating(s.then)) return null;
@@ -237,11 +237,10 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | 
         const someBody: TStmt[] = d.residual
           ? [{ kind: "if", cond: d.residual, then: s.then, else: tail }]
           : tail;
-        tail = [{ kind: "someMatch", scrutinee: d.scrutinee, binderTy: d.innerTy,
-          binder: d.binder, someBody, noneBody: s.then }];
+        tail = noneMatchStmts(d, someBody, s.then);
       }
     }
-    return tail[0];
+    return tail;
   }
 
   let inner: TStmt[] = residualLeaves.length === 0
@@ -249,44 +248,38 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | 
     : [{ kind: "if", cond: residualLeaves.reduce((a, b): TExpr => ({ kind: "binop", op: "||", left: a, right: b, ty: { kind: "bool" } })), then: s.then, else: [] }, ...rest];
   for (let i = detectors.length - 1; i >= 0; i--) {
     const d = detectors[i]!;
-    inner = [{ kind: "someMatch", scrutinee: d.scrutinee, binderTy: d.innerTy, binder: d.binder, someBody: inner, noneBody: s.then }];
+    inner = noneMatchStmts(d, inner, s.then);
   }
-  return inner[0];
+  return inner;
 }
 
-/** Driver: `if (opt?.chain !== lit) terminate; rest` — bound-optional
+function noneMatchStmts(d: NoneDetector, someBody: TStmt[], noneBody: TStmt[]): TStmt[] {
+  return [...(d.before ?? []), { kind: "someMatch", scrutinee: d.scrutinee,
+    binderTy: d.innerTy, binder: d.binder, someBody, noneBody: [...(d.onNone ?? []), ...noneBody] }];
+}
+
+/** Driver: `if (opt?.chain !== value) terminate; rest` — bound-optional
  *  early-return. `opt?.chain` is `undefined` when `opt` is None, and
- *  `undefined !== lit` is true, so the None case takes the terminating branch —
+ *  `undefined !== value` is true for a non-nullish value, so the None case terminates —
  *  falling through to `rest` proves `opt` is Some. Rewrite to
- *    someMatch opt { Some(v) => [if (v.chain !== lit) terminate; rest]; None => terminate }
+ *    someMatch opt { Some(v) => [if (v.chain !== value) terminate; rest]; None => terminate }
  *  narrowing `opt` to `v` across `rest` and handing the now-non-optional inner
  *  guard to the ordinary rules (e.g. discriminant narrowing). Restricted to
- *  `!==` so the None case is guaranteed to terminate. */
-function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | null {
+ *  `!==`; noneDetector retains operand evaluation on both paths. */
+function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt[] | null {
   if (s.kind !== "if") return null;
   if (rest.length === 0) return null;
   if (s.else.length !== 0 || !isTerminating(s.then)) return null;
   const c = s.cond;
   if (c.kind !== "binop" || c.op !== "!==") return null;
-  const oc = c.left.kind === "optChain" ? c.left : c.right.kind === "optChain" ? c.right : null;
-  if (!oc || oc.kind !== "optChain" || oc.obj.ty.kind !== "optional") return null;
-  const lit = c.left === oc ? c.right : c.left;
-  // The None arm skips this operand. Calls and partial expressions must stay
-  // in the ordinary comparison, where both operands are evaluated.
-  if (!isAtomicValue(lit)) return null;
-  const innerTy = oc.obj.ty.inner;
-  const binder = freshPathBinder(oc.obj, ctx);
-  if (binder === null) return null;
-  const binderVar: TExpr = { kind: "var", name: binder, ty: innerTy };
-  const unwrapped = applyChain(binderVar, oc.chain);
-  restoreDiscriminantFlag(unwrapped, ctx.decls);
-  const innerGuard: TExpr = { kind: "binop", op: "!==", left: unwrapped, right: lit, ty: { kind: "bool" } };
+  const d = noneDetector(c, ctx);
+  if (!d?.residual) return null;
   // Keep `rest` as trailing statements (not an else branch) — `s.then` terminates,
   // so `if (g) terminate; rest` ≡ `if (g) terminate else rest`, and the trailing
   // form lets the ordinary early-exit rules (e.g. discriminant narrowing) fire on
   // the now-non-optional inner guard when `chain` is a union discriminant.
-  const someBody: TStmt[] = [{ kind: "if", cond: innerGuard, then: s.then, else: [] }, ...rest];
-  return { kind: "someMatch", scrutinee: oc.obj, binder, binderTy: innerTy, someBody, noneBody: s.then };
+  const someBody: TStmt[] = [{ kind: "if", cond: d.residual, then: s.then, else: [] }, ...rest];
+  return noneMatchStmts(d, someBody, s.then);
 }
 
 /** Driver (expression): `e !== undefined ? a : b` — presence fact in

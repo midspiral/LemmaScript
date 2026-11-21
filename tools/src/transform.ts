@@ -618,10 +618,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         // constructor (`o === "red"` → `Some(v) => v == Color.red`), mirroring the
         // non-optional string-literal rule above.
         const innerTy = optSide.ty.kind === "optional" ? optSide.ty.inner : optSide.ty;
-        // A comparison evaluates both operands even when the optional is None.
+        // An executable comparison evaluates both operands even when the optional is None.
         // Bind complex operands in source order before the match: leaving a
         // pure call in the Some arm would silently skip its preconditions.
-        const eager = !isAtomicValue(valSide);
+        // Proof annotations keep their logical comparison and existing proof text.
+        const eager = !e.inSpec && !isAtomicValue(valSide);
         const values: { name: string; value: Expr }[] = [];
         const operands = [e.left, e.right].map(arg => {
           const value: Expr = arg === valSide && valSide.kind === "str" && innerTy.kind === "user"

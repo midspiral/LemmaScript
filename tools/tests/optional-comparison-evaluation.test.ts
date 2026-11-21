@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ts from "typescript";
@@ -11,6 +11,7 @@ import { resolveModule } from "../src/resolve.ts";
 import { narrowModule } from "../src/narrow.ts";
 import { transformModuleDafny, transformModuleLean } from "../src/transform.ts";
 import { emitDafnyFile } from "../src/dafny-emit.ts";
+import { peepholeModule } from "../src/peephole.ts";
 import type { Stmt } from "../src/ir.ts";
 
 function sourceModule(text: string) {
@@ -22,9 +23,9 @@ function sourceModule(text: string) {
   return narrowModule(resolveModule(extractModule(file)));
 }
 
-function emit(text: string) {
+function emit(text: string, sourceName?: string) {
   const { typesFile, defFile } = transformModuleDafny(sourceModule(text));
-  return emitDafnyFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
+  return emitDafnyFile(peepholeModule({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] }, "dafny"), sourceName);
 }
 
 function verify(text: string) {
@@ -115,6 +116,70 @@ export function compare(x: Box | undefined, xs: number[]): number {
   assert.equal(result.status, 0, result.output);
 });
 
+for (const guard of [
+  "x?.val !== firstValue(xs)",
+  "firstValue(xs) !== x?.val",
+  "x?.val !== firstValue(xs) || y === undefined",
+  "firstValue(xs) !== x?.val || y === undefined",
+]) {
+  test(`computed guard keeps narrowing after ${guard}`, () => {
+    const output = emit(`${helper}
+export function compare(x: Box | undefined, y: number | undefined, xs: number[]): number {
+  //@ requires xs.length > 0
+  //@ ensures \\result === 0 || \\result === firstValue(xs)
+  if (${guard}) return 0;
+  return x.val;
+}`);
+    const result = verify(output);
+    assert.equal(result.status, 0, result.output);
+  });
+}
+
+test("an optional-valued operand does not establish presence", () => {
+  const output = emit(`
+type Box = { val: number };
+function missing(): number | undefined { return undefined; }
+export function compare(x: Box | undefined): number {
+  //@ requires x === undefined
+  //@ ensures \\result === 2
+  if (x?.val !== missing()) return 1;
+  return 2;
+}`);
+  const result = verify(output);
+  assert.equal(result.status, 0, result.output);
+});
+
+for (const name of ["optionalLookup", "spec"]) {
+  test(`${name} retains its existing generated specifications`, () => {
+    const source = readFileSync(new URL(`../../examples/${name}.ts`, import.meta.url), "utf8");
+    const expected = readFileSync(new URL(`../../examples/${name}.dfy.gen`, import.meta.url), "utf8");
+    assert.equal(emit(source, `${name}.ts`), expected);
+  });
+}
+
+test("quantified contracts and loop invariants keep logical optional comparisons", () => {
+  const output = emit(`
+export function readCounts(keys: string[], counts: Record<string, number>): number[] {
+  //@ requires forall(i: nat, i < keys.length ==> keys[i] in counts)
+  //@ ensures \\result.length === keys.length
+  //@ ensures forall(i: nat, i < \\result.length ==> \\result[i] === counts[keys[i]])
+  let rows: number[] = [];
+  let i = 0;
+  while (i < keys.length) {
+    //@ invariant i <= keys.length
+    //@ invariant rows.length === i
+    //@ invariant forall(j: nat, j < rows.length ==> rows[j] === counts[keys[j]])
+    const key = keys[i];
+    rows = [...rows, key in counts ? counts[key] : 0];
+    i += 1;
+  }
+  return rows;
+}`);
+  assert.doesNotMatch(output, /i_cmp\d+/);
+  const result = verify(output);
+  assert.equal(result.status, 0, result.output);
+});
+
 function calls(stmts: Stmt[], depth = 0): { name: string; id: number; depth: number }[] {
   return stmts.flatMap(s => {
     if (s.kind === "let-bind" && s.value.kind === "app" && ["optional", "value"].includes(s.value.fn)) {
@@ -129,6 +194,29 @@ function calls(stmts: Stmt[], depth = 0): { name: string; id: number; depth: num
 }
 
 for (const [backend, transform] of [["Dafny", transformModuleDafny], ["Lean", transformModuleLean]] as const) {
+  test(`${backend} keeps computed guard calls in order on Some and None paths`, () => {
+    const mod = sourceModule(`
+function value(id: number): boolean { let n = id; n += 1; return n > 0; }
+export function forward(xs: boolean[] | undefined): number {
+  if (xs?.includes(value(1)) !== value(2)) return 0;
+  return xs.length;
+}
+export function reversed(xs: boolean[] | undefined): number {
+  if (value(3) !== xs?.includes(value(4))) return 0;
+  return xs.length;
+}
+`);
+    const { defFile } = transform(mod);
+    for (const [name, expected] of [
+      ["forward", [{ name: "value", id: 1, depth: 1 }, { name: "value", id: 2, depth: 1 }, { name: "value", id: 2, depth: 1 }]],
+      ["reversed", [{ name: "value", id: 3, depth: 0 }, { name: "value", id: 4, depth: 1 }]],
+    ] as const) {
+      const method = defFile.decls.find(d => d.kind === "method" && d.name === name);
+      assert.ok(method?.kind === "method", name);
+      assert.deepEqual(calls(method.body), expected, name);
+    }
+  });
+
   test(`${backend} evaluates both comparison operands once in source order`, () => {
     const mod = sourceModule(`
 function optional(id: number): number | undefined { let n = id; n += 1; return n === 2 ? undefined : n; }

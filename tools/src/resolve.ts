@@ -1086,7 +1086,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       else if (["+", "-", "*", "%"].includes(e.op)) {
         ty = (left.ty.kind === "real" || right.ty.kind === "real") ? { kind: "real" } : left.ty;
       }
-      return { kind: "binop", op: e.op, left, right, ty };
+      return { kind: "binop", op: e.op, left, right, ty, ...(ctx.inSpec ? { inSpec: true as const } : {}) };
     }
 
     case "unop": {
