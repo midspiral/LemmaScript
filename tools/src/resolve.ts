@@ -765,18 +765,20 @@ function argumentPack(e: RawExpr, ctx: Ctx): Env["argumentPack"] {
   return pack;
 }
 
-/** A defined-check filter predicate: `(x) => x !== undefined` (expression or
- *  single-return body). Detected on the raw IR before narrowing rewrites it. */
-function isDefinedCheckRawLambda(raw: RawExpr): boolean {
-  if (raw.kind !== "lambda" || raw.params.length !== 1) return false;
-  const p = raw.params[0].name;
-  const body = Array.isArray(raw.body)
-    ? (raw.body.length === 1 && raw.body[0].kind === "return" ? raw.body[0].value : null)
-    : raw.body;
-  if (!body || body.kind !== "binop" || body.op !== "!==") return false;
-  const isParam = (x: RawExpr) => x.kind === "var" && x.name === p;
-  const isUndef = (x: RawExpr) => x.kind === "var" && x.name === "undefined";
-  return (isParam(body.left) && isUndef(body.right)) || (isParam(body.right) && isUndef(body.left));
+/** A defined-check filter predicate: `(x) => x !== undefined`, `x != null`,
+ *  `!(x === undefined)`, etc. (expression or single-return body). Uses
+ *  `presentFact` on the resolved callback and excludes truthiness checks
+ *  (`x => !!x` drops `0` / `""` in JS, unlike `SeqFilterSome`). */
+function isDefinedCheckLambda(raw: RawExpr, resolved: TExpr): boolean {
+  if (raw.kind !== "lambda" || raw.params.length !== 1 || raw.params[0].defaultValue || raw.params[0].rest) return false;
+  if (resolved.kind !== "lambda" || resolved.params.length !== 1) return false;
+  const p = resolved.params[0].name;
+  const body = Array.isArray(resolved.body)
+    ? (resolved.body.length === 1 && resolved.body[0].kind === "return" ? resolved.body[0].value : null)
+    : resolved.body;
+  if (!body) return false;
+  const f = presentFact(body);
+  return !!f && !f.negated && !f.truthiness && f.scrutinee.kind === "var" && f.scrutinee.name === p;
 }
 
 /** Coerce call arguments to their declared parameter slots and pad missing optional args. */
@@ -1148,7 +1150,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       // SeqFilterSome preamble (a plain `Map(.value, Filter(.Some?))` wouldn't
       // verify — `.value` is partial).
       if (e.fn.kind === "field" && e.fn.field === "filter" && e.args.length === 1
-          && isDefinedCheckRawLambda(e.args[0])
+          && isDefinedCheckLambda(e.args[0], args[0])
           && fn.kind === "field" && fn.obj.ty.kind === "array" && fn.obj.ty.elem.kind === "optional") {
         return { kind: "call", fn: { ...fn, field: "filterSome" }, args: [], ty: { kind: "array", elem: fn.obj.ty.elem.inner }, callKind: "method" };
       }

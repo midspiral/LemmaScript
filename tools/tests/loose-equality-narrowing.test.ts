@@ -118,6 +118,30 @@ lemma optChainLooseValues()
   assert.equal(ok.status, 0, output + ok.output);
 });
 
+test("defined-check .filter(...) narrows under loose != null and !(x === undefined)", () => {
+  const project = new Project({ compilerOptions: {
+    strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true,
+  } });
+  const source = project.createSourceFile("filter-some-loose.ts", `
+    export function filterLooseNull(xs: (number | undefined)[]): number[] {
+      return xs.filter(x => x != null);
+    }
+    export function filterNegatedStrict(xs: (number | undefined)[]): number[] {
+      return xs.filter(x => !(x === undefined));
+    }
+  `);
+  assert.deepEqual(project.getPreEmitDiagnostics(), []);
+  const { typesFile, defFile } = transformModuleDafny(narrowModule(resolveModule(extractModule(source))));
+  const output = emitDafnyFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
+  const ok = verify(output + `
+lemma filterLooseValues()
+  ensures filterLooseNull([None, Some(0), Some(5), None]) == [0, 5]
+  ensures filterNegatedStrict([None, Some(0), Some(5), None]) == [0, 5]
+{}
+`);
+  assert.equal(ok.status, 0, output + ok.output);
+});
+
 test("Lean generates the loose-equality fixture", () => {
   resetLeanModule();
   const { typesFile, defFile } = transformModuleLean(typed());
