@@ -665,7 +665,7 @@ a.every((x, i) => x <= b[i]);                 // i is the position
 [7].map((value, ...tail) => tail.length);     // 2: the index and the array
 ```
 
-**filterMap.** `xs.map(x => ... | undefined).filter((x): x is T => x !== undefined)` drops the `undefined`s *and* unwraps to `seq<T>` — lowered to the proven `SeqFilterSome` preamble (a plain `Map(.value, Filter(.Some?, ...))` wouldn't verify, since `.value` is partial).
+**filterMap.** `xs.map(x => ... | undefined).filter((x): x is T => x !== undefined)` drops the `undefined`s *and* unwraps to `seq<T>`. The predicate may be any presence check on its parameter (`x !== undefined`, `x != null`, `!(x === undefined)`); truthiness checks such as `x => !!x` are excluded because they also drop `0` and `""`. It is lowered to the proven `SeqFilterSome` preamble (a plain `Map(.value, Filter(.Some?, ...))` wouldn't verify, since `.value` is partial).
 
 **`.map` (Dafny).** Lowered to a `seq` comprehension with the element access inlined (`var x := arr[i]; e`), not `Seq.Map`. `Seq.Map` hides the element behind a closure, so a recursive rebuild walker (`Node(kids.map(walk))`) fails Dafny's termination check — the obligation gets quantified over the lambda's parameter instead of anchored at `kids[i]`. Applying a lambda inside the comprehension fails the same way, hence the inlining.
 
@@ -734,10 +734,12 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 **Optional narrowing.** All these patterns narrow the optional to its inner type in the appropriate scope:
 
-- Equality: `v !== undefined`, `v === undefined` (early return)
+- Equality: `v !== undefined`, `v === undefined` (early return), in either operand order. The loose forms `v != null`, `v != undefined`, `v == null` and `v == undefined` are the same checks: extract rewrites `==`/`!=` as `===`/`!==`, and `null` and `undefined` both model as `None`.
+- Negation: `!c` for any check `c` here tests the opposite, so `!(v === undefined)` narrows like `v !== undefined` and `!!v` like `v`.
 - Truthiness: `if (v)`, `if (!v)`, `opt ? a : b`
 - Composition: `v && rest` or `rest && v` (optional check on either side) — in an `if`/`?:` condition or as a bare statement (`v !== undefined && v.f()`, the `if`-less guard idiom)
 - Disjunctive early return: `a === undefined || b === undefined`, `!x || x.f !== v`, `x?.t !== 'm' || x.g`
+- Chained comparison early return: `if (x?.t !== 'm') return; rest` narrows `x` in `rest`. When `x` is absent, `x?.t` is `undefined`, so this and the disjunctive form count `x?.chain !== rhs` as an absence check only when `rhs` cannot be `undefined` or `null` (a literal, or a value whose type is not optional, excluding array and string index reads). `x?.val !== undefined` and `x?.val != null` do not narrow `x`.
 - Spec implication: `path !== undefined && rest ==> B` (premise narrows conclusion)
 - Optional chaining: `obj?.field`, `obj?.foo()`, `obj?.[i]`, chained `obj?.a?.b?.c` and `obj?.a.b.c`
 - Nullish coalescing: `x ?? default`; array index `arr[i] ?? default` (undefined ⟺ out of bounds under `noUncheckedIndexedAccess`) → `(0 <= i && i < arr.length) ? arr[i] : default`
@@ -1152,7 +1154,7 @@ When the expected type is a named string-literal union (e.g., `type State = "idl
 | `state === "idle"` | `state = .idle` | `state.idle?` |
 | `"connecting"` (as value) | `.connecting` | `State.connecting` |
 
-The same coercion applies in ternary branches, record fields, return values, call arguments, and variable assignments, including through aliases and optional payloads.
+The same coercion applies in ternary branches, record fields, return values, call arguments, and variable assignments, including through aliases and optional payloads. Other generated union datatypes, such as the one for `string | string[]`, keep the string literal, so Dafny rejects `x === "s"` instead of reading it as a constructor test.
 
 ### 6.3 Discriminated Unions
 

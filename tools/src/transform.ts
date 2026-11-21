@@ -15,7 +15,7 @@ import { freshName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
 import { lowerIndexedCallback } from "./callback-lowering.js";
 import { isFalsyCapableTy } from "./condition-facts.js";
-import { declOf, declOfKind, declOfTy, unionDeclOfTy, declWithVariant, tyBaseName } from "./typedecls.js";
+import { declOf, declOfDotted, declOfKind, declOfTy, unionDeclOfTy, declWithVariant, tyBaseName } from "./typedecls.js";
 
 // ── Generic IR walkers ──────────────────────────────────────
 
@@ -259,6 +259,9 @@ function isNat(ty: Ty): boolean { return ty.kind === "nat"; }
 function isIntegral(ty: Ty): boolean { return ty.kind === "int" || ty.kind === "nat"; }
 function isArray(ty: Ty): boolean { return ty.kind === "array"; }
 function isUser(ty: Ty): boolean { return ty.kind === "user"; }
+function isStringUnion(ty: Ty): boolean {
+  return ty.kind === "user" && declOfDotted(_typeDecls, tyBaseName(ty.name))?.kind === "string-union";
+}
 function isRecordType(ty: Ty): boolean {
   return declOfTy(_typeDecls, ty)?.kind === "record";
 }
@@ -549,13 +552,13 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           right: { kind: "constructor", name: e.right.value, type: objTy, args: [] },
         };
       }
-      // String literal comparison — constructor if user type, string literal if string.
+      // String literal comparison — constructor if string-union enum, string literal otherwise.
       // Skip when the left is optional: fall through to the optional-comparison rule,
       // which unwraps and compares the inner value (`Some(v) => v == "")`.
       if ((e.op === "===" || e.op === "!==") && e.right.kind === "str" && e.left.ty.kind !== "optional") {
         const left = lowerExpr(e.left, binds);
         const leftTy = e.left.ty.kind === "user" ? e.left.ty.name : undefined;
-        const right: Expr = isUser(e.left.ty)
+        const right: Expr = isUser(e.right.ty) || isStringUnion(e.left.ty)
           ? { kind: "constructor", name: e.right.value, type: leftTy, args: [] }
           : { kind: "str", value: e.right.value };
         return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right };
@@ -576,12 +579,12 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             ],
           };
         }
-        // A string literal compared against an optional user type is the variant
+        // A string literal compared against an optional string-union enum is the variant
         // constructor (`o === "red"` → `Some(v) => v == Color.red`), mirroring the
         // non-optional string-literal rule above.
         const innerTy = optSide.ty.kind === "optional" ? optSide.ty.inner : optSide.ty;
-        const valExpr: Expr = valSide.kind === "str" && innerTy.kind === "user"
-          ? { kind: "constructor", name: valSide.value, type: innerTy.name, args: [] }
+        const valExpr: Expr = valSide.kind === "str" && (isUser(valSide.ty) || isStringUnion(innerTy))
+          ? { kind: "constructor", name: valSide.value, type: innerTy.kind === "user" ? innerTy.name : undefined, args: [] }
           : lowerExpr(valSide, binds);
         // The bound value goes on the left, so mirror the operator when the
         // optional was on the right: `x < opt` → `Some(v) => v > x`.
