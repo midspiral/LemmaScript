@@ -1045,6 +1045,9 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       else if (["+", "-", "*", "%"].includes(e.op)) {
         ty = (left.ty.kind === "real" || right.ty.kind === "real") ? { kind: "real" } : left.ty;
       }
+      else if (e.op === "arrayConcat") {
+        ty = left.ty.kind === "array" && left.ty.elem.kind !== "unknown" ? left.ty : right.ty;
+      }
       return { kind: "binop", op: e.op, left, right, ty };
     }
 
@@ -2091,15 +2094,17 @@ export function resolveModule(raw: RawModule): TModule {
     };
   });
   const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
+  let constantEnv: Env | null = null;
   const constants = (raw.constants ?? []).map(c => {
     const declaredTy = expandAlias(parseTsType(c.tsType), raw.typeDecls);
     // Propagate the declared type into the value's resolution context so that
     // record literals on map-typed constants (e.g. `Record<string, number>`)
     // get their `ty` set to `map<...>` rather than `user("...")`.
-    const valueCtx: Ctx = { ...emptyCtx, returnTy: declaredTy };
+    const valueCtx: Ctx = { ...emptyCtx, env: constantEnv, returnTy: declaredTy };
     const value = resolveExpr(c.value, valueCtx);
     // TypeScript's number defaults to int, but fractional initializers need real.
     const ty = declaredTy.kind === "int" && value.ty.kind === "real" ? value.ty : declaredTy;
+    constantEnv = extend(constantEnv, c.name, ty);
     return { name: c.name, ty, value: coerceToTargetTy(value, ty, raw.typeDecls) };
   });
   const moduleConstants = new Map<string, Ty>(constants.map(c => [c.name, c.ty]));
