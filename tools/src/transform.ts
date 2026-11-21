@@ -8,7 +8,7 @@
 import type { TExpr, TStmt, TModule, Ty } from "./typedir.js";
 import { isBigInt, tyEqual } from "./typedir.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
-import { anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
+import { anyExpr, anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
@@ -464,15 +464,33 @@ function lowerMinMaxSequence(e: TExpr, real: boolean, binds: Stmt[] | null): Exp
   if (e.kind === "arrayLiteral") {
     return { kind: "arrayLiteral", elems: e.elems.map(el => {
       const value = lowerExpr(el, binds);
-      return real && isIntegral(el.ty) ? { kind: "toReal", expr: value } : value;
+      if (real && isIntegral(el.ty)) return { kind: "toReal", expr: value };
+      return _opts.backend === "lean" && isNat(el.ty) ? { kind: "toInt", expr: value } : value;
     }) };
   }
   const value = lowerExpr(e, binds);
+  if (_opts.backend === "lean" && e.ty.kind === "array" && isNat(e.ty.elem)) {
+    return { kind: "app", fn: "Array.map", args: [{ kind: "var", name: "Int.ofNat" }, value] };
+  }
   return real && e.ty.kind === "array" && isIntegral(e.ty.elem)
     ? { kind: "app", fn: "SeqIntToReal", args: [value] } : value;
 }
 
 function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
+  // Lean spreads are checked Option operations. Lift even a syntactically pure
+  // call so total correctness requires the combined array to be nonempty.
+  if (_opts.backend === "lean" && e.kind === "call" && e.fn.kind === "var" &&
+      (e.fn.name === "MaxOfSeq" || e.fn.name === "MinOfSeq") && e.args.length === 1) {
+    const name = binds ? freshName(`_t${_liftCounter++}`) : null;
+    const value: Expr = { kind: "app",
+      fn: e.fn.name === "MaxOfSeq" ? "LemmaScript.maxOfArray" : "LemmaScript.minOfArray",
+      args: [lowerMinMaxSequence(e.args[0], e.ty.kind === "real", binds)] };
+    if (binds && name) {
+      binds.push({ kind: "let-bind", name, value });
+      return { kind: "var", name };
+    }
+    return value;
+  }
   // Monadic lifting: extract embedded method calls to let-binds.
   // `callKind: "method"` means a global var-fn call (classifyCall returns
   // "method" only for `fn.kind === "var"`). Receiver method calls have
@@ -913,17 +931,19 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // Math.abs/min/max preserve the resolved numeric type. Mixed operands
       // need explicit int/nat→real coercions, just like real binary operations.
       if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math") {
-        const minMax = (e.fn.field === "min" || e.fn.field === "max") &&
-          (e.args.length === 2 || (_opts.backend === "dafny" && e.args.length >= 1));
+        const minMax = (e.fn.field === "min" || e.fn.field === "max") && e.args.length >= 1;
         const fn = e.fn.field === "abs" && e.args.length === 1 ? "MathAbs"
           : minMax ? (e.fn.field === "min" ? "MathMin" : "MathMax") : null;
         if (fn) {
           const real = e.ty.kind === "real";
           const args = e.args.map((arg): Expr => {
             const lowered = lowerExpr(arg, binds);
-            return real && isIntegral(arg.ty) ? { kind: "toReal", expr: lowered } : lowered;
+            if (real && isIntegral(arg.ty)) return { kind: "toReal", expr: lowered };
+            return _opts.backend === "lean" && minMax && e.ty.kind === "int" && isNat(arg.ty)
+              ? { kind: "toInt", expr: lowered } : lowered;
           });
-          const helper = real ? `${fn}Real` : fn;
+          const helper = real ? `${fn}Real` : _opts.backend === "lean" && minMax
+            ? `${e.fn.field === "min" ? "Min" : "Max"}.${e.fn.field}` : fn;
           // Unary min/max is identity. Fold positional arguments through the
           // binary helpers so scalar bounds need no sequence/index proofs.
           return minMax
@@ -2592,6 +2612,31 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
         decreases: fn.decreases ? transformExpr(fn.decreases) : null,
         methodBody,
       });
+    }
+  }
+
+  if (_opts.backend === "lean") {
+    // A pure mirror would erase the failure on an empty spread. Keep these
+    // functions and their transitive callers as methods, where WP checks it.
+    const checked = new Set(["LemmaScript.maxOfArray", "LemmaScript.minOfArray"]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const def of pureDefs) {
+        if (!checked.has(def.name) && anyExpr(def.body, e => {
+          const name = e.kind === "app" ? e.fn : e.kind === "var" ? e.name : "";
+          return checked.has(name.replace(/^Pure\./, ""));
+        })) {
+          checked.add(def.name);
+          changed = true;
+        }
+      }
+    }
+    for (let i = pureDefs.length - 1; i >= 0; i--) {
+      if (checked.has(pureDefs[i].name)) {
+        _pureDefNames.delete(pureDefs[i].name);
+        pureDefs.splice(i, 1);
+      }
     }
   }
 

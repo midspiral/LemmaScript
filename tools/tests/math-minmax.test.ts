@@ -9,9 +9,10 @@ import { Project, ScriptTarget } from "ts-morph";
 import { extractModule } from "../src/extract.ts";
 import { resolveModule } from "../src/resolve.ts";
 import { narrowModule } from "../src/narrow.ts";
-import { transformModuleDafny } from "../src/transform.ts";
+import { transformModuleDafny, transformModuleLean } from "../src/transform.ts";
 import { emitDafnyFile } from "../src/dafny-emit.ts";
 import * as example from "../../examples/mathMinMax.ts";
+import * as integerExample from "../../examples/mathMinMaxInt.ts";
 
 function sourceModule(text: string) {
   const project = new Project({ compilerOptions: {
@@ -164,23 +165,25 @@ test("min/max diagnose zero arguments, bigint, and nonnumeric operands before lo
 });
 
 test("min/max evaluate positional and spread arguments once in source order", () => {
-  const { defFile } = transformModuleDafny(sourceModule(`
-    function mark(id: number): number { let value = id; value += 1; return value; }
-    function list(id: number): number[] { let value = id; value += 1; return [value]; }
-    export function positional(): number { return Math.max(mark(1), mark(2), mark(3)); }
-    export function single(): number { return Math.min(mark(4)); }
-    export function spread(): number { return Math.max(mark(5), ...list(6), mark(7), ...list(8)); }
-  `));
-  for (const [name, expected] of [["positional", [1, 2, 3]], ["single", [4]], ["spread", [5, 6, 7, 8]]] as const) {
-    const decl = defFile.decls.find(d => d.kind === "method" && d.name === name);
-    assert.ok(decl?.kind === "method", name);
-    const args = decl.body.flatMap(s => {
-      if (s.kind !== "let-bind" || s.value.kind !== "app" || !["mark", "list"].includes(s.value.fn)) return [];
-      const arg = s.value.args[0];
-      assert.ok(arg.kind === "num");
-      return [arg.value];
-    });
-    assert.deepEqual(args, expected, name);
+  for (const transform of [transformModuleDafny, transformModuleLean]) {
+    const { defFile } = transform(sourceModule(`
+      function mark(id: number): number { let value = id; value += 1; return value; }
+      function list(id: number): number[] { let value = id; value += 1; return [value]; }
+      export function positional(): number { return Math.max(mark(1), mark(2), mark(3)); }
+      export function single(): number { return Math.min(mark(4)); }
+      export function spread(): number { return Math.max(mark(5), ...list(6), mark(7), ...list(8)); }
+    `));
+    for (const [name, expected] of [["positional", [1, 2, 3]], ["single", [4]], ["spread", [5, 6, 7, 8]]] as const) {
+      const decl = defFile.decls.find(d => d.kind === "method" && d.name === name);
+      assert.ok(decl?.kind === "method", name);
+      const args = decl.body.flatMap(s => {
+        if (s.kind !== "let-bind" || s.value.kind !== "app" || !["mark", "list"].includes(s.value.fn)) return [];
+        const arg = s.value.args[0];
+        assert.ok(arg.kind === "num");
+        return [arg.value];
+      });
+      assert.deepEqual(args, expected, name);
+    }
   }
 });
 
@@ -206,7 +209,7 @@ test("integer spreads preserve temporary bindings in generated methods", () => {
   var low := i_t1;`), output);
 });
 
-test("the example executes as TypeScript and verifies through the compiled CLI", () => {
+test("the examples execute as TypeScript and verify through the compiled CLI", () => {
   assert.equal(example.singleScore(-0.75), -0.75);
   assert.equal(example.highestOfThree(-3, -2, -1), -1);
   assert.equal(example.lowestOfFour(0.75, -0.25, 0.5, -1.5), -1.5);
@@ -217,16 +220,36 @@ test("the example executes as TypeScript and verifies through the compiled CLI",
   for (const [whole, fractional] of [[[], [-0.5]], [[-2], []], [[-2, 3], [3.5, -0.25]]])
     assert.equal(example.highestMixedScore(whole, fractional), Math.max(...whole, ...fractional));
 
+  assert.equal(integerExample.singleValue(-7), -7);
+  assert.equal(integerExample.highestInteger(-9, -3, -5), -3);
+  assert.equal(integerExample.lowestNatural(5, 0, 2), 0);
+  assert.equal(integerExample.lowestMixed(3, -4), -4);
+  for (const xs of [[-9], [-3, -7, -2], [5, 0, -5]]) {
+    assert.equal(integerExample.highestInArray(xs), Math.max(...xs));
+    assert.equal(integerExample.lowestInArray(xs), Math.min(...xs));
+    assert.equal(integerExample.arrayRange(xs), Math.max(...xs) - Math.min(...xs));
+    assert.equal(integerExample.guardedHighest(xs), Math.max(...xs));
+  }
+  assert.equal(integerExample.lowestOrZero([]), 0);
+  assert.equal(integerExample.lowestOrZero([-3, 2]), -3);
+  assert.equal(integerExample.highestWithNatural([], 2), 2);
+  assert.equal(integerExample.highestWithNatural([-3, 5], 2), 5);
+  assert.equal(integerExample.guardedHighest([]), 0);
+  for (const [ns, xs] of [[[], [-4]], [[2], []], [[0, 3], [-2, 5]]])
+    assert.equal(integerExample.highestMixedArrays(ns, xs), Math.max(...ns, ...xs));
+
   const dir = mkdtempSync(join(tmpdir(), "lsc-minmax-example-"));
   try {
-    for (const ext of ["ts", "dfy"])
-      writeFileSync(join(dir, `mathMinMax.${ext}`), readFileSync(new URL(`../../examples/mathMinMax.${ext}`, import.meta.url)));
-    const cli = fileURLToPath(new URL("../dist/lsc.js", import.meta.url));
-    const result = spawnSync(process.execPath, [cli, "check", "--backend=dafny", "--time-limit=10", join(dir, "mathMinMax.ts")],
-      { encoding: "utf8", timeout: 60_000, env: { ...process.env, LSC_RUN_LOG: "false" } });
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.match(result.stdout, /0 errors/);
+    for (const name of ["mathMinMax", "mathMinMaxInt"]) {
+      for (const ext of ["ts", "dfy"])
+        writeFileSync(join(dir, `${name}.${ext}`), readFileSync(new URL(`../../examples/${name}.${ext}`, import.meta.url)));
+      const cli = fileURLToPath(new URL("../dist/lsc.js", import.meta.url));
+      const result = spawnSync(process.execPath, [cli, "check", "--backend=dafny", "--time-limit=10", join(dir, `${name}.ts`)],
+        { encoding: "utf8", timeout: 60_000, env: { ...process.env, LSC_RUN_LOG: "false" } });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.match(result.stdout, /0 errors/);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
