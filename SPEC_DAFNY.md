@@ -97,6 +97,8 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | `MathAbs` / `MathMin` / `MathMax` | `Math.abs/min/max` (int args) | Scalar integer abs/min/max |
 | `MathAbsReal` / `MathMinReal` / `MathMaxReal` | `Math.abs/min/max` (any real arg) | Scalar real abs/min/max; int/nat operands coerced with `as real` |
 | `MaxOfSeq` / `MinOfSeq` | `Math.max(...s)` / `Math.min(...s)` | Aggregate over a sequence (requires `\|s\| > 0`) |
+| `MaxOfSeqReal` / `MinOfSeqReal` | `Math.max/min` with a real spread or mixed real/integer segments | Real extrema over a nonempty sequence; `Concat` lemmas transfer bounds through concatenation |
+| `SeqIntToReal` | Integer spread mixed with real operands | Convert elements to real, preserving length and each indexed value |
 | `Pow2` / `BitAnd` | `<<` / `>>` / `&` on `bigint` | Bitwise ops as arithmetic |
 | `NatToString` / `IntToString` | `` `${n}` `` template literal (nat / signed int) | Number-to-digit-string for interpolation (`IntToString` prefixes `-`) |
 

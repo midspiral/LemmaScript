@@ -684,6 +684,9 @@ function emitExpr(e: Expr): string {
       if (e.fn === "MathMaxReal") needPreamble("MathMaxReal");
       if (e.fn === "MaxOfSeq") { needPreamble("MathMax"); needPreamble("MaxOfSeq"); }
       if (e.fn === "MinOfSeq") { needPreamble("MathMin"); needPreamble("MinOfSeq"); }
+      if (e.fn === "MaxOfSeqReal") { needPreamble("MathMaxReal"); needPreamble("MaxOfSeqReal"); }
+      if (e.fn === "MinOfSeqReal") { needPreamble("MathMinReal"); needPreamble("MinOfSeqReal"); }
+      if (e.fn === "SeqIntToReal") needPreamble("SeqIntToReal");
       if (e.fn === "Perm") needPreamble("Perm");
       if (e.fn === "SetFromSeq") needPreamble("SetFromSeq");
       // A constructor application must spell the name the same way the
@@ -1614,6 +1617,59 @@ lemma MinOfSeqConcat(a: seq<int>, b: seq<int>)
   }
 }`;
 
+const MAX_OF_SEQ_REAL = `function MaxOfSeqReal(s: seq<real>): real
+  requires |s| > 0
+  ensures forall i: nat :: i < |s| ==> s[i] <= MaxOfSeqReal(s)
+  ensures exists i: nat :: i < |s| && s[i] == MaxOfSeqReal(s)
+  decreases |s|
+{
+  if |s| == 1 then s[0]
+  else MathMaxReal(s[0], MaxOfSeqReal(s[1..]))
+}
+
+lemma MaxOfSeqRealConcat(a: seq<real>, b: seq<real>)
+  requires |a| + |b| > 0
+  ensures forall i: nat :: i < |a| ==> a[i] <= MaxOfSeqReal(a + b)
+  ensures forall i: nat :: i < |b| ==> b[i] <= MaxOfSeqReal(a + b)
+{
+  forall i: nat | i < |a| ensures a[i] <= MaxOfSeqReal(a + b) {
+    assert (a + b)[i] == a[i];
+  }
+  forall i: nat | i < |b| ensures b[i] <= MaxOfSeqReal(a + b) {
+    assert (a + b)[|a| + i] == b[i];
+  }
+}`;
+
+const MIN_OF_SEQ_REAL = `function MinOfSeqReal(s: seq<real>): real
+  requires |s| > 0
+  ensures forall i: nat :: i < |s| ==> MinOfSeqReal(s) <= s[i]
+  ensures exists i: nat :: i < |s| && s[i] == MinOfSeqReal(s)
+  decreases |s|
+{
+  if |s| == 1 then s[0]
+  else MathMinReal(s[0], MinOfSeqReal(s[1..]))
+}
+
+lemma MinOfSeqRealConcat(a: seq<real>, b: seq<real>)
+  requires |a| + |b| > 0
+  ensures forall i: nat :: i < |a| ==> MinOfSeqReal(a + b) <= a[i]
+  ensures forall i: nat :: i < |b| ==> MinOfSeqReal(a + b) <= b[i]
+{
+  forall i: nat | i < |a| ensures MinOfSeqReal(a + b) <= a[i] {
+    assert (a + b)[i] == a[i];
+  }
+  forall i: nat | i < |b| ensures MinOfSeqReal(a + b) <= b[i] {
+    assert (a + b)[|a| + i] == b[i];
+  }
+}`;
+
+const SEQ_INT_TO_REAL = `function SeqIntToReal(s: seq<int>): seq<real>
+  ensures |SeqIntToReal(s)| == |s|
+  ensures forall i: nat :: i < |s| ==> SeqIntToReal(s)[i] == (s[i] as real)
+{
+  seq(|s|, i requires 0 <= i < |s| => s[i] as real)
+}`;
+
 const NAT_TO_STRING = `function NatToString(n: nat): string
   decreases n
 {
@@ -1712,6 +1768,9 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["MathMaxReal", MATH_MAX_REAL],
   ["MaxOfSeq", MAX_OF_SEQ],
   ["MinOfSeq", MIN_OF_SEQ],
+  ["MaxOfSeqReal", MAX_OF_SEQ_REAL],
+  ["MinOfSeqReal", MIN_OF_SEQ_REAL],
+  ["SeqIntToReal", SEQ_INT_TO_REAL],
   ["Perm", PERM],
   ["SetFromSeq", SET_FROM_SEQ],
 ];

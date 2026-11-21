@@ -20,6 +20,7 @@ lean_lib Examples where
     `«transition.types», `«transition.spec», `«transition.def», `«transition.proof»,
     `«packet.types», `«packet.def», `«packet.proof»,
     `«maxElement.def», `«maxElement.proof»,
+    `«mathMinMaxInt.types», `«mathMinMaxInt.spec», `«mathMinMaxInt.def», `«mathMinMaxInt.proof»,
     `«isSorted.def», `«isSorted.proof»,
     `«arrayContains.def», `«arrayContains.proof»,
     `«hof.types», `«hof.def», `«hof.proof»,
