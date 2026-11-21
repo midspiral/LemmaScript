@@ -977,6 +977,36 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           return { kind: "app", fn: "FloorReal", args: [lowerExpr(arg, binds)] };
         return lowerExpr(arg, binds);
       }
+      // Math.trunc(x) / Math.round(x):
+      //   - trunc(a / b) on integral operands → JSTruncDiv (Lean: Int.tdiv),
+      //     checked first for the same reason as the floor case above
+      //   - integral arg → identity
+      //   - real arg (Dafny only) → TruncReal(x) / FloorReal(x + 0.5); JS
+      //     rounds halfway ties toward +Infinity
+      // A bigint argument (a JS TypeError) would otherwise lower to the
+      // identity, and a Lean real argument has no lowering, so both are
+      // rejected. Other calls fall through to the unsupported-call error.
+      if (e.fn.kind === "field" && (e.fn.field === "trunc" || e.fn.field === "round") &&
+          e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1 &&
+          (isIntegral(e.args[0].ty) || e.args[0].ty.kind === "real")) {
+        const name = `Math.${e.fn.field}`;
+        const arg = e.args[0];
+        if (isBigInt(arg.ty))
+          throw new Error(`${name} does not accept a bigint argument (JavaScript throws TypeError)`);
+        if (e.fn.field === "trunc" && arg.kind === "binop" && arg.op === "/" &&
+            isIntegral(arg.left.ty) && isIntegral(arg.right.ty)) {
+          return { kind: "app", fn: "JSTruncDiv", args: [lowerExpr(arg.left, binds), lowerExpr(arg.right, binds)] };
+        }
+        if (isIntegral(arg.ty)) return lowerExpr(arg, binds);
+        if (_opts.backend !== "dafny")
+          throw new Error("real arithmetic is not supported by the Lean backend (needs noncomputable ℝ / Mathlib).");
+        const x = lowerExpr(arg, binds);
+        if (e.fn.field === "trunc") return { kind: "app", fn: "TruncReal", args: [x] };
+        return {
+          kind: "app", fn: "FloorReal",
+          args: [{ kind: "binop", op: "+", left: x, right: { kind: "num", value: 0.5 } }],
+        };
+      }
       // Method call: receiver.method(args) → methodCall node
       if (e.fn.kind === "field") {
         const recv = lowerExpr(e.fn.obj, binds);

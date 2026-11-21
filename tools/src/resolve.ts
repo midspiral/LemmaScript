@@ -856,6 +856,9 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
         throw new Error(`Math.${fn.field}() with zero arguments returns ${fn.field === "max" ? "-Infinity" : "Infinity"}, which is not supported by the numeric model`);
       return minMaxNumericTy(args.map(a => a.ty), `Math.${fn.field}`);
     }
+    // trunc/round are the identity on an integer, so a nat argument stays nat.
+    if ((fn.field === "trunc" || fn.field === "round") && args.length === 1 &&
+        args[0].ty.kind === "nat") return { kind: "nat" };
     if (["floor", "ceil", "round", "trunc"].includes(fn.field)) return { kind: "int" };
   }
   const objTy = fn.obj.ty;

@@ -475,6 +475,10 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `Math.ceil(x)` (real arg) | — | `CeilReal(x)` → `x.Floor + 1` if non-integer |
 | `Math.floor(n)` (int arg) | identity | identity |
 | `Math.ceil(n)` (int arg) | identity | identity |
+| `Math.trunc(a / b)` (int args) | `Int.tdiv a b` | `JSTruncDiv(a, b)` |
+| `Math.trunc(x)` (real arg) | — | `TruncReal(x)` (toward zero) |
+| `Math.round(x)` (real arg) | — | `FloorReal(x + 0.5)` |
+| `Math.trunc(n)` / `Math.round(n)` (int arg) | identity | identity |
 | `Math.abs(x)` (int arg) | `MathAbs(x)` | `MathAbs(x)` (preamble: `if x >= 0 then x else -x`) |
 | `Math.min(a, b)` (int args) | `Min.min a b` (also supports nat) | `MathMin(a, b)` (preamble: `if a <= b then a else b`) |
 | `Math.max(a, b)` (int args) | `Max.max a b` (also supports nat) | `MathMax(a, b)` (preamble: `if a >= b then a else b`) |
@@ -1135,15 +1139,27 @@ tokens.length * 0.8    // nat * real
 | `Math.floor(x)` | `FloorReal(x)` | `x` is `real` |
 | `Math.floor(a / b)` | `JSFloorDiv(a, b)` | `a`, `b` are `int` (legacy) |
 | `Math.floor(n)` | `n` (identity) | `n` is `int` |
+| `Math.trunc(x)` | `TruncReal(x)` | `x` is `real` |
+| `Math.trunc(a / b)` | `JSTruncDiv(a, b)` | `a`, `b` are `int`/`nat` |
+| `Math.round(x)` | `FloorReal(x + 0.5)` | `x` is `real` |
+| `Math.trunc(n)` / `Math.round(n)` | `n` (identity) | `n` is `int`/`nat` |
 
-`CeilReal` and `FloorReal` are preamble helpers using Dafny's built-in `.Floor` on `real`:
+`CeilReal`, `FloorReal`, and `TruncReal` are preamble helpers using Dafny's built-in `.Floor` on `real`:
 
 ```dafny
 function FloorReal(x: real): int { x.Floor }
 function CeilReal(x: real): int {
   if x == (x.Floor as real) then x.Floor else x.Floor + 1
 }
+function TruncReal(x: real): (t: int)
+  ensures x >= 0.0 ==> t as real <= x < t as real + 1.0
+  ensures x < 0.0 ==> t as real - 1.0 < x <= t as real
+{
+  if x >= 0.0 then x.Floor else -((-x).Floor)
+}
 ```
+
+`Math.round` rounds halfway ties toward `+Infinity`, as JS does (`Math.round(-2.5) == -2`). JS defines `Math.round` as the nearest integer without computing `x + 0.5` in binary64, so on any finite double it agrees with the exact `FloorReal(x + 0.5)`: `Math.round(0.49999999999999994)` is `0` in both, although `Math.floor(0.49999999999999994 + 0.5)` is `1` in JS. The model and JS can still differ when the argument expression itself rounds in binary64 (`Math.round(0.5 - 1e-17)` is `1` in JS and `0` in the model), as with any `real` arithmetic. A `bigint` argument (a JS `TypeError`) and a `real` argument on Lean are compile errors.
 
 **Cross-file types:** When a verified function references a type imported from another file (e.g., `Module` from `../types`), `lsc` automatically resolves the type via ts-morph and generates the corresponding backend type declaration. Resolution is recursive — types referenced by resolved types are also extracted (e.g., resolving `Claim` also extracts `ClaimStatus`, `EmbeddedDecision`). Both record types and type aliases (string unions, discriminated unions) are resolved. `lsc` discovers the nearest `tsconfig.json` for module resolution. Built-in types (`Map`, `Set`, `Array`, etc.) are excluded.
 
@@ -1523,5 +1539,5 @@ Each phase (and the three intermediate representations — Raw IR, Typed IR, IR)
 The following TS features are not yet handled by the toolchain:
 
 - `await` / true async — a `Promise<T>`-returning function with an `await` in its body is unmodellable. An `async` function with **no** `await` is supported: its `Promise<T>` return type is unwrapped to `T` (the wrapper is just calling convention), so the body verifies normally.
-- **IEEE 754 semantics.** `number` is modeled as a mathematical integer (or, where annotated, an exact `real` — §6.1.3), never as a double, so double-specific behavior is outside the model and *not* covered by a proof: there is no 53-bit precision bound (`2**53 + 1 !== 2**53` is provable in the model, false at runtime), Dafny's `real` is exact rather than rounding (`0.1 + 0.2 == 0.3` verifies), `NaN`/`Infinity`/`-0` have no representation (a possibly-zero divisor is a proof obligation, not `Infinity`), and bitwise operators on `number` get the unbounded lowering of §6.1.1 with no int32 wrap. The pieces that *are* JS-faithful are called out where they occur: real `/` (§6.1.3), `JSRem` for `%`, `JSTruncDiv` for `bigint /`, `JSFloorDiv` for `Math.floor(a / b)`. `**`, `>>>`, and `Math.round`/`trunc`/`sqrt`/`pow` have no lowering at all.
+- **IEEE 754 semantics.** `number` is modeled as a mathematical integer (or, where annotated, an exact `real` — §6.1.3), never as a double, so double-specific behavior is outside the model and *not* covered by a proof: there is no 53-bit precision bound (`2**53 + 1 !== 2**53` is provable in the model, false at runtime), Dafny's `real` is exact rather than rounding (`0.1 + 0.2 == 0.3` verifies), `NaN`/`Infinity`/`-0` have no representation (a possibly-zero divisor is a proof obligation, not `Infinity`), and bitwise operators on `number` get the unbounded lowering of §6.1.1 with no int32 wrap. The pieces that *are* JS-faithful are called out where they occur: real `/` (§6.1.3), `JSRem` for `%`, `JSTruncDiv` for `bigint /`, `JSFloorDiv` for `Math.floor(a / b)`, `JSTruncDiv` for `Math.trunc(a / b)`, and ties toward `+Infinity` in `Math.round`. `**`, `>>>`, and `Math.sqrt`/`pow` have no lowering at all.
 - Error reporting (mapping prover errors to TS source locations)

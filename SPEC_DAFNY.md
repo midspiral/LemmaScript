@@ -91,7 +91,9 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | Helper | When | Purpose |
 |--------|------|---------|
 | `JSFloorDiv` | `Math.floor(a/b)` (int args) | JS-compatible floor division |
-| `FloorReal` / `CeilReal` | `Math.floor(x)` / `Math.ceil(x)` (real arg) | `real → int` via `.Floor` |
+| `FloorReal` / `CeilReal` | `Math.floor(x)` / `Math.ceil(x)` (real arg); `Math.round(x)` as `FloorReal(x + 0.5)` | `real → int` via `.Floor` |
+| `JSTruncDiv` | `Math.trunc(a/b)` (int/nat args), `bigint /` | JS-compatible truncated division |
+| `TruncReal` | `Math.trunc(x)` (real arg) | `real → int` toward zero |
 | `MathAbs` / `MathMin` / `MathMax` | `Math.abs/min/max` (int args) | Scalar integer abs/min/max |
 | `MathAbsReal` / `MathMinReal` / `MathMaxReal` | `Math.abs/min/max` (any real arg) | Scalar real abs/min/max; int/nat operands coerced with `as real` |
 | `MaxOfSeq` / `MinOfSeq` | `Math.max(...s)` / `Math.min(...s)` | Aggregate over a sequence (requires `\|s\| > 0`) |
@@ -99,6 +101,8 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | `SeqIntToReal` | Integer spread mixed with real operands | Convert elements to real, preserving length and each indexed value |
 | `Pow2` / `BitAnd` | `<<` / `>>` / `&` on `bigint` | Bitwise ops as arithmetic |
 | `NatToString` / `IntToString` | `` `${n}` `` template literal (nat / signed int) | Number-to-digit-string for interpolation (`IntToString` prefixes `-`) |
+
+`Math.trunc` and `Math.round` are the identity on `int`/`nat` arguments. `Math.round` rounds halfway ties toward `+Infinity` (`Math.round(-2.5) == -2`). These lowerings use exact reals, so there is no `-0`, `NaN`, or `Infinity`. JS `Math.round` returns the nearest integer without rounding `x + 0.5`, so it agrees with `FloorReal(x + 0.5)` on every finite double (`Math.round(0.49999999999999994)` is `0` in both). A `bigint` argument is a compile error.
 
 **Sequence:**
 
