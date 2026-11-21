@@ -142,6 +142,29 @@ lemma filterLooseValues()
   assert.equal(ok.status, 0, output + ok.output);
 });
 
+test("non-string-union synthesized datatypes do not lower string literals to constructors", () => {
+  const project = new Project({ compilerOptions: {
+    strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true,
+  } });
+  const source = project.createSourceFile("synth-string-eq.ts", `
+    //@ ensures Array.isArray(x) ==> \\result === 1
+    export function looseCtorCollision(x: string | string[]): number {
+      if (x == "ArrayBranch") return 1;
+      return 2;
+    }
+    export function looseEmpty(x: string | string[]): boolean {
+      return x == "";
+    }
+  `);
+  assert.deepEqual(project.getPreEmitDiagnostics(), []);
+  const { typesFile, defFile } = transformModuleDafny(narrowModule(resolveModule(extractModule(source))));
+  const output = emitDafnyFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
+  assert.doesNotMatch(output, /\.ArrayBranch\?/);
+  assert.doesNotMatch(output, /\.\?/);
+  const bad = verify(output);
+  assert.notEqual(bad.status, 0, "Dafny must reject comparing synthesized union directly with string");
+});
+
 test("Lean generates the loose-equality fixture", () => {
   resetLeanModule();
   const { typesFile, defFile } = transformModuleLean(typed());
