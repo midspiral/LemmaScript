@@ -6,7 +6,7 @@
  */
 
 import type { TExpr, TStmt, TModule, Ty } from "./typedir.js";
-import { isBigInt, tyEqual } from "./typedir.js";
+import { isBigInt, tyEqual, blockExits } from "./typedir.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
 import { anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
@@ -1688,10 +1688,32 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
       i++;
       continue;
     }
+    if (s.kind === "let" && s.rebinds !== undefined) {
+      result.push({ kind: "let", name: s.name, type: s.ty, mutable: false, value: rebindValue(s) });
+      const path: AccessPath = { rootVar: s.rebinds, fields: [] };
+      result.push(...transformStmts(replacePathInTStmts(stmts.slice(i + 1), path, s.name, s.ty), typeDecls));
+      return result;
+    }
     result.push(...transformStmt(s, typeDecls));
     i++;
   }
   return result;
+}
+
+/** The initializer for narrow's re-bind `let` (#342). resolve has
+ *  established that the variable is present here. Dafny reads `.value`, which
+ *  makes Dafny prove that. Lean has no destructor whose precondition the
+ *  verifier checks, so it matches with a None arm that cannot run. That arm
+ *  returns the binder the variable had before the write when transform
+ *  recorded one, and `default` (which needs `Inhabited`) otherwise. */
+function rebindValue(s: TStmt & { kind: "let" }): Expr {
+  const opt = transformExpr(s.init);
+  if (_opts.backend === "dafny") return { kind: "field", obj: opt, field: "value", datatypeField: true };
+  return { kind: "match", scrutinee: opt, arms: [
+    { pattern: pCtor("some", s.name), body: { kind: "var", name: s.name } },
+    { pattern: pCtor("none"), body: s.fallback !== undefined
+      ? { kind: "var", name: s.fallback } : { kind: "default", type: s.ty } },
+  ] };
 }
 
 let _liftCounter = 0;
@@ -2240,10 +2262,84 @@ function replacePathInTExpr(expr: TExpr, path: AccessPath, binder: string, binde
 }
 
 function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, binderTy: Ty): TStmt[] {
-  return stmts.map(s => mapTStmt(s, e =>
-    matchesAccessPath(e, path)
-      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
-  ));
+  const out: TStmt[] = [];
+  for (let i = 0; i < stmts.length; i++) {
+    const s = stmts[i];
+    if (!stmtWritesPath(s, path)) {
+      out.push(mapTStmt(s, e =>
+        matchesAccessPath(e, path) ? { kind: "var", name: binder, ty: binderTy } as TExpr : null));
+      continue;
+    }
+    out.push(replacePathUpToWrite(s, path, binder, binderTy));
+    // A write only in branches that exit leaves the binder valid afterwards.
+    if (!writeReachesAfter(s, path)) continue;
+    // The binder holds the value from before this write, so substitution
+    // stops here (#342): reads after it see the variable, which narrow has
+    // re-bound when it is still defined.
+    out.push(...withRebindFallback(stmts.slice(i + 1), path, binder));
+    return out;
+  }
+  return out;
+}
+
+/** Whether a write by `s` to `path` can still be in effect after `s`. A write
+ *  in a branch that always exits cannot. break and continue leave the
+ *  narrowing's scope too: resolve rejects writes inside a loop or switch to a
+ *  narrowing made outside it. */
+function writeReachesAfter(s: TStmt, path: AccessPath): boolean {
+  const reaches = (b: TStmt[]) => !blockExits(b) && b.some(t => writeReachesAfter(t, path));
+  switch (s.kind) {
+    case "if": return reaches(s.then) || reaches(s.else);
+    case "someMatch": return reaches(s.someBody) || reaches(s.noneBody);
+    default: return stmtWritesPath(s, path);
+  }
+}
+
+/** Record `binder` on the re-bind of `path`'s variable in `stmts`. The
+ *  binder is in scope there and has the same type, so Lean's re-bind uses it
+ *  for the None arm that cannot run, which needs no `Inhabited` instance. */
+function withRebindFallback(stmts: TStmt[], path: AccessPath, binder: string): TStmt[] {
+  if (path.fields.length > 0) return stmts;
+  const i = stmts.findIndex(t => t.kind === "let" && t.rebinds === path.rootVar);
+  if (i < 0) return stmts;
+  return stmts.map((t, j) => j === i ? { ...t, fallback: binder } as TStmt : t);
+}
+
+/** Substitute in the parts of `s` that run before its write to `path`. */
+function replacePathUpToWrite(s: TStmt, path: AccessPath, binder: string, binderTy: Ty): TStmt {
+  const r = (e: TExpr) => replacePathInTExpr(e, path, binder, binderTy);
+  const block = (b: TStmt[]) => replacePathInTStmts(b, path, binder, binderTy);
+  switch (s.kind) {
+    case "assign": case "ghostAssign": return { ...s, value: r(s.value) };
+    case "if": return { ...s, cond: r(s.cond), then: block(s.then), else: block(s.else) };
+    case "switch": return { ...s, expr: r(s.expr),
+      cases: s.cases.map(c => ({ ...c, body: block(c.body) })), defaultBody: block(s.defaultBody) };
+    case "someMatch": return { ...s, scrutinee: r(s.scrutinee), someBody: block(s.someBody), noneBody: block(s.noneBody) };
+    case "tagMatch": return { ...s, scrutinee: r(s.scrutinee),
+      cases: s.cases.map(c => ({ ...c, body: block(c.body) })), fallthrough: block(s.fallthrough) };
+    // A loop body runs again after its write; resolve rejects writes inside
+    // a loop to a narrowing from outside it.
+    default: return s;
+  }
+}
+
+/** Whether `s` assigns `path`, a prefix of it, or a path below it. */
+function stmtWritesPath(s: TStmt, path: AccessPath): boolean {
+  const writes = (target: string) => {
+    const [rootVar, ...fields] = target.split("[")[0].split(".").map(p => p.trim());
+    const n = Math.min(fields.length, path.fields.length);
+    return rootVar === path.rootVar && fields.slice(0, n).every((f, i) => f === path.fields[i]);
+  };
+  const any = (b: TStmt[]) => b.some(t => stmtWritesPath(t, path));
+  switch (s.kind) {
+    case "assign": case "ghostAssign": return writes(s.target);
+    case "if": return any(s.then) || any(s.else);
+    case "while": case "forof": return any(s.body);
+    case "switch": return s.cases.some(c => any(c.body)) || any(s.defaultBody);
+    case "someMatch": return any(s.someBody) || any(s.noneBody);
+    case "tagMatch": return s.cases.some(c => any(c.body)) || any(s.fallthrough);
+    default: return false;
+  }
 }
 
 
@@ -2264,9 +2360,12 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
     switch (s.kind) {
       case "return": return transformExpr(s.value);
       case "let": {
-        const restExpr = transformPureBody(rest, typeDecls);
+        const after = s.rebinds === undefined ? rest
+          : replacePathInTStmts(rest, { rootVar: s.rebinds, fields: [] }, s.name, s.ty);
+        const restExpr = transformPureBody(after, typeDecls);
         if (!restExpr) return null;
-        return { kind: "let", name: s.name, value: transformExpr(s.init), body: restExpr };
+        const value = s.rebinds === undefined ? transformExpr(s.init) : rebindValue(s);
+        return { kind: "let", name: s.name, value, body: restExpr };
       }
       case "if": {
         // Append rest to both branches so nested ifs that fall through

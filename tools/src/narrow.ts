@@ -34,13 +34,13 @@
  * binder counter) threads through the walk; no module-level state.
  */
 
-import type { TModule, TFunction, TStmt, TExpr } from "./typedir.js";
+import type { TModule, TFunction, TStmt, TExpr, Ty } from "./typedir.js";
 import { isTerminatorKind } from "./typedir.js";
 import { builtinSpec } from "./builtins.js";
 import {
   type CondCtx, type PresentFact, type NoneDetector,
   presentFact, leadingPresent, leadingIsArray, flattenOr, noneDetector,
-  bindPresentFact, freshPathBinder, binderHintForMapAccess, freshOcBinder,
+  bindPresentFact, freshPathBinder, freshUnsharedPathBinder, binderHintForMapAccess, freshOcBinder,
   applyChain, restoreDiscriminantFlag, arrayBoundsCond, exprEqual,
   isArrayFact, typeofStringFact, variantFact, negVariantFact,
   presentMatchStmts, presentMatchExpr,
@@ -101,6 +101,8 @@ function walkStmts(stmts: TStmt[], ctx: CondCtx): TStmt[] {
   for (let i = 0; i < stmts.length; i++) {
     const s = stmts[i];
     const rest = stmts.slice(i + 1);
+    const rebound = ruleRenarrowAfterAssign(s, rest, ctx);
+    if (rebound) return [...result, ...walkStmts(rebound, ctx)];
     // Discriminant rules consume a prefix of stmts; remaining is processed normally.
     const tagged = ruleDiscriminantChain(stmts.slice(i), ctx) ?? ruleDiscriminantNegEarlyReturn(stmts.slice(i), ctx);
     if (tagged) {
@@ -124,6 +126,39 @@ function walkStmts(stmts: TStmt[], ctx: CondCtx): TStmt[] {
     result.push(walked);
   }
   return result;
+}
+
+/** Re-bind narrowed variables after a statement that assigned them a defined
+ *  value (resolve's `renarrow`): a `let` marked `rebinds` binds the present
+ *  value under a fresh name, so later reads see the new value instead of the
+ *  binder that holds the old one (#342). A `let` has no None arm to fill, so
+ *  the re-bind can sit in tail position of a value-returning method.
+ *  Returns the replacement for `[s, ...rest]`, or null. */
+function ruleRenarrowAfterAssign(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt[] | null {
+  let plain: TStmt;
+  let rebinds: { target: string; declaredTy: Ty; innerTy: Ty }[];
+  if (s.kind === "assign" && s.renarrow) {
+    const { renarrow, ...a } = s;
+    plain = a;
+    rebinds = [{ target: s.target, ...renarrow }];
+  } else if (s.kind === "if" && s.renarrow) {
+    const { renarrow, ...a } = s;
+    plain = a;
+    rebinds = renarrow;
+  } else {
+    return null;
+  }
+  if (rest.length === 0) return [plain];
+  const lets = rebinds.map((r): TStmt => {
+    const init: TExpr = { kind: "var", name: r.target, ty: r.declaredTy };
+    // Reserve the shared name first: the enclosing check that narrowed the
+    // variable mints it after this (the walk is bottom-up), and it should
+    // keep the name it has without the assignment.
+    freshPathBinder(init, ctx);
+    const name = freshUnsharedPathBinder(init, ctx)!;
+    return { kind: "let", name, ty: r.innerTy, mutable: false, init, rebinds: r.target };
+  });
+  return [plain, ...lets, ...rest];
 }
 
 function recurseStmt(s: TStmt, ctx: CondCtx): TStmt {

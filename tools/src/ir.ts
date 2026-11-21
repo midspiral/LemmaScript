@@ -42,7 +42,7 @@ export type Expr =
   | { kind: "implies"; premises: Expr[]; conclusion: Expr }
   | { kind: "let"; name: string; type?: Ty; value: Expr; body: Expr }
   | { kind: "havoc"; type: Ty }
-  | { kind: "default"; type: Ty }                              // default value of T (Lean: `(default : T)` via Inhabited). Only produced by the return-in-loop→break rewrite, which is Lean-gated since Dafny keeps native in-loop returns; hence no Dafny producer today.
+  | { kind: "default"; type: Ty }                              // default value of T (Lean: `(default : T)` via Inhabited). Produced only on the Lean path: by the return-in-loop→break rewrite (Dafny keeps native in-loop returns) and by the unreachable None arm of a narrowing re-bind that has no earlier binder to fall back on (Dafny reads `.value`); hence no Dafny producer today.
 
 /** A match-arm pattern. Backend-neutral: `.some x`, `.syn seq`, `.none` are held
  *  structurally and rendered to each backend's constructor syntax by its emitter

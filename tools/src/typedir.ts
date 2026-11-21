@@ -120,13 +120,29 @@ export type TExpr =
 // ── Statements ───────────────────────────────────────────────
 
 export type TStmt =
-  | { kind: "let"; name: string; ty: Ty; mutable: boolean; init: TExpr }
-  | { kind: "assign"; target: string; value: TExpr }
+  | { kind: "let"; name: string; ty: Ty; mutable: boolean; init: TExpr;
+      /** Set by narrow when this `let` re-binds the presence-narrowed
+       *  variable it names after an assignment kept it defined (#342).
+       *  `init` reads the variable at its optional type; transform unwraps
+       *  it and reads `name` for the variable in the rest of the block,
+       *  until the next write to it. */
+      rebinds?: string;
+      /** Set by transform on a re-bind: the variable's binder from before
+       *  the write, which Lean returns from the None arm that cannot run. */
+      fallback?: string }
+  | { kind: "assign"; target: string; value: TExpr;
+      /** Set when `target` is a presence-narrowed variable assigned a defined
+       *  value: it stays present, so narrow re-binds it for the rest of the
+       *  block (#342). */
+      renarrow?: { declaredTy: Ty; innerTy: Ty } }
   | { kind: "return"; value: TExpr }
   | { kind: "break" }
   | { kind: "continue" }
   | { kind: "expr"; expr: TExpr }
-  | { kind: "if"; cond: TExpr; then: TStmt[]; else: TStmt[] }
+  | { kind: "if"; cond: TExpr; then: TStmt[]; else: TStmt[];
+      /** Narrowed variables the branches assign but leave defined; narrow
+       *  re-binds them after the `if` (#342). */
+      renarrow?: { target: string; declaredTy: Ty; innerTy: Ty }[] }
   | { kind: "while"; cond: TExpr;
       invariants: TExpr[];       // resolved from //@ annotation strings
       decreases: TExpr | null;
@@ -153,6 +169,25 @@ export type TStmt =
  *  typed IR alike since both use these kind strings. */
 export function isTerminatorKind(kind: string): boolean {
   return kind === "return" || kind === "throw" || kind === "break" || kind === "continue";
+}
+
+interface ExitShape {
+  kind: string;
+  then?: readonly ExitShape[]; else?: readonly ExitShape[];
+  someBody?: readonly ExitShape[]; noneBody?: readonly ExitShape[];
+}
+
+/** Whether control never falls off the end of `stmts`: it ends in a
+ *  terminator, or in an `if` (or narrow's `someMatch` for one) whose
+ *  branches both do. Resolve and transform share this on raw and typed IR so
+ *  they agree on which writes can reach the statements after a branch (#342). */
+export function blockExits(stmts: readonly ExitShape[]): boolean {
+  const last = stmts[stmts.length - 1];
+  if (!last) return false;
+  if (isTerminatorKind(last.kind)) return true;
+  if (last.kind === "if") return blockExits(last.then ?? []) && blockExits(last.else ?? []);
+  if (last.kind === "someMatch") return blockExits(last.someBody ?? []) && blockExits(last.noneBody ?? []);
+  return false;
 }
 
 // ── Top-level ────────────────────────────────────────────────

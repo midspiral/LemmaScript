@@ -34,6 +34,7 @@ lean_lib Examples where
     `«truthiness.types», `«truthiness.def», `«truthiness.proof»,
     `«conditionalCalls.def», `«conditionalCalls.proof»,
     `«optionalLookup.types», `«optionalLookup.def», `«optionalLookup.proof»,
+    `«narrowedAssignment.types», `«narrowedAssignment.def»,
     `«iff.types», `«iff.def», `«iff.proof»,
     `«setFromArray.types», `«setFromArray.def», `«setFromArray.proof»,
     `«templateConcat.types», `«templateConcat.def», `«templateConcat.proof»,

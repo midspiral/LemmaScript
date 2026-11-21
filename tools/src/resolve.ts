@@ -5,9 +5,10 @@
  * No mutation — each let extends the chain, lookup walks it.
  */
 
+import path from "path";
 import type { RawExpr, RawStmt, RawFunction, RawModule } from "./rawir.js";
 import type { Ty, TExpr, TStmt, TFunction, TModule, TParam, CallKind } from "./typedir.js";
-import { isBigInt, tyEqual, isTerminatorKind } from "./typedir.js";
+import { isBigInt, tyEqual, isTerminatorKind, blockExits } from "./typedir.js";
 import { parseTsType, tyToCanonical } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
@@ -29,6 +30,9 @@ interface Env {
   emittedName?: string;
   value?: TExpr;
   argumentPack?: { length: number; at: (index: number) => TExpr };
+  /** Set by `refine`: the variable's declared optional type. Assignments
+   *  are typed against it, since they store a new optional value. */
+  declaredTy?: Ty;
 }
 
 function binding(env: Env | null, name: string): Env | undefined {
@@ -56,7 +60,14 @@ function refine(env: Env | null, name: string, ty: Ty): Env {
   if (!entry) for (let e = env; e; e = e.parent) {
     if (e.emittedName === name) { entry = e; break; }
   }
-  return { ...entry, name: entry?.name ?? name, ty, parent: env };
+  return { ...entry, name: entry?.name ?? name, ty, declaredTy: entry?.declaredTy ?? entry?.ty, parent: env };
+}
+/** End a `refine` narrowing: rebind the variable at its declared type. */
+function unrefine(env: Env | null, name: string): Env | null {
+  const entry = binding(env, name);
+  if (!entry?.declaredTy) return env;
+  const { declaredTy, ...rest } = entry;
+  return { ...rest, ty: declaredTy, parent: env };
 }
 // ── Access paths ─────────────────────────────────────────────
 
@@ -180,6 +191,12 @@ function coerceStr(expr: TExpr, targetTy: Ty, typeDecls: TypeDeclInfo[]): TExpr 
 }
 
 // ── Helpers ──────────────────────────────────────────────────
+
+/** Whether a value of this type is known to be present: not `undefined`,
+ *  not another optional, and not a type resolve could not determine. */
+function isDefinedTy(ty: Ty): boolean {
+  return ty.kind !== "optional" && ty.kind !== "void" && ty.kind !== "unknown";
+}
 
 /** Wrap a resolved expression in Some() for optional coercion. */
 function wrapSome(value: TExpr, optionalTy: Ty): TExpr {
@@ -1545,7 +1562,95 @@ function splitConj(e: RawExpr): RawExpr[] {
 
 // ── Resolve statements ───────────────────────────────────────
 
+/** Source file of the module being resolved, for positioned errors. */
+let _file = "";
+
+/** Every assignment target in `stmts`, including nested blocks. Callback
+ *  bodies are not scanned. */
+function writtenTargets(stmts: RawStmt[]): { target: string; line: number }[] {
+  return stmts.flatMap((s): { target: string; line: number }[] => {
+    switch (s.kind) {
+      case "assign": return [{ target: s.target, line: s.line }];
+      case "if": return [...writtenTargets(s.then), ...writtenTargets(s.else)];
+      case "while": case "forof": return writtenTargets(s.body);
+      case "switch": return [...s.cases.flatMap(c => writtenTargets(c.body)), ...writtenTargets(s.defaultBody)];
+      default: return [];
+    }
+  });
+}
+
+/** The writes in `stmts` that can still be in effect after them. A write in
+ *  a branch that always exits (return, throw, break, continue) cannot:
+ *  control after the branch never passes through it. */
+function reachingWrites(stmts: RawStmt[]): { target: string; line: number }[] {
+  if (blockExits(stmts)) return [];
+  return stmts.flatMap(s => s.kind === "if"
+    ? [...reachingWrites(s.then), ...reachingWrites(s.else)]
+    : writtenTargets([s]));
+}
+
+/** The access path an assignment target writes: `b.v` → b, [v]; for an
+ *  element write (`xs[i] = v`, `a[i].f = v`) the path stops before the first
+ *  index, since everything under it may change. */
+function targetPath(target: string): AccessPath {
+  const [rootVar, ...fields] = target.split("[")[0].split(".").map(p => p.trim());
+  return { rootVar, fields };
+}
+
+/** Whether writing one path can change the value at the other: one is a
+ *  prefix of the other. */
+function pathsOverlap(a: AccessPath, b: AccessPath): boolean {
+  const n = Math.min(a.fields.length, b.fields.length);
+  return a.rootVar === b.rootVar && a.fields.slice(0, n).every((f, i) => f === b.fields[i]);
+}
+
+function pathText(p: AccessPath): string {
+  return [p.rootVar, ...p.fields].join(".");
+}
+
+/** The presence narrowing in `ctx` that writing `target` would invalidate. */
+function narrowingWrittenBy(target: string, ctx: Ctx): string | undefined {
+  const t = targetPath(target);
+  if (binding(ctx.env, t.rootVar)?.declaredTy) return t.rootVar;
+  const np = ctx.narrowedPaths.find(n => n.variant === undefined && pathsOverlap(n.path, t));
+  return np && pathText(np.path);
+}
+
+/** A loop body runs repeatedly, so a narrowing from outside the loop cannot
+ *  end at an assignment inside it: the next iteration would read the old
+ *  value. Report the assignment instead of emitting a stale read (#342). */
+function rejectNarrowedWritesInLoop(body: RawStmt[], ctx: Ctx): void {
+  for (const w of writtenTargets(body)) {
+    const narrowed = narrowingWrittenBy(w.target, ctx);
+    if (narrowed !== undefined) {
+      throw new Error(`${_file}:${w.line}: lsc does not support assigning '${w.target}' inside a loop while a check outside the loop narrows '${narrowed}' to a defined value; check '${narrowed}' inside the loop instead`);
+    }
+  }
+}
+
+/** Report an assignment the narrowing rules cannot follow: a write into a
+ *  value a presence check narrowed (`c.v = 1` under `c !== undefined`,
+ *  `b.v = 7` under `b.v !== undefined`). Field assignment does not lower to
+ *  valid Dafny, and a modified copy written back would not model aliasing. */
+function rejectWriteIntoNarrowed(target: string, line: number, ctx: Ctx): void {
+  const t = targetPath(target);
+  if (target === t.rootVar) return;
+  const isUnder = (p: AccessPath) => p.rootVar === t.rootVar && p.fields.length <= t.fields.length &&
+    p.fields.every((f, i) => f === t.fields[i]);
+  const narrowed = binding(ctx.env, t.rootVar)?.declaredTy ? t.rootVar
+    : ctx.narrowedPaths.find(n => n.variant === undefined && isUnder(n.path))?.path;
+  if (narrowed === undefined) return;
+  const name = typeof narrowed === "string" ? narrowed : pathText(narrowed);
+  throw new Error(`${_file}:${line}: lsc does not support assigning '${target}' while a check narrows '${name}' to a defined value; assign a new value to '${t.rootVar}' instead`);
+}
+
 function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
+  return resolveBlockFlow(stmts, ctx).stmts;
+}
+
+/** Resolve a block, also returning the env at its end so an `if` can tell
+ *  which narrowed variables are still defined after its branches. */
+function resolveBlockFlow(stmts: RawStmt[], ctx: Ctx): { stmts: TStmt[]; env: Env | null } {
   const result: TStmt[] = [];
   let env = ctx.env;
   let narrowedIndices = ctx.narrowedIndices;
@@ -1555,6 +1660,20 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     const [typed, nextEnv] = resolveStmt(s, currentCtx);
     result.push(typed);
     env = nextEnv;
+    // An assignment ends the presence narrowings it can change (#342):
+    // field-path narrowings under the written path, and a narrowed variable
+    // written anywhere other than a direct `x = …` (the assign case decides
+    // those) or an `if` that leaves it defined (the if case decides those).
+    // Transform stops substituting the match binder at the same statements.
+    // Variant narrowings are left alone.
+    const kept = typed.kind === "if" ? (typed.renarrow ?? []).map(r => r.target) : [];
+    for (const w of reachingWrites([s])) {
+      const t = targetPath(w.target);
+      narrowedPaths = narrowedPaths.filter(n => n.variant !== undefined || !pathsOverlap(n.path, t));
+      const keptHere = (s.kind === "assign" && s.target === t.rootVar) ||
+        kept.includes(binding(env, t.rootVar)?.emittedName ?? t.rootVar);
+      if (!keptHere) env = unrefine(env, t.rootVar);
+    }
     // Flow narrowing: if (x === undefined) { return } narrows x for rest of block.
     // Also handles compound: if (x === undefined || y === undefined) { return }
     // Any terminator counts (return/throw/break/continue — same set as narrow's
@@ -1586,7 +1705,23 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
       }
     }
   }
-  return result;
+  return { stmts: result, env };
+}
+
+/** Narrowed variables that an `if` writes but leaves defined on every branch
+ *  that continues past it (TypeScript keeps them narrowed). Narrow re-binds
+ *  each one after the `if`. */
+function renarrowsAfterIf(s: RawStmt & { kind: "if" }, ctx: Ctx, continuing: (Env | null)[]): { target: string; declaredTy: Ty; innerTy: Ty }[] {
+  const names = new Set(reachingWrites([s]).map(w => w.target).filter(t => t === targetPath(t).rootVar));
+  const out: { target: string; declaredTy: Ty; innerTy: Ty }[] = [];
+  for (const name of names) {
+    const entry = binding(ctx.env, name);
+    if (!entry?.declaredTy) continue;
+    if (continuing.every(env => binding(env, name)?.declaredTy)) {
+      out.push({ target: entry.emittedName ?? name, declaredTy: entry.declaredTy, innerTy: entry.ty });
+    }
+  }
+  return out;
 }
 
 function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
@@ -1648,19 +1783,33 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     }
 
     case "assign": {
+      rejectWriteIntoNarrowed(s.target, s.line, ctx);
       const entry = binding(ctx.env, s.target);
       if (entry?.argumentPack || entry?.value) {
         throw new Error(`assignment to callback binding '${s.target}' requires materializing its argument value`);
       }
       entry?.onRead?.();
-      const targetTy = lookup(ctx.env, s.target) ?? { kind: "unknown" as const };
+      // Inside a presence narrowing the binding holds the inner type, but the
+      // assignment stores a new optional value: type it against the declared
+      // optional (`o = 5` → `o := Some(5)`, `o = undefined` → `o := None`).
+      const declaredTy = entry?.declaredTy;
+      const targetTy = declaredTy ?? lookup(ctx.env, s.target) ?? { kind: "unknown" as const };
       // Propagate the target's type as returnTy, mirroring the annotated-let
       // case, so record/union literals and array literals in the RHS resolve
       // to their named datatypes.
       const valueCtx = (targetTy.kind === "user" || targetTy.kind === "array" || targetTy.kind === "optional")
         ? { ...ctx, returnTy: targetTy } : ctx;
-      const value = coerceToTargetTy(resolveExpr(s.value, valueCtx), targetTy, ctx.typeDecls);
-      return [{ kind: "assign", target: entry?.emittedName ?? s.target, value }, ctx.env];
+      const resolved = resolveExpr(s.value, valueCtx);
+      const value = coerceToTargetTy(resolved, targetTy, ctx.typeDecls);
+      const target = entry?.emittedName ?? s.target;
+      if (!entry || !declaredTy) return [{ kind: "assign", target, value }, ctx.env];
+      // A defined value keeps the variable narrowed; narrow re-binds it after
+      // this statement. Anything else (undefined, another optional) ends the
+      // narrowing, so later reads see the declared optional type.
+      if (isDefinedTy(resolved.ty)) {
+        return [{ kind: "assign", target, value, renarrow: { declaredTy, innerTy: entry.ty } }, ctx.env];
+      }
+      return [{ kind: "assign", target, value }, unrefine(ctx.env, s.target)];
     }
 
     case "return": {
@@ -1694,10 +1843,18 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // negated atoms (from `!(k in m)`) → else-branch.
       thenCtx = withInAtoms(thenCtx, extractInAtoms(resolvedCond));
       elseCtx = withInAtoms(elseCtx, extractInAtomsNegated(resolvedCond));
-      return [{ kind: "if", cond: resolvedCond, then: resolveBlock(s.then, thenCtx), else: resolveBlock(s.else, elseCtx) }, ctx.env];
+      const thenFlow = resolveBlockFlow(s.then, thenCtx);
+      const elseFlow = resolveBlockFlow(s.else, elseCtx);
+      const continuing = [...(blockExits(s.then) ? [] : [thenFlow.env]), ...(blockExits(s.else) ? [] : [elseFlow.env])];
+      const renarrow = renarrowsAfterIf(s, ctx, continuing);
+      return [{
+        kind: "if", cond: resolvedCond, then: thenFlow.stmts, else: elseFlow.stmts,
+        ...(renarrow.length > 0 ? { renarrow } : {}),
+      }, ctx.env];
     }
 
     case "while": {
+      rejectNarrowedWritesInLoop(s.body, ctx);
       const whileSpecCtx = { ...ctx, inSpec: true };
       const resolvedInvariants = resolveSpecs(s.invariants, whileSpecCtx);
       // Invariants hold at the top of the body, so any `k in m` atoms among them
@@ -1714,6 +1871,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     }
 
     case "forof": {
+      rejectNarrowedWritesInLoop(s.body, ctx);
       const iterable = resolveExpr(s.iterable, ctx);
       // Determine element types for each destructured name
       const nameTypes: Ty[] = [];
@@ -1755,6 +1913,12 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       return [{ kind: "throw" }, ctx.env];
 
     case "switch":
+      for (const w of writtenTargets([s])) {
+        const t = targetPath(w.target);
+        if (w.target === t.rootVar && binding(ctx.env, t.rootVar)?.declaredTy) {
+          throw new Error(`${_file}:${w.line}: lsc does not support assigning '${w.target}' inside a switch while a check outside it narrows '${w.target}' to a defined value; check '${w.target}' after the switch instead`);
+        }
+      }
       return [{
         kind: "switch", expr: resolveExpr(s.expr, ctx), discriminant: s.discriminant,
         cases: s.cases.map(c => ({ label: c.label, body: resolveBlock(c.body, ctx) })),
@@ -2034,6 +2198,7 @@ function precomputeFieldTypesInner(typeDecls: TypeDeclInfo[]) {
 }
 
 export function resolveModule(raw: RawModule): TModule {
+  _file = path.relative(process.cwd(), raw.file);
   callbackCounter = 0;
   mergeBinder = 0;
   _warnedRefEq.clear();
