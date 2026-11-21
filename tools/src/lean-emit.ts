@@ -500,7 +500,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       return wrap ? `(${inner}).toNat` : `${inner}.toNat`;
     }
 
-    case "toInt": return `(Int.ofNat ${emitExpr(e.expr)})`;
+    case "toInt": return `(Int.ofNat (${emitExpr(e.expr)}))`;
 
     case "toReal":
       // A real value reached the Lean backend via coercion (e.g. number `/`).
