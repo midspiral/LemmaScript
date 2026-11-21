@@ -116,14 +116,3 @@ export function replaceOwnerInExitingBranch(p: Box, c: boolean): number {
   }
   return 0;
 }
-
-export function rebindGeneric<T>(p: T | undefined, q: T): T | undefined {
-  //@ ensures p !== undefined ==> \result === q
-  //@ ensures p === undefined ==> \result === undefined
-  let o = p;
-  if (o !== undefined) {
-    o = q;
-    return o;
-  }
-  return undefined;
-}

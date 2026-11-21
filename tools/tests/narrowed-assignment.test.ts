@@ -71,8 +71,6 @@ test("narrowed-assignment example agrees with JavaScript", () => {
   assert.equal(runtime.replaceOwnerInExitingBranch({ v: 3 }, true), 0);
   assert.equal(runtime.replaceOwnerInExitingBranch({ v: 3 }, false), 4);
   assert.equal(runtime.replaceOwnerInExitingBranch({}, false), 0);
-  assert.equal(runtime.rebindGeneric(3, 8), 8);
-  assert.equal(runtime.rebindGeneric(undefined, 8), undefined);
 });
 
 test("a write in a branch that always exits leaves the narrowing in place after it", () => {

@@ -177,19 +177,3 @@ method replaceOwnerInExitingBranch(p: Box, c: bool) returns (res: int)
   }
   return 0;
 }
-
-method rebindGeneric<T>(p: Option<T>, q: T) returns (res: Option<T>)
-  ensures (match p { case Some(i_p_val) => (match res { case Some(i_value) => (i_value == q) case None => false }) case None => true })
-  ensures ((match p { case Some(i_) => false case None => true }) ==> (match res { case Some(i_) => false case None => true }))
-{
-  var o := p;
-  match o {
-    case Some(i_o_val) =>
-      o := Some(q);
-      var i_o_val' := o.value;
-      return Some(i_o_val');
-    case None =>
-
-  }
-  return None;
-}

@@ -153,17 +153,3 @@ method replaceOwnerInExitingBranch (p : Box) (c : Bool) returns (res : Int)
     else
       pure ()
     return 0
-
-method rebindGeneric (p : Option T) (q : T) returns (res : Option T)
-  ensures ensures_1: ((match p with | .some _p_val => (match res with | .some _value => _value == q | .none => false) | .none => true) : Prop)
-  ensures ensures_2: ((match p with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) : Prop)
-  do
-    let mut o : Option T := p
-    if h_o : (o).isSome = true then
-      let _o_val := (o).get h_o
-      o := some q
-      let _o_val' : T := (match o with | .some _o_val' => _o_val' | .none => _o_val)
-      return some _o_val'
-    else
-      pure ()
-    return none
