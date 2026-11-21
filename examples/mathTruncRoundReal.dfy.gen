@@ -14,11 +14,23 @@ function TruncReal(x: real): (t: int)
 
 function truncReal(): bool
 {
-  (((((TruncReal(2.9) == 2) && (TruncReal(-2.9) == -2)) && (TruncReal(-0.5) == 0)) && (0 == 0)) && (-3 == -3))
+  (((TruncReal(2.9) == 2) && (TruncReal(-2.9) == -2)) && (TruncReal(-0.5) == 0))
 }
 
 lemma truncReal_ensures()
   ensures (truncReal() == true)
+{
+}
+
+function negativeWholeReal(x: real): bool
+  requires (x == (-3 as real))
+{
+  ((TruncReal(x) == -3) && (FloorReal((x + 0.5)) == -3))
+}
+
+lemma negativeWholeReal_ensures(x: real)
+  requires (x == (-3 as real))
+  ensures (negativeWholeReal(x) == true)
 {
 }
 

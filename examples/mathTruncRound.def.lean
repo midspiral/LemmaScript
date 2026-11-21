@@ -24,6 +24,18 @@ method truncNatQuotient (a : Nat) (b : Nat) returns (res : Int)
   do
     return Pure.truncNatQuotient a b
 
+method truncMixed (a : Int) (b : Nat) returns (res : Int)
+  requires require_1: (b > 0 : Prop)
+  ensures ensures_1: (res = (-Int.tdiv ((-a)) b) : Prop)
+  do
+    return Pure.truncMixed a b
+
+method elementAt (xs : Array Int) (i : Nat) returns (res : Int)
+  requires require_1: (i < xs.size : Prop)
+  ensures ensures_1: (res = xs[i]! : Prop)
+  do
+    return Pure.elementAt xs i
+
 method truncInt (x : Int) returns (res : Int)
   ensures ensures_1: (res = x : Prop)
   do

@@ -20,7 +20,7 @@ function JSTruncDiv(a: int, b: int): int
 
 function truncDivision(): bool
 {
-  (((JSTruncDiv(-7, 2) == -3) && (JSTruncDiv(7, 2) == 3)) && (JSTruncDiv(7, -2) == -3))
+  (((((JSTruncDiv(-7, 2) == -3) && (JSTruncDiv(7, 2) == 3)) && (JSTruncDiv(7, -2) == -3)) && (JSTruncDiv(-7, -2) == 3)) && (JSTruncDiv(-6, 3) == -2))
 }
 
 lemma truncDivision_ensures()
@@ -50,6 +50,30 @@ function truncNatQuotient(a: nat, b: nat): int
 lemma truncNatQuotient_ensures(a: nat, b: nat)
   requires (b > 0)
   ensures (truncNatQuotient(a, b) == JSFloorDiv(a, b))
+{
+}
+
+function truncMixed(a: int, b: nat): int
+  requires (b > 0)
+{
+  JSTruncDiv(a, b)
+}
+
+lemma truncMixed_ensures(a: int, b: nat)
+  requires (b > 0)
+  ensures (truncMixed(a, b) == (-(JSTruncDiv((-(a)), b))))
+{
+}
+
+function elementAt(xs: seq<int>, i: nat): int
+  requires (i < |xs|)
+{
+  xs[i]
+}
+
+lemma elementAt_ensures(xs: seq<int>, i: nat)
+  requires (i < |xs|)
+  ensures (elementAt(xs, i) == xs[i])
 {
 }
 

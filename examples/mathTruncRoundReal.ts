@@ -3,9 +3,8 @@
  * does not support `real`).
  *
  * In idealized mode a `number` is an exact mathematical real: there is no -0,
- * NaN, or Infinity, and `x + 0.5` in Math.round is computed exactly, so inputs
- * such as 0.49999999999999994 (which binary64 rounds to 1 via x + 0.5) round
- * to 0 here.
+ * NaN, or Infinity. Math.round lowers to FloorReal(x + 0.5) with an exact sum,
+ * which matches JS Math.round on every finite double.
  */
 
 //@ backend dafny
@@ -13,8 +12,16 @@
 // Math.trunc drops the fractional part, rounding toward zero.
 export function truncReal(): boolean {
   //@ ensures \result === true
-  return Math.trunc(2.9) === 2 && Math.trunc(-2.9) === -2 &&
-    Math.trunc(-0.5) === 0 && Math.trunc(0.0) === 0 && Math.trunc(-3.0) === -3;
+  return Math.trunc(2.9) === 2 && Math.trunc(-2.9) === -2 && Math.trunc(-0.5) === 0;
+}
+
+// A whole-number literal such as -3.0 resolves as an integer, so a real
+// parameter is needed to send a negative whole number through TruncReal.
+export function negativeWholeReal(x: number): boolean {
+  //@ type x real
+  //@ requires x === -3
+  //@ ensures \result === true
+  return Math.trunc(x) === -3 && Math.round(x) === -3;
 }
 
 // Math.round rounds halfway ties toward +Infinity.

@@ -10,7 +10,8 @@
 
 export function truncDivision(): boolean {
   //@ ensures \result === true
-  return Math.trunc(-7 / 2) === -3 && Math.trunc(7 / 2) === 3 && Math.trunc(7 / -2) === -3;
+  return Math.trunc(-7 / 2) === -3 && Math.trunc(7 / 2) === 3 && Math.trunc(7 / -2) === -3 &&
+    Math.trunc(-7 / -2) === 3 && Math.trunc(-6 / 3) === -2;
 }
 
 // The divisor is a parameter, so Dafny must check `b != 0` at the call to JSTruncDiv.
@@ -28,6 +29,23 @@ export function truncNatQuotient(a: number, b: number): number {
   //@ requires b > 0
   //@ ensures \result === Math.floor(a / b)
   return Math.trunc(a / b);
+}
+
+// An int dividend over a nat divisor still truncates toward zero, so negating
+// the dividend negates the quotient (floor division would not).
+export function truncMixed(a: number, b: number): number {
+  //@ type b nat
+  //@ requires b > 0
+  //@ ensures \result === -Math.trunc(-a / b)
+  return Math.trunc(a / b);
+}
+
+// A nat argument keeps type nat, so the result indexes an array directly.
+export function elementAt(xs: number[], i: number): number {
+  //@ type i nat
+  //@ requires i < xs.length
+  //@ ensures \result === xs[i]
+  return xs[Math.round(i)];
 }
 
 export function truncInt(x: number): number {
