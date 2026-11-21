@@ -1703,13 +1703,16 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
 /** The initializer for narrow's re-bind `let` (#342). resolve has
  *  established that the variable is present here. Dafny reads `.value`, which
  *  makes Dafny prove that. Lean has no destructor whose precondition the
- *  verifier checks, so it matches with a `default` None arm that cannot run. */
+ *  verifier checks, so it matches with a None arm that cannot run. That arm
+ *  returns the binder the variable had before the write when transform
+ *  recorded one, and `default` (which needs `Inhabited`) otherwise. */
 function rebindValue(s: TStmt & { kind: "let" }): Expr {
   const opt = transformExpr(s.init);
   if (_opts.backend === "dafny") return { kind: "field", obj: opt, field: "value", datatypeField: true };
   return { kind: "match", scrutinee: opt, arms: [
     { pattern: pCtor("some", s.name), body: { kind: "var", name: s.name } },
-    { pattern: pCtor("none"), body: { kind: "default", type: s.ty } },
+    { pattern: pCtor("none"), body: s.fallback !== undefined
+      ? { kind: "var", name: s.fallback } : { kind: "default", type: s.ty } },
   ] };
 }
 
@@ -2273,7 +2276,7 @@ function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, b
     // The binder holds the value from before this write, so substitution
     // stops here (#342): reads after it see the variable, which narrow has
     // re-bound when it is still defined.
-    out.push(...stmts.slice(i + 1));
+    out.push(...withRebindFallback(stmts.slice(i + 1), path, binder));
     return out;
   }
   return out;
@@ -2290,6 +2293,16 @@ function writeReachesAfter(s: TStmt, path: AccessPath): boolean {
     case "someMatch": return reaches(s.someBody) || reaches(s.noneBody);
     default: return stmtWritesPath(s, path);
   }
+}
+
+/** Record `binder` on the re-bind of `path`'s variable in `stmts`. The
+ *  binder is in scope there and has the same type, so Lean's re-bind uses it
+ *  for the None arm that cannot run, which needs no `Inhabited` instance. */
+function withRebindFallback(stmts: TStmt[], path: AccessPath, binder: string): TStmt[] {
+  if (path.fields.length > 0) return stmts;
+  const i = stmts.findIndex(t => t.kind === "let" && t.rebinds === path.rootVar);
+  if (i < 0) return stmts;
+  return stmts.map((t, j) => j === i ? { ...t, fallback: binder } as TStmt : t);
 }
 
 /** Substitute in the parts of `s` that run before its write to `path`. */

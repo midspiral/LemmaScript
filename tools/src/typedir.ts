@@ -126,7 +126,10 @@ export type TStmt =
        *  `init` reads the variable at its optional type; transform unwraps
        *  it and reads `name` for the variable in the rest of the block,
        *  until the next write to it. */
-      rebinds?: string }
+      rebinds?: string;
+      /** Set by transform on a re-bind: the variable's binder from before
+       *  the write, which Lean returns from the None arm that cannot run. */
+      fallback?: string }
   | { kind: "assign"; target: string; value: TExpr;
       /** Set when `target` is a presence-narrowed variable assigned a defined
        *  value: it stays present, so narrow re-binds it for the rest of the
