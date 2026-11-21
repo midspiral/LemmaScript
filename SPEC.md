@@ -530,7 +530,7 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `expr \|\| default` (on number) | if nonzero | `if expr != 0 then expr else default` |
 | `expr \|\| default` (on array) | `expr` (arrays are always truthy) | `expr` (arrays are always truthy) |
 | `expr?.method(args)` | — | `if key in map { ... }` |
-| `expr as T` | stripped | stripped |
+| `expr as T` | stripped | Preserves named union types on tagged record literals; otherwise stripped ([example](examples/taggedRecordComparisons.ts)) |
 | `null` | `none` | `None` (same as `undefined`) |
 | `//@ skip` (before statement) | — | statement omitted from model |
 | `new Map(arr.map(fn))` | — | loop building `map[]` |
