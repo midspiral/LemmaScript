@@ -480,9 +480,7 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `Math.max(a, b)` (int args) | `MathMax(a, b)` | `MathMax(a, b)` (preamble: `if a >= b then a else b`) |
 | `Math.abs(x)` (real arg) | — | `MathAbsReal(x)` → `real` |
 | `Math.min(a, b)` / `Math.max(a, b)` (either arg real) | — | `MathMinReal(a, b)` / `MathMaxReal(a, b)` → `real`; int/nat operands coerced with `as real` |
-| `Number.isSafeInteger(n)` (integer arg) | `-9007199254740991 ≤ n ∧ n ≤ 9007199254740991` | `-9007199254740991 <= n && n <= 9007199254740991` |
-| `Number.isSafeInteger(n)` (bigint arg) | `false` | `false` |
-| `Number.isSafeInteger(x)` (real arg) | — (rejected) | `IsSafeIntegerReal(x)`; integrality and the same safe integer bounds |
+| `Number.isSafeInteger(n)` (integer arg) | `-9007199254740991 ≤ n ∧ n ≤ 9007199254740991` | `-9007199254740991 <= n && n <= 9007199254740991`; `false` for a bigint argument; real arguments are rejected |
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `opt ? f(opt) : undefined` | match on Some/None | `match opt { case Some(v) => Some(f(v)) case None => None }` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
@@ -1142,8 +1140,6 @@ function CeilReal(x: real): int {
   if x == (x.Floor as real) then x.Floor else x.Floor + 1
 }
 ```
-
-**`Number.isSafeInteger`:** Dafny checks real arguments with `x.Floor as real == x && -9007199254740991 <= x.Floor <= 9007199254740991`, evaluating the argument once. This uses the exact-real model, not IEEE 754 rounding. Lean rejects real arguments, including fractional literals. Unsupported argument types and arities produce explicit errors; narrow optional or union arguments to a numeric type first.
 
 **Cross-file types:** When a verified function references a type imported from another file (e.g., `Module` from `../types`), `lsc` automatically resolves the type via ts-morph and generates the corresponding backend type declaration. Resolution is recursive — types referenced by resolved types are also extracted (e.g., resolving `Claim` also extracts `ClaimStatus`, `EmbeddedDecision`). Both record types and type aliases (string unions, discriminated unions) are resolved. `lsc` discovers the nearest `tsconfig.json` for module resolution. Built-in types (`Map`, `Set`, `Array`, etc.) are excluded.
 
