@@ -575,14 +575,15 @@ function emitStmt(s: Stmt, indent: number): string {
   switch (s.kind) {
     case "let": {
       // `mut` lets always carry their type (assignments must re-elaborate at it).
-      // Immutable lets are ascribed only when the initializer is a `match` (the
-      // `??` / Option-unwrap lowerings): Velvet's WP elaboration runs *backwards*,
+      // Record literals need an expected type. Immutable lets also need one
+      // for `match` initializers (the `??` / Option-unwrap lowerings):
+      // Velvet's WP elaboration runs *backwards*,
       // so without the ascription the binding's type is a metavariable that a
       // later use pins first — e.g. `lines.size ≤ maxLines` pins `maxLines : ℕ`
       // and the ℤ-valued unwrap arms then fail to elaborate. Other initializer
       // shapes determine their own type, and leaving them bare keeps previously
       // generated (and proven) artifacts byte-stable.
-      const ascribe = s.mutable || s.value.kind === "match";
+      const ascribe = s.mutable || s.value.kind === "match" || anyExpr(s.value, e => e.kind === "record" && !e.spread);
       const ty = ascribe && s.type.kind !== "unknown" ? ` : ${tyToLean(s.type)}` : "";
       return `${pad}let ${s.mutable ? "mut " : ""}${escapeName(s.name)}${ty} := ${emitExpr(s.value)}`;
     }
@@ -703,21 +704,21 @@ function emitStmt(s: Stmt, indent: number): string {
 
 // ── Declaration emission ─────────────────────────────────────
 
-/** Collect every function/variable name an IR tree references (stripping any
- *  `Pure.` qualifier), via a generic walk over `app`/`var` nodes. */
-function collectRefNames(node: unknown, into: Set<string>): void {
+/** Collect referenced names, unqualifying references to sibling declarations. */
+function collectRefNames(node: unknown, into: Set<string>, namespace: string): void {
   if (node === null || typeof node !== "object") return;
-  if (Array.isArray(node)) { for (const x of node) collectRefNames(x, into); return; }
+  if (Array.isArray(node)) { for (const x of node) collectRefNames(x, into, namespace); return; }
   const n = node as { kind?: string; fn?: unknown; name?: unknown };
-  if (n.kind === "app" && typeof n.fn === "string") into.add(n.fn.replace(/^Pure\./, ""));
-  if (n.kind === "var" && typeof n.name === "string") into.add(n.name.replace(/^Pure\./, ""));
-  for (const k of Object.keys(node)) collectRefNames((node as Record<string, unknown>)[k], into);
+  const unqualify = (name: string) => name.startsWith(namespace + ".") ? name.slice(namespace.length + 1) : name;
+  if (n.kind === "app" && typeof n.fn === "string") into.add(unqualify(n.fn));
+  if (n.kind === "var" && typeof n.name === "string") into.add(unqualify(n.name));
+  for (const k of Object.keys(node)) collectRefNames((node as Record<string, unknown>)[k], into, namespace);
 }
 
 /** Lean requires definition-before-use: order sibling decls so one that
  *  references another is emitted after it. Cycles are left in place (they would
  *  need a `mutual` block). Bails to the original order if any decl is unnamed. */
-function orderDeclsByDeps(decls: Decl[]): Decl[] {
+function orderDeclsByDeps(decls: Decl[], namespace: string): Decl[] {
   const named = decls.filter((d): d is Decl & { name: string } => typeof (d as { name?: unknown }).name === "string");
   if (named.length !== decls.length) return decls;
   const names = new Set(named.map(d => d.name));
@@ -725,7 +726,7 @@ function orderDeclsByDeps(decls: Decl[]): Decl[] {
   const deps = new Map<string, string[]>();
   for (const d of named) {
     const refs = new Set<string>();
-    collectRefNames(d, refs);
+    collectRefNames(d, refs, namespace);
     refs.delete(d.name);
     deps.set(d.name, [...refs].filter(r => names.has(r)));
   }
@@ -828,7 +829,7 @@ function emitDecl(d: Decl): string {
 
     case "namespace": {
       const lines = [`namespace ${d.name}`];
-      for (const inner of orderDeclsByDeps(d.decls)) lines.push("", emitDecl(inner));
+      for (const inner of orderDeclsByDeps(d.decls, d.name)) lines.push("", emitDecl(inner));
       lines.push("", `end ${d.name}`);
       return lines.join("\n");
     }
