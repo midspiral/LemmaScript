@@ -2444,6 +2444,8 @@ function findReassignedNames(stmts: TStmt[], names: Set<string>): Set<string> {
       if (s.kind === "while") scan(s.body);
       if (s.kind === "forof") scan(s.body);
       if (s.kind === "switch") { for (const c of s.cases) scan(c.body); scan(s.defaultBody); }
+      if (s.kind === "someMatch") { scan(s.someBody); scan(s.noneBody); }
+      if (s.kind === "tagMatch") { for (const c of s.cases) scan(c.body); scan(s.fallthrough); }
     }
   }
   scan(stmts);
