@@ -17,6 +17,8 @@ The `.dfy.gen` extension prevents Dafny tooling from auto-verifying it.
 
 The diff between gen and dfy must be **additions only** — the LLM may insert helper lemmas, ghost predicates, assert statements, and loop invariants, but may not modify generated lines.
 
+Added lines may not contain `assume` statements or `{:axiom}` / `@Axiom` attributes; occurrences inside comments, strings, and character literals are ignored. Added lines also may not introduce an `// lsc options:` line, since verifier options are read from that header.
+
 `"proof-dir": "proofs"` in `lemmascript.json` relocates the complete Dafny
 artifact set while preserving the pair: a source `src/search/foo.ts` under that
 config uses `proofs/src/search/foo.dfy.gen` and `proofs/src/search/foo.dfy`.
