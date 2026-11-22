@@ -109,7 +109,7 @@ method optStrCond (o : Option String) returns (res : Int)
     return Pure.optStrCond o
 
 method optPresent (o : Option Int) returns (res : Int)
-  ensures ensures_1: ((match o with | .some _o_val => res = 1 | .none => true) : Prop)
+  ensures ensures_1: ((match o with | .some _ => res = 1 | .none => true) : Prop)
   ensures ensures_2: ((match o with | .some _ => false | .none => true) → res = 0 : Prop)
   do
     return Pure.optPresent o

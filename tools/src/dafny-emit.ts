@@ -1895,7 +1895,7 @@ function translatePattern(p: MatchPattern): string {
   if (p.kind === "literal") return emitExpr({ kind: "str", value: p.value });
   const ctorName = (Object.hasOwn(CTOR_MAP, p.ctor) ? CTOR_MAP[p.ctor] : undefined) ?? dafnyCtorName(p.ctor);
   if (p.binders.length === 0) return ctorName;
-  return `${ctorName}(${p.binders.map(escapeName).join(", ")})`;
+  return `${ctorName}(${p.binders.map(b => b === "_" ? "_" : escapeName(b)).join(", ")})`;
 }
 
 

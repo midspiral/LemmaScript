@@ -13,7 +13,7 @@ def looseIsNullish (x : Option (Option (Int))) : Bool :=
   match x with
   | .some _optional2 =>
     match _optional2 with
-    | .some _optional3 =>
+    | .some _ =>
       false
     | .none =>
       true
@@ -22,7 +22,7 @@ def looseIsNullish (x : Option (Option (Int))) : Bool :=
 
 def looseOptional (x : Option Int) : Bool :=
   match x with
-  | .some _optional9 =>
+  | .some _ =>
     false
   | .none =>
     true
@@ -31,7 +31,7 @@ def looseNullable (x : Option Int) : Bool :=
   let _optional10 : Unit := ()
   let _optional11 : Option Int := x
   match _optional11 with
-  | .some _optional12 =>
+  | .some _ =>
     true
   | .none =>
     false
@@ -40,8 +40,8 @@ def looseDefault (x : Option (Option (Int))) : Int :=
   match x with
   | .some _optional13 =>
     match _optional13 with
-    | .some _optional14 =>
-      let _x_val : Int := _optional14
+    | .some _value14 =>
+      let _x_val : Int := _value14
       _x_val
     | .none =>
       7
@@ -52,8 +52,8 @@ def looseEarlyReturn (x : Option (Option (Int))) : Int :=
   match x with
   | .some _optional25 =>
     match _optional25 with
-    | .some _optional26 =>
-      let _x_val : Int := _optional26
+    | .some _value26 =>
+      let _x_val : Int := _value26
       _x_val
     | .none =>
       7
@@ -64,8 +64,8 @@ def loosePositive (x : Option (Option (Int))) : Bool :=
   match x with
   | .some _optional37 =>
     match _optional37 with
-    | .some _optional38 =>
-      let _x_val : Int := _optional38
+    | .some _value38 =>
+      let _x_val : Int := _value38
       _x_val > 0
     | .none =>
       false
@@ -76,8 +76,8 @@ def looseAbsentOrPositive (x : Option (Option (Int))) : Bool :=
   match x with
   | .some _optional49 =>
     match _optional49 with
-    | .some _optional50 =>
-      let _x_val : Int := _optional50
+    | .some _value50 =>
+      let _x_val : Int := _value50
       _x_val > 0
     | .none =>
       true
@@ -88,8 +88,8 @@ def looseField (box : LooseBox) : Int :=
   match box.value with
   | .some _optional61 =>
     match _optional61 with
-    | .some _optional62 =>
-      let _box_value_val : Int := _optional62
+    | .some _value62 =>
+      let _box_value_val : Int := _value62
       _box_value_val
     | .none =>
       7
@@ -98,15 +98,15 @@ def looseField (box : LooseBox) : Int :=
 
 def looseCompare (a : Option Int) (b : Option Int) : Bool :=
   match a with
-  | .some _optional75 =>
+  | .some _value75 =>
     match b with
-    | .some _optional76 =>
-      _optional75 = _optional76
+    | .some _value76 =>
+      _value75 = _value76
     | .none =>
       false
   | .none =>
     match b with
-    | .some _optional77 =>
+    | .some _ =>
       false
     | .none =>
       true

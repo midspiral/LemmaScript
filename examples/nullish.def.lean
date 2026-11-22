@@ -16,12 +16,12 @@ method classify (x : Option (Option (Int))) returns (res : Int)
 method reverse (x : Option (Option (Int))) returns (res : Int)
   ensures ensures_1: (x = Option.some Option.none → res = 2 : Prop)
   ensures ensures_2: (x = Option.none → res = 1 : Prop)
-  ensures ensures_3: ((match x with | .some _optional59 => (match _optional59 with | .some _optional60 => (let _x_val : Option Int := Option.some _optional60; (match _x_val with | .some _x_val => res = _x_val | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _x_val => res = _x_val | .none => true))) : Prop)
+  ensures ensures_3: ((match x with | .some _optional59 => (match _optional59 with | .some _value60 => (let _x_val : Option Int := Option.some _value60; (match _x_val with | .some _x_val => res = _x_val | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _x_val => res = _x_val | .none => true))) : Prop)
   do
     return Pure.reverse x
 
 method disjunction (x : Option (Option (Int))) returns (res : Int)
-  ensures ensures_1: ((match x with | .some _optional64 => (match _optional64 with | .some _optional65 => (let _x_val : Option Int := Option.some _optional65; (match _x_val with | .some _x_val => res = _x_val | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _x_val => res = _x_val | .none => true))) : Prop)
+  ensures ensures_1: ((match x with | .some _optional64 => (match _optional64 with | .some _value65 => (let _x_val : Option Int := Option.some _value65; (match _x_val with | .some _x_val => res = _x_val | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _x_val => res = _x_val | .none => true))) : Prop)
   do
     return Pure.disjunction x
 
@@ -31,18 +31,18 @@ method retainNull (x : Option (Option (Int))) returns (res : Option Int)
     return Pure.retainNull x
 
 method retainUndefined (x : Option (Option (Int))) returns (res : Option Int)
-  ensures ensures_1: ((match x with | .some _optional70 => (match _optional70 with | .some _optional71 => (let _x_val : Option Int := Option.some _optional71; res = _x_val) | .none => true) | .none => (let _x_val : Option Int := Option.none; res = _x_val)) : Prop)
+  ensures ensures_1: ((match x with | .some _optional70 => (match _optional70 with | .some _value71 => (let _x_val : Option Int := Option.some _value71; res = _x_val) | .none => true) | .none => (let _x_val : Option Int := Option.none; res = _x_val)) : Prop)
   do
     return Pure.retainUndefined x
 
 method positive (x : Option (Option (Int))) returns (res : Bool)
-  ensures ensures_1: ((match x with | .some _optional73 => (match _optional73 with | .some _optional74 => (let _x_val : Option Int := Option.some _optional74; (match _x_val with | .some _ => false | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _ => false | .none => true))) → ¬(res) : Prop)
-  ensures ensures_2: ((match x with | .some _optional76 => (match _optional76 with | .some _optional77 => (let _x_val : Option Int := Option.some _optional77; (match _x_val with | .some _x_val => res = (_x_val > 0) | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _x_val => res = (_x_val > 0) | .none => true))) : Prop)
+  ensures ensures_1: ((match x with | .some _optional73 => (match _optional73 with | .some _value74 => (let _x_val : Option Int := Option.some _value74; (match _x_val with | .some _ => false | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _ => false | .none => true))) → ¬(res) : Prop)
+  ensures ensures_2: ((match x with | .some _optional76 => (match _optional76 with | .some _value77 => (let _x_val : Option Int := Option.some _value77; (match _x_val with | .some _x_val => res = (_x_val > 0) | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _x_val => res = (_x_val > 0) | .none => true))) : Prop)
   do
     return Pure.positive x
 
 method absentOrPositive (x : Option (Option (Int))) returns (res : Bool)
-  ensures ensures_1: ((match x with | .some _optional81 => (match _optional81 with | .some _optional82 => (let _x_val : Option Int := Option.some _optional82; (match _x_val with | .some _ => false | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _ => false | .none => true))) → res : Prop)
-  ensures ensures_2: ((match x with | .some _optional84 => (match _optional84 with | .some _optional85 => (let _x_val : Option Int := Option.some _optional85; (match _x_val with | .some _x_val => res = (_x_val > 0) | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _x_val => res = (_x_val > 0) | .none => true))) : Prop)
+  ensures ensures_1: ((match x with | .some _optional81 => (match _optional81 with | .some _value82 => (let _x_val : Option Int := Option.some _value82; (match _x_val with | .some _ => false | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _ => false | .none => true))) → res : Prop)
+  ensures ensures_2: ((match x with | .some _optional84 => (match _optional84 with | .some _value85 => (let _x_val : Option Int := Option.some _value85; (match _x_val with | .some _x_val => res = (_x_val > 0) | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _x_val => res = (_x_val > 0) | .none => true))) : Prop)
   do
     return Pure.absentOrPositive x

@@ -29,8 +29,8 @@ function reverse(x: Option<Option<int>>): int
   match x {
     case Some(i_optional4) =>
       match i_optional4 {
-        case Some(i_optional5) =>
-          var i_x_val: Option<int> := Option.Some(i_optional5);
+        case Some(i_value5) =>
+          var i_x_val: Option<int> := Option.Some(i_value5);
           match i_x_val {
             case Some(i_x_val) =>
               i_x_val
@@ -54,7 +54,7 @@ function reverse(x: Option<Option<int>>): int
 lemma reverse_ensures(x: Option<Option<int>>)
   ensures ((x == Option.Some(Option.None)) ==> (reverse(x) == 2))
   ensures ((x == Option.None) ==> (reverse(x) == 1))
-  ensures (match x { case Some(i_optional9) => (match i_optional9 { case Some(i_optional10) => (var i_x_val: Option<int> := Option.Some(i_optional10); (match i_x_val { case Some(i_x_val) => (reverse(x) == i_x_val) case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (reverse(x) == i_x_val) case None => true })) })
+  ensures (match x { case Some(i_optional9) => (match i_optional9 { case Some(i_value10) => (var i_x_val: Option<int> := Option.Some(i_value10); (match i_x_val { case Some(i_x_val) => (reverse(x) == i_x_val) case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (reverse(x) == i_x_val) case None => true })) })
 {
 }
 
@@ -63,8 +63,8 @@ function disjunction(x: Option<Option<int>>): int
   match x {
     case Some(i_optional14) =>
       match i_optional14 {
-        case Some(i_optional15) =>
-          var i_x_val: int := i_optional15;
+        case Some(i_value15) =>
+          var i_x_val: int := i_value15;
           i_x_val
         case None =>
           0
@@ -75,7 +75,7 @@ function disjunction(x: Option<Option<int>>): int
 }
 
 lemma disjunction_ensures(x: Option<Option<int>>)
-  ensures (match x { case Some(i_optional18) => (match i_optional18 { case Some(i_optional19) => (var i_x_val: Option<int> := Option.Some(i_optional19); (match i_x_val { case Some(i_x_val) => (disjunction(x) == i_x_val) case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (disjunction(x) == i_x_val) case None => true })) })
+  ensures (match x { case Some(i_optional18) => (match i_optional18 { case Some(i_value19) => (var i_x_val: Option<int> := Option.Some(i_value19); (match i_x_val { case Some(i_x_val) => (disjunction(x) == i_x_val) case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (disjunction(x) == i_x_val) case None => true })) })
 {
 }
 
@@ -99,8 +99,8 @@ function retainUndefined(x: Option<Option<int>>): Option<int>
   match x {
     case Some(i_optional25) =>
       match i_optional25 {
-        case Some(i_optional26) =>
-          var i_x_val: Option<int> := Option.Some(i_optional26);
+        case Some(i_value26) =>
+          var i_x_val: Option<int> := Option.Some(i_value26);
           i_x_val
         case None =>
           None
@@ -112,7 +112,7 @@ function retainUndefined(x: Option<Option<int>>): Option<int>
 }
 
 lemma retainUndefined_ensures(x: Option<Option<int>>)
-  ensures (match x { case Some(i_optional28) => (match i_optional28 { case Some(i_optional29) => (var i_x_val: Option<int> := Option.Some(i_optional29); (retainUndefined(x) == i_x_val)) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (retainUndefined(x) == i_x_val)) })
+  ensures (match x { case Some(i_optional28) => (match i_optional28 { case Some(i_value29) => (var i_x_val: Option<int> := Option.Some(i_value29); (retainUndefined(x) == i_x_val)) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (retainUndefined(x) == i_x_val)) })
 {
 }
 
@@ -121,8 +121,8 @@ function positive(x: Option<Option<int>>): bool
   match x {
     case Some(i_optional31) =>
       match i_optional31 {
-        case Some(i_optional32) =>
-          var i_x_val: Option<int> := Option.Some(i_optional32);
+        case Some(i_value32) =>
+          var i_x_val: Option<int> := Option.Some(i_value32);
           match i_x_val {
             case Some(i_x_val) =>
               (i_x_val > 0)
@@ -144,8 +144,8 @@ function positive(x: Option<Option<int>>): bool
 }
 
 lemma positive_ensures(x: Option<Option<int>>)
-  ensures ((match x { case Some(i_optional36) => (match i_optional36 { case Some(i_optional37) => (var i_x_val: Option<int> := Option.Some(i_optional37); (match i_x_val { case Some(i_) => false case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_) => false case None => true })) }) ==> !(positive(x)))
-  ensures (match x { case Some(i_optional39) => (match i_optional39 { case Some(i_optional40) => (var i_x_val: Option<int> := Option.Some(i_optional40); (match i_x_val { case Some(i_x_val) => (positive(x) == (i_x_val > 0)) case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (positive(x) == (i_x_val > 0)) case None => true })) })
+  ensures ((match x { case Some(i_optional36) => (match i_optional36 { case Some(i_value37) => (var i_x_val: Option<int> := Option.Some(i_value37); (match i_x_val { case Some(_) => false case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(_) => false case None => true })) }) ==> !(positive(x)))
+  ensures (match x { case Some(i_optional39) => (match i_optional39 { case Some(i_value40) => (var i_x_val: Option<int> := Option.Some(i_value40); (match i_x_val { case Some(i_x_val) => (positive(x) == (i_x_val > 0)) case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (positive(x) == (i_x_val > 0)) case None => true })) })
 {
 }
 
@@ -154,8 +154,8 @@ function absentOrPositive(x: Option<Option<int>>): bool
   match x {
     case Some(i_optional44) =>
       match i_optional44 {
-        case Some(i_optional45) =>
-          var i_x_val: Option<int> := Option.Some(i_optional45);
+        case Some(i_value45) =>
+          var i_x_val: Option<int> := Option.Some(i_value45);
           match i_x_val {
             case Some(i_x_val) =>
               (i_x_val > 0)
@@ -177,7 +177,7 @@ function absentOrPositive(x: Option<Option<int>>): bool
 }
 
 lemma absentOrPositive_ensures(x: Option<Option<int>>)
-  ensures ((match x { case Some(i_optional49) => (match i_optional49 { case Some(i_optional50) => (var i_x_val: Option<int> := Option.Some(i_optional50); (match i_x_val { case Some(i_) => false case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_) => false case None => true })) }) ==> absentOrPositive(x))
-  ensures (match x { case Some(i_optional52) => (match i_optional52 { case Some(i_optional53) => (var i_x_val: Option<int> := Option.Some(i_optional53); (match i_x_val { case Some(i_x_val) => (absentOrPositive(x) == (i_x_val > 0)) case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (absentOrPositive(x) == (i_x_val > 0)) case None => true })) })
+  ensures ((match x { case Some(i_optional49) => (match i_optional49 { case Some(i_value50) => (var i_x_val: Option<int> := Option.Some(i_value50); (match i_x_val { case Some(_) => false case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(_) => false case None => true })) }) ==> absentOrPositive(x))
+  ensures (match x { case Some(i_optional52) => (match i_optional52 { case Some(i_value53) => (var i_x_val: Option<int> := Option.Some(i_value53); (match i_x_val { case Some(i_x_val) => (absentOrPositive(x) == (i_x_val > 0)) case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (absentOrPositive(x) == (i_x_val > 0)) case None => true })) })
 {
 }

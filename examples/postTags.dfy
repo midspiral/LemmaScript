@@ -47,6 +47,6 @@ function hasTag(post: Post, tag: string): bool
 }
 
 lemma hasTag_ensures(post: Post, tag: string)
-  ensures ((match post.tags { case Some(i_) => false case None => true }) ==> (hasTag(post, tag) == false))
+  ensures ((match post.tags { case Some(_) => false case None => true }) ==> (hasTag(post, tag) == false))
 {
 }

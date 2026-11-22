@@ -9,7 +9,7 @@ import type { TExpr, TStmt, TModule, Ty } from "./typedir.js";
 import { isBigInt, tyEqual } from "./typedir.js";
 import { optional, nullishOf, includesNullish, joinTypes } from "./nullish.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
-import { needsOptionalTypeHint, anyExpr, anyExprInStmts, usesName, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
+import { needsOptionalTypeHint, anyExpr, anyExprInStmts, usesName, usesNameInStmts, bindsNameInStmts, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
@@ -414,7 +414,7 @@ const optSome = (value: Expr): Expr => ({ kind: "constructor", name: "some", typ
 const optNone = (): Expr => ({ kind: "constructor", name: "none", type: "Option", args: [] });
 const unit = (): Expr => ({ kind: "tupleLiteral", elems: [] });
 let optionalCounter = 0;
-const optionalBinder = () => freshName(`_optional${optionalCounter++}`);
+const optionalBinder = (prefix: "optional" | "value" = "optional") => freshName(`_${prefix}${optionalCounter++}`);
 
 /** Single-sentinel options retain their binary representation. With both,
  * the outer None is undefined and the inner None is null. */
@@ -424,7 +424,8 @@ function optionalCases<R>(expr: Expr, ty: Ty,
     choose: (expr: Expr, yes: R, no: R) => R;
     evaluated: (expr: Expr, ty: Ty, body: R) => R }, binderHint?: string): R {
   if (ty.kind === "optional") {
-    const binder = binderHint ?? optionalBinder();
+    // Keep `optional` until unwrapping reaches the final payload.
+    const binder = binderHint ?? optionalBinder(ty.nullish === "both" || ty.inner.kind === "optional" ? "optional" : "value");
     const some = ty.nullish === "both"
       ? optionalCases(varE(binder), optional(ty.inner, "null"), value, absent, ops)
       : value(varE(binder), ty.inner);
@@ -440,7 +441,7 @@ function optionalCases<R>(expr: Expr, ty: Ty,
 
 const optionalExprOps = {
   match: (expr: Expr, binder: string, some: Expr, none: Expr): Expr => ({ kind: "match", scrutinee: expr,
-    arms: [{ pattern: pCtor("some", binder), body: some }, { pattern: pCtor("none"), body: none }] }),
+    arms: [{ pattern: pCtor("some", usesName(some, binder) ? binder : "_"), body: some }, { pattern: pCtor("none"), body: none }] }),
   choose: (expr: Expr, yes: Expr, no: Expr): Expr => ({ kind: "if", cond: expr, then: yes, else: no }),
   evaluated: (expr: Expr, ty: Ty, body: Expr): Expr =>
     expr.kind === "var" || expr.kind === "tupleLiteral" ? body
@@ -448,7 +449,7 @@ const optionalExprOps = {
 };
 const optionalStmtOps = {
   match: (expr: Expr, binder: string, some: Stmt[], none: Stmt[]): Stmt[] => [{ kind: "match", scrutinee: expr,
-    arms: [{ pattern: pCtor("some", binder), body: some }, { pattern: pCtor("none"), body: none }] }],
+    arms: [{ pattern: pCtor("some", usesNameInStmts(some, binder) || bindsNameInStmts(some, binder) ? binder : "_"), body: some }, { pattern: pCtor("none"), body: none }] }],
   choose: (expr: Expr, yes: Stmt[], no: Stmt[]): Stmt[] => [{ kind: "if", cond: expr, then: yes, else: no }],
   evaluated: (expr: Expr, ty: Ty, body: Stmt[]): Stmt[] =>
     expr.kind === "var" || expr.kind === "tupleLiteral" ? body
