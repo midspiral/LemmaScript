@@ -40,8 +40,8 @@ test("both backends preserve the enum in every optional record field", () => {
     assert.ok(lean.includes(`${name} : Option Phase`), name);
   }
   for (const name of ["fallback", "retryHint"]) {
-    assert.ok(dafny.includes(`${name}: Option<Option<Phase>>`), name);
-    assert.ok(lean.includes(`${name} : Option (Option (Phase))`), name);
+    assert.ok(dafny.includes(`${name}: Nullish<Phase>`), name);
+    assert.ok(lean.includes(`${name} : LemmaScript.Nullish Phase`), name);
   }
   assert.match(dafny, /current: Phase/);
   assert.match(dafny, /timeline: seq<Phase>/);
