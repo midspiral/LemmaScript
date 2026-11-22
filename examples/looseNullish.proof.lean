@@ -28,22 +28,22 @@ prove_correct looseCompare by
   velvet_vcgen [looseCompare] with
     (expose_names; tactic => cases a <;> cases b <;> simp_all [Pure.looseCompare] <;> grind)
 
-example : Pure.looseIsNullish none = true := by decide
-example : Pure.looseIsNullish (some none) = true := by decide
-example : Pure.looseIsNullish (some (some 0)) = false := by decide
+example : Pure.looseIsNullish .Undefined = true := by decide
+example : Pure.looseIsNullish .Null = true := by decide
+example : Pure.looseIsNullish (.Value 0) = false := by decide
 example : Pure.looseOptional none = true := by decide
 example : Pure.looseOptional (some 0) = false := by decide
 example : Pure.looseNullable none = false := by decide
 example : Pure.looseNullable (some 0) = true := by decide
-example : Pure.looseDefault none = 7 := by decide
-example : Pure.looseDefault (some none) = 7 := by decide
-example : Pure.looseDefault (some (some 0)) = 0 := by decide
-example : Pure.looseEarlyReturn none = 7 := by decide
-example : Pure.looseEarlyReturn (some none) = 7 := by decide
-example : Pure.looseEarlyReturn (some (some 0)) = 0 := by decide
-example : Pure.looseField ⟨none⟩ = 7 := by decide
-example : Pure.looseField ⟨some none⟩ = 7 := by decide
-example : Pure.looseField ⟨some (some 0)⟩ = 0 := by decide
+example : Pure.looseDefault .Undefined = 7 := by decide
+example : Pure.looseDefault .Null = 7 := by decide
+example : Pure.looseDefault (.Value 0) = 0 := by decide
+example : Pure.looseEarlyReturn .Undefined = 7 := by decide
+example : Pure.looseEarlyReturn .Null = 7 := by decide
+example : Pure.looseEarlyReturn (.Value 0) = 0 := by decide
+example : Pure.looseField ⟨.Undefined⟩ = 7 := by decide
+example : Pure.looseField ⟨.Null⟩ = 7 := by decide
+example : Pure.looseField ⟨.Value 0⟩ = 0 := by decide
 example : Pure.looseCompare none none = true := by decide
 example : Pure.looseCompare (some 0) none = false := by decide
 example : Pure.looseCompare none (some 0) = false := by decide

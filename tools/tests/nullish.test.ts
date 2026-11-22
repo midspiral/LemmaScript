@@ -62,6 +62,30 @@ test("Dafny rejects a postcondition that confuses null with undefined", () => {
 
 const narrowing = readFileSync(new URL("../../examples/nullish.ts", import.meta.url), "utf8");
 
+test("three-case values use named cases while single-sentinel options retain their encoding", () => {
+  const text = generate(narrowing);
+  assert.match(text, /datatype Nullish<T> = Undefined \| Null \| Value\(value: T\)/);
+  assert.match(text, /function isUndefined\(x: Nullish<int>\): bool\s*\{\s*x\.Undefined\?/);
+  assert.match(text, /function isNull\(x: Nullish<int>\): bool\s*\{\s*x\.Null\?/);
+  assert.match(text, /function widenUndefined\(x: Option<int>\): Nullish<int>/);
+  assert.match(text, /function widenNull\(x: Option<int>\): Nullish<int>/);
+});
+
+test("a source type named Nullish does not collide with the generated carrier", () => {
+  const result = verify(String.raw`
+interface Nullish { value: number }
+export function extract(x: Nullish | null | undefined): number {
+  //@ ensures x === undefined ==> \result === 1
+  //@ ensures x === null ==> \result === 2
+  //@ ensures x !== undefined && x !== null ==> \result === x.value
+  if (x === undefined) return 1;
+  if (x === null) return 2;
+  return x.value;
+}
+`);
+  assert.equal(result.status, 0, result.output + result.text);
+});
+
 test("partial narrowing, either check order, and disjunctive early returns verify", () => {
   const result = verify(narrowing);
   assert.equal(result.status, 0, result.output + result.text);

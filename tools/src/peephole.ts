@@ -118,6 +118,19 @@ function isBool(e: Expr, v: boolean): boolean {
   return e.kind === "bool" && e.value === v;
 }
 
+/** A three-case boolean nullish match is a constructor test, e.g. !x.Value?.
+ * Keep the scrutinee even for constant results: evaluating it may carry a
+ * precondition or a bounds obligation. */
+function ruleNullishTest(e: Expr): Expr | null {
+  if (e.kind !== "match" || e.arms.length !== 3 ||
+      !e.arms.every(a => a.pattern.kind === "ctor" && a.pattern.type === "LemmaScript.Nullish" && a.body.kind === "bool")) return null;
+  const selected = e.arms.find(a => e.arms.every(b => a === b ||
+    (a.body.kind === "bool" && isBool(b.body, !a.body.value))));
+  if (!selected || selected.pattern.kind !== "ctor") return null;
+  return { kind: "binop", op: isBool(selected.body, true) ? "=" : "≠", left: e.scrutinee,
+    right: { kind: "constructor", name: selected.pattern.ctor, type: "LemmaScript.Nullish", args: [] } };
+}
+
 // Boolean-simplification rules (rules 2-5) collapse `if c then b else false` into
 // `c && b` etc.  These are sound in Dafny because `&&`/`||` are short-circuit, but
 // in Lean they produce `∧`/`∨` (Prop ops) which evaluate both arguments — breaking
@@ -130,6 +143,7 @@ const MAP_GET_RULES = [
   ruleLetMatchOnMapGetExpr,
 ];
 const BOOL_RULES = [
+  ruleNullishTest,
   ruleIfFalseElseTrue,
   ruleIfIdentity,
   ruleIfThenFalse,

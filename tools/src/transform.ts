@@ -7,9 +7,9 @@
 
 import type { TExpr, TStmt, TModule, Ty } from "./typedir.js";
 import { isBigInt, tyEqual } from "./typedir.js";
-import { optional, nullishOf, includesNullish, joinTypes } from "./nullish.js";
+import { nullishOf, includesNullish, joinTypes } from "./nullish.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
-import { needsOptionalTypeHint, anyExpr, anyExprInStmts, usesName, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
+import { needsOptionalTypeHint, anyExpr, anyExprInStmts, usesName, usesNameInStmts, bindsNameInStmts, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
@@ -412,23 +412,33 @@ function wrapOptionalBranch(expr: Expr, raw: TExpr, target: Ty): Expr {
 
 const optSome = (value: Expr): Expr => ({ kind: "constructor", name: "some", type: "Option", args: [value] });
 const optNone = (): Expr => ({ kind: "constructor", name: "none", type: "Option", args: [] });
+const nullishCtor = (name: "Undefined" | "Null" | "Value", ...args: Expr[]): Expr =>
+  ({ kind: "constructor", name, type: "LemmaScript.Nullish", args });
+const nullishPattern = (ctor: "Undefined" | "Null" | "Value", ...binders: string[]): MatchPattern =>
+  ({ kind: "ctor", ctor, type: "LemmaScript.Nullish", binders });
 const unit = (): Expr => ({ kind: "tupleLiteral", elems: [] });
 let optionalCounter = 0;
-const optionalBinder = () => freshName(`_optional${optionalCounter++}`);
+const optionalBinder = (prefix: "optional" | "value" = "optional") => freshName(`_${prefix}${optionalCounter++}`);
 
-/** Single-sentinel options retain their binary representation. With both,
- * the outer None is undefined and the inner None is null. */
+/** Single-sentinel options retain Some/None. Three-case values have explicit
+ * Value, Null and Undefined constructors. */
 function optionalCases<R>(expr: Expr, ty: Ty,
   value: (expr: Expr, ty: Ty) => R, absent: (tag: "null" | "undefined") => R,
-  ops: { match: (expr: Expr, binder: string, some: R, none: R) => R;
+  ops: { match: (expr: Expr, arms: { pattern: MatchPattern; body: R }[]) => R;
     choose: (expr: Expr, yes: R, no: R) => R;
     evaluated: (expr: Expr, ty: Ty, body: R) => R }, binderHint?: string): R {
   if (ty.kind === "optional") {
-    const binder = binderHint ?? optionalBinder();
-    const some = ty.nullish === "both"
-      ? optionalCases(varE(binder), optional(ty.inner, "null"), value, absent, ops)
-      : value(varE(binder), ty.inner);
-    return ops.match(expr, binder, some, absent(ty.nullish === "null" ? "null" : "undefined"));
+    // Preserve existing Option names; only the new Nullish carrier uses `value`.
+    const binder = binderHint ?? optionalBinder(ty.nullish === "both" && ty.inner.kind !== "optional" ? "value" : "optional");
+    const body = value(varE(binder), ty.inner);
+    return ops.match(expr, ty.nullish === "both" ? [
+      { pattern: nullishPattern("Value", binder), body },
+      { pattern: nullishPattern("Null"), body: absent("null") },
+      { pattern: nullishPattern("Undefined"), body: absent("undefined") },
+    ] : [
+      { pattern: pCtor("some", binder), body },
+      { pattern: pCtor("none"), body: absent(ty.nullish === "null" ? "null" : "undefined") },
+    ]);
   }
   if (ty.kind === "nullish" || ty.kind === "void") {
     const mode = nullishOf(ty)!;
@@ -439,16 +449,18 @@ function optionalCases<R>(expr: Expr, ty: Ty,
 }
 
 const optionalExprOps = {
-  match: (expr: Expr, binder: string, some: Expr, none: Expr): Expr => ({ kind: "match", scrutinee: expr,
-    arms: [{ pattern: pCtor("some", binder), body: some }, { pattern: pCtor("none"), body: none }] }),
+  match: (expr: Expr, arms: MatchArm[]): Expr => ({ kind: "match", scrutinee: expr,
+    arms: arms.map(a => ({ ...a, pattern: a.pattern.kind === "ctor" && a.pattern.type === "LemmaScript.Nullish"
+      ? { ...a.pattern, binders: a.pattern.binders.map(b => usesName(a.body, b) ? b : "_") } : a.pattern })) }),
   choose: (expr: Expr, yes: Expr, no: Expr): Expr => ({ kind: "if", cond: expr, then: yes, else: no }),
   evaluated: (expr: Expr, ty: Ty, body: Expr): Expr =>
     expr.kind === "var" || expr.kind === "tupleLiteral" ? body
       : { kind: "let", name: optionalBinder(), type: ty, value: expr, body },
 };
 const optionalStmtOps = {
-  match: (expr: Expr, binder: string, some: Stmt[], none: Stmt[]): Stmt[] => [{ kind: "match", scrutinee: expr,
-    arms: [{ pattern: pCtor("some", binder), body: some }, { pattern: pCtor("none"), body: none }] }],
+  match: (expr: Expr, arms: { pattern: MatchPattern; body: Stmt[] }[]): Stmt[] => [{ kind: "match", scrutinee: expr,
+    arms: arms.map(a => ({ ...a, pattern: a.pattern.kind === "ctor" && a.pattern.type === "LemmaScript.Nullish"
+      ? { ...a.pattern, binders: a.pattern.binders.map(b => usesNameInStmts(a.body, b) || bindsNameInStmts(a.body, b) ? b : "_") } : a.pattern })) }],
   choose: (expr: Expr, yes: Stmt[], no: Stmt[]): Stmt[] => [{ kind: "if", cond: expr, then: yes, else: no }],
   evaluated: (expr: Expr, ty: Ty, body: Stmt[]): Stmt[] =>
     expr.kind === "var" || expr.kind === "tupleLiteral" ? body
@@ -458,7 +470,7 @@ const optionalStmtOps = {
 function absentValue(tag: "null" | "undefined", target: Ty): Expr {
   const mode = nullishOf(target);
   if (!mode || !includesNullish(mode, tag)) throw new Error(`cannot represent ${tag} in ${JSON.stringify(target)}`);
-  if (target.kind === "optional") return mode === "both" && tag === "null" ? optSome(optNone()) : optNone();
+  if (target.kind === "optional") return mode === "both" ? nullishCtor(tag === "null" ? "Null" : "Undefined") : optNone();
   return mode === "both" ? { kind: "bool", value: tag === "null" } : unit();
 }
 
@@ -475,8 +487,7 @@ function convertOptional(expr: Expr, from: Ty, to: Ty): Expr {
     return optionalCases(expr, from, (v, ty) => convertOptional(v, ty, to), tag => absentValue(tag, to), optionalExprOps);
   }
   if (to.kind === "optional") {
-    const value = optSome(expr);
-    return to.nullish === "both" ? optSome(value) : value;
+    return to.nullish === "both" ? nullishCtor("Value", expr) : optSome(expr);
   }
   return expr;
 }
@@ -500,16 +511,16 @@ function optionalOperands(left: TExpr, right: TExpr, binds: Stmt[] | null,
 }
 
 type OptionalMatch = Extract<TExpr | TStmt, { kind: "someMatch" }>;
-/** Removing undefined from the three-case encoding is precisely its outer
- * match. Keep that existing binder rather than splitting and rebuilding the
- * remaining nullable option in two branches. */
+/** Preserve existing binders when a single-sentinel option is unwrapped. */
 function refinementCases<R>(expr: Expr, e: OptionalMatch,
   value: (expr: Expr, ty: Ty) => R, absent: (tag: "null" | "undefined") => R,
   ops: Parameters<typeof optionalCases<R>>[4]): R {
   const ty = e.scrutinee.ty;
-  if (ty.kind === "optional" && (ty.nullish !== "both" || e.excluded === "undefined")) {
-    const inner = ty.nullish === "both" ? optional(ty.inner, "null") : ty.inner;
-    return ops.match(expr, e.binder, value(varE(e.binder), inner), absent(ty.nullish === "null" ? "null" : "undefined"));
+  if (ty.kind === "optional" && ty.nullish !== "both") {
+    return ops.match(expr, [
+      { pattern: pCtor("some", e.binder), body: value(varE(e.binder), ty.inner) },
+      { pattern: pCtor("none"), body: absent(ty.nullish === "null" ? "null" : "undefined") },
+    ]);
   }
   return optionalCases(expr, ty, value, absent, ops);
 }
@@ -547,10 +558,10 @@ function lowerOptionalMatch(e: Extract<TExpr, { kind: "someMatch" }>, binds: Stm
   const lowered = refinementCases<Branch>(scrutinee, e,
     (actual, ty) => lower(actual, ty, true),
     tag => lower(unit(), { kind: "nullish", nullish: tag }, !includesNullish(e.excluded ?? "both", tag)), {
-      match: (expr, binder, some, none) => ({
-        expr: optionalExprOps.match(expr, binder, some.expr, none.expr),
-        hasEffects: some.hasEffects || none.hasEffects,
-        assign: target => optionalStmtOps.match(expr, binder, some.assign(target), none.assign(target)),
+      match: (expr, arms) => ({
+        expr: optionalExprOps.match(expr, arms.map(a => ({ ...a, body: a.body.expr }))),
+        hasEffects: arms.some(a => a.body.hasEffects),
+        assign: target => optionalStmtOps.match(expr, arms.map(a => ({ ...a, body: a.body.assign(target) }))),
       }),
       choose: (expr, yes, no) => ({
         expr: optionalExprOps.choose(expr, yes.expr, no.expr),
@@ -1727,6 +1738,7 @@ function matchToIfChains(stmts: Stmt[]): Stmt[] {
     // accidentally drop an earlier literal arm from a malformed mixed match.
     if (arms.some(a => a.pattern.kind === "literal")) return [{ ...s, arms }];
     const ctorArms = arms.filter(a => a.pattern.kind === "ctor");
+    if (ctorArms.some(a => a.pattern.kind === "ctor" && a.pattern.type === "LemmaScript.Nullish")) return [{ ...s, arms }];
     const firstCtor = ctorArms[0] ? patternCtor(ctorArms[0].pattern) : undefined;
     const decl = firstCtor ? declWithVariant(_typeDecls, firstCtor) : undefined;
     if (!decl) return [{ ...s, arms }]; // not a user union (e.g. Option) — leave as match

@@ -21,16 +21,47 @@ prove_correct positive by
 prove_correct absentOrPositive by
   velvet_vcgen [absentOrPositive] with finish [Pure.absentOrPositive]
 
-example : Pure.classify none = 1 := by decide
-example : Pure.classify (some none) = 2 := by decide
-example : Pure.classify (some (some 9)) = 9 := by decide
-example : Pure.reverse none = 1 := by decide
-example : Pure.reverse (some none) = 2 := by decide
-example : Pure.reverse (some (some 9)) = 9 := by decide
-example : Pure.disjunction (some (some 9)) = 9 := by decide
-example : Pure.retainNull (some none) = none := by decide
-example : Pure.retainUndefined none = none := by decide
-example : Pure.positive (some (some 1)) = true := by decide
-example : Pure.positive (some none) = false := by decide
-example : Pure.absentOrPositive none = true := by decide
-example : Pure.absentOrPositive (some (some (-1))) = false := by decide
+prove_correct isUndefined by
+  velvet_vcgen [isUndefined] with finish [Pure.isUndefined]
+
+prove_correct isNull by
+  velvet_vcgen [isNull] with finish [Pure.isNull]
+
+prove_correct widenUndefined by
+  velvet_vcgen [widenUndefined] with finish [Pure.widenUndefined]
+
+prove_correct widenNull by
+  velvet_vcgen [widenNull] with finish [Pure.widenNull]
+
+prove_correct classifyMethod by
+  velvet_vcgen [classifyMethod] with
+    (expose_names; tactic => cases x <;>
+      simp_all [LemmaScript.Nullish.isValue, LemmaScript.Nullish.isNull, LemmaScript.Nullish.get] <;>
+      cases h_x)
+
+prove_correct lookupNullable by
+  velvet_vcgen [lookupNullable] with finish [Pure.lookupNullable]
+
+example : Pure.classify .Undefined = 1 := by decide
+example : Pure.classify .Null = 2 := by decide
+example : Pure.classify (.Value 9) = 9 := by decide
+example : Pure.reverse .Undefined = 1 := by decide
+example : Pure.reverse .Null = 2 := by decide
+example : Pure.reverse (.Value 9) = 9 := by decide
+example : Pure.disjunction (.Value 9) = 9 := by decide
+example : Pure.retainNull .Null = none := by decide
+example : Pure.retainUndefined .Undefined = none := by decide
+example : Pure.positive (.Value 1) = true := by decide
+example : Pure.positive .Null = false := by decide
+example : Pure.absentOrPositive .Undefined = true := by decide
+example : Pure.absentOrPositive (.Value (-1)) = false := by decide
+example : Pure.isUndefined .Undefined = true := by decide
+example : Pure.isUndefined .Null = false := by decide
+example : Pure.isUndefined (.Value 0) = false := by decide
+example : Pure.isNull .Undefined = false := by decide
+example : Pure.isNull .Null = true := by decide
+example : Pure.isNull (.Value 0) = false := by decide
+example : Pure.widenUndefined none = .Undefined := by decide
+example : Pure.widenUndefined (some 0) = .Value 0 := by decide
+example : Pure.widenNull none = .Null := by decide
+example : Pure.widenNull (some 0) = .Value 0 := by decide

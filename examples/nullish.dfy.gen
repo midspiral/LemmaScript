@@ -2,45 +2,53 @@
 
 datatype Option<T> = None | Some(value: T)
 
-function classify(x: Option<Option<int>>): int
+datatype Nullish<T> = Undefined | Null | Value(value: T)
+
+function classify(x: Nullish<int>): int
 {
   match x {
-    case Some(i_x_val) =>
+    case Value(i_value0) =>
+      var i_x_val: Option<int> := Option.Some(i_value0);
       match i_x_val {
         case Some(i_x_val) =>
           i_x_val
         case None =>
           2
       }
-    case None =>
+    case Null =>
+      var i_x_val: Option<int> := Option.None;
+      match i_x_val {
+        case Some(i_x_val) =>
+          i_x_val
+        case None =>
+          2
+      }
+    case Undefined =>
       1
   }
 }
 
-lemma classify_ensures(x: Option<Option<int>>)
-  ensures ((x == Option.None) ==> (classify(x) == 1))
-  ensures ((x == Option.Some(Option.None)) ==> (classify(x) == 2))
-  ensures (match x { case Some(i_x_val) => (match i_x_val { case Some(i_x_val) => (classify(x) == i_x_val) case None => true }) case None => true })
+lemma classify_ensures(x: Nullish<int>)
+  ensures (x.Undefined? ==> (classify(x) == 1))
+  ensures (x.Null? ==> (classify(x) == 2))
+  ensures (match x { case Value(i_value4) => (var i_x_val: Option<int> := Option.Some(i_value4); (match i_x_val { case Some(i_x_val) => (classify(x) == i_x_val) case None => true })) case Null => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (classify(x) == i_x_val) case None => true })) case Undefined => true })
 {
 }
 
-function reverse(x: Option<Option<int>>): int
+function reverse(x: Nullish<int>): int
 {
   match x {
-    case Some(i_optional4) =>
-      match i_optional4 {
-        case Some(i_optional5) =>
-          var i_x_val: Option<int> := Option.Some(i_optional5);
-          match i_x_val {
-            case Some(i_x_val) =>
-              i_x_val
-            case None =>
-              1
-          }
+    case Value(i_value8) =>
+      var i_x_val: Option<int> := Option.Some(i_value8);
+      match i_x_val {
+        case Some(i_x_val) =>
+          i_x_val
         case None =>
-          2
+          1
       }
-    case None =>
+    case Null =>
+      2
+    case Undefined =>
       var i_x_val: Option<int> := Option.None;
       match i_x_val {
         case Some(i_x_val) =>
@@ -51,88 +59,83 @@ function reverse(x: Option<Option<int>>): int
   }
 }
 
-lemma reverse_ensures(x: Option<Option<int>>)
-  ensures ((x == Option.Some(Option.None)) ==> (reverse(x) == 2))
-  ensures ((x == Option.None) ==> (reverse(x) == 1))
-  ensures (match x { case Some(i_optional9) => (match i_optional9 { case Some(i_optional10) => (var i_x_val: Option<int> := Option.Some(i_optional10); (match i_x_val { case Some(i_x_val) => (reverse(x) == i_x_val) case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (reverse(x) == i_x_val) case None => true })) })
+lemma reverse_ensures(x: Nullish<int>)
+  ensures (x.Null? ==> (reverse(x) == 2))
+  ensures (x.Undefined? ==> (reverse(x) == 1))
+  ensures (match x { case Value(i_value12) => (var i_x_val: Option<int> := Option.Some(i_value12); (match i_x_val { case Some(i_x_val) => (reverse(x) == i_x_val) case None => true })) case Null => true case Undefined => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (reverse(x) == i_x_val) case None => true })) })
 {
 }
 
-function disjunction(x: Option<Option<int>>): int
+function disjunction(x: Nullish<int>): int
 {
   match x {
-    case Some(i_optional14) =>
-      match i_optional14 {
-        case Some(i_optional15) =>
-          var i_x_val: int := i_optional15;
-          i_x_val
-        case None =>
-          0
-      }
-    case None =>
+    case Value(i_value16) =>
+      var i_x_val: int := i_value16;
+      i_x_val
+    case Null =>
+      0
+    case Undefined =>
       0
   }
 }
 
-lemma disjunction_ensures(x: Option<Option<int>>)
-  ensures (match x { case Some(i_optional18) => (match i_optional18 { case Some(i_optional19) => (var i_x_val: Option<int> := Option.Some(i_optional19); (match i_x_val { case Some(i_x_val) => (disjunction(x) == i_x_val) case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (disjunction(x) == i_x_val) case None => true })) })
+lemma disjunction_ensures(x: Nullish<int>)
+  ensures (match x { case Value(i_value19) => (var i_x_val: Option<int> := Option.Some(i_value19); (match i_x_val { case Some(i_x_val) => (disjunction(x) == i_x_val) case None => true })) case Null => true case Undefined => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (disjunction(x) == i_x_val) case None => true })) })
 {
 }
 
-function retainNull(x: Option<Option<int>>): Option<int>
+function retainNull(x: Nullish<int>): Option<int>
 {
   match x {
-    case Some(i_x_val) =>
+    case Value(i_value23) =>
+      var i_x_val: Option<int> := Option.Some(i_value23);
       i_x_val
-    case None =>
+    case Null =>
+      var i_x_val: Option<int> := Option.None;
+      i_x_val
+    case Undefined =>
       None
   }
 }
 
-lemma retainNull_ensures(x: Option<Option<int>>)
-  ensures (match x { case Some(i_x_val) => (retainNull(x) == i_x_val) case None => true })
+lemma retainNull_ensures(x: Nullish<int>)
+  ensures (match x { case Value(i_value25) => (var i_x_val: Option<int> := Option.Some(i_value25); (retainNull(x) == i_x_val)) case Null => (var i_x_val: Option<int> := Option.None; (retainNull(x) == i_x_val)) case Undefined => true })
 {
 }
 
-function retainUndefined(x: Option<Option<int>>): Option<int>
+function retainUndefined(x: Nullish<int>): Option<int>
 {
   match x {
-    case Some(i_optional25) =>
-      match i_optional25 {
-        case Some(i_optional26) =>
-          var i_x_val: Option<int> := Option.Some(i_optional26);
-          i_x_val
-        case None =>
-          None
-      }
-    case None =>
+    case Value(i_value27) =>
+      var i_x_val: Option<int> := Option.Some(i_value27);
+      i_x_val
+    case Null =>
+      None
+    case Undefined =>
       var i_x_val: Option<int> := Option.None;
       i_x_val
   }
 }
 
-lemma retainUndefined_ensures(x: Option<Option<int>>)
-  ensures (match x { case Some(i_optional28) => (match i_optional28 { case Some(i_optional29) => (var i_x_val: Option<int> := Option.Some(i_optional29); (retainUndefined(x) == i_x_val)) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (retainUndefined(x) == i_x_val)) })
+lemma retainUndefined_ensures(x: Nullish<int>)
+  ensures (match x { case Value(i_value29) => (var i_x_val: Option<int> := Option.Some(i_value29); (retainUndefined(x) == i_x_val)) case Null => true case Undefined => (var i_x_val: Option<int> := Option.None; (retainUndefined(x) == i_x_val)) })
 {
 }
 
-function positive(x: Option<Option<int>>): bool
+function positive(x: Nullish<int>): bool
 {
   match x {
-    case Some(i_optional31) =>
-      match i_optional31 {
-        case Some(i_optional32) =>
-          var i_x_val: Option<int> := Option.Some(i_optional32);
-          match i_x_val {
-            case Some(i_x_val) =>
-              (i_x_val > 0)
-            case None =>
-              false
-          }
+    case Value(i_value31) =>
+      var i_x_val: Option<int> := Option.Some(i_value31);
+      match i_x_val {
+        case Some(i_x_val) =>
+          (i_x_val > 0)
         case None =>
           false
       }
-    case None =>
+    case Null =>
+      false
+    case Undefined =>
       var i_x_val: Option<int> := Option.None;
       match i_x_val {
         case Some(i_x_val) =>
@@ -143,29 +146,26 @@ function positive(x: Option<Option<int>>): bool
   }
 }
 
-lemma positive_ensures(x: Option<Option<int>>)
-  ensures ((match x { case Some(i_optional36) => (match i_optional36 { case Some(i_optional37) => (var i_x_val: Option<int> := Option.Some(i_optional37); (match i_x_val { case Some(i_) => false case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_) => false case None => true })) }) ==> !(positive(x)))
-  ensures (match x { case Some(i_optional39) => (match i_optional39 { case Some(i_optional40) => (var i_x_val: Option<int> := Option.Some(i_optional40); (match i_x_val { case Some(i_x_val) => (positive(x) == (i_x_val > 0)) case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (positive(x) == (i_x_val > 0)) case None => true })) })
+lemma positive_ensures(x: Nullish<int>)
+  ensures ((match x { case Value(i_value35) => (var i_x_val: Option<int> := Option.Some(i_value35); (match i_x_val { case Some(i_) => false case None => true })) case Null => true case Undefined => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_) => false case None => true })) }) ==> !(positive(x)))
+  ensures (match x { case Value(i_value37) => (var i_x_val: Option<int> := Option.Some(i_value37); (match i_x_val { case Some(i_x_val) => (positive(x) == (i_x_val > 0)) case None => true })) case Null => true case Undefined => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (positive(x) == (i_x_val > 0)) case None => true })) })
 {
 }
 
-function absentOrPositive(x: Option<Option<int>>): bool
+function absentOrPositive(x: Nullish<int>): bool
 {
   match x {
-    case Some(i_optional44) =>
-      match i_optional44 {
-        case Some(i_optional45) =>
-          var i_x_val: Option<int> := Option.Some(i_optional45);
-          match i_x_val {
-            case Some(i_x_val) =>
-              (i_x_val > 0)
-            case None =>
-              true
-          }
+    case Value(i_value41) =>
+      var i_x_val: Option<int> := Option.Some(i_value41);
+      match i_x_val {
+        case Some(i_x_val) =>
+          (i_x_val > 0)
         case None =>
           true
       }
-    case None =>
+    case Null =>
+      true
+    case Undefined =>
       var i_x_val: Option<int> := Option.None;
       match i_x_val {
         case Some(i_x_val) =>
@@ -176,8 +176,107 @@ function absentOrPositive(x: Option<Option<int>>): bool
   }
 }
 
-lemma absentOrPositive_ensures(x: Option<Option<int>>)
-  ensures ((match x { case Some(i_optional49) => (match i_optional49 { case Some(i_optional50) => (var i_x_val: Option<int> := Option.Some(i_optional50); (match i_x_val { case Some(i_) => false case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_) => false case None => true })) }) ==> absentOrPositive(x))
-  ensures (match x { case Some(i_optional52) => (match i_optional52 { case Some(i_optional53) => (var i_x_val: Option<int> := Option.Some(i_optional53); (match i_x_val { case Some(i_x_val) => (absentOrPositive(x) == (i_x_val > 0)) case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (absentOrPositive(x) == (i_x_val > 0)) case None => true })) })
+lemma absentOrPositive_ensures(x: Nullish<int>)
+  ensures ((match x { case Value(i_value45) => (var i_x_val: Option<int> := Option.Some(i_value45); (match i_x_val { case Some(i_) => false case None => true })) case Null => true case Undefined => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_) => false case None => true })) }) ==> absentOrPositive(x))
+  ensures (match x { case Value(i_value47) => (var i_x_val: Option<int> := Option.Some(i_value47); (match i_x_val { case Some(i_x_val) => (absentOrPositive(x) == (i_x_val > 0)) case None => true })) case Null => true case Undefined => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (absentOrPositive(x) == (i_x_val > 0)) case None => true })) })
 {
+}
+
+function isUndefined(x: Nullish<int>): bool
+{
+  x.Undefined?
+}
+
+lemma isUndefined_ensures(x: Nullish<int>)
+  ensures (isUndefined(x) == x.Undefined?)
+{
+}
+
+function isNull(x: Nullish<int>): bool
+{
+  x.Null?
+}
+
+lemma isNull_ensures(x: Nullish<int>)
+  ensures (isNull(x) == x.Null?)
+{
+}
+
+function widenUndefined(x: Option<int>): Nullish<int>
+{
+  match x {
+    case Some(i_optional51) =>
+      Nullish.Value(i_optional51)
+    case None =>
+      Nullish.Undefined
+  }
+}
+
+lemma widenUndefined_ensures(x: Option<int>)
+  ensures (widenUndefined(x) == (match x { case Some(i_optional52) => Nullish.Value(i_optional52) case None => Nullish.Undefined }))
+{
+}
+
+function widenNull(x: Option<int>): Nullish<int>
+{
+  match x {
+    case Some(i_optional53) =>
+      Nullish.Value(i_optional53)
+    case None =>
+      Nullish.Null
+  }
+}
+
+lemma widenNull_ensures(x: Option<int>)
+  ensures (widenNull(x) == (match x { case Some(i_optional54) => Nullish.Value(i_optional54) case None => Nullish.Null }))
+{
+}
+
+function lookupNullable(m: map<string, Option<int>>, key: string): Nullish<int>
+{
+  if (key in m) then
+    var i_optional55 := m[key];
+    match i_optional55 {
+      case Some(i_optional56) =>
+        Nullish.Value(i_optional56)
+      case None =>
+        Nullish.Null
+    }
+  else
+    Nullish.Undefined
+}
+
+lemma lookupNullable_ensures(m: map<string, Option<int>>, key: string)
+  ensures (!((key in m)) ==> lookupNullable(m, key).Undefined?)
+  ensures ((key in m) ==> (lookupNullable(m, key) == (match m[key] { case Some(i_optional57) => Nullish.Value(i_optional57) case None => Nullish.Null })))
+{
+}
+
+method classifyMethod(x: Nullish<int>) returns (res: int)
+  ensures (x.Undefined? ==> (res == 1))
+  ensures (x.Null? ==> (res == 2))
+  ensures (match x { case Value(i_value88) => (var i_x_val: Option<int> := Option.Some(i_value88); (match i_x_val { case Some(i_x_val) => (res == i_x_val) case None => true })) case Null => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (res == i_x_val) case None => true })) case Undefined => true })
+{
+  var result := 0;
+  match x {
+    case Value(i_value92) =>
+      var i_x_val := Option.Some(i_value92);
+      match i_x_val {
+        case Some(i_x_val) =>
+          result := i_x_val;
+        case None =>
+          result := 2;
+      }
+    case Null =>
+      var i_x_val: Option<int> := Option.None;
+      match i_x_val {
+        case Some(i_x_val) =>
+          result := i_x_val;
+        case None =>
+          result := 2;
+      }
+    case Undefined =>
+      result := 1;
+  }
+  return result;
 }

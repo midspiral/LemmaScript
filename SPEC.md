@@ -1051,7 +1051,7 @@ Dafny then verifies that the `by method` block computes `tagNameExists_fun_spec`
 | `Set<T>` | `Std.HashSet T'` | `set<T'>` |
 | `T \| undefined` | `Option T'` | `Option<T'>` |
 | `T \| null` | `Option T'` | `Option<T'>` |
-| `T \| null \| undefined` | `Option (Option T')` | `Option<Option<T'>>` |
+| `T \| null \| undefined` | `LemmaScript.Nullish T'` | `Nullish<T'>` |
 | `true \| false \| undefined` | `Option Bool` | `Option<bool>` |
 | `Record<K, V>` | `Std.HashMap K' V'` | `map<K', V'>` |
 | `(a: T1, b: T2) => R` (function type) | — | `(T1, T2) -> R` (typically used in a `type Foo = (...) => R` alias; lambda params passed to a callee with a `Foo`-typed parameter get inferred types) |
@@ -1063,7 +1063,7 @@ Dafny then verifies that the `by method` block computes `tagNameExists_fun_spec`
 | `A \| B` (union param) | field intersection type | field intersection type |
 | Anything else | Pass through | Pass through |
 
-For an optional admitting one nullish value, `None` denotes that value. With both, outer `None` denotes `undefined`, `Some(None)` denotes `null`, and `Some(Some(v))` denotes `v`. Conversions preserve those identities when widening or narrowing; nested source unions are flattened. A standalone nullish singleton uses unit, and `null | undefined` uses a boolean tag (`true` for `null`).
+For an optional admitting one nullish value, `None` denotes that value. With both, `Nullish<T>` has three explicit cases: `Undefined`, `Null`, and `Value(value: T)`. A strict check tests just its named case; a loose nullish check matches either `Undefined` or `Null`. Conversions preserve those identities when widening or narrowing between `Option` and `Nullish`; nested source unions are flattened. A standalone nullish singleton uses unit, and `null | undefined` uses a boolean tag (`true` for `null`).
 
 For the Dafny backend, `string` uses Unicode-scalar semantics by default.
 To use JavaScript's UTF-16 code-unit model, select

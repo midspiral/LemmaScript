@@ -50,7 +50,7 @@ export type Expr =
  *  literals are stored decoded and quoted/escaped by the backend emitter. */
 export type MatchPattern =
   | { kind: "wild" }                                    // "_"
-  | { kind: "ctor"; ctor: string; binders: string[] }   // ".some x" ⇒ {ctor:"some", binders:["x"]}; ".none" ⇒ binders:[]
+  | { kind: "ctor"; ctor: string; binders: string[]; type?: string }   // type identifies built-in constructors when their names overlap user variants
   | { kind: "literal"; value: string };                 // `"small"` ⇒ {value:"small"}
 
 export const pWild = (): MatchPattern => ({ kind: "wild" });
@@ -62,8 +62,8 @@ export const pLiteral = (value: string): MatchPattern => ({ kind: "literal", val
 export function needsOptionalTypeHint(e: Expr, mutable = false): boolean {
   // Existing mutable None bindings infer their payload from later assignments.
   if (e.kind === "var" && e.name === "undefined") return !mutable;
-  if (e.kind === "constructor" && e.type === "Option")
-    return e.name === "none" || e.args.every(x => needsOptionalTypeHint(x));
+  if (e.kind === "constructor" && (e.type === "Option" || e.type === "LemmaScript.Nullish"))
+    return e.args.every(x => needsOptionalTypeHint(x));
   if (e.kind === "arrayLiteral") return e.elems.length > 0 && e.elems.every(x => needsOptionalTypeHint(x));
   if (e.kind === "if") return needsOptionalTypeHint(e.then) && needsOptionalTypeHint(e.else);
   if (e.kind === "match") return e.arms.every(a => needsOptionalTypeHint(a.body));

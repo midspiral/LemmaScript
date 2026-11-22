@@ -60,8 +60,9 @@ function tyToLean(ty: Ty): string {
     }
     case "optional": {
       const payload = tyToLean(ty.inner);
-      const inner = ty.nullish === "both" ? `Option (${payload})` : payload;
-      return inner.includes(" ") ? `Option (${inner})` : `Option ${inner}`;
+      if (ty.nullish === "both") _needsNullish = true;
+      const type = ty.nullish === "both" ? "LemmaScript.Nullish" : "Option";
+      return `${type} ${payload.includes(" ") ? `(${payload})` : payload}`;
     }
     case "user": return ty.name;
     case "fn": {
@@ -187,6 +188,7 @@ function emitDeriving(name: string, deriving: string[]): string {
 }
 
 let _needsJSString = false;
+let _needsNullish = false;
 let _needsUnknown = false;
 let _unknownEmitted = false;  // across files in one run — the def file imports the types file
 
@@ -324,6 +326,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 
     case "constructor": {
+      if (e.type === "LemmaScript.Nullish") _needsNullish = true;
       // With type: emit `Type.name` (unambiguous; needed in expression positions
       // like `match ... | .none => Type.some x` where elaboration can't infer).
       // Without type: emit `.name` (dotted form; works in pattern positions
@@ -638,6 +641,25 @@ function emitStmt(s: Stmt, indent: number): string {
 
     case "match": {
       const scrut = emitExpr(s.scrutinee);
+      // Velvet needs method-body branches as ifs, including the three-case carrier.
+      if (s.arms.length === 3 && s.arms.every(a => a.pattern.kind === "ctor" && a.pattern.type === "LemmaScript.Nullish")) {
+        _needsNullish = true;
+        const valueArm = s.arms.find(a => a.pattern.kind === "ctor" && a.pattern.ctor === "Value")!;
+        const nullArm = s.arms.find(a => a.pattern.kind === "ctor" && a.pattern.ctor === "Null")!;
+        const undefinedArm = s.arms.find(a => a.pattern.kind === "ctor" && a.pattern.ctor === "Undefined")!;
+        const binder = patternBinders(valueArm.pattern)[0];
+        const hName = `h_${scrut.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+        const body = (stmts: Stmt[]) => stmts.length ? emitStmts(stmts, indent + 1) : `${pad}  pure ()`;
+        return [
+          `${pad}if ${hName} : (${scrut}).isValue = true then`,
+          ...(binder !== "_" ? [`${pad}  let ${binder} := (${scrut}).get ${hName}`] : []),
+          body(valueArm.body),
+          `${pad}else if (${scrut}).isNull then`,
+          body(nullArm.body),
+          `${pad}else`,
+          body(undefinedArm.body),
+        ].join("\n");
+      }
       // Option match (.some/.none) → emit as if/let for WPGen.if compatibility
       if (s.arms.length === 2) {
         const someArm = s.arms.find(a => a.pattern.kind === "ctor" && a.pattern.ctor === "some");
@@ -912,6 +934,7 @@ export function resetLeanModule(): void {
   _typeRefs.clear();
   _taintedTypes.clear();
   _needsJSString = false;
+  _needsNullish = false;
   _needsUnknown = false;
   _unknownEmitted = false;
   _boolCtx = false;
@@ -919,6 +942,7 @@ export function resetLeanModule(): void {
 
 export function emitLeanFile(file: Module): string {
   _needsJSString = false;
+  _needsNullish = false;
   _needsUnknown = false;
   registerInductives(file.decls);
   // Emit declarations first so _needsJSString / _needsUnknown are set
@@ -941,6 +965,8 @@ export function emitLeanFile(file: Module): string {
   for (const imp of file.imports) lines.push(`import ${imp}`);
   if (_needsJSString && !file.imports.includes("LemmaScript.JSString"))
     lines.push("import LemmaScript.JSString");
+  if (_needsNullish && !file.imports.includes("LemmaScript.Nullish"))
+    lines.push("import LemmaScript.Nullish");
   if (file.options.length > 0) lines.push("");
   for (const opt of file.options) lines.push(`set_option ${opt.key} ${opt.value}`);
   lines.push(...declLines);

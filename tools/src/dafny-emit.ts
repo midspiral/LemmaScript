@@ -5,7 +5,7 @@
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
 import { needsOptionalTypeHint, decimalNumberLiteral, exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
-import { freshNameWhere, userNames } from "./names.js";
+import { freshName, freshNameWhere, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
 import { DEFAULT_OPTIONS, resolveOptions, type LscOptions } from "./config.js";
 
@@ -51,7 +51,10 @@ function tyToDafny(ty: Ty): string {
     case "tuple": return `(${ty.elems.map(tyToDafny).join(", ")})`;
     case "map": return `map<${tyToDafny(ty.key)}, ${tyToDafny(ty.value)}>`;
     case "set": return `set<${tyToDafny(ty.elem)}>`;
-    case "optional": { needPreamble("OptionType"); return ty.nullish === "both" ? `Option<Option<${tyToDafny(ty.inner)}>>` : `Option<${tyToDafny(ty.inner)}>`; }
+    case "optional": {
+      needPreamble(ty.nullish === "both" ? "NullishType" : "OptionType");
+      return `${ty.nullish === "both" ? freshName("Nullish") : "Option"}<${tyToDafny(ty.inner)}>`;
+    }
     case "user": return escapeName(ty.name);
     case "fn": return `(${ty.params.map(tyToDafny).join(", ")}) -> ${tyToDafny(ty.result)}`;
     // Out-of-subset (`any`/`unknown`); opaque so real ops on it fail loudly
@@ -310,6 +313,7 @@ function emitExpr(e: Expr): string {
       // (e.g. lambda result) without an explicit `optional<T>` in any
       // signature, so request the preamble here.
       if (e.type === "Option") needPreamble("OptionType");
+      if (e.type === "LemmaScript.Nullish") needPreamble("NullishType");
       const head = qualifyCtor(e.name, e.type);
       if (!e.args || e.args.length === 0) return head;
       return `${head}(${e.args.map(emitExpr).join(", ")})`;
@@ -614,7 +618,7 @@ function emitExpr(e: Expr): string {
       // Discriminant check: x == .Ctor → x.Ctor?
       const op = mapOp(e.op);
       if ((op === "==" || op === "!=") && e.right.kind === "constructor" && e.right.args.length === 0 && e.right.type !== "Option") {
-        const ctorName = dafnyCtorName(e.right.name.replace(/^\./, ""));
+        const ctorName = e.right.type === "LemmaScript.Nullish" ? e.right.name : dafnyCtorName(e.right.name.replace(/^\./, ""));
         const pred = `${emitExpr(e.left)}.${ctorName}?`;
         return op === "!=" ? `(!${pred})` : pred;
       }
@@ -781,7 +785,10 @@ function emitExpr(e: Expr): string {
           const vals = structFields.map(sf => {
             const f = provided.get(sf.name);
             if (f) return emitExpr(f.value);
-            if (sf.type.kind === "optional") { needPreamble("OptionType"); return "None"; }
+            if (sf.type.kind === "optional") {
+              needPreamble(sf.type.nullish === "both" ? "NullishType" : "OptionType");
+              return sf.type.nullish === "both" ? `${freshName("Nullish")}.Undefined` : "None";
+            }
             return `/* missing: ${sf.name} */`;
           });
           return `${ctorName}(${vals.join(", ")})`;
@@ -1718,6 +1725,7 @@ const SET_TO_SEQ = `method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
 /** Preamble code keyed by name. Emitted in this order when needed. */
 const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["OptionType", "datatype Option<T> = None | Some(value: T)"],
+  ["NullishType", () => `datatype ${freshName("Nullish")}<T> = Undefined | Null | Value(value: T)`],
   // Opaque carrier for `unknown`-typed values. `(==)` for compare/map-key/match;
   // `(0)` (auto-init ⇒ nonempty) so `havoc` (`:= *`) is well-formed.
   ["UnknownType", "type Unknown(==, 0)"],
@@ -1875,6 +1883,7 @@ function dafnyCtorName(name: string): string {
 
 function qualifyCtor(name: string, type?: string): string {
   const rawName = name.replace(/^\./, "");
+  if (type === "LemmaScript.Nullish") return `${freshName("Nullish")}.${rawName}`;
   // hasOwn: a ctor literally named "constructor" (the IR's own Expr variant)
   // must not hit Object.prototype.constructor through the bare index.
   const mapped = (Object.hasOwn(CTOR_MAP, rawName) ? CTOR_MAP[rawName] : undefined) ?? dafnyCtorName(rawName);
@@ -1893,11 +1902,12 @@ const CTOR_MAP: Record<string, string> = { "some": "Some", "none": "None" };
 function translatePattern(p: MatchPattern): string {
   if (p.kind === "wild") return "_";
   if (p.kind === "literal") return emitExpr({ kind: "str", value: p.value });
-  const ctorName = (Object.hasOwn(CTOR_MAP, p.ctor) ? CTOR_MAP[p.ctor] : undefined) ?? dafnyCtorName(p.ctor);
+  const ctorName = p.type === "LemmaScript.Nullish" ? p.ctor
+    : (Object.hasOwn(CTOR_MAP, p.ctor) ? CTOR_MAP[p.ctor] : undefined) ?? dafnyCtorName(p.ctor);
   if (p.binders.length === 0) return ctorName;
-  // Preserve historical binder spelling (including `_` -> `i_`): existing
-  // proof files must remain additions-only without downstream regeneration.
-  return `${ctorName}(${p.binders.map(escapeName).join(", ")})`;
+  // Only the new Nullish carrier uses true wildcards. Preserve historical
+  // spelling (`_` -> `i_`) elsewhere so existing proofs need no regeneration.
+  return `${ctorName}(${p.binders.map(b => p.type === "LemmaScript.Nullish" && b === "_" ? "_" : escapeName(b)).join(", ")})`;
 }
 
 

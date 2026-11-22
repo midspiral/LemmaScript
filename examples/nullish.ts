@@ -39,3 +39,40 @@ export function absentOrPositive(x: number | null | undefined): boolean {
   //@ ensures x !== null && x !== undefined ==> (\result === (x > 0))
   return x === null || x === undefined || x > 0;
 }
+
+export function isUndefined(x: number | null | undefined): boolean {
+  //@ ensures \result === (x === undefined)
+  return x === undefined;
+}
+
+export function isNull(x: number | null | undefined): boolean {
+  //@ ensures \result === (x === null)
+  return x === null;
+}
+
+export function widenUndefined(x: number | undefined): number | null | undefined {
+  //@ ensures \result === x
+  return x;
+}
+
+export function widenNull(x: number | null): number | null | undefined {
+  //@ ensures \result === x
+  return x;
+}
+
+export function classifyMethod(x: number | null | undefined): number {
+  //@ ensures x === undefined ==> \result === 1
+  //@ ensures x === null ==> \result === 2
+  //@ ensures x !== undefined && x !== null ==> \result === x
+  let result = 0;
+  if (x === undefined) result = 1;
+  else if (x === null) result = 2;
+  else result = x;
+  return result;
+}
+
+export function lookupNullable(m: Map<string, number | null>, key: string): number | null | undefined {
+  //@ ensures !m.has(key) ==> \result === undefined
+  //@ ensures m.has(key) ==> \result === m.get(key)
+  return m.get(key);
+}

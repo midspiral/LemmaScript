@@ -83,10 +83,11 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | Helper | When | Purpose |
 |--------|------|---------|
 | `Option<T>` | `Map.get`, optional types | `datatype Option<T> = None \| Some(value: T)` |
+| `Nullish<T>` | Types admitting both sentinels | `datatype Nullish<T> = Undefined \| Null \| Value(value: T)` |
 | `SetToSeq` | `for (x of set)`, map/record iteration | Convert set to sequence for iteration |
 | `SetFromSeq` | `new Set(arr)` | Build a deduplicated set from a sequence (`set x \| x in s`) |
 
-`T | null` and `T | undefined` each use one `Option<T>` with distinct frontend tags. `T | null | undefined` uses `Option<Option<T>>`: `None` is undefined, `Some(None)` is null, and `Some(Some(v))` is a value. Narrowing and coercions translate between these representations; a missing map lookup adds only undefined.
+`T | null` and `T | undefined` each use one `Option<T>` with distinct frontend tags. `T | null | undefined` uses `Nullish<T>` with explicit `Undefined`, `Null`, and `Value(v)` cases. For that three-case type, `x === undefined` emits `x.Undefined?`, `x === null` emits `x.Null?`, and `x == null` emits `!x.Value?`. Narrowing and coercions translate between these representations; a missing map lookup adds only undefined.
 
 **Numeric:**
 

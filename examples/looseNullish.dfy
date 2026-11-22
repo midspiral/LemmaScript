@@ -2,32 +2,24 @@
 
 datatype Option<T> = None | Some(value: T)
 
-datatype LooseBox = LooseBox(value: Option<Option<int>>)
+datatype Nullish<T> = Undefined | Null | Value(value: T)
 
-function looseIsNullish(x: Option<Option<int>>): bool
+datatype LooseBox = LooseBox(value: Nullish<int>)
+
+function looseIsNullish(x: Nullish<int>): bool
 {
-  match x {
-    case Some(i_optional2) =>
-      match i_optional2 {
-        case Some(i_optional3) =>
-          false
-        case None =>
-          true
-      }
-    case None =>
-      true
-  }
+  (!x.Value?)
 }
 
-lemma looseIsNullish_ensures(x: Option<Option<int>>)
-  ensures (looseIsNullish(x) == (match x { case Some(i_optional4) => (match i_optional4 { case Some(i_optional5) => (var i_x_val: Option<int> := Option.Some(i_optional5); (match i_x_val { case Some(i_) => false case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_) => false case None => true })) }))
+lemma looseIsNullish_ensures(x: Nullish<int>)
+  ensures (looseIsNullish(x) == (match x { case Value(i_value3) => (var i_x_val: Option<int> := Option.Some(i_value3); (match i_x_val { case Some(i_) => false case None => true })) case Null => true case Undefined => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_) => false case None => true })) }))
 {
 }
 
 function looseOptional(x: Option<int>): bool
 {
   match x {
-    case Some(i_optional9) =>
+    case Some(i_optional7) =>
       false
     case None =>
       true
@@ -41,10 +33,10 @@ lemma looseOptional_ensures(x: Option<int>)
 
 function looseNullable(x: Option<int>): bool
 {
-  var i_optional10: () := ();
-  var i_optional11: Option<int> := x;
-  match i_optional11 {
-    case Some(i_optional12) =>
+  var i_optional8: () := ();
+  var i_optional9: Option<int> := x;
+  match i_optional9 {
+    case Some(i_optional10) =>
       true
     case None =>
       false
@@ -56,129 +48,114 @@ lemma looseNullable_ensures(x: Option<int>)
 {
 }
 
-function looseDefault(x: Option<Option<int>>): int
+function looseDefault(x: Nullish<int>): int
 {
   match x {
-    case Some(i_optional13) =>
-      match i_optional13 {
-        case Some(i_optional14) =>
-          var i_x_val: int := i_optional14;
-          i_x_val
-        case None =>
-          7
-      }
-    case None =>
+    case Value(i_value11) =>
+      var i_x_val: int := i_value11;
+      i_x_val
+    case Null =>
+      7
+    case Undefined =>
       7
   }
 }
 
-lemma looseDefault_ensures(x: Option<Option<int>>)
-  ensures ((match x { case Some(i_optional19) => (match i_optional19 { case Some(i_optional20) => false case None => true }) case None => true }) ==> (looseDefault(x) == 7))
-  ensures (match x { case Some(i_optional21) => (match i_optional21 { case Some(i_optional22) => (var i_x_val: int := i_optional22; (looseDefault(x) == i_x_val)) case None => true }) case None => true })
+lemma looseDefault_ensures(x: Nullish<int>)
+  ensures ((!x.Value?) ==> (looseDefault(x) == 7))
+  ensures (match x { case Value(i_value17) => (var i_x_val: int := i_value17; (looseDefault(x) == i_x_val)) case Null => true case Undefined => true })
 {
 }
 
-function looseEarlyReturn(x: Option<Option<int>>): int
+function looseEarlyReturn(x: Nullish<int>): int
 {
   match x {
-    case Some(i_optional25) =>
-      match i_optional25 {
-        case Some(i_optional26) =>
-          var i_x_val: int := i_optional26;
-          i_x_val
-        case None =>
-          7
-      }
-    case None =>
+    case Value(i_value20) =>
+      var i_x_val: int := i_value20;
+      i_x_val
+    case Null =>
+      7
+    case Undefined =>
       7
   }
 }
 
-lemma looseEarlyReturn_ensures(x: Option<Option<int>>)
-  ensures ((match x { case Some(i_optional29) => (match i_optional29 { case Some(i_optional30) => (var i_x_val: Option<int> := Option.Some(i_optional30); (match i_x_val { case Some(i_) => false case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_) => false case None => true })) }) ==> (looseEarlyReturn(x) == 7))
-  ensures (match x { case Some(i_optional32) => (match i_optional32 { case Some(i_optional33) => (var i_x_val: Option<int> := Option.Some(i_optional33); (match i_x_val { case Some(i_x_val) => (looseEarlyReturn(x) == i_x_val) case None => true })) case None => true }) case None => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (looseEarlyReturn(x) == i_x_val) case None => true })) })
+lemma looseEarlyReturn_ensures(x: Nullish<int>)
+  ensures ((match x { case Value(i_value23) => (var i_x_val: Option<int> := Option.Some(i_value23); (match i_x_val { case Some(i_) => false case None => true })) case Null => true case Undefined => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_) => false case None => true })) }) ==> (looseEarlyReturn(x) == 7))
+  ensures (match x { case Value(i_value25) => (var i_x_val: Option<int> := Option.Some(i_value25); (match i_x_val { case Some(i_x_val) => (looseEarlyReturn(x) == i_x_val) case None => true })) case Null => true case Undefined => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (looseEarlyReturn(x) == i_x_val) case None => true })) })
 {
 }
 
-function loosePositive(x: Option<Option<int>>): bool
+function loosePositive(x: Nullish<int>): bool
 {
   match x {
-    case Some(i_optional37) =>
-      match i_optional37 {
-        case Some(i_optional38) =>
-          var i_x_val: int := i_optional38;
-          (i_x_val > 0)
-        case None =>
-          false
-      }
-    case None =>
+    case Value(i_value29) =>
+      var i_x_val: int := i_value29;
+      (i_x_val > 0)
+    case Null =>
+      false
+    case Undefined =>
       false
   }
 }
 
-lemma loosePositive_ensures(x: Option<Option<int>>)
-  ensures ((match x { case Some(i_optional43) => (match i_optional43 { case Some(i_optional44) => false case None => true }) case None => true }) ==> !(loosePositive(x)))
-  ensures (match x { case Some(i_optional45) => (match i_optional45 { case Some(i_optional46) => (var i_x_val: int := i_optional46; (loosePositive(x) == (i_x_val > 0))) case None => true }) case None => true })
+lemma loosePositive_ensures(x: Nullish<int>)
+  ensures ((!x.Value?) ==> !(loosePositive(x)))
+  ensures (match x { case Value(i_value35) => (var i_x_val: int := i_value35; (loosePositive(x) == (i_x_val > 0))) case Null => true case Undefined => true })
 {
 }
 
-function looseAbsentOrPositive(x: Option<Option<int>>): bool
+function looseAbsentOrPositive(x: Nullish<int>): bool
 {
   match x {
-    case Some(i_optional49) =>
-      match i_optional49 {
-        case Some(i_optional50) =>
-          var i_x_val: int := i_optional50;
-          (i_x_val > 0)
-        case None =>
-          true
-      }
-    case None =>
+    case Value(i_value38) =>
+      var i_x_val: int := i_value38;
+      (i_x_val > 0)
+    case Null =>
+      true
+    case Undefined =>
       true
   }
 }
 
-lemma looseAbsentOrPositive_ensures(x: Option<Option<int>>)
-  ensures ((match x { case Some(i_optional55) => (match i_optional55 { case Some(i_optional56) => false case None => true }) case None => true }) ==> looseAbsentOrPositive(x))
-  ensures (match x { case Some(i_optional57) => (match i_optional57 { case Some(i_optional58) => (var i_x_val: int := i_optional58; (looseAbsentOrPositive(x) == (i_x_val > 0))) case None => true }) case None => true })
+lemma looseAbsentOrPositive_ensures(x: Nullish<int>)
+  ensures ((!x.Value?) ==> looseAbsentOrPositive(x))
+  ensures (match x { case Value(i_value44) => (var i_x_val: int := i_value44; (looseAbsentOrPositive(x) == (i_x_val > 0))) case Null => true case Undefined => true })
 {
 }
 
 function looseField(box: LooseBox): int
 {
   match box.value {
-    case Some(i_optional61) =>
-      match i_optional61 {
-        case Some(i_optional62) =>
-          var i_box_value_val: int := i_optional62;
-          i_box_value_val
-        case None =>
-          7
-      }
-    case None =>
+    case Value(i_value47) =>
+      var i_box_value_val: int := i_value47;
+      i_box_value_val
+    case Null =>
+      7
+    case Undefined =>
       7
   }
 }
 
 lemma looseField_ensures(box: LooseBox)
-  ensures ((var i_optional65: Option<Option<int>> := box.value; (var i_optional66: () := (); (match i_optional65 { case Some(i_optional67) => (match i_optional67 { case Some(i_optional68) => false case None => true }) case None => true }))) ==> (looseField(box) == 7))
-  ensures (match box.value { case Some(i_optional69) => (match i_optional69 { case Some(i_optional70) => (var i_box_value_val: int := i_optional70; (looseField(box) == i_box_value_val)) case None => true }) case None => true })
+  ensures ((var i_optional50: Nullish<int> := box.value; (var i_optional51: () := (); (!i_optional50.Value?))) ==> (looseField(box) == 7))
+  ensures (match box.value { case Value(i_value53) => (var i_box_value_val: int := i_value53; (looseField(box) == i_box_value_val)) case Null => true case Undefined => true })
 {
 }
 
 function looseCompare(a: Option<int>, b: Option<int>): bool
 {
   match a {
-    case Some(i_optional75) =>
+    case Some(i_optional58) =>
       match b {
-        case Some(i_optional76) =>
-          (i_optional75 == i_optional76)
+        case Some(i_optional59) =>
+          (i_optional58 == i_optional59)
         case None =>
           false
       }
     case None =>
       match b {
-        case Some(i_optional77) =>
+        case Some(i_optional60) =>
           false
         case None =>
           true
