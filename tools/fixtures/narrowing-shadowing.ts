@@ -76,3 +76,14 @@ export function shadowUnionInNestedBlock(s: Shape, flag: boolean): number {
   }
   return 0;
 }
+
+// A ghost let exists only in the proof, so the returned `p` is still the
+// narrowed parameter.
+//@ ensures p !== undefined ==> \result === p
+export function ghostLetDoesNotShadow(p: number | undefined): number {
+  if (p !== undefined) {
+    //@ ghost let p: number = 0
+    return p;
+  }
+  return 0;
+}

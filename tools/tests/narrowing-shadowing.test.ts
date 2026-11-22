@@ -50,6 +50,7 @@ test("JavaScript reads the inner declaration, not the narrowed outer name", () =
   assert.equal(runtime.shadowUnion({ kind: "a", v: 99 }, true), 1);
   assert.equal(runtime.shadowUnionInNestedBlock({ kind: "a", v: 7 }, true), 71);
   assert.equal(runtime.shadowUnionInNestedBlock({ kind: "a", v: 7 }, false), 7);
+  assert.equal(runtime.ghostLetDoesNotShadow(5), 5);
 });
 
 test("Dafny proves the JavaScript results for shadowed narrowed names", () => {
@@ -71,4 +72,5 @@ test("the binder of a narrowed name does not replace reads of a shadowing declar
   assert.match(body("shadowQuantifier"), /forall p: int :: .*xs\[p\] == xs\[p\]/);
   assert.match(body("shadowUnion"), /var s := a\(1\);\s+return s\.v;/);
   assert.match(body("shadowUnionInNestedBlock"), /before \* 10\)? \+ s\.v\b/);
+  assert.match(body("ghostLetDoesNotShadow"), /ghost var p: int := 0;\s+return i_p_val;/);
 });

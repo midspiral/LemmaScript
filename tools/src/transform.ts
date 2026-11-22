@@ -175,15 +175,17 @@ function mapTExpr(e: TExpr, root: string, f: (e: TExpr) => TExpr | null): TExpr 
 }
 
 /** Map over the expressions of a statement block, with the scoping of
- *  `mapTExpr`. A `let` or `ghostLet` of `root` shadows it for the rest of the
- *  block; its own initializer still sees the outer binding. Nested blocks get
- *  their own scope, so the shadow ends with the block that declares it. */
+ *  `mapTExpr`. A `let` of `root` shadows it for the rest of the block; its own
+ *  initializer still sees the outer binding. Nested blocks get their own
+ *  scope, so the shadow ends with the block that declares it. A `//@ ghost let`
+ *  does not stop the substitution: it does not exist in the JavaScript, so
+ *  later runtime code still reads the narrowed outer name. */
 function mapTStmts(stmts: TStmt[], root: string, f: (e: TExpr) => TExpr | null): TStmt[] {
   const out: TStmt[] = [];
   for (let i = 0; i < stmts.length; i++) {
     const s = stmts[i];
     out.push(mapTStmt(s, root, f));
-    if ((s.kind === "let" || s.kind === "ghostLet") && s.name === root) {
+    if (s.kind === "let" && s.name === root) {
       out.push(...stmts.slice(i + 1));
       break;
     }
