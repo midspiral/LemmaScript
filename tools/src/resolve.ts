@@ -1074,9 +1074,9 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       }
       if (e.op === "||") rightCtx = conditionContext(left, ctx, false);
       let right = resolveExpr(rawRight, rightCtx);
-      // Preserve loose nullish comparisons for narrowing and lowering. Other
-      // equality comparisons retain the existing common representation.
-      const op = (e.op === "==" || e.op === "!=") && !nullishOf(left.ty) && !nullishOf(right.ty)
+      // Special nullish equality is needed only when both sides can be absent.
+      // Otherwise retain the existing comparison lowering and its value binder.
+      const op = (e.op === "==" || e.op === "!=") && (!nullishOf(left.ty) || !nullishOf(right.ty))
         ? e.op === "==" ? "===" : "!==" : e.op;
       if (["===", "!==", "==", "!="].includes(op)) {
         left = coerceStr(left, right.ty, ctx.typeDecls);
