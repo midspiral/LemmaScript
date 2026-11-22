@@ -306,7 +306,7 @@ function isMonadicBody(stmts: Stmt[]): boolean {
 const OP_MAP: Record<string, string> = {
   "===": "=", "!==": "≠", ">=": "≥", "<=": "≤", ">": ">", "<": "<",
   "&&": "∧", "||": "∨", "+": "+", "-": "-", "*": "*", "/": "/", "%": "%",
-  "==": "=", "!=": "≠", "<==>": "↔",
+  "<==>": "↔",
 };
 
 /** Relational operators with their operands swapped (`a < b` ≡ `b > a`). */
