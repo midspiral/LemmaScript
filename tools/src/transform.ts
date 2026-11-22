@@ -128,9 +128,11 @@ export function renameFreeVar(e: Expr, from: string, to: string): Expr {
  *  result replaces the node and stops descent. Every caller substitutes for a
  *  narrowed variable named `root` (or a path rooted at it), so descent stops
  *  wherever `root` is rebound: a `forall`/`exists` variable, a `someMatch`
- *  binder, and, through `mapTStmts`, a block-level declaration or a `for…of`
- *  name. Otherwise an inner declaration that shadows the narrowed name would
- *  have its reads replaced by the outer binder (#351). */
+ *  binder, a lambda parameter, and, through `mapTStmts`, a block-level
+ *  declaration or a `for…of` name. Otherwise an inner declaration that shadows
+ *  the narrowed name would have its reads replaced by the outer binder (#351).
+ *  Lambda bodies and loop `decreases`/`done_with` clauses are walked like any
+ *  other sub-expression, so they read the binder too (#353). */
 function mapTExpr(e: TExpr, root: string, f: (e: TExpr) => TExpr | null): TExpr {
   const hit = f(e);
   if (hit) return hit;
@@ -157,7 +159,13 @@ function mapTExpr(e: TExpr, root: string, f: (e: TExpr) => TExpr | null): TExpr 
       fallthrough: e.fallthrough ? r(e.fallthrough) : null };
     case "forall": return e.var === root ? e : { ...e, body: r(e.body) };
     case "exists": return e.var === root ? e : { ...e, body: r(e.body) };
-    case "lambda": return e;
+    case "lambda":
+      // Parameters share one scope, so a parameter named `root` also hides
+      // it from the other parameters' defaults.
+      if (e.params.some(p => p.name === root)) return e;
+      return { ...e,
+        params: e.params.map(p => p.defaultValue ? { ...p, defaultValue: r(p.defaultValue) } : p),
+        body: mapTStmts(e.body, root, f) };
   }
 }
 
@@ -188,13 +196,16 @@ function mapTStmt(s: TStmt, root: string, f: (e: TExpr) => TExpr | null): TStmt 
     case "break": case "continue": case "throw": return s;
     case "expr": return { ...s, expr: r(s.expr) };
     case "if": return { ...s, cond: r(s.cond), then: block(s.then), else: block(s.else) };
-    case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r), body: block(s.body) };
+    case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r),
+      decreases: s.decreases ? r(s.decreases) : null, doneWith: s.doneWith ? r(s.doneWith) : null,
+      body: block(s.body) };
     case "switch": return { ...s, expr: r(s.expr), cases: s.cases.map(c => ({ ...c, body: block(c.body) })), defaultBody: block(s.defaultBody) };
     case "forof":
       // The loop names are in scope for the specs and the body; resolve
       // types the specs in the loop scope too.
       if (s.names.includes(root)) return { ...s, iterable: r(s.iterable) };
-      return { ...s, iterable: r(s.iterable), invariants: s.invariants.map(r), body: block(s.body) };
+      return { ...s, iterable: r(s.iterable), invariants: s.invariants.map(r),
+        doneWith: s.doneWith ? r(s.doneWith) : null, body: block(s.body) };
     case "ghostLet": return { ...s, init: r(s.init) };
     case "ghostAssign": return { ...s, value: r(s.value) };
     case "assert": return { ...s, expr: r(s.expr) };
