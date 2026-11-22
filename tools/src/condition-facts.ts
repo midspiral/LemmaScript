@@ -63,7 +63,15 @@ export interface PresentFact {
   negated: boolean;
   binder: string;
   truthiness: boolean;
-  /** Alternatives eliminated in the positive branch; its binder may still be optional. */
+  /** Nullish values removed to obtain the narrowed type `innerTy`.
+   *  For `x: T | null | undefined`:
+   *    excluded: "undefined"  -> innerTy: T | null
+   *    excluded: "null"       -> innerTy: T | undefined
+   *    excluded: "both"       -> innerTy: T
+   *  Omitted means "both".
+   *
+   *  `x !== undefined` uses the first narrowing when the test is true.
+   *  `x === undefined` uses it when the test is false (`negated: true`). */
   excluded?: Nullish;
 }
 
