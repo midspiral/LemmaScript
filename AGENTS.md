@@ -41,7 +41,7 @@ If a generated file is wrong, the fix is in `foo.ts` (or in the emitter under `t
 - `foo.spec.lean` (Lean) — ghost definitions and helper lemmas
 - `foo.proof.lean` (Lean) — `prove_correct` plus tactics
 
-For Dafny, the diff between `foo.dfy.gen` and `foo.dfy` must be **additions-only**. You may insert helper lemmas, ghost predicates, asserts, and loop invariants, but you may not modify or delete generated lines. `lsc check` enforces this. (A subtle trap: don't append a trailing comment to a generated line like `{` or `decreases fuel` — that counts as a *modified* generated line. Put your comment on its own new line.)
+For Dafny, the diff between `foo.dfy.gen` and `foo.dfy` must be **additions-only**. You may insert helper lemmas, ghost predicates, asserts, and loop invariants, but you may not modify or delete generated lines. Added lines may not use `assume`, `{:axiom}`, or `@Axiom`, or add an `// lsc options:` line. `lsc check` enforces this. (A subtle trap: don't append a trailing comment to a generated line like `{` or `decreases fuel` — that counts as a *modified* generated line. Put your comment on its own new line.)
 
 ### Function-level `ensures` for caller composition
 

@@ -7,6 +7,7 @@ import { execFileSync } from "child_process";
 import path from "path";
 import { DEFAULT_OPTIONS, parseOptionValue, type LscOptions } from "./config.js";
 import type { RunLog } from "./run-log.js";
+import { proofAdditionViolations } from "./dafny-proof-additions.js";
 
 function writeGen(genPath: string, text: string) {
   writeFileSync(genPath, text);
@@ -83,6 +84,14 @@ function additionsOnly(genPath: string, dfyPath: string): boolean {
   if (deletions.length > 0) {
     console.error(`WARNING: ${path.basename(dfyPath)} has modifications to generated lines (not additions-only):`);
     for (const d of deletions.slice(0, 5)) console.error("  " + d);
+    return false;
+  }
+  // Added lines must not bypass the verifier or change its options.
+  const violations = proofAdditionViolations(
+    readFileSync(genPath, "utf-8"), readFileSync(dfyPath, "utf-8"), path.basename(dfyPath));
+  if (violations.length > 0) {
+    console.error(`ERROR: ${path.basename(dfyPath)} has proof additions that bypass verification:`);
+    for (const v of violations) console.error("  " + v);
     return false;
   }
   return true;

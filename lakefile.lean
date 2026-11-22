@@ -20,11 +20,13 @@ lean_lib Examples where
     `«transition.types», `«transition.spec», `«transition.def», `«transition.proof»,
     `«packet.types», `«packet.def», `«packet.proof»,
     `«maxElement.def», `«maxElement.proof»,
+    `«mathMinMaxInt.types», `«mathMinMaxInt.spec», `«mathMinMaxInt.def», `«mathMinMaxInt.proof»,
     `«isSorted.def», `«isSorted.proof»,
     `«arrayContains.def», `«arrayContains.proof»,
     `«hof.types», `«hof.def», `«hof.proof»,
     `«spec.types», `«spec.def», `«spec.proof»,
     `«clamp.def», `«clamp.proof»,
+    `«safeInteger.types», `«safeInteger.def», `«safeInteger.proof»,
     `«clampAll.def», `«clampAll.proof»,
     `«toposort.spec», `«toposort.def», `«toposort.proof»,
     `«majority.types», `«majority.spec», `«majority.def», `«majority.proof»,
@@ -51,5 +53,6 @@ lean_lib Examples where
     `«forContinue.types», `«forContinue.def», `«forContinue.proof»,
     `«arrayFind.types», `«arrayFind.def»,
     `«ctorName.types», `«ctorName.def»,
-    `«switchEnumField.types», `«switchEnumField.def», `«switchEnumField.proof»
+    `«switchEnumField.types», `«switchEnumField.def», `«switchEnumField.proof»,
+    `«mathTruncRound.types», `«mathTruncRound.def», `«mathTruncRound.proof»
   ]

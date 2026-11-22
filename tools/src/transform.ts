@@ -6,10 +6,10 @@
  */
 
 import type { TExpr, TStmt, TModule, Ty } from "./typedir.js";
-import { tyEqual } from "./typedir.js";
+import { isBigInt, tyEqual } from "./typedir.js";
 import { optional, nullishOf, includesNullish, joinTypes } from "./nullish.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
-import { needsOptionalTypeHint, anyExprInStmts, usesName, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
+import { needsOptionalTypeHint, anyExpr, anyExprInStmts, usesName, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
@@ -640,7 +640,44 @@ function buildNestedFieldUpdate(recv: TExpr, newVal: Expr): { root: string; valu
   return null;
 }
 
+/** Promote every spread segment before concatenation, preserving evaluation
+ *  order. A seq<int> needs elementwise conversion; it cannot be cast to real. */
+function lowerMinMaxSequence(e: TExpr, real: boolean, binds: Stmt[] | null): Expr {
+  if (e.kind === "binop" && e.op === "arrayConcat") {
+    return { kind: "binop", op: "arrayConcat",
+      left: lowerMinMaxSequence(e.left, real, binds),
+      right: lowerMinMaxSequence(e.right, real, binds) };
+  }
+  if (e.kind === "arrayLiteral") {
+    return { kind: "arrayLiteral", elems: e.elems.map(el => {
+      const value = lowerExpr(el, binds);
+      if (real && isIntegral(el.ty)) return { kind: "toReal", expr: value };
+      return _opts.backend === "lean" && isNat(el.ty) ? { kind: "toInt", expr: value } : value;
+    }) };
+  }
+  const value = lowerExpr(e, binds);
+  if (_opts.backend === "lean" && e.ty.kind === "array" && isNat(e.ty.elem)) {
+    return { kind: "app", fn: "Array.map", args: [{ kind: "var", name: "Int.ofNat" }, value] };
+  }
+  return real && e.ty.kind === "array" && isIntegral(e.ty.elem)
+    ? { kind: "app", fn: "SeqIntToReal", args: [value] } : value;
+}
+
 function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
+  // Lean spreads are checked Option operations. Lift even a syntactically pure
+  // call so total correctness requires the combined array to be nonempty.
+  if (_opts.backend === "lean" && e.kind === "call" && e.fn.kind === "var" &&
+      (e.fn.name === "MaxOfSeq" || e.fn.name === "MinOfSeq") && e.args.length === 1) {
+    const name = binds ? freshName(`_t${_liftCounter++}`) : null;
+    const value: Expr = { kind: "app",
+      fn: e.fn.name === "MaxOfSeq" ? "LemmaScript.maxOfArray" : "LemmaScript.minOfArray",
+      args: [lowerMinMaxSequence(e.args[0], e.ty.kind === "real", binds)] };
+    if (binds && name) {
+      binds.push({ kind: "let-bind", name, value });
+      return { kind: "var", name };
+    }
+    return value;
+  }
   // Monadic lifting: extract embedded method calls to let-binds.
   // `callKind: "method"` means a global var-fn call (classifyCall returns
   // "method" only for `fn.kind === "var"`). Receiver method calls have
@@ -1025,6 +1062,12 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     }
 
     case "call": {
+      if (_opts.backend === "dafny" && e.fn.kind === "var" &&
+          (e.fn.name === "MaxOfSeq" || e.fn.name === "MinOfSeq") && e.args.length === 1) {
+        const real = e.ty.kind === "real";
+        return { kind: "app", fn: real ? `${e.fn.name}Real` : e.fn.name,
+          args: [lowerMinMaxSequence(e.args[0], real, binds)] };
+      }
       // Array.isArray(x) on a synth array-union (discriminant "__isArray__")
       // → constructor predicate `x.ArrayBranch?`. Used in spec ensures and
       // anywhere `Array.isArray` escapes the narrowing rule (narrow rewrites
@@ -1054,7 +1097,19 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // model, so the JS bound -(2^53 - 1) <= n <= 2^53 - 1 must be stated.
       if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Number" &&
           e.fn.field === "isSafeInteger" && e.args.length === 1 && isIntegral(e.args[0].ty)) {
-        if (e.args[0].ty.kind === "int" && e.args[0].ty.big) return { kind: "bool", value: false };
+        if (isBigInt(e.args[0].ty)) {
+          // The result is false, but JS still evaluates the argument. Keep
+          // lifted method calls and pure expressions' proof obligations.
+          const value = lowerExpr(e.args[0], binds);
+          const result: Expr = { kind: "bool", value: false };
+          if (value.kind === "var" || value.kind === "bigint") return result;
+          const name = freshName("_safeIntegerArg");
+          if (binds) {
+            binds.push({ kind: "let", name, type: e.args[0].ty, mutable: false, value });
+            return result;
+          }
+          return { kind: "let", name, type: e.args[0].ty, value, body: result };
+        }
         const n = lowerExpr(e.args[0], binds);
         const max = 9007199254740991;
         return {
@@ -1063,19 +1118,33 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           right: { kind: "binop", op: "≤", left: n, right: { kind: "num", value: max } },
         };
       }
+      // Number.isSafeInteger(x) on a real: check integrality and safe range via
+      // a preamble predicate.
+      if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Number" &&
+          e.fn.field === "isSafeInteger" && e.args.length === 1 && e.args[0].ty.kind === "real") {
+        return { kind: "app", fn: "IsSafeIntegerReal", args: [lowerExpr(e.args[0], binds)] };
+      }
       // Math.abs/min/max preserve the resolved numeric type. Mixed operands
       // need explicit int/nat→real coercions, just like real binary operations.
       if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math") {
+        const minMax = (e.fn.field === "min" || e.fn.field === "max") && e.args.length >= 1;
         const fn = e.fn.field === "abs" && e.args.length === 1 ? "MathAbs"
-          : e.fn.field === "min" && e.args.length === 2 ? "MathMin"
-          : e.fn.field === "max" && e.args.length === 2 ? "MathMax" : null;
+          : minMax ? (e.fn.field === "min" ? "MathMin" : "MathMax") : null;
         if (fn) {
           const real = e.ty.kind === "real";
           const args = e.args.map((arg): Expr => {
             const lowered = lowerExpr(arg, binds);
-            return real && isIntegral(arg.ty) ? { kind: "toReal", expr: lowered } : lowered;
+            if (real && isIntegral(arg.ty)) return { kind: "toReal", expr: lowered };
+            return _opts.backend === "lean" && minMax && e.ty.kind === "int" && isNat(arg.ty)
+              ? { kind: "toInt", expr: lowered } : lowered;
           });
-          return { kind: "app", fn: real ? `${fn}Real` : fn, args };
+          const helper = real ? `${fn}Real` : _opts.backend === "lean" && minMax
+            ? `${e.fn.field === "min" ? "Min" : "Max"}.${e.fn.field}` : fn;
+          // Unary min/max is identity. Fold positional arguments through the
+          // binary helpers so scalar bounds need no sequence/index proofs.
+          return minMax
+            ? args.slice(1).reduce<Expr>((acc, arg) => ({ kind: "app", fn: helper, args: [acc, arg] }), args[0])
+            : { kind: "app", fn: helper, args };
         }
       }
       // Math.ceil(x): CeilReal on real args, identity on int
@@ -1103,6 +1172,36 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         if (arg.ty.kind === "real")
           return { kind: "app", fn: "FloorReal", args: [lowerExpr(arg, binds)] };
         return lowerExpr(arg, binds);
+      }
+      // Math.trunc(x) / Math.round(x):
+      //   - trunc(a / b) on integral operands → JSTruncDiv (Lean: Int.tdiv),
+      //     checked first for the same reason as the floor case above
+      //   - integral arg → identity
+      //   - real arg (Dafny only) → TruncReal(x) / FloorReal(x + 0.5); JS
+      //     rounds halfway ties toward +Infinity
+      // A bigint argument (a JS TypeError) would otherwise lower to the
+      // identity, and a Lean real argument has no lowering, so both are
+      // rejected. Other calls fall through to the unsupported-call error.
+      if (e.fn.kind === "field" && (e.fn.field === "trunc" || e.fn.field === "round") &&
+          e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1 &&
+          (isIntegral(e.args[0].ty) || e.args[0].ty.kind === "real")) {
+        const name = `Math.${e.fn.field}`;
+        const arg = e.args[0];
+        if (isBigInt(arg.ty))
+          throw new Error(`${name} does not accept a bigint argument (JavaScript throws TypeError)`);
+        if (e.fn.field === "trunc" && arg.kind === "binop" && arg.op === "/" &&
+            isIntegral(arg.left.ty) && isIntegral(arg.right.ty)) {
+          return { kind: "app", fn: "JSTruncDiv", args: [lowerExpr(arg.left, binds), lowerExpr(arg.right, binds)] };
+        }
+        if (isIntegral(arg.ty)) return lowerExpr(arg, binds);
+        if (_opts.backend !== "dafny")
+          throw new Error("real arithmetic is not supported by the Lean backend (needs noncomputable ℝ / Mathlib).");
+        const x = lowerExpr(arg, binds);
+        if (e.fn.field === "trunc") return { kind: "app", fn: "TruncReal", args: [x] };
+        return {
+          kind: "app", fn: "FloorReal",
+          args: [{ kind: "binop", op: "+", left: x, right: { kind: "num", value: 0.5 } }],
+        };
       }
       // Method call: receiver.method(args) → methodCall node
       if (e.fn.kind === "field") {
@@ -2682,6 +2781,31 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
         decreases: fn.decreases ? transformExpr(fn.decreases) : null,
         methodBody,
       });
+    }
+  }
+
+  if (_opts.backend === "lean") {
+    // A pure mirror would erase the failure on an empty spread. Keep these
+    // functions and their transitive callers as methods, where WP checks it.
+    const checked = new Set(["LemmaScript.maxOfArray", "LemmaScript.minOfArray"]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const def of pureDefs) {
+        if (!checked.has(def.name) && anyExpr(def.body, e => {
+          const name = e.kind === "app" ? e.fn : e.kind === "var" ? e.name : "";
+          return checked.has(name.replace(/^Pure\./, ""));
+        })) {
+          checked.add(def.name);
+          changed = true;
+        }
+      }
+    }
+    for (let i = pureDefs.length - 1; i >= 0; i--) {
+      if (checked.has(pureDefs[i].name)) {
+        _pureDefNames.delete(pureDefs[i].name);
+        pureDefs.splice(i, 1);
+      }
     }
   }
 
