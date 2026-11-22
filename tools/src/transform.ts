@@ -123,11 +123,18 @@ export function renameFreeVar(e: Expr, from: string, to: string): Expr {
 
 
 
-/** Map over all sub-expressions in a TExpr (typed IR). */
-function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
+/** Map over the sub-expressions of a TExpr (typed IR) in which `root` still
+ *  names the binding visible at `e`. `f` is called on each node; a non-null
+ *  result replaces the node and stops descent. Every caller substitutes for a
+ *  narrowed variable named `root` (or a path rooted at it), so descent stops
+ *  wherever `root` is rebound: a `forall`/`exists` variable, a `someMatch`
+ *  binder, and, through `mapTStmts`, a block-level declaration or a `for…of`
+ *  name. Otherwise an inner declaration that shadows the narrowed name would
+ *  have its reads replaced by the outer binder (#351). */
+function mapTExpr(e: TExpr, root: string, f: (e: TExpr) => TExpr | null): TExpr {
   const hit = f(e);
   if (hit) return hit;
-  const r = (x: TExpr) => mapTExpr(x, f);
+  const r = (x: TExpr) => mapTExpr(x, root, f);
   switch (e.kind) {
     case "var": case "num": case "bigint": case "str": case "bool": case "havoc": return e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
@@ -143,36 +150,59 @@ function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
         : s.kind === "index" ? { ...s, idx: r(s.idx) }
         : s) };
     case "nullish": return { ...e, left: r(e.left), right: r(e.right) };
-    case "someMatch": return { ...e, scrutinee: r(e.scrutinee), someBody: r(e.someBody), noneBody: r(e.noneBody) };
+    case "someMatch": return { ...e, scrutinee: r(e.scrutinee),
+      someBody: e.binder === root ? e.someBody : r(e.someBody), noneBody: r(e.noneBody) };
     case "tagMatch": return { ...e, scrutinee: r(e.scrutinee),
       cases: e.cases.map(c => ({ ...c, body: r(c.body) })),
       fallthrough: e.fallthrough ? r(e.fallthrough) : null };
-    case "forall": return { ...e, body: r(e.body) };
-    case "exists": return { ...e, body: r(e.body) };
+    case "forall": return e.var === root ? e : { ...e, body: r(e.body) };
+    case "exists": return e.var === root ? e : { ...e, body: r(e.body) };
     case "lambda": return e;
   }
 }
 
-/** Map over all expressions in a TStmt tree (typed IR). */
-function mapTStmt(s: TStmt, f: (e: TExpr) => TExpr | null): TStmt {
-  const r = (e: TExpr) => mapTExpr(e, f);
+/** Map over the expressions of a statement block, with the scoping of
+ *  `mapTExpr`. A `let` or `ghostLet` of `root` shadows it for the rest of the
+ *  block; its own initializer still sees the outer binding. Nested blocks get
+ *  their own scope, so the shadow ends with the block that declares it. */
+function mapTStmts(stmts: TStmt[], root: string, f: (e: TExpr) => TExpr | null): TStmt[] {
+  const out: TStmt[] = [];
+  for (let i = 0; i < stmts.length; i++) {
+    const s = stmts[i];
+    out.push(mapTStmt(s, root, f));
+    if ((s.kind === "let" || s.kind === "ghostLet") && s.name === root) {
+      out.push(...stmts.slice(i + 1));
+      break;
+    }
+  }
+  return out;
+}
+
+function mapTStmt(s: TStmt, root: string, f: (e: TExpr) => TExpr | null): TStmt {
+  const r = (e: TExpr) => mapTExpr(e, root, f);
+  const block = (b: TStmt[]) => mapTStmts(b, root, f);
   switch (s.kind) {
     case "let": return { ...s, init: r(s.init) };
     case "assign": return { ...s, value: r(s.value) };
     case "return": return { ...s, value: r(s.value) };
     case "break": case "continue": case "throw": return s;
     case "expr": return { ...s, expr: r(s.expr) };
-    case "if": return { ...s, cond: r(s.cond), then: s.then.map(t => mapTStmt(t, f)), else: s.else.map(t => mapTStmt(t, f)) };
-    case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r), body: s.body.map(t => mapTStmt(t, f)) };
-    case "switch": return { ...s, expr: r(s.expr), cases: s.cases.map(c => ({ ...c, body: c.body.map(t => mapTStmt(t, f)) })), defaultBody: s.defaultBody.map(t => mapTStmt(t, f)) };
-    case "forof": return { ...s, iterable: r(s.iterable), invariants: s.invariants.map(r), body: s.body.map(t => mapTStmt(t, f)) };
+    case "if": return { ...s, cond: r(s.cond), then: block(s.then), else: block(s.else) };
+    case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r), body: block(s.body) };
+    case "switch": return { ...s, expr: r(s.expr), cases: s.cases.map(c => ({ ...c, body: block(c.body) })), defaultBody: block(s.defaultBody) };
+    case "forof":
+      // The loop names are in scope for the specs and the body; resolve
+      // types the specs in the loop scope too.
+      if (s.names.includes(root)) return { ...s, iterable: r(s.iterable) };
+      return { ...s, iterable: r(s.iterable), invariants: s.invariants.map(r), body: block(s.body) };
     case "ghostLet": return { ...s, init: r(s.init) };
     case "ghostAssign": return { ...s, value: r(s.value) };
     case "assert": return { ...s, expr: r(s.expr) };
-    case "someMatch": return { ...s, scrutinee: r(s.scrutinee), someBody: s.someBody.map(t => mapTStmt(t, f)), noneBody: s.noneBody.map(t => mapTStmt(t, f)) };
+    case "someMatch": return { ...s, scrutinee: r(s.scrutinee),
+      someBody: s.binder === root ? s.someBody : block(s.someBody), noneBody: block(s.noneBody) };
     case "tagMatch": return { ...s, scrutinee: r(s.scrutinee),
-      cases: s.cases.map(c => ({ ...c, body: c.body.map(t => mapTStmt(t, f)) })),
-      fallthrough: s.fallthrough.map(t => mapTStmt(t, f)) };
+      cases: s.cases.map(c => ({ ...c, body: block(c.body) })),
+      fallthrough: block(s.fallthrough) };
   }
 }
 
@@ -2118,12 +2148,12 @@ function emitMatchStmt(
  *  Used by emitMatchStmt for synth array-unions where the variant has a single
  *  payload field and the user code refers to the scrutinee by its bare name. */
 function replaceVarInTStmts(stmts: TStmt[], oldName: string, newName: string, newTy: Ty): TStmt[] {
-  return stmts.map(s => mapTStmt(s, e => {
+  return mapTStmts(stmts, oldName, e => {
     if (e.kind === "var" && e.name === oldName) {
       return { kind: "var", name: newName, ty: newTy } as TExpr;
     }
     return null;
-  }));
+  });
 }
 
 /** If the chain has matched all variants but one, return that remaining variant. */
@@ -2211,7 +2241,7 @@ function replaceFieldsInTStmts(
   replacements: { fieldName: string; newName: string; fallbackTy: Ty }[]
 ): TStmt[] {
   if (replacements.length === 0) return stmts;
-  return stmts.map(s => mapTStmt(s, e => {
+  return mapTStmts(stmts, objName, e => {
     if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === objName) {
       const r = replacements.find(r => r.fieldName === e.field);
       if (r) {
@@ -2220,7 +2250,7 @@ function replaceFieldsInTStmts(
       }
     }
     return null;
-  }));
+  });
 }
 
 /** Replace all variant fields of obj → match binder vars in typed IR.
@@ -2252,7 +2282,7 @@ function projectStructuralCallArgsInTStmts(
     resolvedTy: f.type ?? parseTsType(f.tsType),
   }));
 
-  return stmts.map(s => mapTStmt(s, e => {
+  return mapTStmts(stmts, varName, e => {
     if (e.kind !== "call" || !e.paramTys) return null;
     const paramTys = e.paramTys;
     let changed = false;
@@ -2286,7 +2316,7 @@ function projectStructuralCallArgsInTStmts(
       };
     });
     return changed ? { ...e, args } : null;
-  }));
+  });
 }
 
 /** A pure access path — chain of field accesses rooted at a var. */
@@ -2314,17 +2344,17 @@ function matchesAccessPath(e: TExpr, path: AccessPath): boolean {
 
 /** Replace every TExpr matching `path` with `var(binder, binderTy)`. */
 function replacePathInTExpr(expr: TExpr, path: AccessPath, binder: string, binderTy: Ty): TExpr {
-  return mapTExpr(expr, e =>
+  return mapTExpr(expr, path.rootVar, e =>
     matchesAccessPath(e, path)
       ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
   );
 }
 
 function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, binderTy: Ty): TStmt[] {
-  return stmts.map(s => mapTStmt(s, e =>
+  return mapTStmts(stmts, path.rootVar, e =>
     matchesAccessPath(e, path)
       ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
-  ));
+  );
 }
 
 
