@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Project, ScriptTarget } from "ts-morph";
+import { Project, ScriptTarget, type SourceFile } from "ts-morph";
 import * as fixture from "../fixtures/loose-equality-narrowing.ts";
 import { extractModule } from "../src/extract.ts";
 import { resolveModule } from "../src/resolve.ts";
@@ -14,13 +14,29 @@ import { transformModuleDafny, transformModuleLean } from "../src/transform.ts";
 import { emitDafnyFile } from "../src/dafny-emit.ts";
 import { emitLeanFile, resetLeanModule } from "../src/lean-emit.ts";
 
-function typed() {
-  const project = new Project({ compilerOptions: {
+function strictProject() {
+  return new Project({ compilerOptions: {
     strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true,
   } });
-  const source = project.addSourceFileAtPath(fileURLToPath(new URL("../fixtures/loose-equality-narrowing.ts", import.meta.url)));
-  assert.deepEqual(project.getPreEmitDiagnostics(), [], "the regression must be valid TypeScript");
+}
+
+function narrowed(source: SourceFile) {
+  assert.deepEqual(source.getProject().getPreEmitDiagnostics(), [], "the regression must be valid TypeScript");
   return narrowModule(resolveModule(extractModule(source)));
+}
+
+function typed() {
+  return narrowed(strictProject().addSourceFileAtPath(
+    fileURLToPath(new URL("../fixtures/loose-equality-narrowing.ts", import.meta.url))));
+}
+
+function inline(name: string, text: string) {
+  return narrowed(strictProject().createSourceFile(name, text));
+}
+
+function dafnyOf(module: ReturnType<typeof narrowModule>) {
+  const { typesFile, defFile } = transformModuleDafny(module);
+  return emitDafnyFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
 }
 
 function verify(text: string) {
@@ -82,8 +98,7 @@ test("JavaScript: loose null checks and !(o === undefined) test presence", () =>
 });
 
 test("Dafny narrows optionals under loose null checks and !(o === undefined)", () => {
-  const { typesFile, defFile } = transformModuleDafny(typed());
-  const output = emitDafnyFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
+  const output = dafnyOf(typed());
   const facts = [
     ...presence.map(name => `
 lemma ${name}Values()
@@ -119,20 +134,14 @@ lemma optChainLooseValues()
 });
 
 test("defined-check .filter(...) narrows under loose != null and !(x === undefined)", () => {
-  const project = new Project({ compilerOptions: {
-    strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true,
-  } });
-  const source = project.createSourceFile("filter-some-loose.ts", `
+  const output = dafnyOf(inline("filter-some-loose.ts", `
     export function filterLooseNull(xs: (number | undefined)[]): number[] {
       return xs.filter(x => x != null);
     }
     export function filterNegatedStrict(xs: (number | undefined)[]): number[] {
       return xs.filter(x => !(x === undefined));
     }
-  `);
-  assert.deepEqual(project.getPreEmitDiagnostics(), []);
-  const { typesFile, defFile } = transformModuleDafny(narrowModule(resolveModule(extractModule(source))));
-  const output = emitDafnyFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
+  `));
   const ok = verify(output + `
 lemma filterLooseValues()
   ensures filterLooseNull([None, Some(0), Some(5), None]) == [0, 5]
@@ -143,10 +152,10 @@ lemma filterLooseValues()
 });
 
 test("non-string-union synthesized datatypes do not lower string literals to constructors", () => {
-  const project = new Project({ compilerOptions: {
-    strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true,
-  } });
-  const source = project.createSourceFile("synth-string-eq.ts", `
+  // In JavaScript, looseCtorCollision returns 2 for every array, so its
+  // ensures is false. Lowering "ArrayBranch" to the constructor test
+  // `x.ArrayBranch?` made Dafny prove it.
+  const output = dafnyOf(inline("synth-string-eq.ts", `
     //@ ensures Array.isArray(x) ==> \\result === 1
     export function looseCtorCollision(x: string | string[]): number {
       if (x == "ArrayBranch") return 1;
@@ -155,14 +164,11 @@ test("non-string-union synthesized datatypes do not lower string literals to con
     export function looseEmpty(x: string | string[]): boolean {
       return x == "";
     }
-  `);
-  assert.deepEqual(project.getPreEmitDiagnostics(), []);
-  const { typesFile, defFile } = transformModuleDafny(narrowModule(resolveModule(extractModule(source))));
-  const output = emitDafnyFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
+  `));
   assert.doesNotMatch(output, /\.ArrayBranch\?/);
   assert.doesNotMatch(output, /\.\?/);
   const bad = verify(output);
-  assert.notEqual(bad.status, 0, "Dafny must reject comparing synthesized union directly with string");
+  assert.notEqual(bad.status, 0, "the false ensures on looseCtorCollision must not verify");
 });
 
 test("Lean generates the loose-equality fixture", () => {
