@@ -20,8 +20,8 @@ def reverse (x : Option (Option (Int))) : Int :=
   match x with
   | .some _optional4 =>
     match _optional4 with
-    | .some _value5 =>
-      let _x_val : Option Int := Option.some _value5
+    | .some _optional5 =>
+      let _x_val : Option Int := Option.some _optional5
       match _x_val with
       | .some _x_val =>
         _x_val
@@ -41,8 +41,8 @@ def disjunction (x : Option (Option (Int))) : Int :=
   match x with
   | .some _optional14 =>
     match _optional14 with
-    | .some _value15 =>
-      let _x_val : Int := _value15
+    | .some _optional15 =>
+      let _x_val : Int := _optional15
       _x_val
     | .none =>
       0
@@ -60,8 +60,8 @@ def retainUndefined (x : Option (Option (Int))) : Option Int :=
   match x with
   | .some _optional25 =>
     match _optional25 with
-    | .some _value26 =>
-      let _x_val : Option Int := Option.some _value26
+    | .some _optional26 =>
+      let _x_val : Option Int := Option.some _optional26
       _x_val
     | .none =>
       none
@@ -73,8 +73,8 @@ def positive (x : Option (Option (Int))) : Bool :=
   match x with
   | .some _optional31 =>
     match _optional31 with
-    | .some _value32 =>
-      let _x_val : Option Int := Option.some _value32
+    | .some _optional32 =>
+      let _x_val : Option Int := Option.some _optional32
       match _x_val with
       | .some _x_val =>
         _x_val > 0
@@ -94,8 +94,8 @@ def absentOrPositive (x : Option (Option (Int))) : Bool :=
   match x with
   | .some _optional44 =>
     match _optional44 with
-    | .some _value45 =>
-      let _x_val : Option Int := Option.some _value45
+    | .some _optional45 =>
+      let _x_val : Option Int := Option.some _optional45
       match _x_val with
       | .some _x_val =>
         _x_val > 0

@@ -119,7 +119,7 @@ function pick(n: int): Option<Color>
 
 lemma pick_ensures(n: int)
   ensures ((n == 1) ==> (match pick(n) { case Some(i_value) => i_value.red? case None => false }))
-  ensures ((n != 1) ==> (n != 2) ==> (match pick(n) { case Some(_) => false case None => true }))
+  ensures ((n != 1) ==> (n != 2) ==> (match pick(n) { case Some(i_) => false case None => true }))
 {
 }
 

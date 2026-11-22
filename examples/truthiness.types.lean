@@ -103,7 +103,7 @@ def optStrCond (o : Option String) : Int :=
 
 def optPresent (o : Option Int) : Int :=
   match o with
-  | .some _ =>
+  | .some _o_val =>
     1
   | .none =>
     0

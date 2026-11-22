@@ -7,7 +7,7 @@ import «looseNullish.types»
 set_option velvet.semantics.termination "total"
 
 method looseIsNullish (x : Option (Option (Int))) returns (res : Bool)
-  ensures ensures_1: (res = (match x with | .some _optional79 => (match _optional79 with | .some _value80 => (let _x_val : Option Int := Option.some _value80; (match _x_val with | .some _ => false | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _ => false | .none => true))) : Prop)
+  ensures ensures_1: (res = (match x with | .some _optional79 => (match _optional79 with | .some _optional80 => (let _x_val : Option Int := Option.some _optional80; (match _x_val with | .some _ => false | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _ => false | .none => true))) : Prop)
   do
     return Pure.looseIsNullish x
 
@@ -22,34 +22,34 @@ method looseNullable (x : Option Int) returns (res : Bool)
     return Pure.looseNullable x
 
 method looseDefault (x : Option (Option (Int))) returns (res : Int)
-  ensures ensures_1: ((match x with | .some _optional84 => (match _optional84 with | .some _ => false | .none => true) | .none => true) → res = 7 : Prop)
-  ensures ensures_2: ((match x with | .some _optional86 => (match _optional86 with | .some _value87 => (let _x_val : Int := _value87; res = _x_val) | .none => true) | .none => true) : Prop)
+  ensures ensures_1: ((match x with | .some _optional84 => (match _optional84 with | .some _optional85 => false | .none => true) | .none => true) → res = 7 : Prop)
+  ensures ensures_2: ((match x with | .some _optional86 => (match _optional86 with | .some _optional87 => (let _x_val : Int := _optional87; res = _x_val) | .none => true) | .none => true) : Prop)
   do
     return Pure.looseDefault x
 
 method looseEarlyReturn (x : Option (Option (Int))) returns (res : Int)
-  ensures ensures_1: ((match x with | .some _optional90 => (match _optional90 with | .some _value91 => (let _x_val : Option Int := Option.some _value91; (match _x_val with | .some _ => false | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _ => false | .none => true))) → res = 7 : Prop)
-  ensures ensures_2: ((match x with | .some _optional93 => (match _optional93 with | .some _value94 => (let _x_val : Option Int := Option.some _value94; (match _x_val with | .some _x_val => res = _x_val | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _x_val => res = _x_val | .none => true))) : Prop)
+  ensures ensures_1: ((match x with | .some _optional90 => (match _optional90 with | .some _optional91 => (let _x_val : Option Int := Option.some _optional91; (match _x_val with | .some _ => false | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _ => false | .none => true))) → res = 7 : Prop)
+  ensures ensures_2: ((match x with | .some _optional93 => (match _optional93 with | .some _optional94 => (let _x_val : Option Int := Option.some _optional94; (match _x_val with | .some _x_val => res = _x_val | .none => true)) | .none => true) | .none => (let _x_val : Option Int := Option.none; (match _x_val with | .some _x_val => res = _x_val | .none => true))) : Prop)
   do
     return Pure.looseEarlyReturn x
 
 method loosePositive (x : Option (Option (Int))) returns (res : Bool)
-  ensures ensures_1: ((match x with | .some _optional100 => (match _optional100 with | .some _ => false | .none => true) | .none => true) → ¬(res) : Prop)
-  ensures ensures_2: ((match x with | .some _optional102 => (match _optional102 with | .some _value103 => (let _x_val : Int := _value103; res = (_x_val > 0)) | .none => true) | .none => true) : Prop)
+  ensures ensures_1: ((match x with | .some _optional100 => (match _optional100 with | .some _optional101 => false | .none => true) | .none => true) → ¬(res) : Prop)
+  ensures ensures_2: ((match x with | .some _optional102 => (match _optional102 with | .some _optional103 => (let _x_val : Int := _optional103; res = (_x_val > 0)) | .none => true) | .none => true) : Prop)
   do
     return Pure.loosePositive x
 
 method looseAbsentOrPositive (x : Option (Option (Int))) returns (res : Bool)
-  ensures ensures_1: ((match x with | .some _optional108 => (match _optional108 with | .some _ => false | .none => true) | .none => true) → res : Prop)
-  ensures ensures_2: ((match x with | .some _optional110 => (match _optional110 with | .some _value111 => (let _x_val : Int := _value111; res = (_x_val > 0)) | .none => true) | .none => true) : Prop)
+  ensures ensures_1: ((match x with | .some _optional108 => (match _optional108 with | .some _optional109 => false | .none => true) | .none => true) → res : Prop)
+  ensures ensures_2: ((match x with | .some _optional110 => (match _optional110 with | .some _optional111 => (let _x_val : Int := _optional111; res = (_x_val > 0)) | .none => true) | .none => true) : Prop)
   do
     return Pure.looseAbsentOrPositive x
 
 method looseField (box : LooseBox) returns (res : Int)
   ensures ensures_1: ((let _optional114 : Option (Option (Int)) := box.value
 let _optional115 : Unit := ()
-(match _optional114 with | .some _optional116 => (match _optional116 with | .some _ => false | .none => true) | .none => true)) → res = 7 : Prop)
-  ensures ensures_2: ((match box.value with | .some _optional118 => (match _optional118 with | .some _value119 => (let _box_value_val : Int := _value119; res = _box_value_val) | .none => true) | .none => true) : Prop)
+(match _optional114 with | .some _optional116 => (match _optional116 with | .some _optional117 => false | .none => true) | .none => true)) → res = 7 : Prop)
+  ensures ensures_2: ((match box.value with | .some _optional118 => (match _optional118 with | .some _optional119 => (let _box_value_val : Int := _optional119; res = _box_value_val) | .none => true) | .none => true) : Prop)
   do
     return Pure.looseField box
 

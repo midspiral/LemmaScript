@@ -316,7 +316,7 @@ function deepAccess(t: Tree): int
 
 lemma deepAccess_ensures(t: Tree)
   ensures (match t.middle { case Some(i_t_middle_val) => (match i_t_middle_val.leaf { case Some(i_t_middle_leaf_val) => (deepAccess(t) == i_t_middle_leaf_val.value) case None => true }) case None => true })
-  ensures ((match t.middle { case Some(_) => false case None => true }) ==> (deepAccess(t) == 0))
+  ensures ((match t.middle { case Some(i_) => false case None => true }) ==> (deepAccess(t) == 0))
 {
 }
 
@@ -331,7 +331,7 @@ function ocField(o: Option<Outer>): Option<Inner>
 }
 
 lemma ocField_ensures(o: Option<Outer>)
-  ensures ((match o { case Some(_) => false case None => true }) ==> (match ocField(o) { case Some(_) => false case None => true }))
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (match ocField(o) { case Some(i_) => false case None => true }))
   ensures (match o { case Some(i_o_val) => (ocField(o) == i_o_val.inner) case None => true })
 {
 }
@@ -347,8 +347,8 @@ function ocChain(o: Option<Outer>): Option<int>
 }
 
 lemma ocChain_ensures(o: Option<Outer>)
-  ensures ((match o { case Some(_) => false case None => true }) ==> (match ocChain(o) { case Some(_) => false case None => true }))
-  ensures (match o { case Some(i_o_val) => ((match i_o_val.inner { case Some(_) => false case None => true }) ==> (match ocChain(o) { case Some(_) => false case None => true })) case None => true })
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (match ocChain(o) { case Some(i_) => false case None => true }))
+  ensures (match o { case Some(i_o_val) => ((match i_o_val.inner { case Some(i_) => false case None => true }) ==> (match ocChain(o) { case Some(i_) => false case None => true })) case None => true })
   ensures (match o { case Some(i_o_val) => (match i_o_val.inner { case Some(i_o_inner_val) => (match ocChain(o) { case Some(i_value) => (i_value == i_o_inner_val.val) case None => false }) case None => true }) case None => true })
 {
 }
@@ -364,7 +364,7 @@ function ocMethodCall(s: Option<set<string>>, k: string): Option<bool>
 }
 
 lemma ocMethodCall_ensures(s: Option<set<string>>, k: string)
-  ensures ((match s { case Some(_) => false case None => true }) ==> (match ocMethodCall(s, k) { case Some(_) => false case None => true }))
+  ensures ((match s { case Some(i_) => false case None => true }) ==> (match ocMethodCall(s, k) { case Some(i_) => false case None => true }))
   ensures (match s { case Some(i_s_val) => (match ocMethodCall(s, k) { case Some(i_value) => (i_value == (k in i_s_val)) case None => false }) case None => true })
 {
 }
@@ -380,7 +380,7 @@ function ocIndex(m: Option<map<string, string>>, k: string): Option<string>
 }
 
 lemma ocIndex_ensures(m: Option<map<string, string>>, k: string)
-  ensures ((match m { case Some(_) => false case None => true }) ==> (match ocIndex(m, k) { case Some(_) => false case None => true }))
+  ensures ((match m { case Some(i_) => false case None => true }) ==> (match ocIndex(m, k) { case Some(i_) => false case None => true }))
   ensures (match m { case Some(i_m_val) => (ocIndex(m, k) == (if k in i_m_val then Some(i_m_val[k]) else None)) case None => true })
 {
 }
@@ -396,7 +396,7 @@ function nullishVar(o: Option<Inner>, fallback: int): int
 }
 
 lemma nullishVar_ensures(o: Option<Inner>, fallback: int)
-  ensures ((match o { case Some(_) => false case None => true }) ==> (nullishVar(o, fallback) == fallback))
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (nullishVar(o, fallback) == fallback))
   ensures (match o { case Some(i_o_val) => (nullishVar(o, fallback) == i_o_val.val) case None => true })
 {
 }
@@ -481,7 +481,7 @@ function negVar(o: Option<Inner>, fallback: int): int
 }
 
 lemma negVar_ensures(o: Option<Inner>, fallback: int)
-  ensures ((match o { case Some(_) => false case None => true }) ==> (negVar(o, fallback) == fallback))
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (negVar(o, fallback) == fallback))
   ensures (match o { case Some(i_o_val) => (negVar(o, fallback) == i_o_val.val) case None => true })
 {
 }
@@ -497,7 +497,7 @@ function negField(o: Outer, fallback: int): int
 }
 
 lemma negField_ensures(o: Outer, fallback: int)
-  ensures ((match o.inner { case Some(_) => false case None => true }) ==> (negField(o, fallback) == fallback))
+  ensures ((match o.inner { case Some(i_) => false case None => true }) ==> (negField(o, fallback) == fallback))
   ensures (match o.inner { case Some(i_o_inner_val) => (negField(o, fallback) == i_o_inner_val.val) case None => true })
 {
 }
@@ -514,7 +514,7 @@ function truthyVar(o: Option<Inner>, fallback: int): int
 
 lemma truthyVar_ensures(o: Option<Inner>, fallback: int)
   ensures (match o { case Some(i_o_val) => (truthyVar(o, fallback) == i_o_val.val) case None => true })
-  ensures ((match o { case Some(_) => false case None => true }) ==> (truthyVar(o, fallback) == fallback))
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (truthyVar(o, fallback) == fallback))
 {
 }
 
@@ -534,8 +534,8 @@ function nestedAndTernary(o: Option<Outer>, fallback: int): int
 }
 
 lemma nestedAndTernary_ensures(o: Option<Outer>, fallback: int)
-  ensures ((match o { case Some(_) => false case None => true }) ==> (nestedAndTernary(o, fallback) == fallback))
-  ensures (match o { case Some(i_o_val) => ((match i_o_val.inner { case Some(_) => false case None => true }) ==> (nestedAndTernary(o, fallback) == fallback)) case None => true })
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (nestedAndTernary(o, fallback) == fallback))
+  ensures (match o { case Some(i_o_val) => ((match i_o_val.inner { case Some(i_) => false case None => true }) ==> (nestedAndTernary(o, fallback) == fallback)) case None => true })
   ensures (match o { case Some(i_o_val) => (match i_o_val.inner { case Some(i_o_inner_val) => (nestedAndTernary(o, fallback) == i_o_inner_val.val) case None => true }) case None => true })
 {
 }

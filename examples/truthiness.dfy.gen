@@ -168,7 +168,7 @@ function optNumCond(o: Option<int>): int
 }
 
 lemma optNumCond_ensures(o: Option<int>)
-  ensures ((match o { case Some(_) => false case None => true }) ==> (optNumCond(o) == 0))
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (optNumCond(o) == 0))
   ensures ((match o { case Some(i_value) => (i_value == 0) case None => false }) ==> (optNumCond(o) == 0))
   ensures (match o { case Some(i_o_val) => ((i_o_val != 0) ==> (optNumCond(o) == 1)) case None => true })
 {
@@ -188,7 +188,7 @@ function optNumNot(o: Option<int>): int
 }
 
 lemma optNumNot_ensures(o: Option<int>)
-  ensures ((match o { case Some(_) => false case None => true }) ==> (optNumNot(o) == 1))
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (optNumNot(o) == 1))
   ensures ((match o { case Some(i_value) => (i_value == 0) case None => false }) ==> (optNumNot(o) == 1))
   ensures (match o { case Some(i_o_val) => ((i_o_val != 0) ==> (optNumNot(o) == 0)) case None => true })
 {
@@ -208,7 +208,7 @@ function optStrCond(o: Option<string>): int
 }
 
 lemma optStrCond_ensures(o: Option<string>)
-  ensures ((match o { case Some(_) => false case None => true }) ==> (optStrCond(o) == 0))
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (optStrCond(o) == 0))
   ensures ((match o { case Some(i_value) => (i_value == "") case None => false }) ==> (optStrCond(o) == 0))
   ensures (match o { case Some(i_o_val) => ((i_o_val != "") ==> (optStrCond(o) == 1)) case None => true })
 {
@@ -217,7 +217,7 @@ lemma optStrCond_ensures(o: Option<string>)
 function optPresent(o: Option<int>): int
 {
   match o {
-    case Some(_) =>
+    case Some(i_o_val) =>
       1
     case None =>
       0
@@ -225,8 +225,8 @@ function optPresent(o: Option<int>): int
 }
 
 lemma optPresent_ensures(o: Option<int>)
-  ensures (match o { case Some(_) => (optPresent(o) == 1) case None => true })
-  ensures ((match o { case Some(_) => false case None => true }) ==> (optPresent(o) == 0))
+  ensures (match o { case Some(i_o_val) => (optPresent(o) == 1) case None => true })
+  ensures ((match o { case Some(i_) => false case None => true }) ==> (optPresent(o) == 0))
 {
 }
 

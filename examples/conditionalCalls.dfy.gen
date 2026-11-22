@@ -119,7 +119,7 @@ method choiceArgument(enabled: bool) returns (res: int)
 
 method optionalChoice(enabled: bool) returns (res: Option<int>)
   ensures (enabled ==> (match res { case Some(i_value) => (i_value == 1) case None => false }))
-  ensures (!(enabled) ==> (match res { case Some(_) => false case None => true }))
+  ensures (!(enabled) ==> (match res { case Some(i_) => false case None => true }))
 {
   var i_branch8: Option<int> := *;
   if enabled {
