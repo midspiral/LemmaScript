@@ -11,7 +11,7 @@ import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm
 import { anyExpr, anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { parseTsType } from "./types.js";
-import { freshName } from "./names.js";
+import { freshName, freshNameWhere, isUserName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
 import { lowerIndexedCallback } from "./callback-lowering.js";
 import { isFalsyCapableTy } from "./condition-facts.js";
@@ -83,15 +83,32 @@ function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
   }
 }
 
+const varE = (name: string): Expr => ({ kind: "var", name });
+
+/** Map `f` over a lambda body unless a parameter rebinds `name`. `mapExpr`
+ *  doesn't descend into lambda bodies, so substitutions that must reach
+ *  closures call this. Statement binders are tracked only at the body's top
+ *  level: a `let`/`let-bind`/`ghostLet` of `name` shadows it for the rest of
+ *  the body, and a `for-in` index of `name` shadows it inside that loop. */
+function mapLambdaBody(x: Expr & { kind: "lambda" }, name: string, f: (e: Expr) => Expr | null): Expr {
+  if (x.params.some(p => p.name === name)) return x;
+  const body: Stmt[] = [];
+  let shadowed = false;
+  for (const s of x.body) {
+    if (shadowed) { body.push(s); continue; }
+    body.push(s.kind === "forin" && s.idx === name
+      ? { ...s, bound: mapExpr(s.bound, f) }
+      : mapStmt(s, f));
+    if ((s.kind === "let" || s.kind === "let-bind" || s.kind === "ghostLet") && s.name === name) shadowed = true;
+  }
+  return { ...x, body };
+}
+
 /** Rename free occurrences of `from` to `to`, stopping at every construct that
  *  rebinds `from` — lambda params, `let`/`let-bind`/`ghostLet` (shadows the
  *  rest of the block), `match` arm patterns, `forall`/`exists`, and `for-in`
  *  indices. Capture-avoiding: a nested scope that reintroduces `from` keeps its
- *  own binding untouched. `mapExpr` doesn't descend into lambda bodies, so this
- *  walks them by hand — statement binders are tracked only at that body's top
- *  level, which is enough for the sole caller (dafny-emit's
- *  `comprehensionBinder`). TODO: generalize if more callers need this. */
-const varE = (name: string): Expr => ({ kind: "var", name });
+ *  own binding untouched. Lambda bodies are walked by `mapLambdaBody`. */
 export function renameFreeVar(e: Expr, from: string, to: string): Expr {
   const f = (x: Expr): Expr | null => {
     if (x.kind === "var") return x.name === from ? { ...x, name: to } : x;
@@ -103,19 +120,7 @@ export function renameFreeVar(e: Expr, from: string, to: string): Expr {
       return { ...x, scrutinee: mapExpr(x.scrutinee, f), arms: x.arms.map(a =>
         patternBinds(a.pattern, from) ? a : { ...a, body: mapExpr(a.body, f) }) };
     }
-    if (x.kind === "lambda") {
-      if (x.params.some(p => p.name === from)) return x;   // param shadows `from`
-      const body: Stmt[] = [];
-      let shadowed = false;
-      for (const s of x.body) {
-        if (shadowed) { body.push(s); continue; }
-        body.push(s.kind === "forin" && s.idx === from
-          ? { ...s, bound: mapExpr(s.bound, f) }            // idx shadows in the loop body
-          : mapStmt(s, f));
-        if ((s.kind === "let" || s.kind === "let-bind" || s.kind === "ghostLet") && s.name === from) shadowed = true;
-      }
-      return { ...x, body };
-    }
+    if (x.kind === "lambda") return mapLambdaBody(x, from, f);
     return null;
   };
   return mapExpr(e, f);
@@ -282,17 +287,21 @@ function kindHelperDecl(decl: TypeDeclInfo): Decl {
  *  collisions in nested matches on different variables. `freshName` closes
  *  the residual gap: a user variable literally named `_value`/`_x_field` in an
  *  arm body would still be captured, so prime on any module-wide collision.
- *  Deterministic, so the pattern binder and its body substitutions agree. */
-function matchBinder(fieldName: string, prefix?: string): string {
+ *  Deterministic, so the pattern binder and its body substitutions agree.
+ *  `taken` adds names the arm already reads, such as an outer narrowing's
+ *  binder substituted into the arm before this match was lowered. */
+function matchBinder(fieldName: string, prefix?: string, taken?: (name: string) => boolean): string {
   const safePrefix = prefix === "\\result"
     ? "result"
     : prefix?.replace(/[^A-Za-z0-9_]/g, "_");
-  return freshName(safePrefix ? `_${safePrefix}_${fieldName}` : `_${fieldName}`);
+  const base = safePrefix ? `_${safePrefix}_${fieldName}` : `_${fieldName}`;
+  return taken ? freshNameWhere(base, n => isUserName(n) || taken(n)) : freshName(base);
 }
 
 /** Build a match arm pattern like `.VariantName _v_field1 _v_field2` from variant info. */
-function buildMatchPattern(variantName: string, fields: { name: string }[], scopePrefix?: string): MatchPattern {
-  return pCtor(variantName, ...fields.map(f => matchBinder(f.name, scopePrefix)));
+function buildMatchPattern(variantName: string, fields: { name: string }[], scopePrefix?: string,
+                           taken?: (name: string) => boolean): MatchPattern {
+  return pCtor(variantName, ...fields.map(f => matchBinder(f.name, scopePrefix, taken)));
 }
 
 const _forofCounters = new Map<string, number>();
@@ -1333,26 +1342,35 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       const varName = e.scrutinee.kind === "var" ? e.scrutinee.name : undefined;
       const pathHint = varName ?? scrutineeHint(e.scrutinee);
       const wrapOpt = e.ty.kind === "optional";
-      const arms: MatchArm[] = e.cases.map(c => {
+      const lowered = e.cases.map(c => lowerExpr(c.body, binds));
+      const loweredFallthrough = e.fallthrough ? lowerExpr(e.fallthrough, binds) : null;
+      // The arms may already read a binder minted for an enclosing narrowing
+      // with the same hint (`u` and `m.u` both give `_u_arr`). Prime this
+      // match's binders past those names so the arm does not capture them.
+      const read = new Set<string>();
+      for (const b of [...lowered, ...(loweredFallthrough ? [loweredFallthrough] : [])])
+        anyExpr(b, x => { if (x.kind === "var") read.add(x.name); return false; });
+      const taken = (n: string) => read.has(n);
+      const arms: MatchArm[] = e.cases.map((c, i) => {
         const variant = decl?.variants?.find(v => v.name === c.variant);
         const fields = variant?.fields ?? [];
-        let body = lowerExpr(c.body, binds);
+        let body = lowered[i];
         if (varName && fields.length > 0) {
-          body = replaceFieldAccess(body, varName, fields, c.variant, tyBaseName(e.typeName));
+          body = replaceFieldAccess(body, varName, fields, c.variant, tyBaseName(e.typeName), taken);
           if (isSynthArrayUnion && fields.length === 1) {
-            body = replaceVarInExpr(body, varName, matchBinder(fields[0].name, varName));
+            body = replaceVarInExpr(body, varName, matchBinder(fields[0].name, varName, taken));
           }
         } else if (!varName && isSynthArrayUnion && fields.length === 1) {
           // Path scrutinee (e.g. `m.content`): replace structural occurrences
           // with the binder var ref.
-          const binderName = matchBinder(fields[0].name, pathHint);
+          const binderName = matchBinder(fields[0].name, pathHint, taken);
           body = replaceExprInExpr(body, scrutinee, { kind: "var", name: binderName });
         }
         if (wrapOpt) body = wrapOptionalBranch(body, c.body);
-        return { pattern: buildMatchPattern(c.variant, fields, pathHint), body };
+        return { pattern: buildMatchPattern(c.variant, fields, pathHint, taken), body };
       });
-      if (e.fallthrough) {
-        let body = lowerExpr(e.fallthrough, binds);
+      if (e.fallthrough && loweredFallthrough) {
+        let body = loweredFallthrough;
         if (wrapOpt) body = wrapOptionalBranch(body, e.fallthrough);
         arms.push({ pattern: pWild(), body });
       }
@@ -1401,11 +1419,44 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): Expr | null {
   return { kind: "match", scrutinee: varE(obj.name), arms: [{ pattern, body: rhs }, { pattern: pWild(), body: { kind: "bool", value: true } }] };
 }
 
-function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; tsType: string }[], ctorName?: string, ctorOf?: string): Expr {
-  return mapExpr(e, x => {
+/** Substitution into a nested `match` that is capture-avoiding. An arm whose
+ *  pattern rebinds `oldName` keeps its body. An arm that binds one of the
+ *  `introduced` names, while its body still reads `oldName`, has that binder
+ *  renamed to a fresh name first. Without the rename, the substituted
+ *  reference would resolve to the inner binder instead of the outer one. */
+function substIntoMatch(x: Expr & { kind: "match" }, oldName: string, introduced: string[],
+                        sub: (e: Expr) => Expr): Expr {
+  return { ...x, scrutinee: sub(x.scrutinee), arms: x.arms.map(a => {
+    if (patternBinds(a.pattern, oldName)) return a;
+    const readsOld = anyExpr(a.body, y => y.kind === "var" && y.name === oldName);
+    if (!readsOld || a.pattern.kind !== "ctor") return { ...a, body: sub(a.body) };
+    const binders = [...a.pattern.binders];
+    let body = a.body;
+    for (let i = 0; i < binders.length; i++) {
+      const b = binders[i];
+      if (!introduced.includes(b)) continue;
+      const fresh = freshNameWhere(b, n => isUserName(n) || introduced.includes(n) || binders.includes(n) ||
+        anyExpr(body, y => y.kind === "var" && y.name === n));
+      binders[i] = fresh;
+      body = renameFreeVar(body, b, fresh);
+    }
+    const pattern: MatchPattern = { ...a.pattern, binders };
+    return { ...a, pattern, body: sub(body) };
+  }) };
+}
+
+function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; tsType: string }[], ctorName?: string, ctorOf?: string,
+                            taken?: (name: string) => boolean): Expr {
+  const introduced = fields.map(f => matchBinder(f.name, varName, taken));
+  const fn = (x: Expr): Expr | null => {
+    if (x.kind === "lambda") return mapLambdaBody(x, varName, fn);
+    if ((x.kind === "forall" || x.kind === "exists") && x.var === varName) return x;
+    if (x.kind === "match") {
+      return substIntoMatch(x, varName, introduced, y => replaceFieldAccess(y, varName, fields, ctorName, ctorOf, taken));
+    }
     if (x.kind === "field" && x.obj.kind === "var" && x.obj.name === varName) {
       const f = fields.find(f => f.name === x.field);
-      if (f) return { kind: "var", name: matchBinder(f.name, varName) };
+      if (f) return { kind: "var", name: matchBinder(f.name, varName, taken) };
     }
     // Datatype update of the scrutinee (`{ ...vn, f: v }`): the arm knows the
     // variant, so stamp it — emitters need it for per-constructor destructor
@@ -1413,12 +1464,13 @@ function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; ts
     if (ctorName && x.kind === "record" && !x.ctor && x.spread &&
         x.spread.kind === "var" && x.spread.name === varName) {
       return { ...x, ctor: ctorName, ctorOf,
-        fields: x.fields.map(f => ({ ...f, value: replaceFieldAccess(f.value, varName, fields, ctorName, ctorOf) })) };
+        fields: x.fields.map(f => ({ ...f, value: replaceFieldAccess(f.value, varName, fields, ctorName, ctorOf, taken) })) };
     }
     // If this let shadows the matched variable, stop replacing in the body
-    if (x.kind === "let" && x.name === varName) return { ...x, value: replaceFieldAccess(x.value, varName, fields, ctorName, ctorOf) };
+    if (x.kind === "let" && x.name === varName) return { ...x, value: replaceFieldAccess(x.value, varName, fields, ctorName, ctorOf, taken) };
     return null;
-  });
+  };
+  return mapExpr(e, fn);
 }
 
 /** Replace bare `var(oldName)` references → `var(newName)` in lowered IR.
@@ -1426,12 +1478,16 @@ function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; ts
  *  scrutinee by its bare name (`content`), but in the arm body that name
  *  must refer to the variant's sole payload binder (`i_content_arr`). */
 function replaceVarInExpr(e: Expr, oldName: string, newName: string): Expr {
-  return mapExpr(e, x => {
+  const fn = (x: Expr): Expr | null => {
     if (x.kind === "var" && x.name === oldName) return { kind: "var", name: newName };
+    if (x.kind === "match") return substIntoMatch(x, oldName, [newName], y => replaceVarInExpr(y, oldName, newName));
+    if (x.kind === "lambda") return mapLambdaBody(x, oldName, fn);
     // If a binding shadows the name, stop substituting inside its body.
     if (x.kind === "let" && x.name === oldName) return { ...x, value: replaceVarInExpr(x.value, oldName, newName) };
+    if ((x.kind === "forall" || x.kind === "exists") && x.var === oldName) return x;
     return null;
-  });
+  };
+  return mapExpr(e, fn);
 }
 
 /** Structural equality on Expr access-paths (var / field chain). Enough to
