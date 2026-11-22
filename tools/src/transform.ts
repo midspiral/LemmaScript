@@ -767,6 +767,20 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         }
         return { kind: "binop", op: OP_MAP[e.op], left, right };
       }
+      // Loose equality identifies null and undefined, but neither equals a
+      // payload (including 0, false, or ""). Bind both operands before matching
+      // so even a constant result preserves evaluation and call obligations.
+      if ((e.op === "==" || e.op === "!=") && (nullishOf(e.left.ty) || nullishOf(e.right.ty))) {
+        const absentComparison = (equal: boolean): Expr => ({ kind: "bool", value: equal === (e.op === "==") });
+        return optionalOperands(e.left, e.right, binds, (left, right) =>
+          optionalCases(left, e.left.ty,
+            value => optionalCases(right, e.right.ty,
+              other => ({ kind: "binop", op: e.op === "==" ? "=" : "≠", left: value, right: other }),
+              () => absentComparison(false), optionalExprOps),
+            () => optionalCases(right, e.right.ty,
+              () => absentComparison(false), () => absentComparison(true), optionalExprOps),
+            optionalExprOps));
+      }
       // Discriminant check: x.discriminant === "foo" → x = .foo (before generic string literal comparison)
       if ((e.op === "===" || e.op === "!==") && e.left.kind === "field" && e.left.isDiscriminant && e.right.kind === "str") {
         const objTy = e.left.obj.ty.kind === "user" ? e.left.obj.ty.name : undefined;

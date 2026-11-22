@@ -104,7 +104,7 @@ export function bindPresentFact(f: PresentFact, ctx: CondCtx): PresentFact {
   return { ...f, binder: freshPathBinder(f.scrutinee, ctx)! };
 }
 
-/** Detect optional checks: `e !== undefined`, `e === undefined`, `!e`, or a
+/** Detect optional checks: strict/loose equality with null/undefined, `!e`, or a
  *  bare optional `e` — for a pure-access-path optional-typed `e`. `!e` and
  *  bare `e` are truthiness forms. `!!c` is the same check as `c`. Following
  *  TS, only pure access paths narrow; complex scrutinees return null. */
@@ -120,7 +120,7 @@ export function presentFact(cond: TExpr): PresentFact | null {
     if (hint === null) return null;
     return { scrutinee: e, innerTy, negated: true, binder: freshName(hint), truthiness: true };
   }
-  if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) {
+  if (cond.kind !== "binop" || !["!==", "===", "!=", "=="].includes(cond.op)) {
     // Bare optional truthiness: `if (e)` where e: T | undefined — true iff e is
     // present AND its inner value is truthy.
     if (cond.ty.kind === "optional") {
@@ -130,8 +130,8 @@ export function presentFact(cond: TExpr): PresentFact | null {
     }
     return null;
   }
-  // Explicit `e === undefined` / `e !== undefined` — a pure presence check,
-  // independent of the inner value (so NOT a truthiness form).
+  // Strict checks exclude one sentinel; loose checks exclude both. Neither
+  // tests the payload's truthiness, so zero/false/empty string remain present.
   let e: TExpr | null = null;
   let excluded: Nullish = "undefined";
   if (cond.right.kind === "var" && (cond.right.name === "undefined" || cond.right.name === "null")) {
@@ -141,11 +141,12 @@ export function presentFact(cond: TExpr): PresentFact | null {
     e = cond.right; excluded = cond.left.name;
   }
   if (!e || (e.ty.kind !== "optional" && e.ty.kind !== "nullish")) return null;
-  if (!includesNullish(e.ty.nullish, excluded)) return null;
+  if (cond.op === "==" || cond.op === "!=") excluded = "both";
+  if (excluded !== "both" && !includesNullish(e.ty.nullish, excluded)) return null;
   const hint = binderHintFor(e);
   if (hint === null) return null;
   return { scrutinee: e, innerTy: excludeNullish(e.ty, excluded), excluded,
-    negated: cond.op === "===", binder: freshName(hint), truthiness: false };
+    negated: cond.op === "===" || cond.op === "==", binder: freshName(hint), truthiness: false };
 }
 
 /** Which types have falsy values in JS (`0`, `""`, `false`); everything else

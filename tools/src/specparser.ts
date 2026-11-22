@@ -185,9 +185,8 @@ class Parser {
     }
     if (t?.type === "op" && ["===", "!==", "==", "!=", ">=", "<=", ">", "<"].includes(t.value)) {
       this.advance();
-      // Normalize == to ===, != to !== so downstream sees one spelling
-      const op = t.value === "==" ? "===" : t.value === "!=" ? "!==" : t.value;
-      return { kind: "binop", op, left, right: this.parseAdd() };
+      // Keep loose equality until types are known: == null also matches undefined.
+      return { kind: "binop", op: t.value, left, right: this.parseAdd() };
     }
     return left;
   }

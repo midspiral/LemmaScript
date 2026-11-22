@@ -243,7 +243,7 @@ function conditionContext(cond: TExpr, ctx: Ctx, truth: boolean): Ctx {
   const current = path.fields.length === 0 ? lookup(ctx.env, path.rootVar) ?? fact.scrutinee.ty
     : [...ctx.narrowedPaths].reverse().find(p => p.path.rootVar === path.rootVar && p.path.fields.join(".") === path.fields.join("."))?.narrowedTy ?? fact.scrutinee.ty;
   const ty = positive ? excludeNullish(current, fact.excluded ?? "both")
-    : { kind: "nullish" as const, nullish: fact.excluded ?? nullishOf(current)! };
+    : { kind: "nullish" as const, nullish: fact.excluded && fact.excluded !== "both" ? fact.excluded : nullishOf(current)! };
   return path.fields.length === 0 ? withEnv(ctx, refine(ctx.env, path.rootVar, ty))
     : { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: ty }] };
 }
@@ -1074,7 +1074,11 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       }
       if (e.op === "||") rightCtx = conditionContext(left, ctx, false);
       let right = resolveExpr(rawRight, rightCtx);
-      if (e.op === "===" || e.op === "!==") {
+      // Preserve loose nullish comparisons for narrowing and lowering. Other
+      // equality comparisons retain the existing common representation.
+      const op = (e.op === "==" || e.op === "!=") && !nullishOf(left.ty) && !nullishOf(right.ty)
+        ? e.op === "==" ? "===" : "!==" : e.op;
+      if (["===", "!==", "==", "!="].includes(op)) {
         left = coerceStr(left, right.ty, ctx.typeDecls);
         right = coerceStr(right, left.ty, ctx.typeDecls);
         // Spec (`//@`) comparisons are proof-only, so they can't diverge at
@@ -1086,7 +1090,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       let ty: Ty = { kind: "unknown" };
       // <==> is bool like the comparisons; unlike ==>, neither side narrows
       // the other (no premise to assume).
-      if (["===", "!==", ">=", "<=", ">", "<", "in", "<==>"].includes(e.op)) ty = { kind: "bool" };
+      if (["===", "!==", "==", "!=", ">=", "<=", ">", "<", "in", "<==>"].includes(op)) ty = { kind: "bool" };
       else if (e.op === "&&") ty = right.ty;
       else if (e.op === "||" && nullishOf(left.ty)) {
         ty = left.ty.kind === "optional" ? joinTypes(left.ty.inner, right.ty) : right.ty;
@@ -1102,7 +1106,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       else if (["+", "-", "*", "%"].includes(e.op)) {
         ty = (left.ty.kind === "real" || right.ty.kind === "real") ? { kind: "real" } : left.ty;
       }
-      return { kind: "binop", op: e.op, left, right, ty };
+      return { kind: "binop", op, left, right, ty };
     }
 
     case "unop": {

@@ -36,6 +36,7 @@ lean_lib Examples where
     `«conditionalCalls.def», `«conditionalCalls.proof»,
     `«optionalLookup.types», `«optionalLookup.def», `«optionalLookup.proof»,
     `«nullish.types», `«nullish.def», `«nullish.proof»,
+    `«looseNullish.types», `«looseNullish.def», `«looseNullish.proof»,
     `«iff.types», `«iff.def», `«iff.proof»,
     `«setFromArray.types», `«setFromArray.def», `«setFromArray.proof»,
     `«templateConcat.types», `«templateConcat.def», `«templateConcat.proof»,

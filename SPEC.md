@@ -70,7 +70,7 @@ implies  := or ('==>' implies)?          // right-associative
 or       := and ('||' and)*
 and      := compare ('&&' compare)*
 compare  := add (cmpOp add)?
-cmpOp    := '===' | '!==' | '>=' | '<=' | '>' | '<'
+cmpOp    := '===' | '!==' | '==' | '!=' | '>=' | '<=' | '>' | '<'
 add      := mul (('+' | '-') mul)*
 mul      := unary (('*' | '/' | '%') unary)*
 unary    := '!' unary | '-' unary | postfix
@@ -740,9 +740,10 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 **`Map.get` returns `Option`** in code context (since the key may not exist). In spec context (annotations), `map.get(k)` emits direct access without an Option wrapper, matching how specs reason about map contents.
 
-**Optional narrowing.** The optional type records whether it admits `null`, `undefined`, or both. A check removes only the tested alternative: for `x: T | null | undefined`, `x !== undefined` leaves `T | null`; checking `x !== null` as well exposes `T`. These patterns refine the appropriate scope:
+**Optional narrowing.** The optional type records whether it admits `null`, `undefined`, or both. A strict equality check removes only the tested alternative: for `x: T | null | undefined`, `x !== undefined` leaves `T | null`; checking `x !== null` as well exposes `T`. These patterns refine the appropriate scope:
 
-- Equality: `v !== undefined`, `v !== null`, and the corresponding equality checks (including early returns)
+- Strict equality: `v !== undefined`, `v !== null`, and the corresponding equality checks (including early returns)
+- Loose equality: JavaScript's `==` treats `null` and `undefined` as equal, while `===` distinguishes them. `v == null` checks whether `v` is `null` or `undefined`; `v != null` checks that it is neither. Using `undefined` instead of `null`, or reversing the operands, gives the same result. These rules also apply in annotations ([example](examples/looseNullish.ts)).
 - Truthiness: `if (v)`, `if (!v)`, `opt ? a : b`
 - Composition: `v && rest` or `rest && v` (optional check on either side) — in an `if`/`?:` condition or as a bare statement (`v !== undefined && v.f()`, the `if`-less guard idiom)
 - Disjunctive early return: `a === undefined || b === undefined`, `!x || x.f !== v`, `x?.t !== 'm' || x.g`
