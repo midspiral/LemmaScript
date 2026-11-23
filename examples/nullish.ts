@@ -76,3 +76,36 @@ export function lookupNullable(m: Map<string, number | null>, key: string): numb
   //@ ensures m.has(key) ==> \result === m.get(key)
   return m.get(key);
 }
+
+export function notNull(x: number | null | undefined): boolean {
+  //@ ensures \result === (x !== null)
+  return !(x === null);
+}
+
+export function gatedNull(x: Map<number, number> | null | undefined, enabled: boolean): boolean {
+  //@ ensures \result === (enabled && x === null)
+  return enabled && x === null;
+}
+
+export function filterAbsent(xs: (number | null | undefined)[], keepAll: boolean): (number | null | undefined)[] {
+  //@ ensures \result.length <= xs.length
+  return xs.filter(x => keepAll || x === undefined);
+}
+
+export function guardedIdentity(x: number | undefined, enabled: boolean): number | undefined {
+  //@ ensures \result === x
+  if (x !== undefined && enabled) { return x; } else { return x; }
+}
+
+export function keepDefined(xs: (number | null | undefined)[]): (number | null)[] {
+  //@ ensures \result.length <= xs.length
+  return xs.filter(x => x !== undefined);
+}
+
+export function overwriteOptional(init: number | undefined, other: number | undefined): number | undefined {
+  //@ ensures \result === other
+  let value = init;
+  if (value === undefined) { value = other; return value; }
+  value = other;
+  return value;
+}

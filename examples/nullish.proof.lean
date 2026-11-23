@@ -42,6 +42,25 @@ prove_correct classifyMethod by
 prove_correct lookupNullable by
   velvet_vcgen [lookupNullable] with finish [Pure.lookupNullable]
 
+prove_correct notNull by
+  velvet_vcgen [notNull] with finish [Pure.notNull]
+
+prove_correct gatedNull by
+  velvet_vcgen [gatedNull] with finish [Pure.gatedNull]
+
+prove_correct filterAbsent by
+  velvet_vcgen [filterAbsent] with finish [Pure.filterAbsent]
+
+prove_correct guardedIdentity by
+  velvet_vcgen [guardedIdentity] with
+    (expose_names; tactic => cases x <;> simp_all [Pure.guardedIdentity])
+
+prove_correct keepDefined by
+  velvet_vcgen [keepDefined] with finish [Pure.keepDefined, Array.size_filterMap_le]
+
+prove_correct overwriteOptional by
+  velvet_vcgen [overwriteOptional] with finish
+
 example : Pure.classify .Undefined = 1 := by decide
 example : Pure.classify .Null = 2 := by decide
 example : Pure.classify (.Value 9) = 9 := by decide
@@ -65,3 +84,18 @@ example : Pure.widenUndefined none = .Undefined := by decide
 example : Pure.widenUndefined (some 0) = .Value 0 := by decide
 example : Pure.widenNull none = .Null := by decide
 example : Pure.widenNull (some 0) = .Value 0 := by decide
+
+example : Pure.notNull .Null = false := by decide
+example : Pure.notNull .Undefined = true := by decide
+example : Pure.notNull (.Value 7) = true := by decide
+example : Pure.gatedNull .Null true = true := by decide
+example : Pure.gatedNull .Null false = false := by decide
+example : Pure.gatedNull .Undefined true = false := by decide
+example : Pure.gatedNull (.Value (∅ : Std.HashMap Int Int)) true = false := by decide
+example : Pure.filterAbsent #[.Null, .Undefined, .Value 7] false = #[.Undefined] := by decide
+example : Pure.filterAbsent #[.Null, .Undefined, .Value 7] true = #[.Null, .Undefined, .Value 7] := by decide
+example : Pure.guardedIdentity none false = none := by decide
+example : Pure.guardedIdentity none true = none := by decide
+example : Pure.guardedIdentity (some 7) false = some 7 := by decide
+example : Pure.guardedIdentity (some 7) true = some 7 := by decide
+example : Pure.keepDefined #[.Undefined, .Null, .Value 7] = #[none, some 7] := by decide

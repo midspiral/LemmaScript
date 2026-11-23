@@ -17,8 +17,8 @@ def classify (x : LemmaScript.Nullish Int) : Int :=
 
 def reverse (x : LemmaScript.Nullish Int) : Int :=
   match x with
-  | .Value _value8 =>
-    _value8
+  | .Value _value14 =>
+    _value14
   | .Null =>
     2
   | .Undefined =>
@@ -26,8 +26,8 @@ def reverse (x : LemmaScript.Nullish Int) : Int :=
 
 def disjunction (x : LemmaScript.Nullish Int) : Int :=
   match x with
-  | .Value _value16 =>
-    _value16
+  | .Value _value28 =>
+    _value28
   | .Null =>
     0
   | .Undefined =>
@@ -35,8 +35,8 @@ def disjunction (x : LemmaScript.Nullish Int) : Int :=
 
 def retainNull (x : LemmaScript.Nullish Int) : Option Int :=
   match x with
-  | .Value _value23 =>
-    let _x_val : Option Int := Option.some _value23
+  | .Value _value35 =>
+    let _x_val : Option Int := Option.some _value35
     _x_val
   | .Null =>
     let _x_val : Option Int := Option.none
@@ -46,8 +46,8 @@ def retainNull (x : LemmaScript.Nullish Int) : Option Int :=
 
 def retainUndefined (x : LemmaScript.Nullish Int) : Option Int :=
   match x with
-  | .Value _value27 =>
-    let _x_val : Option Int := Option.some _value27
+  | .Value _value39 =>
+    let _x_val : Option Int := Option.some _value39
     _x_val
   | .Null =>
     none
@@ -57,8 +57,8 @@ def retainUndefined (x : LemmaScript.Nullish Int) : Option Int :=
 
 def positive (x : LemmaScript.Nullish Int) : Bool :=
   match x with
-  | .Value _value31 =>
-    _value31 > 0
+  | .Value _value43 =>
+    _value43 > 0
   | .Null =>
     false
   | .Undefined =>
@@ -66,42 +66,76 @@ def positive (x : LemmaScript.Nullish Int) : Bool :=
 
 def absentOrPositive (x : LemmaScript.Nullish Int) : Bool :=
   match x with
-  | .Value _value41 =>
-    _value41 > 0
+  | .Value _value53 =>
+    _value53 > 0
   | .Null =>
     true
   | .Undefined =>
     true
 
 def isUndefined (x : LemmaScript.Nullish Int) : Bool :=
-  x = LemmaScript.Nullish.Undefined
+  match x with
+  | .Value _ =>
+    false
+  | .Null =>
+    false
+  | .Undefined =>
+    true
 
 def isNull (x : LemmaScript.Nullish Int) : Bool :=
-  x = LemmaScript.Nullish.Null
+  match x with
+  | .Value _ =>
+    false
+  | .Null =>
+    true
+  | .Undefined =>
+    false
 
 def widenUndefined (x : Option Int) : LemmaScript.Nullish Int :=
   match x with
-  | .some _optional51 =>
-    LemmaScript.Nullish.Value _optional51
+  | .some _optional75 =>
+    LemmaScript.Nullish.Value _optional75
   | .none =>
     LemmaScript.Nullish.Undefined
 
 def widenNull (x : Option Int) : LemmaScript.Nullish Int :=
   match x with
-  | .some _optional53 =>
-    LemmaScript.Nullish.Value _optional53
+  | .some _optional77 =>
+    LemmaScript.Nullish.Value _optional77
   | .none =>
     LemmaScript.Nullish.Null
 
 def lookupNullable (m : Std.HashMap String (Option Int)) (key : String) : LemmaScript.Nullish Int :=
   if m.contains key then
-    let _optional55 := m[key]!
-    match _optional55 with
-    | .some _optional56 =>
-      LemmaScript.Nullish.Value _optional56
+    let _optional79 := m[key]!
+    match _optional79 with
+    | .some _optional80 =>
+      LemmaScript.Nullish.Value _optional80
     | .none =>
       LemmaScript.Nullish.Null
   else
     LemmaScript.Nullish.Undefined
+
+def notNull (x : LemmaScript.Nullish Int) : Bool :=
+  !((match x with | .Value _ => false | .Null => true | .Undefined => false))
+
+def gatedNull (x : LemmaScript.Nullish (Std.HashMap Int Int)) (enabled : Bool) : Bool :=
+  enabled && (match x with | .Value _ => false | .Null => true | .Undefined => false)
+
+def filterAbsent (xs : Array (LemmaScript.Nullish Int)) (keepAll : Bool) : Array (LemmaScript.Nullish Int) :=
+  xs.filter (fun x => keepAll || (match x with | .Value _ => false | .Null => false | .Undefined => true))
+
+def guardedIdentity (x : Option Int) (enabled : Bool) : Option Int :=
+  match x with
+  | .some _x_val =>
+    if enabled then
+      some _x_val
+    else
+      Option.some _x_val
+  | .none =>
+    Option.none
+
+def keepDefined (xs : Array (LemmaScript.Nullish Int)) : Array (Option Int) :=
+  xs.filterMap (fun _optional101 => (match _optional101 with | .Value _value102 => Option.some (Option.some _value102) | .Null => Option.some Option.none | .Undefined => Option.none))
 
 end Pure

@@ -753,7 +753,7 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 - Optional chaining: `obj?.field`, `obj?.foo()`, `obj?.[i]`, chained `obj?.a?.b?.c` and `obj?.a.b.c`
 - Nullish coalescing: `x ?? default`; array index `arr[i] ?? default` (undefined ⟺ out of bounds under `noUncheckedIndexedAccess`) → `(0 <= i && i < arr.length) ? arr[i] : default`
 
-The narrow pass (`narrow.ts`) records the excluded nullish alternatives in `someMatch`; its branch binder can remain optional. Transform performs the representation conversion in that branch. `??` excludes both alternatives, while optional chaining produces `undefined` on short circuit and preserves nullish values returned by the selected field or call.
+Assignments use the declared slot type and end refinements of the assigned path and its descendants. Loops discard incoming refinements for paths they may write. The narrow pass (`narrow.ts`) records the excluded alternatives in `someMatch`; its binder can remain optional. Transform converts branch values to each read's resolved type without retyping the read. `??` excludes both alternatives, while optional chaining produces `undefined` on short circuit and preserves nullish values returned by the selected field or call.
 
 Following TS, the equality/truthiness/`&&`/`||`/`==>` patterns fire only for pure access paths (`x`, `obj.field`, `a.b.c.d`); method-call results must be bound first (`const v = m.get(k); if (v !== undefined) ...`). The `obj?.<chain>` and `x ?? d` forms are exceptions: extract emits dedicated single-evaluation IR nodes (`optChain`, `nullish`), so any expression on the left is allowed.
 

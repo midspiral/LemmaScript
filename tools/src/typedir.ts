@@ -86,8 +86,10 @@ export type TChainStep =
 
 // ── Expressions ──────────────────────────────────────────────
 
+/** Reads carry their storage version so lowering cannot reuse a guard's
+ * captured value after a write. An omitted version is the initial value. */
 export type TExpr =
-  | { kind: "var"; name: string; ty: Ty }
+  | { kind: "var"; name: string; ty: Ty; valueVersion?: number }
   | { kind: "num"; value: number; ty: Ty }
   | { kind: "bigint"; value: string; ty: Ty }   // exact integer, canonical decimal
   | { kind: "str"; value: string; ty: Ty }
@@ -105,7 +107,7 @@ export type TExpr =
       /** Payload of the binary option returned by a collection helper, before flattening. */
       optionalReturn?: Ty }
   | { kind: "index"; obj: TExpr; idx: TExpr; ty: Ty; optionalReturn?: Ty; safeAccess?: true }
-  | { kind: "field"; obj: TExpr; field: string; ty: Ty;
+  | { kind: "field"; obj: TExpr; field: string; ty: Ty; valueVersion?: number;
       isDiscriminant?: boolean;             // true if this is a discriminant field access
       ofVariant?: string }                  // which union variant the field is read from, when narrowing determined it
   | { kind: "record"; spread: TExpr | null; fields: { name: string; value: TExpr }[]; ty: Ty }

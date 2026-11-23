@@ -16,11 +16,14 @@ import { freshName } from "./names.js";
 import { recognizeBuiltin, builtinSpec, callbackArgumentTypes, callbackBaseArity } from "./builtins.js";
 import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName } from "./typedecls.js";
 import { presentFact, variantFact } from "./condition-facts.js";
+import { accessPath, samePath as accessPathsEqual, containsPath, targetPath, type AccessPath } from "./access-path.js";
+import { continuationWrites, loopWrites } from "./write-effects.js";
 
 // ── Environment ──────────────────────────────────────────────
 
 interface Env {
   name: string;
+  /** Storage type; flow refinements apply only to reads in Ctx. */
   ty: Ty;
   parent: Env | null;
   /** Callback bindings are lexical, so a nested declaration shadows them in
@@ -45,44 +48,7 @@ function lookup(env: Env | null, name: string): Ty | undefined {
 function extend(env: Env | null, name: string, ty: Ty): Env {
   return { name, ty, parent: env };
 }
-/** Shadow a binding with a narrowed type, keeping its callback state.
- *  Dropping that state would let the body reference a renamed parameter by its
- *  source name, which can silently bind an outer variable. The spread is exact
- *  because refine always follows a read of the same variable, and that read is
- *  what sets `emittedName`; the `argumentPack`/`value` getters are evaluated
- *  once, but they belong to rest and beyond-arity frames, whose types (`unknown`,
- *  `void`) are never narrowed. */
-function refine(env: Env | null, name: string, ty: Ty): Env {
-  let entry = binding(env, name);
-  if (!entry) for (let e = env; e; e = e.parent) {
-    if (e.emittedName === name) { entry = e; break; }
-  }
-  return { ...entry, name: entry?.name ?? name, ty, parent: env };
-}
-// ── Access paths ─────────────────────────────────────────────
-
-/** Pure access path — a chain of field accesses rooted at a variable.
- *  E.g. `a.b.c` → { rootVar: "a", fields: ["b", "c"] }. Empty fields
- *  means the path is just the var itself. */
-interface AccessPath {
-  rootVar: string;
-  fields: string[];
-}
-
-function asRawAccessPath(e: RawExpr): AccessPath | null {
-  if (e.kind === "var") return { rootVar: e.name, fields: [] };
-  if (e.kind === "field") {
-    const inner = asRawAccessPath(e.obj);
-    if (!inner) return null;
-    return { rootVar: inner.rootVar, fields: [...inner.fields, e.field] };
-  }
-  return null;
-}
-
-function accessPathsEqual(a: AccessPath, b: AccessPath): boolean {
-  return a.rootVar === b.rootVar && a.fields.length === b.fields.length &&
-    a.fields.every((f, i) => f === b.fields[i]);
-}
+const asTExprAccessPath = accessPath;
 
 // ── Context ──────────────────────────────────────────────────
 
@@ -125,13 +91,31 @@ interface Ctx {
   narrowedPaths: NarrowedPath[];  // pure access path narrowing for conditional then-branches
   narrowedIndices: NarrowedIndex[];  // `k in m` atoms known-true in this scope
   safeSpecAccesses?: NarrowedIndex[];  // lookup domains established within a specification
+  writes?: { path: AccessPath; version: number }[];
+}
+
+let nextValueVersion = 1;
+
+function invalidateWrites(ctx: Ctx, paths: AccessPath[]): Ctx {
+  if (!paths.length) return ctx;
+  paths = paths.map(path => ({ ...path, rootVar: binding(ctx.env, path.rootVar)?.emittedName ?? path.rootVar }));
+  const clobbered = (path: AccessPath) => paths.some(write => containsPath(write, path));
+  const indexSurvives = (a: NarrowedIndex) => !clobbered(a.obj) && !clobbered(a.idx);
+  return { ...ctx,
+    narrowedPaths: ctx.narrowedPaths.filter(p => !clobbered(p.path)),
+    narrowedIndices: ctx.narrowedIndices.filter(indexSurvives),
+    safeSpecAccesses: ctx.safeSpecAccesses?.filter(indexSurvives),
+    writes: [...(ctx.writes ?? []), ...paths.map(path => ({ path, version: nextValueVersion++ }))],
+  };
 }
 
 function withEnv(ctx: Ctx, env: Env | null): Ctx {
-  if (!ctx.safeSpecAccesses?.length) return { ...ctx, env };
   const rebound = new Set<string>();
   for (let entry = env; entry && entry !== ctx.env; entry = entry.parent) rebound.add(entry.name);
-  return { ...ctx, env, safeSpecAccesses: ctx.safeSpecAccesses?.filter(
+  return { ...ctx, env,
+    narrowedPaths: ctx.narrowedPaths.filter(p => !rebound.has(p.path.rootVar)),
+    writes: ctx.writes?.filter(w => !rebound.has(w.path.rootVar)),
+    safeSpecAccesses: ctx.safeSpecAccesses?.filter(
     a => !rebound.has(a.obj.rootVar) && !rebound.has(a.idx.rootVar)) };
 }
 
@@ -240,12 +224,10 @@ function conditionContext(cond: TExpr, ctx: Ctx, truth: boolean): Ctx {
   if (!positive && fact.truthiness) return ctx;
   const path = asTExprAccessPath(fact.scrutinee);
   if (!path) return ctx;
-  const current = path.fields.length === 0 ? lookup(ctx.env, path.rootVar) ?? fact.scrutinee.ty
-    : [...ctx.narrowedPaths].reverse().find(p => p.path.rootVar === path.rootVar && p.path.fields.join(".") === path.fields.join("."))?.narrowedTy ?? fact.scrutinee.ty;
+  const current = [...ctx.narrowedPaths].reverse().find(p => accessPathsEqual(p.path, path))?.narrowedTy ?? fact.scrutinee.ty;
   const ty = positive ? excludeNullish(current, fact.excluded ?? "both")
     : { kind: "nullish" as const, nullish: fact.excluded && fact.excluded !== "both" ? fact.excluded : nullishOf(current)! };
-  return path.fields.length === 0 ? withEnv(ctx, refine(ctx.env, path.rootVar, ty))
-    : { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: ty }] };
+  return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: ty }] };
 }
 
 /** Negated discriminant check (`path.kind !== "lit"`) on a var or field path.
@@ -256,18 +238,6 @@ function negatedVariantCheck(cond: TExpr): NarrowedPath | null {
       cond.left.kind === "field" && cond.left.isDiscriminant && cond.left.obj.ty.kind === "user") {
     const path = asTExprAccessPath(cond.left.obj);
     if (path) return { path, narrowedTy: cond.left.obj.ty, variant: cond.right.value };
-  }
-  return null;
-}
-
-/** TExpr → AccessPath. Counterpart to `asRawAccessPath` for resolved trees.
- *  Used by `extractInAtoms` when pulling atoms out of typed spec expressions. */
-function asTExprAccessPath(e: TExpr): AccessPath | null {
-  if (e.kind === "var") return { rootVar: e.name, fields: [] };
-  if (e.kind === "field") {
-    const inner = asTExprAccessPath(e.obj);
-    if (!inner) return null;
-    return { rootVar: inner.rootVar, fields: [...inner.fields, e.field] };
   }
   return null;
 }
@@ -340,8 +310,8 @@ function withInAtoms(ctx: Ctx, atoms: NarrowedIndex[]): Ctx {
  *  condition, returning a Ctx with all narrowings applied. Earlier checks
  *  are in scope for later checks (the right conjunct was already resolved
  *  under the left's narrowings by the `&&` case of resolveExpr). Consults
- *  the shared condition analyzer (§4): a positive presence fact on a bare
- *  var extends the env; on a pure field path it extends `narrowedPaths`. */
+ *  the shared condition analyzer (§4). Variables and field paths use the
+ *  same refinement context; their declared storage types stay unchanged. */
 function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
   if (cond.kind === "binop" && cond.op === "&&") {
     const leftCtx = collectAndChainNarrowings(cond.left, ctx);
@@ -349,9 +319,6 @@ function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
   }
   const f = presentFact(cond);
   if (f && !f.negated) {
-    if (f.scrutinee.kind === "var") {
-      return withEnv(ctx, refine(ctx.env, f.scrutinee.name, f.innerTy));
-    }
     const path = asTExprAccessPath(f.scrutinee);
     if (path) {
       return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: f.innerTy }] };
@@ -721,7 +688,7 @@ function resolveCallback(e: Extract<RawExpr, { kind: "lambda" }>, actual: Ty[], 
       // their order. Resolution is synchronous, so this local collector also
       // sees reads through nested lambdas without threading capture maps in Ctx.
       captures = p.defaultValue!.kind === "lambda" ? new Set<number>() : undefined;
-      let init = resolveExpr(p.defaultValue!, { ...ctx, env, inLambda: true });
+      let init = resolveExpr(p.defaultValue!, { ...withEnv(ctx, env), inLambda: true });
       if (defaults[i] === "optional") {
         const arg = read(i);
         const presentTy = excludeNullish(arg.ty, "undefined");
@@ -755,7 +722,7 @@ function resolveCallback(e: Extract<RawExpr, { kind: "lambda" }>, actual: Ty[], 
   // than silently capturing an unrelated outer binding. No source call moves.
   for (const [i, p] of pending) emit(i, p.init);
   const returnTy: Ty = e.returnTsType ? parseTsType(e.returnTsType) : { kind: "unknown" };
-  const lambdaCtx = { ...ctx, env, inLambda: true, returnTy };
+  const lambdaCtx = { ...withEnv(ctx, env), inLambda: true, returnTy };
   const body = [...prefix, ...(Array.isArray(e.body) ? resolveBlock(e.body, lambdaCtx)
     : [{ kind: "return" as const, value: resolveExpr(e.body, lambdaCtx) }])];
   const arity = Math.max(baseArity, used.lastIndexOf(true) + 1);
@@ -1022,6 +989,16 @@ function resolveConstEnumMember(obj: RawExpr, name: string, ctx: Ctx): TExpr | u
 
 function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
   const expr = resolveExprInner(e, ctx);
+  if ((e.kind === "var" || e.kind === "field" || e.kind === "result") &&
+      (expr.kind === "var" || expr.kind === "field")) {
+    const path = accessPath(expr);
+    if (path) {
+      const refinement = [...ctx.narrowedPaths].reverse().find(p => accessPathsEqual(p.path, path));
+      const version = [...(ctx.writes ?? [])].reverse().find(w => containsPath(w.path, path))?.version;
+      return { ...expr, ty: numericValueType(refinement?.narrowedTy ?? expr.ty, ctx.typeDecls),
+        ...(version ? { valueVersion: version } : {}) };
+    }
+  }
   return { ...expr, ty: numericValueType(expr.ty, ctx.typeDecls) };
 }
 
@@ -1295,23 +1272,12 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       let isDiscriminant = false;
       let ty: Ty = { kind: "unknown" };
 
-      // Check narrowed path context (from conditional optional checks).
-      // Applies when the current field-access forms a pure access path AND
-      // that path is in the narrowedPaths list.
-      if (ctx.narrowedPaths.length > 0) {
-        const myPath = asRawAccessPath(e);
-        if (myPath) {
-          const np = ctx.narrowedPaths.find(n => accessPathsEqual(n.path, myPath));
-          if (np) ty = np.narrowedTy;
-        }
-      }
-
       // A variant narrowing on the object picks the field's type from that
       // variant (a shared field name can have a different type per variant).
       let ofVariant: string | undefined;
       if (ty.kind === "unknown" && ctx.narrowedPaths.length > 0 && obj.ty.kind === "user") {
-        const objPath = asRawAccessPath(e.obj);
-        const np = objPath ? ctx.narrowedPaths.find(n => n.variant && accessPathsEqual(n.path, objPath)) : undefined;
+        const objPath = accessPath(obj);
+        const np = objPath ? [...ctx.narrowedPaths].reverse().find(n => n.variant && accessPathsEqual(n.path, objPath)) : undefined;
         if (np?.variant) {
           const decl = findDecl(ctx, tyBaseName(obj.ty.name));
           const f = decl?.variants?.find(v => v.name === np.variant)?.fields.find(f => f.name === e.field);
@@ -1633,14 +1599,10 @@ function splitConj(e: RawExpr): RawExpr[] {
 
 function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
   const result: TStmt[] = [];
-  let env = ctx.env;
-  let narrowedIndices = ctx.narrowedIndices;
-  let narrowedPaths = ctx.narrowedPaths;
   for (const s of stmts) {
-    const currentCtx = { ...ctx, env, narrowedIndices, narrowedPaths };
-    const [typed, nextEnv] = resolveStmt(s, currentCtx);
+    const [typed, nextEnv] = resolveStmt(s, ctx);
     result.push(typed);
-    env = nextEnv;
+    ctx = invalidateWrites(withEnv(ctx, nextEnv), continuationWrites(s));
     // Flow narrowing: if (x === undefined) { return } narrows x for rest of block.
     // Also handles compound: if (x === undefined || y === undefined) { return }
     // Any terminator counts (return/throw/break/continue — same set as narrow's
@@ -1649,17 +1611,15 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     // Field-path refinements are materialized as branch-local bindings by transform.
     if (s.kind === "if" && s.then.length > 0 && isTerminatorKind(s.then[s.then.length - 1].kind) && s.else.length === 0) {
       if (typed.kind === "if") {
-        const refined = conditionContext(typed.cond, { ...currentCtx, env, narrowedPaths }, false);
-        env = refined.env;
-        narrowedPaths = refined.narrowedPaths;
+        ctx = conditionContext(typed.cond, ctx, false);
         const nv = negatedVariantCheck(typed.cond);
-        if (nv) narrowedPaths = [...narrowedPaths, nv];
+        if (nv) ctx = { ...ctx, narrowedPaths: [...ctx.narrowedPaths, nv] };
       }
       // Map-index narrowing: `if (!(k in m)) return;` means `k in m` holds in rest.
       if (typed.kind === "if") {
         const addedAtoms = extractInAtomsNegated(typed.cond);
         if (addedAtoms.length > 0) {
-          narrowedIndices = withInAtoms({ ...ctx, narrowedIndices }, addedAtoms).narrowedIndices;
+          ctx = withInAtoms(ctx, addedAtoms);
         }
       }
     }
@@ -1667,7 +1627,7 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     if (typed.kind === "assert") {
       const addedAtoms = extractInAtoms(typed.expr);
       if (addedAtoms.length > 0) {
-        narrowedIndices = withInAtoms({ ...ctx, narrowedIndices }, addedAtoms).narrowedIndices;
+        ctx = withInAtoms(ctx, addedAtoms);
       }
     }
   }
@@ -1678,7 +1638,8 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
   switch (s.kind) {
     case "let": {
       // No source annotation → infer type from initializer (resolved first).
-      if (s.tsType === null) {
+      const typeText = s.tsType ?? s.inferredTsType;
+      if (!typeText) {
         const init = resolveExpr(s.init, ctx);
         const ty = init.ty;
         const mutable = s.mutable || isRefMutableInTS(ty);
@@ -1687,7 +1648,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // expandAlias unwraps an array/collection alias (`type Board = number[]`)
       // to its underlying type, so array methods / index-assignment on the
       // local dispatch correctly (params get the same treatment, see makeParams).
-      const declTy = expandAlias(resolveTsType(s.tsType, ctx.overrides, s.name), ctx.typeDecls);
+      let declTy = expandAlias(resolveTsType(typeText, ctx.overrides, s.name), ctx.typeDecls);
       // Propagate declared type as returnTy so nested record expressions resolve
       // union variants correctly (e.g., EffectState → mode: EffectMode → { kind:
       // 'Idle' }). Arrays too, so `const xs: Foo[] = [{...}]` threads the element
@@ -1697,6 +1658,10 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       const initCtx = (declTy.kind === "user" || declTy.kind === "array" || declTy.kind === "optional")
         ? { ...ctx, returnTy: declTy } : ctx;
       let init = coerceStr(resolveExpr(s.init, initCtx), declTy, ctx.typeDecls);
+      // A checker-inferred predicate can narrow find/filter beyond the
+      // modeled call signature. Infer a slot that admits both types; only an
+      // explicit annotation or override constrains the initializer.
+      if (!s.tsType && !ctx.overrides.has(s.name)) declTy = joinTypes(declTy, init.ty);
       // Under noUncheckedIndexedAccess, TS gives `const e = arr[i]` type T | undefined
       // while the index expression itself resolves to T. Leave that mismatch intact:
       // narrow.ts's ruleOptionalIndexBinding adds the runtime bounds guard and the
@@ -1738,7 +1703,9 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         throw new Error(`assignment to callback binding '${s.target}' requires materializing its argument value`);
       }
       entry?.onRead?.();
-      const targetTy = lookup(ctx.env, s.target) ?? { kind: "unknown" as const };
+      const path = targetPath(s.target);
+      let targetTy = lookup(ctx.env, path.rootVar) ?? { kind: "unknown" as const };
+      for (const field of path.fields) targetTy = lookupFieldTy(targetTy, field, ctx).ty;
       // Propagate the target's type as returnTy, mirroring the annotated-let
       // case, so record/union literals and array literals in the RHS resolve
       // to their named datatypes.
@@ -1779,6 +1746,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     }
 
     case "while": {
+      ctx = invalidateWrites(ctx, loopWrites(s.body));
       const whileSpecCtx = { ...ctx, inSpec: true };
       const resolvedInvariants = resolveSpecs(s.invariants, whileSpecCtx);
       // Invariants hold at the top of the body, so any `k in m` atoms among them
@@ -1796,6 +1764,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
 
     case "forof": {
       const iterable = resolveExpr(s.iterable, ctx);
+      ctx = invalidateWrites(ctx, loopWrites(s.body));
       // Determine element types for each destructured name
       const nameTypes: Ty[] = [];
       let env = ctx.env;
@@ -2115,6 +2084,7 @@ function precomputeFieldTypesInner(typeDecls: TypeDeclInfo[]) {
 }
 
 export function resolveModule(raw: RawModule): TModule {
+  nextValueVersion = 1;
   callbackCounter = 0;
   mergeBinder = 0;
   _warnedRefEq.clear();

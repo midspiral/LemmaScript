@@ -8,6 +8,7 @@
 import type { TExpr, TStmt, TModule, Ty } from "./typedir.js";
 import { isBigInt, tyEqual } from "./typedir.js";
 import { nullishOf, includesNullish, joinTypes } from "./nullish.js";
+import { accessPath as asTAccessPath, samePath, type AccessPath } from "./access-path.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
 import { needsOptionalTypeHint, anyExpr, anyExprInStmts, usesName, usesNameInStmts, bindsNameInStmts, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
@@ -562,7 +563,23 @@ function bindOptionalStmts(b: ReturnType<typeof optionalBranch>, body: Stmt[]): 
 function optionalBranch(e: OptionalMatch, actual: Expr, actualTy: Ty, positive: boolean) {
   const binderTy = positive ? e.binderTy : actualTy;
   const binder = positive ? e.binder : optionalBinder();
-  return { binder, binderTy, path: asTAccessPath(e.scrutinee), value: convertOptional(actual, actualTy, binderTy) };
+  const version = e.scrutinee.kind === "var" || e.scrutinee.kind === "field" ? e.scrutinee.valueVersion : undefined;
+  return { binder, binderTy, path: asTAccessPath(e.scrutinee), version, value: convertOptional(actual, actualTy, binderTy) };
+}
+
+/** A guard supplies a representation for a particular read, not a new type
+ * for every occurrence of its source name. Keep the resolved tree intact;
+ * conversions at reads preserve types even when a branch is duplicated. */
+let optionalBindings: ReturnType<typeof optionalBranch>[] = [];
+function withOptionalBinding<R>(binding: ReturnType<typeof optionalBranch>, lower: () => R): R {
+  optionalBindings.push(binding);
+  try { return lower(); } finally { optionalBindings.pop(); }
+}
+
+function withoutOptionalBindings<R>(names: string[], lower: () => R): R {
+  const outer = optionalBindings;
+  optionalBindings = outer.filter(b => !b.path || !names.includes(b.path.rootVar));
+  try { return lower(); } finally { optionalBindings = outer; }
 }
 
 function lowerOptionalMatch(e: Extract<TExpr, { kind: "someMatch" }>, binds: Stmt[] | null): Expr {
@@ -571,9 +588,8 @@ function lowerOptionalMatch(e: Extract<TExpr, { kind: "someMatch" }>, binds: Stm
   const lower = (actual: Expr, actualTy: Ty, positive: boolean): Branch => {
     const b = optionalBranch(e, actual, actualTy, positive);
     const body = positive ? e.someBody : e.noneBody;
-    const replaced = b.path ? replacePathInTExpr(body, b.path, b.binder, b.binderTy) : body;
     const local: Stmt[] | null = binds ? [] : null;
-    const result = convertOptional(lowerExpr(replaced, local), replaced.ty, e.ty);
+    const result = withOptionalBinding(b, () => convertOptional(lowerExpr(body, local), body.ty, e.ty));
     return { expr: bindOptionalExpr(b, result), hasEffects: !!local?.length,
       assign: target => bindOptionalStmts(b, [...(local ?? []), { kind: "assign", target, value: result }]) };
   };
@@ -611,14 +627,13 @@ function lowerOptionalStmts(s: Extract<TStmt, { kind: "someMatch" }>, rest: TStm
   const branch = (actual: Expr, ty: Ty, positive: boolean) => {
     const b = optionalBranch(s, actual, ty, positive);
     const body = positive ? s.someBody : s.noneBody;
-    const replaced = b.path ? replacePathInTStmts(body, b.path, b.binder, b.binderTy) : body;
-    return { ...b, body: [...replaced, ...rest] };
+    return { ...b, body: [...body, ...rest] };
   };
   const scrutinee = transformExpr(s.scrutinee);
   if (!pure) {
     const lower = (actual: Expr, ty: Ty, positive: boolean): Stmt[] => {
       const b = branch(actual, ty, positive);
-      return bindOptionalStmts(b, transformStmts(b.body, typeDecls));
+      return bindOptionalStmts(b, withOptionalBinding(b, () => transformStmts(b.body, typeDecls)));
     };
     return refinementCases(scrutinee, s, (v, ty) => lower(v, ty, true),
       tag => lower(unit(), { kind: "nullish", nullish: tag }, !includesNullish(s.excluded ?? "both", tag)), optionalStmtOps);
@@ -626,7 +641,7 @@ function lowerOptionalStmts(s: Extract<TStmt, { kind: "someMatch" }>, rest: TStm
   let failed = false;
   const lower = (actual: Expr, ty: Ty, positive: boolean): Expr => {
     const b = branch(actual, ty, positive);
-    const body = transformPureBody(b.body, typeDecls);
+    const body = withOptionalBinding(b, () => transformPureBody(b.body, typeDecls));
     if (!body) failed = true;
     return bindOptionalExpr(b, body ?? unit());
   };
@@ -697,6 +712,12 @@ function lowerMinMaxSequence(e: TExpr, real: boolean, binds: Stmt[] | null): Exp
 }
 
 function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
+  if (e.kind === "var" || e.kind === "field") {
+    const path = asTAccessPath(e);
+    const binding = path && [...optionalBindings].reverse().find(b => b.path &&
+      samePath(b.path, path) && b.version === e.valueVersion);
+    if (binding) return convertOptional(varE(binding.binder), binding.binderTy, e.ty);
+  }
   // Lean spreads are checked Option operations. Lift even a syntactically pure
   // call so total correctness requires the combined array to be nonempty.
   if (_opts.backend === "lean" && e.kind === "call" && e.fn.kind === "var" &&
@@ -872,6 +893,18 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         }
       }
       if ((e.op === "===" || e.op === "!==") && (nullishOf(e.left.ty) || nullishOf(e.right.ty))) {
+        // Constructor tests need no equality operation on the payload. Lean
+        // cannot decide equality of, for example, a Map-valued payload.
+        const singleton = (ty: Ty) => ty.kind === "nullish" && ty.nullish !== "both";
+        if (_opts.backend === "lean" && (singleton(e.left.ty) || singleton(e.right.ty))) {
+          const sentinelOnLeft = singleton(e.left.ty);
+          const sentinel = sentinelOnLeft ? e.left : e.right;
+          const tested = sentinelOnLeft ? e.right : e.left;
+          const answer = (equal: boolean): Expr => ({ kind: "bool", value: equal === (e.op === "===") });
+          return optionalOperands(e.left, e.right, binds, (left, right) =>
+            optionalCases(sentinelOnLeft ? right : left, tested.ty,
+              () => answer(false), tag => answer(tag === nullishOf(sentinel.ty)), optionalExprOps));
+        }
         const ty = joinTypes(e.left.ty, e.right.ty);
         return { kind: "binop", op: e.op === "===" ? "=" : "≠",
           left: convertOptional(lowerExpr(e.left, binds), e.left.ty, ty),
@@ -1254,6 +1287,20 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.fn.kind === "field") {
         const recv = lowerExpr(e.fn.obj, binds);
         let method = e.fn.field;
+        // A three-case defined-filter produces Option<T> elements. Express
+        // its representation change as a total filterMap callback, keeping
+        // the collection helper independent of the nullish datatype.
+        if (method === "filterSome" && e.fn.obj.ty.kind === "array" &&
+            e.fn.obj.ty.elem.kind === "optional" && e.fn.obj.ty.elem.nullish === "both" && e.ty.kind === "array") {
+          const source = e.fn.obj.ty.elem;
+          const target = e.ty.elem;
+          const name = optionalBinder();
+          const value = optionalCases(varE(name), source,
+            (v, ty) => optSome(convertOptional(v, ty, target)),
+            tag => tag === "undefined" ? optNone() : optSome(absentValue(tag, target)), optionalExprOps);
+          return { kind: "methodCall", obj: recv, objTy: e.fn.obj.ty, method: "filterMap", monadic: false,
+            args: [{ kind: "lambda", params: [{ name, type: source }], body: [{ kind: "return", value }] }] };
+        }
         const spec = e.builtinId !== undefined ? builtinSpec(e.builtinId) : null;
         // Lambda-taking array builtins (registry `hof`, comparator excluded —
         // mirrors the historical HOF_METHODS set).
@@ -1423,8 +1470,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             expr.builtinId !== undefined && !builtinSpec(expr.builtinId).pure)) hasEffects = true;
         return null;
       });
-      const pureBody = hasEffects ? null : transformPureBody(e.body, _typeDecls);
-      const body: Stmt[] = pureBody ? [{ kind: "return", value: pureBody }] : transformStmts(e.body, _typeDecls);
+      const body = withoutOptionalBindings(e.params.map(p => p.name), (): Stmt[] => {
+        const pureBody = hasEffects ? null : transformPureBody(e.body, _typeDecls);
+        return pureBody ? [{ kind: "return", value: pureBody }] : transformStmts(e.body, _typeDecls);
+      });
       // Flatten an if/let/return-shaped multi-statement body into a single
       // `return <expr>` so both backends' single-return-lambda fast path emits
       // it (Dafny lambdas are expression-only; Lean prefers the expression form
@@ -1439,10 +1488,12 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     }
 
     case "forall":
-      return { kind: "forall", var: e.var, type: e.varTy, body: transformExpr(e.body) };
+      return { kind: "forall", var: e.var, type: e.varTy,
+        body: withoutOptionalBindings([e.var], () => transformExpr(e.body)) };
 
     case "exists":
-      return { kind: "exists", var: e.var, type: e.varTy, body: transformExpr(e.body) };
+      return { kind: "exists", var: e.var, type: e.varTy,
+        body: withoutOptionalBindings([e.var], () => transformExpr(e.body)) };
 
     case "conditional": {
       // JS truthiness coercion (string/array/int → ... > 0).  Matches SPEC §3.1
@@ -2489,19 +2540,6 @@ function projectStructuralCallArgsInTStmts(
   }));
 }
 
-/** A pure access path — chain of field accesses rooted at a var. */
-interface AccessPath { rootVar: string; fields: string[] }
-
-function asTAccessPath(e: TExpr): AccessPath | null {
-  if (e.kind === "var") return { rootVar: e.name, fields: [] };
-  if (e.kind === "field") {
-    const inner = asTAccessPath(e.obj);
-    if (!inner) return null;
-    return { rootVar: inner.rootVar, fields: [...inner.fields, e.field] };
-  }
-  return null;
-}
-
 /** Does TExpr `e` match the given access path exactly? */
 function matchesAccessPath(e: TExpr, path: AccessPath): boolean {
   const collected: string[] = [];
@@ -2510,14 +2548,6 @@ function matchesAccessPath(e: TExpr, path: AccessPath): boolean {
   if (cur.kind !== "var" || cur.name !== path.rootVar) return false;
   if (collected.length !== path.fields.length) return false;
   return collected.every((f, i) => f === path.fields[i]);
-}
-
-/** Replace every TExpr matching `path` with `var(binder, binderTy)`. */
-function replacePathInTExpr(expr: TExpr, path: AccessPath, binder: string, binderTy: Ty): TExpr {
-  return mapTExpr(expr, e =>
-    matchesAccessPath(e, path)
-      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
-  );
 }
 
 function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, binderTy: Ty): TStmt[] {
@@ -2780,6 +2810,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   _callbackCounter = 0;
   _branchCounter = 0;
   optionalCounter = 0;
+  optionalBindings = [];
   _typeDecls = mod.typeDecls;
   _neededKindHelpers = new Map();
   _pureDefNames = new Set(mod.functions.filter(f => f.isPure).map(f => f.name));

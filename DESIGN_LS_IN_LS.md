@@ -257,9 +257,13 @@ narrowing form is taught once.
   pattern); mixed disjunctions like `x === undefined || x.field === 0`
   fall into the residual and get no refinement. This matches current
   behavior and is sound.
-- **Nothing is stored in the IR.** Facts are computed where needed and
+- **Condition facts are not stored in the IR.** Facts are computed where needed and
   discarded; no condition wrapper node, no plan threading between passes.
-  Analysis is cheap and determinism makes recomputation safe.
+  Analysis is cheap and determinism makes recomputation safe. Resolved reads
+  carry a storage version so lowering can reuse a guard's binding only for
+  the value it tested. Assignment effects and refinement invalidation belong
+  to resolve; lowering preserves each read's type through representation
+  conversion instead of rewriting typed subtrees.
 - **Key-membership facts need a variable key.** `exprEqual` — the structural
   equality that recognizes `m[k]` on both sides of `k in m ? m[k] : default`
   — compares vars, field chains, and indices, not literals, so a literal key

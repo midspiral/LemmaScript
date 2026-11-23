@@ -8,7 +8,8 @@ import { Project, ScriptTarget } from "ts-morph";
 import { extractModule } from "../src/extract.ts";
 import { resolveModule } from "../src/resolve.ts";
 import { narrowModule } from "../src/narrow.ts";
-import { transformModuleDafny } from "../src/transform.ts";
+import { transformModuleDafny, transformModuleLean } from "../src/transform.ts";
+import { emitLeanFile, resetLeanModule } from "../src/lean-emit.ts";
 import { emitDafnyFile } from "../src/dafny-emit.ts";
 import { peepholeModule } from "../src/peephole.ts";
 import { parseTsType } from "../src/types.ts";
@@ -292,6 +293,254 @@ export function popWiden(): boolean {
   let value: number | null | undefined = null;
   value = xs.pop();
   return value === undefined && xs.length === 0;
+}
+`);
+  assert.equal(result.status, 0, result.output + result.text);
+});
+
+const reassigned = String.raw`
+export function absentBranch(init: number | undefined, other: number | undefined): number | undefined {
+  //@ ensures init === undefined ==> \result === RESULT
+  let x: number | undefined = init;
+  if (x === undefined) { x = other; return x; }
+  return x;
+}
+export function presentBranch(init: number | undefined, other: number | undefined): number | undefined {
+  //@ ensures init !== undefined ==> \result === other
+  let x: number | undefined = init;
+  if (x !== undefined) { x = other; return x; }
+  return x;
+}
+export function afterGuard(init: number | undefined, other: number | undefined, c: boolean): number | undefined {
+  //@ ensures init !== undefined && c ==> \result === other
+  //@ ensures init !== undefined && !c ==> \result === init
+  let x: number | undefined = init;
+  if (x === undefined) return 0;
+  if (c) { x = other; }
+  return x;
+}
+export function nullBranch(init: number | null | undefined, other: number | null | undefined): number | null | undefined {
+  //@ ensures init === null ==> \result === other
+  //@ ensures init !== null ==> \result === init
+  let x: number | null | undefined = init;
+  if (x === null) { x = other; return x; }
+  return x;
+}
+export function inLoop(init: number | undefined, n: number): number | undefined {
+  //@ requires n >= 0
+  //@ ensures init !== undefined && n > 0 ==> \result === undefined
+  let x: number | undefined = init;
+  if (x === undefined) return 0;
+  let i = 0;
+  while (i < n) {
+    //@ invariant 0 <= i && i <= n
+    //@ invariant i > 0 ==> x === undefined
+    x = undefined;
+    i = i + 1;
+  }
+  return x;
+}
+`;
+
+test("assigning a narrowed variable targets its declared type and ends the narrowing", () => {
+  const stale = verify(reassigned.replace("RESULT", "undefined"));
+  assert.notEqual(stale.status, 0, stale.text);
+  assert.match(stale.output, /postcondition could not be proved/, stale.output);
+  assert.doesNotMatch(stale.output, /resolution\/type errors/, stale.output);
+  const correct = verify(reassigned.replace("RESULT", "other"));
+  assert.equal(correct.status, 0, correct.output + correct.text);
+});
+
+test("writes invalidate field paths and branch joins without discarding terminating-branch facts", () => {
+  const result = verify(String.raw`
+interface Box { value: number | undefined }
+export class FieldBox {
+  value: number | undefined;
+  update(other: number | undefined): number | undefined {
+    //@ ensures \result === other
+    if (this.value === undefined) {
+      this.value = other;
+      return this.value;
+    }
+    this.value = other;
+    return this.value;
+  }
+}
+export function parent(init: number | undefined, other: number | undefined, c: boolean): number | undefined {
+  //@ ensures init !== undefined && c ==> \result === other
+  //@ ensures init !== undefined && !c ==> \result === init
+  let b: Box = { value: init };
+  if (b.value === undefined) return 0;
+  if (c) b = { value: other };
+  return b.value;
+}
+export function exiting(init: number | undefined, c: boolean): number {
+  //@ ensures init !== undefined && !c ==> \result === init
+  let x: number | undefined = init;
+  if (x === undefined) return 0;
+  if (c) { x = undefined; return 0; }
+  return x;
+}
+export function iterations(init: number | undefined, n: number): number | undefined {
+  //@ requires n >= 0
+  //@ ensures init !== undefined && n > 0 ==> \result === undefined
+  let x: number | undefined = init;
+  if (x === undefined) return 0;
+  let i = 0;
+  while (i < n) {
+    //@ invariant 0 <= i && i <= n
+    //@ invariant i > 0 ==> x === undefined
+    if (i === 0) { x = undefined; i = i + 1; continue; }
+    i = i + 1;
+  }
+  return x;
+}
+`);
+  assert.equal(result.status, 0, result.output + result.text);
+});
+
+test("inferred array types preserve union precedence through aliases and nested arrays", () => {
+  const result = verify(String.raw`
+type Values = (number | null)[];
+export function aliases(xs: Values): number {
+  //@ requires xs.length > 0
+  //@ ensures xs[0] === null ==> \result === 0
+  const value = xs[0];
+  return value === null ? 0 : value;
+}
+export function nested(): boolean {
+  //@ ensures \result
+  const values = [[null, 7]];
+  const row = values[0];
+  return row[0] === null && row[1] === 7;
+}
+`);
+  assert.equal(result.status, 0, result.output + result.text);
+});
+
+test("a type-guard find keeps the element carried by its model result", () => {
+  const result = verify(String.raw`
+export function findNullish(xs: (number | null)[]): number {
+  //@ ensures xs.length === 0 ==> \result === 0
+  //@ ensures \result !== 2
+  const v = xs.find(x => x === null);
+  if (v === undefined) return 0;
+  if (v === null) return 1;
+  return 2;
+}
+`);
+  assert.equal(result.status, 0, result.output + result.text);
+});
+
+test("filtering undefined out of three-case elements keeps null", () => {
+  const result = verify(String.raw`
+export function defined(xs: (number | null | undefined)[]): (number | null)[] {
+  //@ ensures \result.length <= xs.length
+  return xs.filter(x => x !== undefined);
+}
+export function keepsNull(): boolean {
+  //@ ensures \result
+  const xs: (number | null | undefined)[] = [undefined, null, 7];
+  const ys = xs.filter(x => x !== undefined);
+  return ys.length === 2 && ys[0] === null && ys[1] === 7;
+}
+`);
+  assert.equal(result.status, 0, result.output + result.text);
+});
+
+test("a conjunction of presence checks narrows the then-branch beside an else", () => {
+  const result = verify(String.raw`
+export function both(x: number | null | undefined): number {
+  //@ ensures x === null || x === undefined ==> \result === 0
+  //@ ensures x !== null && x !== undefined ==> \result === x
+  if (x !== null && x !== undefined) { return x; } else { return 0; }
+}
+export function guarded(x: number | undefined, c: boolean): number {
+  //@ ensures x !== undefined && c ==> \result === x
+  if (x !== undefined && c) { return x; } else { return 0; }
+}
+export function effects(x: number | null | undefined, c: boolean): number {
+  //@ ensures !c ==> \result === 0
+  let r = 1;
+  if (x !== undefined && c && x !== null) { r = x; } else { r = 0; }
+  return r;
+}
+`);
+  assert.equal(result.status, 0, result.output + result.text);
+});
+
+test("Lean sentinel tests do not require decidable equality on the payload", () => {
+  const project = new Project({ compilerOptions: {
+    strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true,
+  } });
+  const source = project.createSourceFile("nullish-lean.ts", String.raw`
+export function isNull(x: Map<number, number> | null | undefined): boolean {
+  return x === null;
+}
+export function isDefined(x: Map<number, number> | null | undefined): boolean {
+  return x !== undefined;
+}
+`);
+  const { typesFile } = transformModuleLean(narrowModule(resolveModule(extractModule(source))));
+  resetLeanModule();
+  const text = emitLeanFile(peepholeModule(typesFile!, "lean"));
+  assert.match(text, /match x with[\s\S]*\| \.Null =>\s+true/);
+  assert.match(text, /match x with[\s\S]*\| \.Undefined =>\s+false/);
+  assert.doesNotMatch(text, /[=≠] LemmaScript\.Nullish\./);
+});
+
+test("copied else branches retain optional returns, initializers, and call arguments", () => {
+  const result = verify(String.raw`
+export function reviewed(x: number | undefined, c: boolean): number | undefined {
+  //@ ensures c ==> \result === undefined
+  //@ ensures !c ==> \result === x
+  if (x !== undefined && c) return x === undefined ? 0 : undefined;
+  else return x;
+}
+function identity(x: number | null | undefined): number | null | undefined {
+  return x;
+}
+export function partial(x: number | null | undefined, c: boolean): number | null | undefined {
+  //@ ensures \result === x
+  if (x !== undefined && c) { return x; }
+  else { const value = x; return identity(value); }
+}
+export function nullable(x: number | null, c: boolean): number | null {
+  //@ ensures \result === x
+  if (x !== null && c) { return x; } else { return x; }
+}
+interface Box { value: number | null | undefined }
+export function field(box: Box, c: boolean): number | null | undefined {
+  //@ ensures \result === box.value
+  if (box.value !== null && c) { return box.value; }
+  else { return identity(box.value); }
+}
+export function reassignedElse(init: number | null | undefined, other: number | null | undefined, c: boolean): number | null | undefined {
+  //@ ensures init !== undefined && c ==> \result === init
+  //@ ensures init === undefined || !c ==> \result === other
+  let x = init;
+  if (x !== undefined && c) { return x; }
+  else { x = other; return x; }
+}
+export function nested(x: number | null | undefined, c: boolean): number {
+  //@ ensures x === null || x === undefined ==> \result === 0
+  //@ ensures x !== null && x !== undefined ==> \result === x
+  if (x !== undefined && c) { return x ?? 0; }
+  else {
+    if (x === undefined) return 0;
+    if (x === null) return 0;
+    return x;
+  }
+}
+export function coalesced(x: number | null | undefined, c: boolean): number {
+  //@ ensures x === null || x === undefined ==> \result === 0
+  //@ ensures x !== null && x !== undefined ==> \result === x
+  if (x !== undefined && c) { return x ?? 0; } else { return x ?? 0; }
+}
+export function callCoalesced(x: number | null | undefined, c: boolean): number {
+  //@ ensures x === null || x === undefined ==> \result === 0
+  //@ ensures x !== null && x !== undefined ==> \result === x
+  if (x !== undefined && c) { return x ?? 0; } else { return identity(x) ?? 0; }
 }
 `);
   assert.equal(result.status, 0, result.output + result.text);

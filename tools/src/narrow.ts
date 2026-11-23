@@ -507,19 +507,18 @@ function ruleConditionalOptionalTruthy(e: TExpr, ctx: CondCtx): TExpr | null {
   };
 }
 
-/** Driver: `if (x !== undefined && rest) then` (no else) — presence fact in
+/** Driver: `if (x !== undefined && rest) then else fallback` — presence fact in
  *  guarded-if position.
- *  → `someMatch x { Some(_x_val) => if rest then then; , None => {} }`.
+ *  The fallback runs both when x is absent and when rest is false.
  *  Walks the inner if back through narrow so that nested optional checks in
  *  rest also become someMatches. */
 function ruleIfAndOptional(s: TStmt, ctx: CondCtx): TStmt | null {
   if (s.kind !== "if") return null;
-  if (s.else.length !== 0) return null;
   const extracted = leadingPresent(s.cond);
   if (!extracted) return null;
   const { check, restCond } = extracted;
-  const innerIf: TStmt = { kind: "if", cond: restCond, then: s.then, else: [] };
-  return presentMatchStmts(check, [walkStmt(innerIf, ctx)], [], ctx);
+  const innerIf: TStmt = { kind: "if", cond: restCond, then: s.then, else: s.else };
+  return presentMatchStmts(check, [walkStmt(innerIf, ctx)], s.else, ctx);
 }
 
 /** Driver: a bare expression statement `x !== undefined && rest` (the

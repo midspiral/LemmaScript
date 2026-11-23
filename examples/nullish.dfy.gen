@@ -4,6 +4,13 @@ datatype Option<T> = None | Some(value: T)
 
 datatype Nullish<T> = Undefined | Null | Value(value: T)
 
+function SeqFilterMap<T(!new), U(!new)>(f: T -> Option<U>, xs: seq<T>): seq<U>
+  ensures |SeqFilterMap(f, xs)| <= |xs|
+{
+  if |xs| == 0 then []
+  else (match f(xs[0]) case Some(value) => [value] case None => []) + SeqFilterMap(f, xs[1..])
+}
+
 function classify(x: Nullish<int>): int
 {
   match x {
@@ -203,15 +210,73 @@ lemma lookupNullable_ensures(m: map<string, Option<int>>, key: string)
 {
 }
 
+function notNull(x: Nullish<int>): bool
+{
+  !(x.Null?)
+}
+
+lemma notNull_ensures(x: Nullish<int>)
+  ensures (notNull(x) == (!x.Null?))
+{
+}
+
+function gatedNull(x: Nullish<map<int, int>>, enabled: bool): bool
+{
+  (enabled && x.Null?)
+}
+
+lemma gatedNull_ensures(x: Nullish<map<int, int>>, enabled: bool)
+  ensures (gatedNull(x, enabled) == (enabled && x.Null?))
+{
+}
+
+function filterAbsent(xs: seq<Nullish<int>>, keepAll: bool): seq<Nullish<int>>
+{
+  Std.Collections.Seq.Filter((x: Nullish<int>) => (keepAll || x.Undefined?), xs)
+}
+
+lemma filterAbsent_ensures(xs: seq<Nullish<int>>, keepAll: bool)
+  ensures (|filterAbsent(xs, keepAll)| <= |xs|)
+{
+}
+
+function guardedIdentity(x: Option<int>, enabled: bool): Option<int>
+{
+  match x {
+    case Some(i_x_val) =>
+      if enabled then
+        Some(i_x_val)
+      else
+        Option.Some(i_x_val)
+    case None =>
+      Option.None
+  }
+}
+
+lemma guardedIdentity_ensures(x: Option<int>, enabled: bool)
+  ensures (guardedIdentity(x, enabled) == x)
+{
+}
+
+function keepDefined(xs: seq<Nullish<int>>): seq<Option<int>>
+{
+  SeqFilterMap((i_optional59: Nullish<int>) => (match i_optional59 { case Value(i_value60) => Option.Some(Option.Some(i_value60)) case Null => Option.Some(Option.None) case Undefined => Option.None }), xs)
+}
+
+lemma keepDefined_ensures(xs: seq<Nullish<int>>)
+  ensures (|keepDefined(xs)| <= |xs|)
+{
+}
+
 method classifyMethod(x: Nullish<int>) returns (res: int)
   ensures (x.Undefined? ==> (res == 1))
   ensures (x.Null? ==> (res == 2))
-  ensures (match x { case Value(i_value88) => (res == i_value88) case Null => true case Undefined => true })
+  ensures (match x { case Value(i_value91) => (res == i_value91) case Null => true case Undefined => true })
 {
   var result := 0;
   match x {
-    case Value(i_value92) =>
-      var i_x_val := Option.Some(i_value92);
+    case Value(i_value95) =>
+      var i_x_val := Option.Some(i_value95);
       match i_x_val {
         case Some(i_x_val) =>
           result := i_x_val;
@@ -230,4 +295,18 @@ method classifyMethod(x: Nullish<int>) returns (res: int)
       result := 1;
   }
   return result;
+}
+
+method overwriteOptional(init: Option<int>, other: Option<int>) returns (res: Option<int>)
+  ensures (res == other)
+{
+  var value := init;
+  match value {
+    case Some(i_value_val) =>
+      value := other;
+      return value;
+    case None =>
+      value := other;
+      return value;
+  }
 }
