@@ -101,10 +101,27 @@ export function noCollision(p: number): number {
   }
   return p + r;
 }
+
+export type Shape = { kind: "a"; n: number } | { kind: "b"; n: number };
+
+//@ ensures \result === s.n + 1
+export function caseBlocks(s: Shape): number {
+  switch (s.kind) {
+    case "a": {
+      const m = s.n + 1;
+      return m;
+    }
+    case "b": {
+      const m = 1 + s.n;
+      return m;
+    }
+  }
+}
 `);
   const result = verify(output);
   assert.equal(result.status, 0, output + result.output);
   assert.match(output, /var q := 1;/, output);
+  assert.doesNotMatch(output, /\bm_\d/, output);
   assert.match(output, /s\.p \+ 1/, output);
   assert.doesNotMatch(output, /s\.p_/, output);
 });

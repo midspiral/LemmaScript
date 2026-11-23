@@ -1520,16 +1520,16 @@ function renameRawStmts(stmts: RawStmt[], from: string, to: string): RawStmt[] {
 
 // A bare `{ }` block is flattened into its parent statement list, but in
 // JavaScript its declarations go out of scope at the closing brace. Rename each
-// top-level declaration whose name also appears outside the block to a fresh
-// `<name>_N`, so reads after the block keep the outer binding (#361). A block
-// whose names do not appear outside keeps its names, and its output is unchanged.
+// top-level declaration whose name also appears in another statement of that
+// parent list to a fresh `<name>_N`, so reads after the block keep the outer
+// binding and sibling blocks do not redeclare one name (#361). Other names are
+// kept, so a block that is a whole `case` body, for example, is unchanged.
 function renameBareBlockLocals(stmts: RawStmt[], block: Block): RawStmt[] {
-  const scopeRoot: Node = block.getFirstAncestor(a =>
-    Node.isFunctionDeclaration(a) || Node.isArrowFunction(a) ||
-    Node.isFunctionExpression(a) || Node.isMethodDeclaration(a)) ?? block.getSourceFile();
-  const outside = new Set(scopeRoot.getDescendantsOfKind(SyntaxKind.Identifier)
-    .filter(i => i.getStart() < block.getStart() || i.getStart() >= block.getEnd())
-    .map(i => i.getText()));
+  const parent = block.getParent();
+  const siblings: Node[] = parent && (Node.isBlock(parent) || Node.isCaseClause(parent) || Node.isDefaultClause(parent))
+    ? parent.getStatements().filter(st => st !== block)
+    : [];
+  const outside = new Set(siblings.flatMap(st => st.getDescendantsOfKind(SyntaxKind.Identifier)).map(i => i.getText()));
   let out = stmts;
   for (let i = 0; i < out.length; i++) {
     const s = out[i];
