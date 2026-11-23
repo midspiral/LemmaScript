@@ -132,6 +132,7 @@ function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
     case "var": case "num": case "bigint": case "str": case "bool": case "havoc": return e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
+    case "assignment": return { ...e, target: r(e.target), value: r(e.value), storedValue: r(e.storedValue) };
     case "call": return { ...e, fn: r(e.fn), args: e.args.map(r) };
     case "index": return { ...e, obj: r(e.obj), idx: r(e.idx) };
     case "field": return { ...e, obj: r(e.obj) };
@@ -389,6 +390,8 @@ function flattenLambdaBody(stmts: Stmt[]): Expr | null {
 function asCondition(e: TExpr): TExpr {
   const bool: Ty = { kind: "bool" };
   if (e.ty.kind === "bool") return e;
+  if (hasAssignment(e)) return { kind: "unop", op: "!", ty: bool,
+    expr: { kind: "unop", op: "!", expr: e, ty: bool } };
   if (e.kind === "binop" && (e.op === "&&" || e.op === "||"))
     return { ...e, left: asCondition(e.left), right: asCondition(e.right), ty: bool };
   if (e.ty.kind === "int" || e.ty.kind === "nat")
@@ -476,7 +479,137 @@ function lowerMinMaxSequence(e: TExpr, real: boolean, binds: Stmt[] | null): Exp
     ? { kind: "app", fn: "SeqIntToReal", args: [value] } : value;
 }
 
+/** Lambda bodies execute in their own scope, not when the lambda is created. */
+function hasAssignment(e: TExpr): boolean {
+  let found = false;
+  mapTExpr(e, node => {
+    if (node.kind === "assignment") { found = true; return node; }
+    return node.kind === "lambda" ? node : null;
+  });
+  return found;
+}
+
+/** Save an operand before a later operand can mutate the variables it reads. */
+function saveOperand(e: TExpr, binds: Stmt[], later: TExpr[] = [], copy = false): TExpr {
+  if (["num", "bigint", "str", "bool", "lambda"].includes(e.kind)) return e;
+  const value = lowerExpr(e, binds);
+  // Reading a collection captures its reference, not a copy of its contents.
+  // Keep a stable access path live across later element/field mutations. A
+  // later reassignment of the path itself still requires a snapshot.
+  const reference = e.kind === "assignment" && e.op === "=" && tyEqual(e.ty, e.target.ty) ? e.target : e;
+  const path = asTAccessPath(reference);
+  if (!copy && path && ["array", "map", "set", "user", "tuple"].includes(e.ty.kind)) {
+    let rebound = false;
+    for (const next of later) mapTExpr(next, node => {
+      if (node.kind === "assignment") {
+        const target = asTAccessPath(node.target);
+        if (target?.rootVar === path.rootVar && target.fields.length <= path.fields.length &&
+            target.fields.every((field, i) => field === path.fields[i])) rebound = true;
+      }
+      return null;
+    });
+    if (!rebound) return reference;
+  }
+  const name = freshName(`_eval${_effectCounter++}`);
+  binds.push({ kind: "let", name, type: e.ty, mutable: false, value });
+  return { kind: "var", name, ty: e.ty };
+}
+
+/** Evaluate computed indices once, before the RHS. Keep the path to the
+ *  destination so value-type collection updates still write back to its root. */
+function assignmentTarget(e: TExpr, binds: Stmt[]): TExpr {
+  if (e.kind === "field") return { ...e, obj: assignmentTarget(e.obj, binds) };
+  if (e.kind === "index") return { ...e, obj: assignmentTarget(e.obj, binds), idx: saveOperand(e.idx, binds) };
+  return e.kind === "var" ? e : saveOperand(e, binds);
+}
+
+function writeAssignment(target: TExpr, value: Expr): Stmt {
+  if (target.kind === "var") return { kind: "assign", target: target.name, value };
+  if (target.kind === "field") {
+    if (target.obj.kind === "var" && target.obj.name === "this")
+      return { kind: "assign", target: `this.${target.field}`, value };
+    return writeAssignment(target.obj, { kind: "record", spread: transformExpr(target.obj),
+      fields: [{ name: target.field, value }] });
+  }
+  if (target.kind === "index") {
+    const index = transformExpr(target.idx);
+    return writeAssignment(target.obj, { kind: "methodCall", obj: transformExpr(target.obj), objTy: target.obj.ty,
+      method: target.obj.ty.kind === "map" ? "set" : "with",
+      args: [target.obj.ty.kind === "array" && !isNat(target.idx.ty) ? { kind: "toNat", expr: index } : index, value], monadic: false });
+  }
+  throw new Error(`Unsupported assignment target: ${target.kind}`);
+}
+
+function lowerAssignment(e: Extract<TExpr, { kind: "assignment" }>, binds: Stmt[]): Expr {
+  const target = assignmentTarget(e.target, binds);
+  const old = e.op === "=" ? null : saveOperand(target, binds);
+  if (e.op === "&&=" || e.op === "||=" || e.op === "??=") {
+    const assign: TExpr = { ...e, op: "=", target };
+    if (e.op === "??=" && old!.ty.kind === "optional") {
+      const binder = freshName(`_present${_effectCounter++}`);
+      return lowerExpr({ kind: "someMatch", scrutinee: old!, binder, binderTy: old!.ty.inner,
+        someBody: { kind: "var", name: binder, ty: old!.ty.inner }, noneBody: assign, ty: e.ty }, binds);
+    }
+    if (e.op === "??=") return lowerExpr(old!, binds);
+    const bool: Ty = { kind: "bool" };
+    const cond: TExpr = { kind: "unop", op: "!", ty: bool,
+      expr: { kind: "unop", op: "!", expr: old!, ty: bool } };
+    return lowerExpr({ kind: "conditional", cond, ty: e.ty,
+      then: e.op === "&&=" ? assign : old!, else: e.op === "&&=" ? old! : assign }, binds);
+  }
+  const value = e.op === "=" ? e.value
+    : { kind: "binop" as const, op: e.op.slice(0, -1), left: old!, right: e.value, ty: e.ty };
+  let result = lowerExpr(value, binds);
+  if (_opts.backend === "lean" && e.ty.kind === "int" && value.ty.kind === "nat")
+    result = { kind: "toInt", expr: result };
+  binds.push({ kind: "let", name: e.resultName, type: e.ty, mutable: false, value: result });
+  binds.push(writeAssignment(target, transformExpr(e.storedValue)));
+  return e.postfix ? transformExpr(old!) : { kind: "var", name: e.resultName };
+}
+
 function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
+  // Earlier operands must be read before later assignments. Reuse the normal
+  // expression lowering after saving those operands; conditional arms retain
+  // their own bind lists, so effects cannot escape a short-circuit branch.
+  if (binds && hasAssignment(e)) {
+    const save = (operand: TExpr) => saveOperand(operand, binds);
+    const ordered = (operands: TExpr[]) => operands.map((operand, i) => saveOperand(operand, binds, operands.slice(i + 1)));
+    switch (e.kind) {
+      case "binop":
+        if (e.op === "&&" || e.op === "||") {
+          const left = save(e.left);
+          const bool: Ty = { kind: "bool" };
+          const cond: TExpr = { kind: "unop", op: "!", ty: bool,
+            expr: { kind: "unop", op: "!", expr: left, ty: bool } };
+          return lowerExpr({ kind: "conditional", cond, ty: e.ty,
+            then: e.op === "&&" ? e.right : left, else: e.op === "&&" ? left : e.right }, binds);
+        }
+        const left = saveOperand(e.left, binds, [e.right], e.op === "arrayConcat");
+        const right = save(e.right);
+        return lowerExpr({ ...e, left, right }, binds);
+      case "field": return lowerExpr({ ...e, obj: save(e.obj) }, binds);
+      case "index": {
+        const [obj, idx] = ordered([e.obj, e.idx]);
+        return lowerExpr({ ...e, obj, idx }, binds);
+      }
+      case "arrayLiteral": return lowerExpr({ ...e, elems: ordered(e.elems) }, binds);
+      case "record": {
+        const fields = e.fields.map(f => f.value);
+        const spread = e.spread ? saveOperand(e.spread, binds, fields, true) : null;
+        const values = ordered(fields);
+        return lowerExpr({ ...e, spread, fields: e.fields.map((f, i) => ({ ...f, value: values[i] })) }, binds);
+      }
+      case "call": {
+        let fn = e.fn;
+        if (fn.kind === "field" && !(fn.obj.kind === "var" && fn.obj.ty.kind === "unknown")) {
+          const [obj, ...args] = ordered([fn.obj, ...e.args]);
+          return lowerExpr({ ...e, fn: { ...fn, obj }, args }, binds);
+        }
+        if (fn.kind !== "var" && fn.kind !== "field") fn = saveOperand(fn, binds, e.args);
+        return lowerExpr({ ...e, fn, args: ordered(e.args) }, binds);
+      }
+    }
+  }
   // Lean spreads are checked Option operations. Lift even a syntactically pure
   // call so total correctness requires the combined array to be nonempty.
   if (_opts.backend === "lean" && e.kind === "call" && e.fn.kind === "var" &&
@@ -504,6 +637,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
   }
 
   switch (e.kind) {
+    case "assignment":
+      if (!binds) throw new Error("Assignment requires an executable statement context");
+      return lowerAssignment(e, binds);
     case "var": return { kind: "var", name: e.name };
     case "num": {
       const literal: Expr = { kind: "num", value: e.value };
@@ -1245,6 +1381,25 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "havoc", type: e.ty };
 
     case "someMatch": {
+      if (binds && hasAssignment(e)) {
+        const scrutinee = lowerExpr(e.scrutinee, binds);
+        const path = asTAccessPath(e.scrutinee);
+        const some = path ? replacePathInTExpr(e.someBody, path, e.binder, e.binderTy) : e.someBody;
+        const someBinds: Stmt[] = [], noneBinds: Stmt[] = [];
+        let someValue = lowerExpr(some, someBinds), noneValue = lowerExpr(e.noneBody, noneBinds);
+        if (e.ty.kind === "optional") {
+          someValue = wrapOptionalBranch(someValue, some);
+          noneValue = wrapOptionalBranch(noneValue, e.noneBody);
+        }
+        const name = freshName(`_branch${_branchCounter++}`);
+        binds.push({ kind: "let", name, type: e.ty, mutable: true,
+          value: { kind: _opts.backend === "dafny" ? "havoc" : "default", type: e.ty } });
+        binds.push({ kind: "match", scrutinee, arms: [
+          { pattern: pCtor("some", e.binder), body: [...someBinds, { kind: "assign", target: name, value: someValue }] },
+          { pattern: pCtor("none"), body: [...noneBinds, { kind: "assign", target: name, value: noneValue }] },
+        ] });
+        return { kind: "var", name };
+      }
       let someBody: Expr;
       let scrutinee: Expr | string;
       const path = asTAccessPath(e.scrutinee);
@@ -1292,28 +1447,44 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       const varName = e.scrutinee.kind === "var" ? e.scrutinee.name : undefined;
       const pathHint = varName ?? scrutineeHint(e.scrutinee);
       const wrapOpt = e.ty.kind === "optional";
+      const resultName = binds && hasAssignment(e) ? freshName(`_branch${_branchCounter++}`) : null;
+      const statementArms: { pattern: MatchPattern; body: Stmt[] }[] = [];
       const arms: MatchArm[] = e.cases.map(c => {
         const variant = decl?.variants?.find(v => v.name === c.variant);
         const fields = variant?.fields ?? [];
-        let body = lowerExpr(c.body, binds);
-        if (varName && fields.length > 0) {
-          body = replaceFieldAccess(body, varName, fields, c.variant, tyBaseName(e.typeName));
-          if (isSynthArrayUnion && fields.length === 1) {
-            body = replaceVarInExpr(body, varName, matchBinder(fields[0].name, varName));
+        const armBinds: Stmt[] | null = resultName ? [] : binds;
+        const rewrite = (body: Expr): Expr => {
+          if (varName && fields.length > 0) {
+            body = replaceFieldAccess(body, varName, fields, c.variant, tyBaseName(e.typeName));
+            if (isSynthArrayUnion && fields.length === 1) {
+              body = replaceVarInExpr(body, varName, matchBinder(fields[0].name, varName));
+            }
+          } else if (!varName && isSynthArrayUnion && fields.length === 1) {
+            const binderName = matchBinder(fields[0].name, pathHint);
+            body = replaceExprInExpr(body, scrutinee, { kind: "var", name: binderName });
           }
-        } else if (!varName && isSynthArrayUnion && fields.length === 1) {
-          // Path scrutinee (e.g. `m.content`): replace structural occurrences
-          // with the binder var ref.
-          const binderName = matchBinder(fields[0].name, pathHint);
-          body = replaceExprInExpr(body, scrutinee, { kind: "var", name: binderName });
-        }
+          return body;
+        };
+        let body = rewrite(lowerExpr(c.body, armBinds));
         if (wrapOpt) body = wrapOptionalBranch(body, c.body);
-        return { pattern: buildMatchPattern(c.variant, fields, pathHint), body };
+        const pattern = buildMatchPattern(c.variant, fields, pathHint);
+        if (resultName) statementArms.push({ pattern,
+          body: [...armBinds!.map(s => mapStmt(s, rewrite)), { kind: "assign", target: resultName, value: body }] });
+        return { pattern, body };
       });
       if (e.fallthrough) {
-        let body = lowerExpr(e.fallthrough, binds);
+        const armBinds: Stmt[] | null = resultName ? [] : binds;
+        let body = lowerExpr(e.fallthrough, armBinds);
         if (wrapOpt) body = wrapOptionalBranch(body, e.fallthrough);
         arms.push({ pattern: pWild(), body });
+        if (resultName) statementArms.push({ pattern: pWild(),
+          body: [...armBinds!, { kind: "assign", target: resultName, value: body }] });
+      }
+      if (binds && resultName) {
+        binds.push({ kind: "let", name: resultName, type: e.ty, mutable: true,
+          value: { kind: _opts.backend === "dafny" ? "havoc" : "default", type: e.ty } });
+        binds.push({ kind: "match", scrutinee, arms: statementArms });
+        return { kind: "var", name: resultName };
       }
       return { kind: "match", scrutinee: varName !== undefined ? varE(varName) : scrutinee, arms };
     }
@@ -1776,6 +1947,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
 }
 
 let _liftCounter = 0;
+let _effectCounter = 0;
 let _callbackCounter = 0;
 // Branch results must not renumber the existing lifted-call temporaries.
 let _branchCounter = 0;
@@ -1882,7 +2054,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
         ];
       }
       // Top-level method call → direct monadic bind, no lifting needed
-      if (s.value.kind === "call" && s.value.callKind === "method")
+      if (s.value.kind === "call" && s.value.callKind === "method" && !hasAssignment(s.value))
         return [{ kind: "bind", target: s.target, value: transformExpr(s.value) }];
       const { binds, expr } = liftMethodCalls(s.value);
       return [...binds, { kind: "assign", target: s.target, value: expr }];
@@ -1946,15 +2118,44 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       return [...binds, { kind: "if", cond, then: transformStmts(s.then, typeDecls), else: transformStmts(s.else, typeDecls) }];
     }
 
-    case "while":
+    case "while": {
+      const { binds, expr: cond } = liftMethodCalls(asCondition(s.cond));
+      const body = transformStmts(s.body, typeDecls);
+      if (binds.length && _opts.backend === "lean") {
+        // Velvet requires invariants even on break. A separate test flag lets
+        // the original head invariants stop applying after the final test has
+        // mutated state; done_with describes that final state instead.
+        const name = freshName(`_testing${_effectCounter++}`);
+        const testing: Expr = { kind: "var", name };
+        const done = s.doneWith ? transformExpr(s.doneWith) : { kind: "bool" as const, value: true };
+        return [
+          { kind: "let", name, type: { kind: "bool" }, mutable: true, value: { kind: "bool", value: true } },
+          { kind: "while", cond: testing,
+            invariants: [
+              ...s.invariants.map(e => ({ kind: "implies" as const, premises: [testing], conclusion: transformExpr(e) })),
+              { kind: "implies", premises: [negateExpr(testing)], conclusion: done },
+            ],
+            decreasing: s.decreases ? { kind: "if", cond: testing,
+              then: { kind: "binop", op: "+", left: transformExpr(s.decreases), right: { kind: "num", value: 1 } },
+              else: { kind: "num", value: 0 } } : null,
+            doneWith: done,
+            body: [...binds, { kind: "if", cond, then: eliminateTopLevelContinue(body),
+              else: [{ kind: "assign", target: name, value: { kind: "bool", value: false } }] }],
+          },
+        ];
+      }
       return [{
         kind: "while",
-        cond: transformExpr(asCondition(s.cond)),
+        cond: binds.length ? { kind: "bool", value: true } : cond,
         invariants: s.invariants.map(transformExpr),
         decreasing: s.decreases ? transformExpr(s.decreases) : null,
-        doneWith: s.doneWith ? transformExpr(s.doneWith) : null,
-        body: eliminateTopLevelContinue(transformStmts(s.body, typeDecls)),
+        doneWith: s.doneWith ? transformExpr(s.doneWith) : binds.length ? { kind: "bool", value: true } : null,
+        // The test runs at the head, including after continue and on the final
+        // failed test. Break skips both the body and a C-style for's update.
+        body: eliminateTopLevelContinue(binds.length ? [...binds,
+          { kind: "if", cond: negateExpr(cond), then: [{ kind: "break" }], else: [] }, ...body] : body),
       }];
+    }
 
     case "throw":
       return [{ kind: "assert", expr: { kind: "bool", value: false } }];
@@ -2343,13 +2544,15 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
     const s = stmts[i];
     const rest = stmts.slice(i + 1);
     switch (s.kind) {
-      case "return": return transformExpr(s.value);
+      case "return": return hasAssignment(s.value) ? null : transformExpr(s.value);
       case "let": {
+        if (hasAssignment(s.init)) return null;
         const restExpr = transformPureBody(rest, typeDecls);
         if (!restExpr) return null;
         return { kind: "let", name: s.name, value: transformExpr(s.init), body: restExpr };
       }
       case "if": {
+        if (hasAssignment(s.cond)) return null;
         // Append rest to both branches so nested ifs that fall through
         // can reach the continuation (e.g. early return inside then-branch).
         const thenExpr = transformPureBody([...s.then, ...rest], typeDecls);
@@ -2359,7 +2562,7 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
         if (!elseExpr) return null;
         return { kind: "if", cond: transformExpr(asCondition(s.cond)), then: thenExpr, else: elseExpr };
       }
-      case "switch": return transformPureSwitch(s, typeDecls);
+      case "switch": return hasAssignment(s.expr) ? null : transformPureSwitch(s, typeDecls);
       case "someMatch": {
         const path = asTAccessPath(s.scrutinee);
         if (path) {
@@ -2513,6 +2716,14 @@ function findReassignedNames(stmts: TStmt[], names: Set<string>): Set<string> {
   const found = new Set<string>();
   function scan(stmts: TStmt[]) {
     for (const s of stmts) {
+      mapTStmt(s, e => {
+        if (e.kind === "assignment") {
+          let target = e.target;
+          while (target.kind === "field" || target.kind === "index") target = target.obj;
+          if (target.kind === "var" && names.has(target.name)) found.add(target.name);
+        }
+        return null;
+      });
       if (s.kind === "assign" && names.has(s.target)) found.add(s.target);
       if (s.kind === "ghostAssign" && names.has(s.target)) found.add(s.target);
       // Mutating collection calls: s.add(x), m.set(k,v), s.delete(x), arr.push(x)
@@ -2591,6 +2802,7 @@ export function transformModuleDafny(mod: TModule): { typesFile: Module | null; 
 export function transformModule(mod: TModule, specImport?: string, moduleBaseOverride?: string): { typesFile: Module | null; defFile: Module } {
   _forofCounters.clear();
   _liftCounter = 0;
+  _effectCounter = 0;
   _callbackCounter = 0;
   _branchCounter = 0;
   _typeDecls = mod.typeDecls;

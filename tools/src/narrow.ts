@@ -61,6 +61,7 @@ function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
       return e;
     case "binop": return { ...e, left: re(e.left), right: re(e.right) };
     case "unop": return { ...e, expr: re(e.expr) };
+    case "assignment": return { ...e, target: re(e.target), value: re(e.value), storedValue: re(e.storedValue) };
     case "call": return { ...e, fn: re(e.fn), args: e.args.map(re) };
     case "index": return { ...e, obj: re(e.obj), idx: re(e.idx) };
     case "field": return { ...e, obj: re(e.obj) };
@@ -499,6 +500,7 @@ function ruleLetCondAndOptional(s: TStmt, ctx: CondCtx): TStmt[] | null {
  *  (they lower to pure Dafny expressions: `x in arr`, `x in m`, `s.Keys`,
  *  …) are exempt even though they carry `callKind: "method"`. */
 function containsMethodCall(e: TExpr): boolean {
+  if (e.kind === "assignment") return true;
   if (e.kind === "call" && e.callKind === "method" &&
       !(e.builtinId !== undefined && builtinSpec(e.builtinId).pure)) {
     return true;

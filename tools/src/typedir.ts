@@ -89,6 +89,10 @@ export type TExpr =
   | { kind: "bool"; value: boolean; ty: Ty }
   | { kind: "binop"; op: string; left: TExpr; right: TExpr; ty: Ty }
   | { kind: "unop"; op: string; expr: TExpr; ty: Ty }
+  // resultName binds the expression's value; storedValue applies the target's
+  // representation coercion (e.g. Some(resultName)) without evaluating it twice.
+  | { kind: "assignment"; op: string; target: TExpr; value: TExpr; ty: Ty;
+      resultName: string; storedValue: TExpr; postfix?: boolean }
   | { kind: "call"; fn: TExpr; args: TExpr[]; ty: Ty; callKind: CallKind;
       builtinId?: BuiltinId;
       /** Resolved parameter types for a named callee. Kept so nominal
