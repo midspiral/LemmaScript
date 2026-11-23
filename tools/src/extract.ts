@@ -6,12 +6,12 @@
  */
 
 import path from "path";
-import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
+import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ScriptTarget, VariableDeclaration, Block, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
 import { normalizeBigIntLiteral } from "./rawir.js";
-import { setUserNames, freshName } from "./names.js";
+import { setUserNames, freshName, isUserName } from "./names.js";
 import { DEFAULT_OPTIONS, fileCommentLines, isOptionDirective, type LscOptions } from "./config.js";
 
 // ── Expression extraction ────────────────────────────────────
@@ -1439,9 +1439,11 @@ function forCounterRename(decl: VariableDeclaration, forStmt: Node): string | nu
   return fresh;
 }
 
-/** Whole-word rename of an identifier inside an unparsed `//@` spec string. */
+/** Whole-word rename of an identifier inside an unparsed `//@` spec string.
+ *  A name after a single `.` is a field access and keeps its name; `...name` is a spread. */
 function renameSpec(s: string, from: string, to: string): string {
-  return s.replace(new RegExp(`\\b${from}\\b`, "g"), to);
+  const escaped = from.replace(/[$]/g, "\\$&");
+  return s.replace(new RegExp(`(?<![\\w$])(?<!(?<!\\.)\\.)${escaped}(?![\\w$])`, "g"), to);
 }
 
 /** Rename free references to `from` → `to` in a Raw expression, stopping under a
@@ -1503,14 +1505,39 @@ function renameRawStmt(s: RawStmt, from: string, to: string): RawStmt {
 }
 
 /** Rename `from` → `to` through a statement list, stopping after a `let from`
- *  shadows it (subsequent references are a different variable). */
+ *  or ghost `let from` shadows it (subsequent references are a different variable). */
 function renameRawStmts(stmts: RawStmt[], from: string, to: string): RawStmt[] {
   const out: RawStmt[] = [];
   let active = true;
   for (const s of stmts) {
     if (!active) { out.push(s); continue; }
     out.push(renameRawStmt(s, from, to));
-    if (s.kind === "let" && s.name === from) active = false;
+    if ((s.kind === "let" || s.kind === "ghostLet") && s.name === from) active = false;
+  }
+  return out;
+}
+
+// A bare `{ }` block is flattened into its parent statement list, but in
+// JavaScript its declarations go out of scope at the closing brace. Rename each
+// top-level declaration whose name also appears outside the block to a fresh
+// `<name>_N`, so reads after the block keep the outer binding (#361). A block
+// whose names do not appear outside keeps its names, and its output is unchanged.
+function renameBareBlockLocals(stmts: RawStmt[], block: Block): RawStmt[] {
+  const scopeRoot: Node = block.getFirstAncestor(a =>
+    Node.isFunctionDeclaration(a) || Node.isArrowFunction(a) ||
+    Node.isFunctionExpression(a) || Node.isMethodDeclaration(a)) ?? block.getSourceFile();
+  const outside = new Set(scopeRoot.getDescendantsOfKind(SyntaxKind.Identifier)
+    .filter(i => i.getStart() < block.getStart() || i.getStart() >= block.getEnd())
+    .map(i => i.getText()));
+  let out = stmts;
+  for (let i = 0; i < out.length; i++) {
+    const s = out[i];
+    if ((s.kind !== "let" && s.kind !== "ghostLet") || !outside.has(s.name)) continue;
+    let n = 2;
+    while (isUserName(`${s.name}_${n}`) || _reservedForCounterNames.has(`${s.name}_${n}`)) n++;
+    const fresh = `${s.name}_${n}`;
+    _reservedForCounterNames.add(fresh);
+    out = [...out.slice(0, i), { ...s, name: fresh }, ...renameRawStmts(out.slice(i + 1), s.name, fresh)];
   }
   return out;
 }
@@ -2083,9 +2110,10 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       continue;
     }
 
-    // Block statement: { ... } — flatten into parent
+    // Block statement: { ... } — flatten into parent, renaming declarations
+    // that would otherwise stay in scope after the closing brace.
     if (Node.isBlock(s)) {
-      result.push(...extractStmts(s.getStatements()));
+      result.push(...renameBareBlockLocals(extractStmts(s.getStatements()), s));
       continue;
     }
 
