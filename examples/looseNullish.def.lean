@@ -8,7 +8,7 @@ import LemmaScript.Nullish
 set_option velvet.semantics.termination "total"
 
 method looseIsNullish (x : LemmaScript.Nullish Int) returns (res : Bool)
-  ensures ensures_1: (res = (match x with | .Value _value62 => (let _x_val : Option Int := Option.some _value62; (match _x_val with | .some _ => false | .none => true)) | .Null => true | .Undefined => (let _x_val : Option Int := Option.none; (match _x_val with | .some _ => false | .none => true))) : Prop)
+  ensures ensures_1: (res = (match x with | .Value _value62 => false | .Null => true | .Undefined => true) : Prop)
   do
     return Pure.looseIsNullish x
 
@@ -29,8 +29,8 @@ method looseDefault (x : LemmaScript.Nullish Int) returns (res : Int)
     return Pure.looseDefault x
 
 method looseEarlyReturn (x : LemmaScript.Nullish Int) returns (res : Int)
-  ensures ensures_1: ((match x with | .Value _value70 => (let _x_val : Option Int := Option.some _value70; (match _x_val with | .some _ => false | .none => true)) | .Null => true | .Undefined => (let _x_val : Option Int := Option.none; (match _x_val with | .some _ => false | .none => true))) → res = 7 : Prop)
-  ensures ensures_2: ((match x with | .Value _value72 => (let _x_val : Option Int := Option.some _value72; (match _x_val with | .some _x_val => res = _x_val | .none => true)) | .Null => true | .Undefined => (let _x_val : Option Int := Option.none; (match _x_val with | .some _x_val => res = _x_val | .none => true))) : Prop)
+  ensures ensures_1: ((match x with | .Value _value70 => false | .Null => true | .Undefined => true) → res = 7 : Prop)
+  ensures ensures_2: ((match x with | .Value _value72 => (let _x_val := _value72; res = _x_val) | .Null => true | .Undefined => true) : Prop)
   do
     return Pure.looseEarlyReturn x
 

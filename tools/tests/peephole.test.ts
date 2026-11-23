@@ -299,3 +299,34 @@ test("Dafny verifies a source lookup whose absent branch uses the original bindi
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a match on a variable just bound to an Option or Nullish constructor selects its arm", () => {
+  const some = (value: Expr): Expr => ({ kind: "constructor", name: "some", type: "Option", args: [value] });
+  const none: Expr = { kind: "constructor", name: "none", type: "Option", args: [] };
+  const match = (name: string, binder: string, someBody: Expr, noneBody: Expr): Expr => ({
+    kind: "match", scrutinee: variable(name),
+    arms: [{ pattern: pCtor("some", binder), body: someBody }, { pattern: pCtor("none"), body: noneBody }],
+  });
+  const bind = (name: string, value: Expr, body: Expr): Expr => ({ kind: "let", name, value, body });
+  const zero: Expr = { kind: "num", value: 0 };
+
+  for (const backend of ["dafny", "lean"] as const) {
+    // The selected arm replaces the binding; an unused binder binds nothing.
+    assert.deepEqual(optimize(bind("o", some(variable("v")), match("o", "_", variable("a"), variable("b"))), backend), variable("a"));
+    assert.deepEqual(optimize(bind("o", none, match("o", "x", variable("x"), zero)), backend), zero);
+    // A used binder is bound to the payload, also when it shadows the binding.
+    assert.deepEqual(optimize(bind("o", some(variable("v")), match("o", "x", variable("x"), zero)), backend),
+      bind("x", variable("v"), variable("x")));
+    assert.deepEqual(optimize(bind("o", some(variable("v")), match("o", "o", variable("o"), zero)), backend),
+      bind("o", variable("v"), variable("o")));
+    // The binding stays when the arm reads it, or when its payload is not trivial.
+    const call: Expr = { kind: "app", fn: "f", args: [variable("v")] };
+    assert.deepEqual(optimize(bind("o", some(variable("v")), match("o", "_", variable("o"), none)), backend),
+      bind("o", some(variable("v")), variable("o")));
+    assert.deepEqual(optimize(bind("o", some(call), match("o", "_", zero, zero)), backend), bind("o", some(call), zero));
+    // Other constructors and other scrutinees are left alone.
+    const user: Expr = { kind: "constructor", name: "some", type: "Mine", args: [variable("v")] };
+    const untouched = [bind("o", user, match("o", "_", zero, zero)), bind("o", some(variable("v")), match("p", "_", zero, zero))];
+    for (const e of untouched) assert.deepEqual(optimize(e, backend), e);
+  }
+});

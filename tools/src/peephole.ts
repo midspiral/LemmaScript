@@ -11,6 +11,9 @@
  *   4. if c then false else true  →  ¬c
  *   5. if c then true else false  →  c
  *
+ *   6. let x = Some(v) in match x { Some(b) => sb, None => nb }  →  sb[b := v]
+ *      (Option and Nullish constructors)
+ *
  * Statement-level rule 1 also handles match-statement on m.get.
  */
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
@@ -114,6 +117,34 @@ function ruleLetMatchOnMapGetExpr(e: Expr): Expr | null {
   return { kind: "if", cond: has, then: someBody, else: arms.noneArm.body };
 }
 
+/** Rule 6: a match on a variable just bound to an Option or Nullish
+ *  constructor selects that constructor's arm. Narrowing produces this shape
+ *  when it re-represents a value at a smaller type (Nullish → Option) and the
+ *  narrowed test then inspects it.
+ *  The binding stays when the arm still reads it, or when dropping it would
+ *  drop the evaluation of a non-trivial payload. */
+function ruleLetKnownConstructorMatch(e: Expr): Expr | null {
+  if (e.kind !== "let" || e.value.kind !== "constructor" ||
+      (e.value.type !== "Option" && e.value.type !== "LemmaScript.Nullish")) return null;
+  const { name, args } = e.value;
+  const m = e.body;
+  if (m.kind !== "match" || m.scrutinee.kind !== "var" || m.scrutinee.name !== e.name) return null;
+  if (m.arms.some(a => a.pattern.kind === "literal") || args.some(a => usesName(a, e.name))) return null;
+  const arm = m.arms.find(a => a.pattern.kind === "wild" || patternCtor(a.pattern) === name);
+  if (!arm) return null;
+  const binders = patternBinders(arm.pattern);
+  if (binders.length > args.length) return null;
+  let body = arm.body;
+  for (let i = binders.length - 1; i >= 0; i--) {
+    if (binders[i] !== "_" && usesName(body, binders[i]))
+      body = { kind: "let", name: binders[i], value: args[i], body };
+  }
+  const trivial = (a: Expr) => ["var", "num", "bigint", "bool", "str"].includes(a.kind);
+  // A binder of the same name shadows the binding inside the arm.
+  const read = !binders.includes(e.name) && usesName(arm.body, e.name);
+  return read || !args.every(trivial) ? { ...e, body } : body;
+}
+
 function isBool(e: Expr, v: boolean): boolean {
   return e.kind === "bool" && e.value === v;
 }
@@ -141,6 +172,7 @@ function ruleNullishTest(e: Expr): Expr | null {
 const MAP_GET_RULES = [
   ruleMatchOnMapGetExpr,
   ruleLetMatchOnMapGetExpr,
+  ruleLetKnownConstructorMatch,
 ];
 const BOOL_RULES = [
   ruleNullishTest,

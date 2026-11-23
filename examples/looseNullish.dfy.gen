@@ -12,7 +12,7 @@ function looseIsNullish(x: Nullish<int>): bool
 }
 
 lemma looseIsNullish_ensures(x: Nullish<int>)
-  ensures (looseIsNullish(x) == (match x { case Value(i_value3) => (var i_x_val: Option<int> := Option.Some(i_value3); (match i_x_val { case Some(i_) => false case None => true })) case Null => true case Undefined => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_) => false case None => true })) }))
+  ensures (looseIsNullish(x) == (!x.Value?))
 {
 }
 
@@ -81,8 +81,8 @@ function looseEarlyReturn(x: Nullish<int>): int
 }
 
 lemma looseEarlyReturn_ensures(x: Nullish<int>)
-  ensures ((match x { case Value(i_value23) => (var i_x_val: Option<int> := Option.Some(i_value23); (match i_x_val { case Some(i_) => false case None => true })) case Null => true case Undefined => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_) => false case None => true })) }) ==> (looseEarlyReturn(x) == 7))
-  ensures (match x { case Value(i_value25) => (var i_x_val: Option<int> := Option.Some(i_value25); (match i_x_val { case Some(i_x_val) => (looseEarlyReturn(x) == i_x_val) case None => true })) case Null => true case Undefined => (var i_x_val: Option<int> := Option.None; (match i_x_val { case Some(i_x_val) => (looseEarlyReturn(x) == i_x_val) case None => true })) })
+  ensures ((!x.Value?) ==> (looseEarlyReturn(x) == 7))
+  ensures (match x { case Value(i_value25) => (var i_x_val := i_value25; (looseEarlyReturn(x) == i_x_val)) case Null => true case Undefined => true })
 {
 }
 

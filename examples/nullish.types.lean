@@ -9,40 +9,22 @@ namespace Pure
 def classify (x : LemmaScript.Nullish Int) : Int :=
   match x with
   | .Value _value0 =>
-    let _x_val : Option Int := Option.some _value0
-    match _x_val with
-    | .some _x_val =>
-      _x_val
-    | .none =>
-      2
+    let _x_val := _value0
+    _x_val
   | .Null =>
-    let _x_val : Option Int := Option.none
-    match _x_val with
-    | .some _x_val =>
-      _x_val
-    | .none =>
-      2
+    2
   | .Undefined =>
     1
 
 def reverse (x : LemmaScript.Nullish Int) : Int :=
   match x with
   | .Value _value8 =>
-    let _x_val : Option Int := Option.some _value8
-    match _x_val with
-    | .some _x_val =>
-      _x_val
-    | .none =>
-      1
+    let _x_val := _value8
+    _x_val
   | .Null =>
     2
   | .Undefined =>
-    let _x_val : Option Int := Option.none
-    match _x_val with
-    | .some _x_val =>
-      _x_val
-    | .none =>
-      1
+    1
 
 def disjunction (x : LemmaScript.Nullish Int) : Int :=
   match x with
@@ -79,40 +61,22 @@ def retainUndefined (x : LemmaScript.Nullish Int) : Option Int :=
 def positive (x : LemmaScript.Nullish Int) : Bool :=
   match x with
   | .Value _value31 =>
-    let _x_val : Option Int := Option.some _value31
-    match _x_val with
-    | .some _x_val =>
-      _x_val > 0
-    | .none =>
-      false
+    let _x_val := _value31
+    _x_val > 0
   | .Null =>
     false
   | .Undefined =>
-    let _x_val : Option Int := Option.none
-    match _x_val with
-    | .some _x_val =>
-      _x_val > 0
-    | .none =>
-      false
+    false
 
 def absentOrPositive (x : LemmaScript.Nullish Int) : Bool :=
   match x with
   | .Value _value41 =>
-    let _x_val : Option Int := Option.some _value41
-    match _x_val with
-    | .some _x_val =>
-      _x_val > 0
-    | .none =>
-      true
+    let _x_val := _value41
+    _x_val > 0
   | .Null =>
     true
   | .Undefined =>
-    let _x_val : Option Int := Option.none
-    match _x_val with
-    | .some _x_val =>
-      _x_val > 0
-    | .none =>
-      true
+    true
 
 def isUndefined (x : LemmaScript.Nullish Int) : Bool :=
   x = LemmaScript.Nullish.Undefined
