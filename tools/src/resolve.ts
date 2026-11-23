@@ -20,6 +20,8 @@ import { presentFact, variantFact } from "./condition-facts.js";
 
 interface Env {
   name: string;
+  /** Identity of the declaration. Refinements of a binding keep its id. */
+  id: number;
   ty: Ty;
   parent: Env | null;
   /** Callback bindings are lexical, so a nested declaration shadows them in
@@ -41,8 +43,9 @@ function lookup(env: Env | null, name: string): Ty | undefined {
   return env.name === name ? env.ty : lookup(env.parent, name);
 }
 
+let nextBindingId = 1;
 function extend(env: Env | null, name: string, ty: Ty): Env {
-  return { name, ty, parent: env };
+  return { name, id: nextBindingId++, ty, parent: env };
 }
 /** Shadow a binding with a narrowed type, keeping its callback state.
  *  Dropping that state would let the body reference a renamed parameter by its
@@ -56,7 +59,7 @@ function refine(env: Env | null, name: string, ty: Ty): Env {
   if (!entry) for (let e = env; e; e = e.parent) {
     if (e.emittedName === name) { entry = e; break; }
   }
-  return { ...entry, name: entry?.name ?? name, ty, parent: env };
+  return { ...entry, name: entry?.name ?? name, id: entry?.id ?? nextBindingId++, ty, parent: env };
 }
 // ── Access paths ─────────────────────────────────────────────
 
@@ -656,7 +659,7 @@ function resolveCallback(e: Extract<RawExpr, { kind: "lambda" }>, actual: Ty[], 
   let env = ctx.env;
   const frames = e.params.map((p, i): Env => {
     const frame: Env = {
-      name: p.name, parent: env,
+      name: p.name, id: nextBindingId++, parent: env,
       ty: executesDefault(i) ? expandAlias(parseTsType(p.inferredTsType ?? p.tsType ?? "unknown"), ctx.typeDecls)
         : p.rest ? { kind: "unknown" } : slots[i]?.ty ?? { kind: "void" },
       onRead: () => {
@@ -670,7 +673,7 @@ function resolveCallback(e: Extract<RawExpr, { kind: "lambda" }>, actual: Ty[], 
           if (!captures && !eagerReads.has(i)) {
             eagerReads.add(i);
             prefix.push({ kind: "let", name: freshName(`_callbackRead${id}_${i}`), ty: frame.ty,
-              mutable: false, init: { kind: "var", name: frame.emittedName, ty: frame.ty } });
+              mutable: false, init: { kind: "var", name: frame.emittedName, ty: frame.ty, binding: frame.id } });
           }
         }
         if (!p.rest && !executesDefault(i) && i < actual.length) used[i] = true;
@@ -1018,7 +1021,8 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         throw new Error(`cannot materialize callback rest parameter '${e.name}'; use its length or a constant indexed read`);
       }
       entry?.onRead?.();
-      return entry?.value ?? { kind: "var", name: entry?.emittedName ?? e.name, ty: entry?.ty ?? { kind: "unknown" } };
+      return entry?.value ?? { kind: "var", name: entry?.emittedName ?? e.name, ty: entry?.ty ?? { kind: "unknown" },
+        ...(entry ? { binding: entry.id } : {}) };
     }
 
     case "num":
@@ -2088,6 +2092,7 @@ function precomputeFieldTypesInner(typeDecls: TypeDeclInfo[]) {
 }
 
 export function resolveModule(raw: RawModule): TModule {
+  nextBindingId = 1;
   callbackCounter = 0;
   mergeBinder = 0;
   _warnedRefEq.clear();

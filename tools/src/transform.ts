@@ -2001,6 +2001,8 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
 
 interface Chain {
   varName: string;
+  /** Declaration identity of the scrutinee variable (see `readsVar`). */
+  binding?: number;
   typeName: string;
   cases: { variant: string; body: TStmt[] }[];
   fallthrough: TStmt[];
@@ -2083,10 +2085,11 @@ function emitMatchStmt(
         ? replacePathInTStmts(body, path, matchBinder(fields[0].name, prefix), fields[0].type ?? parseTsType(fields[0].tsType))
         : body;
     } else {
-      stmts = replaceFieldAccessInTStmts(body, prefix, fields);
+      const scrutineeVar = path ?? { rootVar: prefix };
+      stmts = replaceFieldAccessInTStmts(body, scrutineeVar, fields);
       if (isSynthArrayUnion && fields.length === 1) {
         const f = fields[0];
-        stmts = replaceVarInTStmts(stmts, prefix, matchBinder(f.name, prefix), f.type ?? parseTsType(f.tsType));
+        stmts = replaceVarInTStmts(stmts, scrutineeVar, matchBinder(f.name, prefix), f.type ?? parseTsType(f.tsType));
       }
     }
     return transformStmts(stmts, typeDecls);
@@ -2117,9 +2120,9 @@ function emitMatchStmt(
 /** Replace bare `var(oldName)` references → `var(newName)` with the given type.
  *  Used by emitMatchStmt for synth array-unions where the variant has a single
  *  payload field and the user code refers to the scrutinee by its bare name. */
-function replaceVarInTStmts(stmts: TStmt[], oldName: string, newName: string, newTy: Ty): TStmt[] {
+function replaceVarInTStmts(stmts: TStmt[], old: VarRef, newName: string, newTy: Ty): TStmt[] {
   return stmts.map(s => mapTStmt(s, e => {
-    if (e.kind === "var" && e.name === oldName) {
+    if (readsVar(e, old)) {
       return { kind: "var", name: newName, ty: newTy } as TExpr;
     }
     return null;
@@ -2196,7 +2199,8 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
       ? buildMatchArms(cases, undefined, ctorDecl!.name, typeDecls, (body) => transformStmts(body, typeDecls))!
       : buildMatchArms(cases, s.expr.kind === "var" ? s.expr.name : "?", ctorDecl!.name, typeDecls,
         (body, vn, fields, ctorName) => {
-          let out = transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls);
+          const scrutineeVar = { rootVar: vn!, binding: s.expr.kind === "var" ? s.expr.binding : undefined };
+          let out = transformStmts(replaceFieldAccessInTStmts(body, scrutineeVar, fields), typeDecls);
           if (ctorName && vn && baseName) out = stampScrutineeUpdates(out, vn, ctorName, baseName);
           return out;
         })!;
@@ -2207,12 +2211,12 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
 /** Replace obj.field → replacement var in typed IR.
  *  Uses the TExpr's resolved type when available, falling back to `fallbackTy`. */
 function replaceFieldsInTStmts(
-  stmts: TStmt[], objName: string,
+  stmts: TStmt[], obj: VarRef,
   replacements: { fieldName: string; newName: string; fallbackTy: Ty }[]
 ): TStmt[] {
   if (replacements.length === 0) return stmts;
   return stmts.map(s => mapTStmt(s, e => {
-    if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === objName) {
+    if (e.kind === "field" && readsVar(e.obj, obj)) {
       const r = replacements.find(r => r.fieldName === e.field);
       if (r) {
         const ty = e.ty.kind !== "unknown" ? e.ty : r.fallbackTy;
@@ -2229,11 +2233,11 @@ function replaceFieldsInTStmts(
  *  The source value is still the enclosing union in typed IR, while Dafny and
  *  Lean expect the helper's nominal record. Rebuild that record solely from
  *  the fields bound by this arm's match pattern. */
-function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { name: string; tsType: string; type?: Ty }[]): TStmt[] {
-  const projected = projectStructuralCallArgsInTStmts(stmts, varName, fields);
-  return replaceFieldsInTStmts(projected, varName, fields.map(f => ({
+function replaceFieldAccessInTStmts(stmts: TStmt[], obj: VarRef, fields: { name: string; tsType: string; type?: Ty }[]): TStmt[] {
+  const projected = projectStructuralCallArgsInTStmts(stmts, obj, fields);
+  return replaceFieldsInTStmts(projected, obj, fields.map(f => ({
     fieldName: f.name,
-    newName: matchBinder(f.name, varName),
+    newName: matchBinder(f.name, obj.rootVar),
     fallbackTy: f.type ?? parseTsType(f.tsType),
   })));
 }
@@ -2244,7 +2248,7 @@ function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { n
  *  match-bound source field. That deliberately avoids inventing a broad cast:
  *  it is the nominal-backend witness for the structural call TS already accepts. */
 function projectStructuralCallArgsInTStmts(
-  stmts: TStmt[], varName: string,
+  stmts: TStmt[], obj: VarRef,
   fields: { name: string; tsType: string; type?: Ty }[],
 ): TStmt[] {
   const sourceFields = fields.map(f => ({
@@ -2257,7 +2261,7 @@ function projectStructuralCallArgsInTStmts(
     const paramTys = e.paramTys;
     let changed = false;
     const args = e.args.map((arg, i) => {
-      if (arg.kind !== "var" || arg.name !== varName || i >= paramTys.length) return arg;
+      if (!readsVar(arg, obj) || i >= paramTys.length) return arg;
       const targetTy = paramTys[i];
       const targetDecl = declOfTy(_typeDecls, targetTy);
       if (targetTy.kind !== "user" || targetDecl?.kind !== "record" || !targetDecl.fields) return arg;
@@ -2278,7 +2282,7 @@ function projectStructuralCallArgsInTStmts(
           name: m.targetField.name,
           value: {
             kind: "var" as const,
-            name: matchBinder(m.sourceField.name, varName),
+            name: matchBinder(m.sourceField.name, obj.rootVar),
             ty: m.sourceField.resolvedTy,
           },
         })),
@@ -2290,16 +2294,24 @@ function projectStructuralCallArgsInTStmts(
 }
 
 /** A pure access path — chain of field accesses rooted at a var. */
-interface AccessPath { rootVar: string; fields: string[] }
+interface VarRef { rootVar: string; binding?: number }
+interface AccessPath extends VarRef { fields: string[] }
 
 function asTAccessPath(e: TExpr): AccessPath | null {
-  if (e.kind === "var") return { rootVar: e.name, fields: [] };
+  if (e.kind === "var") return { rootVar: e.name, binding: e.binding, fields: [] };
   if (e.kind === "field") {
     const inner = asTAccessPath(e.obj);
     if (!inner) return null;
-    return { rootVar: inner.rootVar, fields: [...inner.fields, e.field] };
+    return { ...inner, fields: [...inner.fields, e.field] };
   }
   return null;
+}
+
+/** Is `e` a read of this declaration? Resolve stamps each read with the
+ *  binding it found, so a shadowing local, loop variable, lambda parameter or
+ *  quantified variable of the same spelling is a different variable. */
+function readsVar(e: TExpr, v: VarRef): boolean {
+  return e.kind === "var" && e.name === v.rootVar && e.binding === v.binding;
 }
 
 /** Does TExpr `e` match the given access path exactly? */
@@ -2307,24 +2319,28 @@ function matchesAccessPath(e: TExpr, path: AccessPath): boolean {
   const collected: string[] = [];
   let cur = e;
   while (cur.kind === "field") { collected.unshift(cur.field); cur = cur.obj; }
-  if (cur.kind !== "var" || cur.name !== path.rootVar) return false;
+  if (!readsVar(cur, path)) return false;
   if (collected.length !== path.fields.length) return false;
   return collected.every((f, i) => f === path.fields[i]);
 }
 
-/** Replace every TExpr matching `path` with `var(binder, binderTy)`. */
+/** Replace every read of `path` with `var(binder, binderTy)`. Binding
+ *  identity decides what is a read of the path, so this also descends into
+ *  lambdas: a captured outer variable is substituted, a parameter or local
+ *  that reuses its name is not. */
 function replacePathInTExpr(expr: TExpr, path: AccessPath, binder: string, binderTy: Ty): TExpr {
-  return mapTExpr(expr, e =>
-    matchesAccessPath(e, path)
-      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
-  );
+  return mapTExpr(expr, e => {
+    if (matchesAccessPath(e, path)) return { kind: "var", name: binder, ty: binderTy };
+    if (e.kind === "lambda") return { ...e,
+      params: e.params.map(p => p.defaultValue
+        ? { ...p, defaultValue: replacePathInTExpr(p.defaultValue, path, binder, binderTy) } : p),
+      body: replacePathInTStmts(e.body, path, binder, binderTy) };
+    return null;
+  });
 }
 
 function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, binderTy: Ty): TStmt[] {
-  return stmts.map(s => mapTStmt(s, e =>
-    matchesAccessPath(e, path)
-      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
-  ));
+  return stmts.map(s => mapTStmt(s, e => replacePathInTExpr(e, path, binder, binderTy)));
 }
 
 
@@ -2335,7 +2351,7 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
   if (stmts.length > 0 && stmts[0].kind === "tagMatch") {
     const t = stmts[0];
     const varName = t.scrutinee.kind === "var" ? t.scrutinee.name : "?";
-    const chain: Chain = { varName, typeName: t.typeName, cases: t.cases, fallthrough: t.fallthrough };
+    const chain: Chain = { varName, binding: t.scrutinee.kind === "var" ? t.scrutinee.binding : undefined, typeName: t.typeName, cases: t.cases, fallthrough: t.fallthrough };
     return transformPureMatch(chain, typeDecls);
   }
 
@@ -2408,9 +2424,10 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
   const typeName = ctorDecl.name;
   const varName = s.expr.kind === "var" ? s.expr.name : undefined;
   const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
+  const binding = s.expr.kind === "var" ? s.expr.binding : undefined;
   const arms = buildMatchArms(cases, varName, typeName, typeDecls,
     (body, vn, fields, ctorName) => {
-      const projected = vn ? projectStructuralCallArgsInTStmts(body, vn, fields) : body;
+      const projected = vn ? projectStructuralCallArgsInTStmts(body, { rootVar: vn, binding }, fields) : body;
       let result = transformPureBody(projected, typeDecls);
       if (!result) return null;
       if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields, ctorName, tyBaseName(typeName));
@@ -2435,7 +2452,7 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
   const isSynthArrayUnion = decl?.discriminant === "__isArray__";
   const arms = buildMatchArms(cases, chain.varName, chain.typeName, typeDecls,
     (body, vn, fields, ctorName) => {
-      const projected = vn ? projectStructuralCallArgsInTStmts(body, vn, fields) : body;
+      const projected = vn ? projectStructuralCallArgsInTStmts(body, { rootVar: vn, binding: chain.binding }, fields) : body;
       let result = transformPureBody(projected, typeDecls);
       if (!result) return null;
       if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields, ctorName, tyBaseName(chain.typeName));
@@ -2453,7 +2470,7 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
     const remaining = remainingVariant(chain.typeName, chain.cases, typeDecls);
     if (remaining) {
       // Exactly one variant left — destructure for variant-specific field access.
-      const projected = projectStructuralCallArgsInTStmts(chain.fallthrough, chain.varName, remaining.fields);
+      const projected = projectStructuralCallArgsInTStmts(chain.fallthrough, { rootVar: chain.varName, binding: chain.binding }, remaining.fields);
       let body = transformPureBody(projected, typeDecls);
       if (!body) return null;
       if (remaining.fields.length > 0) body = replaceFieldAccess(body, chain.varName, remaining.fields, remaining.name, tyBaseName(chain.typeName));

@@ -82,7 +82,9 @@ export type TChainStep =
 // ── Expressions ──────────────────────────────────────────────
 
 export type TExpr =
-  | { kind: "var"; name: string; ty: Ty }
+  /** `binding` identifies the declaration a read resolved to, so a later pass
+   *  can tell an outer variable from an inner one with the same spelling. */
+  | { kind: "var"; name: string; ty: Ty; binding?: number }
   | { kind: "num"; value: number; ty: Ty }
   | { kind: "bigint"; value: string; ty: Ty }   // exact integer, canonical decimal
   | { kind: "str"; value: string; ty: Ty }
