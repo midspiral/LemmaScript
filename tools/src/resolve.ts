@@ -1038,11 +1038,8 @@ function resolveAssignment(targetExpr: RawExpr, op: string, valueExpr: RawExpr, 
 
 function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
   switch (e.kind) {
-    case "update":
-      return { ...resolveAssignment(e.target, e.op === "++" ? "+=" : "-=",
-        { kind: "num", value: 1 }, ctx), postfix: !e.prefix };
     case "assignment":
-      return resolveAssignment(e.target, e.op, e.value, ctx);
+      return { ...resolveAssignment(e.target, e.op, e.value, ctx), postfix: e.postfix };
     case "var": {
       if (e.name === "undefined") return { kind: "var", name: "undefined", ty: { kind: "void" } };
       const entry = binding(ctx.env, e.name);
@@ -1885,7 +1882,7 @@ function containsHavoc(v: unknown): boolean {
 function containsAssignment(v: unknown): boolean {
   if (Array.isArray(v)) return v.some(containsAssignment);
   if (v === null || typeof v !== "object") return false;
-  if (["assignment", "update"].includes((v as { kind: string }).kind)) return true;
+  if ((v as { kind?: string }).kind === "assignment") return true;
   return Object.values(v).some(containsAssignment);
 }
 
@@ -1918,7 +1915,6 @@ function collectCallsExpr(e: RawExpr, fns: Set<string>, out: Set<string>): void 
     case "binop": collectCallsExpr(e.left, fns, out); collectCallsExpr(e.right, fns, out); return;
     case "unop": collectCallsExpr(e.expr, fns, out); return;
     case "assignment": collectCallsExpr(e.target, fns, out); collectCallsExpr(e.value, fns, out); return;
-    case "update": collectCallsExpr(e.target, fns, out); return;
     case "field": collectCallsExpr(e.obj, fns, out); return;
     case "index": collectCallsExpr(e.obj, fns, out); collectCallsExpr(e.idx, fns, out); return;
     case "record":

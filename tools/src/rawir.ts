@@ -42,8 +42,7 @@ export type RawExpr =
   | { kind: "bool"; value: boolean }
   | { kind: "binop"; op: string; left: RawExpr; right: RawExpr }
   | { kind: "unop"; op: string; expr: RawExpr }
-  | { kind: "assignment"; op: string; target: RawExpr; value: RawExpr }
-  | { kind: "update"; op: "++" | "--"; target: RawExpr; prefix: boolean }
+  | { kind: "assignment"; op: string; target: RawExpr; value: RawExpr; postfix?: boolean }
   | { kind: "call"; fn: RawExpr; args: RawExpr[] }
   | { kind: "index"; obj: RawExpr; idx: RawExpr }
   | { kind: "field"; obj: RawExpr; field: string }

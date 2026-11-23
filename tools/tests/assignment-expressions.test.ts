@@ -55,6 +55,8 @@ const cases = [
   ["takeOptionalCall", "let x = p; const a = p === 0 ? [7] : undefined; const y = a?.includes(x = 7); return x;", 7],
   ["parameter", "return (p = 7);", 7],
   ["objectCondition", "let a: number[] = []; if (a = [7]) return a[0]; return 0;", 7],
+  ["forOfIterable", "let a = [1]; for (const n of (a = [7])) {} return a[0];", 7],
+  ["switchCondition", 'let tag = "a"; switch (tag = p === 0 ? "b" : "a") { case "b": return tag === "b" ? 8 : 0; default: return 0; }', 8],
   ["loopCondition", `let x = p;
     while ((x = x + 1) < 3) {
       //@ invariant 0 <= x && x < 3

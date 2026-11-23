@@ -531,8 +531,8 @@ function extractExpr(node: Expression): RawExpr {
   // Updates yield the new value in prefix form, the old value in postfix form.
   if ((Node.isPrefixUnaryExpression(node) || Node.isPostfixUnaryExpression(node)) &&
       (node.getOperatorToken() === SyntaxKind.PlusPlusToken || node.getOperatorToken() === SyntaxKind.MinusMinusToken)) {
-    return { kind: "update", op: node.getOperatorToken() === SyntaxKind.PlusPlusToken ? "++" : "--",
-      target: extractExpr(node.getOperand()), prefix: Node.isPrefixUnaryExpression(node) };
+    return { kind: "assignment", op: node.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+=" : "-=",
+      target: extractExpr(node.getOperand()), value: { kind: "num", value: 1 }, postfix: Node.isPostfixUnaryExpression(node) };
   }
 
   // Prefix unary: !x, -x
@@ -1484,7 +1484,6 @@ function renameRawExpr(e: RawExpr, from: string, to: string): RawExpr {
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
     case "assignment": return { ...e, target: r(e.target), value: r(e.value) };
-    case "update": return { ...e, target: r(e.target) };
     case "call": return { ...e, fn: r(e.fn), args: e.args.map(r) };
     case "index": return { ...e, obj: r(e.obj), idx: r(e.idx) };
     case "field": return { ...e, obj: r(e.obj) };
