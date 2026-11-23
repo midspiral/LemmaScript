@@ -210,3 +210,30 @@ for (const name of ["variantShadow", "switchShadow"]) {
     assert.doesNotMatch(result.output, /resolution\/type errors|unresolved identifier|timed out/);
   });
 }
+
+const loopAnnotations = `export function narrowedLoopAnnotations(p: number[] | undefined): number {
+  //@ type i nat
+  //@ ensures p !== undefined ==> \\result === p.length
+  if (p !== undefined) {
+    let i = 0;
+    while (i < p.length) {
+      //@ invariant i <= p.length
+      //@ decreases p.length - i
+      //@ done_with i === p.length
+      i++;
+    }
+    return i;
+  }
+  return 0;
+}`;
+
+test("narrowing reaches a loop's termination measure", () => {
+  const result = verify(generate(loopAnnotations));
+  assert.equal(result.status, 0, result.output);
+});
+
+test("Lean loop annotations use the narrowed value", () => {
+  const lean = generate(loopAnnotations, "lean");
+  assert.match(lean, /decreasing _p_val\.size - i/);
+  assert.match(lean, /done_with \(i = _p_val\.size : Prop\)/);
+});

@@ -125,9 +125,12 @@ function mapTStmt(s: TStmt, f: (e: TExpr) => TExpr | null): TStmt {
     case "break": case "continue": case "throw": return s;
     case "expr": return { ...s, expr: r(s.expr) };
     case "if": return { ...s, cond: r(s.cond), then: s.then.map(t => mapTStmt(t, f)), else: s.else.map(t => mapTStmt(t, f)) };
-    case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r), body: s.body.map(t => mapTStmt(t, f)) };
+    case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r),
+      decreases: s.decreases ? r(s.decreases) : null,
+      doneWith: s.doneWith ? r(s.doneWith) : null, body: s.body.map(t => mapTStmt(t, f)) };
     case "switch": return { ...s, expr: r(s.expr), cases: s.cases.map(c => ({ ...c, body: c.body.map(t => mapTStmt(t, f)) })), defaultBody: s.defaultBody.map(t => mapTStmt(t, f)) };
-    case "forof": return { ...s, iterable: r(s.iterable), invariants: s.invariants.map(r), body: s.body.map(t => mapTStmt(t, f)) };
+    case "forof": return { ...s, iterable: r(s.iterable), invariants: s.invariants.map(r),
+      doneWith: s.doneWith ? r(s.doneWith) : null, body: s.body.map(t => mapTStmt(t, f)) };
     case "ghostLet": return { ...s, init: r(s.init) };
     case "ghostAssign": return { ...s, value: r(s.value) };
     case "assert": return { ...s, expr: r(s.expr) };
