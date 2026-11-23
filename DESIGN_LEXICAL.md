@@ -1,7 +1,8 @@
 # DESIGN_LEXICAL — Preserving lexical bindings through lowering
 
 Implemented in [PR #364](https://github.com/midspiral/LemmaScript/pull/364);
-extended from lost scopes to every shadowing binding afterwards.
+extended in [PR #377](https://github.com/midspiral/LemmaScript/pull/377)
+from lost scopes to every shadowing binding afterwards.
 
 Lowering changes block boundaries. Extraction must preserve which declaration
 each reference denotes before the IR loses TypeScript's symbol information.
