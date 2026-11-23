@@ -499,7 +499,7 @@ function ruleLetCondAndOptional(s: TStmt, ctx: CondCtx): TStmt[] | null {
  *  name only valid in the arm. Builtins whose registry entry is `pure`
  *  (they lower to pure Dafny expressions: `x in arr`, `x in m`, `s.Keys`,
  *  …) are exempt even though they carry `callKind: "method"`. */
-function containsMethodCall(e: TExpr): boolean {
+export function containsMethodCall(e: TExpr): boolean {
   if (e.kind === "assignment") return true;
   if (e.kind === "call" && e.callKind === "method" &&
       !(e.builtinId !== undefined && builtinSpec(e.builtinId).pure)) {

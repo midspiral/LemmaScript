@@ -119,7 +119,8 @@ export type TExpr =
   | { kind: "forall"; var: string; varTy: Ty; body: TExpr; ty: Ty }
   | { kind: "exists"; var: string; varTy: Ty; body: TExpr; ty: Ty }
   // Havoc — nondeterministic value:
-  | { kind: "havoc"; ty: Ty }
+  // `placeholder` marks an initializer that is always overwritten before it is read.
+  | { kind: "havoc"; ty: Ty; placeholder?: true }
 
 // ── Statements ───────────────────────────────────────────────
 
