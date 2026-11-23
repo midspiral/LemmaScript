@@ -27,7 +27,7 @@ def single (n : Int) : Array Int :=
   #[n]
 
 def anyOdd (n : Int) : Bool :=
-  (single n).any (fun n => Int.tmod n 2 = 1)
+  (single n).any (fun n_2 => Int.tmod n_2 2 = 1)
 
 def underscoreVsMangled (i_x : Int) : Int :=
   let _x := 1
@@ -44,7 +44,7 @@ def callee (x : Int) : Int :=
   x + 1
 
 def someEscCollision (_x : Int) (i_x : Int) : Bool :=
-  (single _x).any (fun _x => _x > 0)
+  (single _x).any (fun _x_2 => _x_2 > 0)
 
 def constructorVsLocal (error : String) : ClashVerdict :=
   ClashVerdict.error error
