@@ -285,7 +285,7 @@ function _synthFromTsTypeString(ts: string): string | null {
       kind: "discriminated-union",
       discriminant: "__isArray__",
       variants: [
-        { name: "ArrayBranch", fields: [{ name: "arr", tsType: `${elem}[]` }] },
+        { name: "ArrayBranch", fields: [{ name: "arr", tsType: arrayTypeText(elem) }] },
         { name: "NonArrayBranch", fields: [{ name: "val", tsType: other }] },
       ],
     });
@@ -326,7 +326,7 @@ function _tsTypeFromUnionNode(tn: Node): string {
             kind: "discriminated-union",
             discriminant: "__isArray__",
             variants: [
-              { name: "ArrayBranch", fields: [{ name: "arr", tsType: `${elemName}[]` }] },
+              { name: "ArrayBranch", fields: [{ name: "arr", tsType: arrayTypeText(elemName) }] },
               { name: "NonArrayBranch", fields: [{ name: "val", tsType: otherName }] },
             ],
           });
@@ -1124,7 +1124,7 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   // alias's own name (via getAliasSymbol), yielding a self-referential alias.
   if (type.isArray()) {
     const elem = type.getArrayElementTypeOrThrow();
-    return { name, typeParams: tpField, kind: "alias", aliasOf: `${typeToString(elem)}[]` };
+    return { name, typeParams: tpField, kind: "alias", aliasOf: arrayTypeText(typeToString(elem)) };
   }
   if (type.isObject() || type.isIntersection()) return extractRecord(name, type, decl, undefined, extraDecls);
   // Primitive type alias: type TaskId = number → alias
@@ -1246,6 +1246,9 @@ function annotationTypeText(tn: TypeNode, type: Type): string | undefined {
   return indexed ? typeToString(type) : undefined;
 }
 
+/** Generic array syntax preserves element precedence for unions and functions. */
+function arrayTypeText(element: string): string { return `Array<${element}>`; }
+
 function typeToString(type: Type): string {
   if (constEnumInfo(type)) return "number";
   if (type.isUndefined()) return "undefined";
@@ -1296,7 +1299,7 @@ function typeToString(type: Type): string {
             kind: "discriminated-union",
             discriminant: "__isArray__",
             variants: [
-              { name: "ArrayBranch", fields: [{ name: "arr", tsType: `${elemName}[]` }] },
+              { name: "ArrayBranch", fields: [{ name: "arr", tsType: arrayTypeText(elemName) }] },
               { name: "NonArrayBranch", fields: [{ name: "val", tsType: otherName }] },
             ],
           });
@@ -1319,7 +1322,7 @@ function typeToString(type: Type): string {
   }
   if (type.isArray()) {
     const elem = type.getArrayElementTypeOrThrow();
-    return `${typeToString(elem)}[]`;
+    return arrayTypeText(typeToString(elem));
   }
   const symbol = type.getSymbol() ?? type.getAliasSymbol();
   if (symbol) {
@@ -1634,22 +1637,19 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
         }
         // Use the source-level type annotation if present — ts-morph's
         // `d.getType()` strips `| undefined` from optional annotations.
-        // When no annotation, fall back to ts-morph's inferred type — except
-        // when the inference collapses to `any` (e.g. brownfield imports
-        // where the imported declaration's shape is opaque to LS): in that
-        // case leave null so resolve infers from the initializer's IR type
-        // (which sees the declare-type stubs).
+        // Keep inference separate: it supplies context to resolve but must
+        // not discard alternatives admitted by the modeled initializer.
         const annotationNode = d.getTypeNode();
         const annotatedText = annotationNode
           ? annotationTypeText(annotationNode, declType) ?? annotationNode.getText() : undefined;
         const inferred = annotatedText ? null : _eraseGenerics(typeToString(declType));
-        const tsType: string | null = havocType
-          ?? (annotatedText ? _eraseGenerics(annotatedText) : (inferred === "any" ? null : inferred));
+        const tsType: string | null = havocType ?? (annotatedText ? _eraseGenerics(annotatedText) : null);
         result.push({
           kind: "let",
           name: sourceName(d.getNameNode()),
           mutable: s.getDeclarationKind() === "let",
           tsType,
+          ...(!tsType && inferred && inferred !== "any" ? { inferredTsType: inferred } : {}),
           init,
           line,
         });

@@ -8,8 +8,9 @@ import { Project, ScriptTarget } from "ts-morph";
 import { extractModule } from "../src/extract.ts";
 import { resolveModule } from "../src/resolve.ts";
 import { narrowModule } from "../src/narrow.ts";
-import { transformModuleDafny } from "../src/transform.ts";
+import { transformModuleDafny, transformModuleLean } from "../src/transform.ts";
 import { emitDafnyFile } from "../src/dafny-emit.ts";
+import { emitLeanFile, resetLeanModule } from "../src/lean-emit.ts";
 import { peepholeModule } from "../src/peephole.ts";
 import { parseTsType } from "../src/types.ts";
 
@@ -295,4 +296,77 @@ export function popWiden(): boolean {
 }
 `);
   assert.equal(result.status, 0, result.output + result.text);
+});
+
+test("inferred array types preserve union precedence through aliases and nested arrays", () => {
+  const result = verify(String.raw`
+type Values = (number | null)[];
+export function aliases(xs: Values): number {
+  //@ requires xs.length > 0
+  //@ ensures xs[0] === null ==> \result === 0
+  const value = xs[0];
+  return value === null ? 0 : value;
+}
+export function nested(): boolean {
+  //@ ensures \result
+  const values = [[null, 7]];
+  const row = values[0];
+  return row[0] === null && row[1] === 7;
+}
+`);
+  assert.equal(result.status, 0, result.output + result.text);
+});
+
+test("a type-guard find keeps the element carried by its model result", () => {
+  const result = verify(String.raw`
+export function findNullish(xs: (number | null)[]): number {
+  //@ ensures xs.length === 0 ==> \result === 0
+  //@ ensures \result !== 2
+  const v = xs.find(x => x === null);
+  if (v === undefined) return 0;
+  if (v === null) return 1;
+  return 2;
+}
+export function findsNull(): boolean {
+  //@ ensures \result
+  return findNullish([null]) === 1 && findNullish([4]) === 0;
+}
+`);
+  assert.equal(result.status, 0, result.output + result.text);
+});
+
+test("filtering undefined out of three-case elements keeps null", () => {
+  const result = verify(String.raw`
+export function defined(xs: (number | null | undefined)[]): (number | null)[] {
+  //@ ensures \result.length <= xs.length
+  return xs.filter(x => x !== undefined);
+}
+export function keepsNull(): boolean {
+  //@ ensures \result
+  const xs: (number | null | undefined)[] = [undefined, null, 7];
+  const ys = xs.filter(x => x !== undefined);
+  return ys.length === 2 && ys[0] === null && ys[1] === 7;
+}
+`);
+  assert.equal(result.status, 0, result.output + result.text);
+});
+
+test("Lean sentinel tests do not require decidable equality on the payload", () => {
+  const project = new Project({ compilerOptions: {
+    strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true,
+  } });
+  const source = project.createSourceFile("nullish-lean.ts", String.raw`
+export function isNull(x: Map<number, number> | null | undefined): boolean {
+  return x === null;
+}
+export function isDefined(x: Map<number, number> | null | undefined): boolean {
+  return x !== undefined;
+}
+`);
+  const { typesFile } = transformModuleLean(narrowModule(resolveModule(extractModule(source))));
+  resetLeanModule();
+  const text = emitLeanFile(peepholeModule(typesFile!, "lean"));
+  assert.match(text, /match x with[\s\S]*\| \.Null =>\s+true/);
+  assert.match(text, /match x with[\s\S]*\| \.Undefined =>\s+false/);
+  assert.doesNotMatch(text, /[=≠] LemmaScript\.Nullish\./);
 });

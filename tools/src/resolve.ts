@@ -1678,7 +1678,8 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
   switch (s.kind) {
     case "let": {
       // No source annotation → infer type from initializer (resolved first).
-      if (s.tsType === null) {
+      const typeText = s.tsType ?? s.inferredTsType;
+      if (!typeText) {
         const init = resolveExpr(s.init, ctx);
         const ty = init.ty;
         const mutable = s.mutable || isRefMutableInTS(ty);
@@ -1687,7 +1688,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // expandAlias unwraps an array/collection alias (`type Board = number[]`)
       // to its underlying type, so array methods / index-assignment on the
       // local dispatch correctly (params get the same treatment, see makeParams).
-      const declTy = expandAlias(resolveTsType(s.tsType, ctx.overrides, s.name), ctx.typeDecls);
+      let declTy = expandAlias(resolveTsType(typeText, ctx.overrides, s.name), ctx.typeDecls);
       // Propagate declared type as returnTy so nested record expressions resolve
       // union variants correctly (e.g., EffectState → mode: EffectMode → { kind:
       // 'Idle' }). Arrays too, so `const xs: Foo[] = [{...}]` threads the element
@@ -1697,6 +1698,9 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       const initCtx = (declTy.kind === "user" || declTy.kind === "array" || declTy.kind === "optional")
         ? { ...ctx, returnTy: declTy } : ctx;
       let init = coerceStr(resolveExpr(s.init, initCtx), declTy, ctx.typeDecls);
+      // Checker-inferred predicates can narrow beyond the modeled call
+      // signature. An inferred slot must still admit the modeled initializer.
+      if (!s.tsType && !ctx.overrides.has(s.name)) declTy = joinTypes(declTy, init.ty);
       // Under noUncheckedIndexedAccess, TS gives `const e = arr[i]` type T | undefined
       // while the index expression itself resolves to T. Leave that mismatch intact:
       // narrow.ts's ruleOptionalIndexBinding adds the runtime bounds guard and the

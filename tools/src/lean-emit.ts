@@ -250,6 +250,8 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
   if (tyKind === "array") {
     if (method === "map")      return `${obj}.${monadic ? "mapM" : "map"} ${args[0]}`;
     if (method === "filter")   return `${obj}.${monadic ? "filterM" : "filter"} ${args[0]}`;
+    if (method === "filterMap") return `${obj}.filterMap ${args[0]}`;
+    if (method === "filterSome") return `${obj}.filterMap id`;
     if (method === "every")    return `${obj}.${monadic ? "allM" : "all"} ${args[0]}`;
     if (method === "some")     return `${obj}.${monadic ? "anyM" : "any"} ${args[0]}`;
     if (method === "reduce" && args.length === 2) return `(${obj}.foldl ${args[0]} ${args[1]})`;

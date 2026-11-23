@@ -872,6 +872,18 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         }
       }
       if ((e.op === "===" || e.op === "!==") && (nullishOf(e.left.ty) || nullishOf(e.right.ty))) {
+        // Constructor tests do not need decidable equality on the payload.
+        if (_opts.backend === "lean" &&
+            (e.left.ty.kind === "nullish" && e.left.ty.nullish !== "both" ||
+             e.right.ty.kind === "nullish" && e.right.ty.nullish !== "both")) {
+          const sentinelOnLeft = e.left.ty.kind === "nullish" && e.left.ty.nullish !== "both";
+          const sentinel = sentinelOnLeft ? e.left : e.right;
+          const tested = sentinelOnLeft ? e.right : e.left;
+          const answer = (equal: boolean): Expr => ({ kind: "bool", value: equal === (e.op === "===") });
+          return optionalOperands(e.left, e.right, binds, (left, right) =>
+            optionalCases(sentinelOnLeft ? right : left, tested.ty,
+              () => answer(false), tag => answer(tag === nullishOf(sentinel.ty)), optionalExprOps));
+        }
         const ty = joinTypes(e.left.ty, e.right.ty);
         return { kind: "binop", op: e.op === "===" ? "=" : "≠",
           left: convertOptional(lowerExpr(e.left, binds), e.left.ty, ty),
@@ -1254,6 +1266,19 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.fn.kind === "field") {
         const recv = lowerExpr(e.fn.obj, binds);
         let method = e.fn.field;
+        // Removing undefined from Nullish<T> keeps null as an Option<T>
+        // element. A total filterMap callback performs that conversion.
+        if (method === "filterSome" && e.fn.obj.ty.kind === "array" &&
+            e.fn.obj.ty.elem.kind === "optional" && e.fn.obj.ty.elem.nullish === "both" && e.ty.kind === "array") {
+          const source = e.fn.obj.ty.elem;
+          const target = e.ty.elem;
+          const name = optionalBinder();
+          const value = optionalCases(varE(name), source,
+            (v, ty) => optSome(convertOptional(v, ty, target)),
+            tag => tag === "undefined" ? optNone() : optSome(absentValue(tag, target)), optionalExprOps);
+          return { kind: "methodCall", obj: recv, objTy: e.fn.obj.ty, method: "filterMap", monadic: false,
+            args: [{ kind: "lambda", params: [{ name, type: source }], body: [{ kind: "return", value }] }] };
+        }
         const spec = e.builtinId !== undefined ? builtinSpec(e.builtinId) : null;
         // Lambda-taking array builtins (registry `hof`, comparator excluded —
         // mirrors the historical HOF_METHODS set).

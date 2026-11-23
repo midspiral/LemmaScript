@@ -432,6 +432,10 @@ function emitExpr(e: Expr): string {
         }
         // filterMap (synthesized in resolve): drop Nones and unwrap to seq<T>.
         if (e.method === "filterSome") { needPreamble("SeqFilterSome"); needPreamble("OptionType"); return `SeqFilterSome(${obj})`; }
+        if (e.method === "filterMap") {
+          needPreamble("SeqFilterMap"); needPreamble("OptionType");
+          return `SeqFilterMap(${args[0]}, ${obj})`;
+        }
         if (e.method === "every") {
           if (_dafnyLibrary === "stdlib") return `Std.Collections.Seq.All(${obj}, ${args[0]})`;
           needPreamble("SeqAll");
@@ -1208,6 +1212,13 @@ const CALLBACK_INDICES = `function CallbackIndices(n: nat): (r: seq<int>)
   if n == 0 then [] else CallbackIndices(n - 1) + [n - 1]
 }`;
 
+const SEQ_FILTER_MAP = `function SeqFilterMap<T(!new), U(!new)>(f: T -> Option<U>, xs: seq<T>): seq<U>
+  ensures |SeqFilterMap(f, xs)| <= |xs|
+{
+  if |xs| == 0 then []
+  else (match f(xs[0]) case Some(value) => [value] case None => []) + SeqFilterMap(f, xs[1..])
+}`;
+
 const SEQ_FILTER_SOME = `function SeqFilterSome<T>(xs: seq<Option<T>>): seq<T>
   ensures |SeqFilterSome(xs)| <= |xs|
 {
@@ -1753,6 +1764,7 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["SeqAll", SEQ_ALL],
   ["SeqFoldLeft", SEQ_FOLD_LEFT],
   ["SeqFilterSome", SEQ_FILTER_SOME],
+  ["SeqFilterMap", SEQ_FILTER_MAP],
   ["CallbackIndices", CALLBACK_INDICES],
   ["SeqFind", SEQ_FIND],
   ["SeqFindLast", SEQ_FIND_LAST],

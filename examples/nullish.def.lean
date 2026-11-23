@@ -8,75 +8,75 @@ import LemmaScript.Nullish
 set_option velvet.semantics.termination "total"
 
 method classify (x : LemmaScript.Nullish Int) returns (res : Int)
-  ensures ensures_1: (x = LemmaScript.Nullish.Undefined → res = 1 : Prop)
-  ensures ensures_2: (x = LemmaScript.Nullish.Null → res = 2 : Prop)
-  ensures ensures_3: ((match x with | .Value _value58 => res = _value58 | .Null => true | .Undefined => true) : Prop)
+  ensures ensures_1: ((match x with | .Value _ => false | .Null => false | .Undefined => true) → res = 1 : Prop)
+  ensures ensures_2: ((match x with | .Value _ => false | .Null => true | .Undefined => false) → res = 2 : Prop)
+  ensures ensures_3: ((match x with | .Value _value91 => res = _value91 | .Null => true | .Undefined => true) : Prop)
   do
     return Pure.classify x
 
 method reverse (x : LemmaScript.Nullish Int) returns (res : Int)
-  ensures ensures_1: (x = LemmaScript.Nullish.Null → res = 2 : Prop)
-  ensures ensures_2: (x = LemmaScript.Nullish.Undefined → res = 1 : Prop)
-  ensures ensures_3: ((match x with | .Value _value62 => res = _value62 | .Null => true | .Undefined => true) : Prop)
+  ensures ensures_1: ((match x with | .Value _ => false | .Null => true | .Undefined => false) → res = 2 : Prop)
+  ensures ensures_2: ((match x with | .Value _ => false | .Null => false | .Undefined => true) → res = 1 : Prop)
+  ensures ensures_3: ((match x with | .Value _value101 => res = _value101 | .Null => true | .Undefined => true) : Prop)
   do
     return Pure.reverse x
 
 method disjunction (x : LemmaScript.Nullish Int) returns (res : Int)
-  ensures ensures_1: ((match x with | .Value _value66 => res = _value66 | .Null => true | .Undefined => true) : Prop)
+  ensures ensures_1: ((match x with | .Value _value105 => res = _value105 | .Null => true | .Undefined => true) : Prop)
   do
     return Pure.disjunction x
 
 method retainNull (x : LemmaScript.Nullish Int) returns (res : Option Int)
-  ensures ensures_1: ((match x with | .Value _value70 => (let _x_val : Option Int := Option.some _value70; res = _x_val) | .Null => (let _x_val : Option Int := Option.none; res = _x_val) | .Undefined => true) : Prop)
+  ensures ensures_1: ((match x with | .Value _value109 => (let _x_val : Option Int := Option.some _value109; res = _x_val) | .Null => (let _x_val : Option Int := Option.none; res = _x_val) | .Undefined => true) : Prop)
   do
     return Pure.retainNull x
 
 method retainUndefined (x : LemmaScript.Nullish Int) returns (res : Option Int)
-  ensures ensures_1: ((match x with | .Value _value72 => (let _x_val : Option Int := Option.some _value72; res = _x_val) | .Null => true | .Undefined => (let _x_val : Option Int := Option.none; res = _x_val)) : Prop)
+  ensures ensures_1: ((match x with | .Value _value111 => (let _x_val : Option Int := Option.some _value111; res = _x_val) | .Null => true | .Undefined => (let _x_val : Option Int := Option.none; res = _x_val)) : Prop)
   do
     return Pure.retainUndefined x
 
 method positive (x : LemmaScript.Nullish Int) returns (res : Bool)
-  ensures ensures_1: ((match x with | .Value _value74 => false | .Null => true | .Undefined => true) → ¬(res) : Prop)
-  ensures ensures_2: ((match x with | .Value _value76 => res = (_value76 > 0) | .Null => true | .Undefined => true) : Prop)
+  ensures ensures_1: ((match x with | .Value _value113 => false | .Null => true | .Undefined => true) → ¬(res) : Prop)
+  ensures ensures_2: ((match x with | .Value _value115 => res = (_value115 > 0) | .Null => true | .Undefined => true) : Prop)
   do
     return Pure.positive x
 
 method absentOrPositive (x : LemmaScript.Nullish Int) returns (res : Bool)
-  ensures ensures_1: ((match x with | .Value _value80 => false | .Null => true | .Undefined => true) → res : Prop)
-  ensures ensures_2: ((match x with | .Value _value82 => res = (_value82 > 0) | .Null => true | .Undefined => true) : Prop)
+  ensures ensures_1: ((match x with | .Value _value119 => false | .Null => true | .Undefined => true) → res : Prop)
+  ensures ensures_2: ((match x with | .Value _value121 => res = (_value121 > 0) | .Null => true | .Undefined => true) : Prop)
   do
     return Pure.absentOrPositive x
 
 method isUndefined (x : LemmaScript.Nullish Int) returns (res : Bool)
-  ensures ensures_1: (res = (x = LemmaScript.Nullish.Undefined) : Prop)
+  ensures ensures_1: (res = (match x with | .Value _ => false | .Null => false | .Undefined => true) : Prop)
   do
     return Pure.isUndefined x
 
 method isNull (x : LemmaScript.Nullish Int) returns (res : Bool)
-  ensures ensures_1: (res = (x = LemmaScript.Nullish.Null) : Prop)
+  ensures ensures_1: (res = (match x with | .Value _ => false | .Null => true | .Undefined => false) : Prop)
   do
     return Pure.isNull x
 
 method widenUndefined (x : Option Int) returns (res : LemmaScript.Nullish Int)
-  ensures ensures_1: (res = (match x with | .some _optional86 => LemmaScript.Nullish.Value _optional86 | .none => LemmaScript.Nullish.Undefined) : Prop)
+  ensures ensures_1: (res = (match x with | .some _optional131 => LemmaScript.Nullish.Value _optional131 | .none => LemmaScript.Nullish.Undefined) : Prop)
   do
     return Pure.widenUndefined x
 
 method widenNull (x : Option Int) returns (res : LemmaScript.Nullish Int)
-  ensures ensures_1: (res = (match x with | .some _optional87 => LemmaScript.Nullish.Value _optional87 | .none => LemmaScript.Nullish.Null) : Prop)
+  ensures ensures_1: (res = (match x with | .some _optional132 => LemmaScript.Nullish.Value _optional132 | .none => LemmaScript.Nullish.Null) : Prop)
   do
     return Pure.widenNull x
 
 method classifyMethod (x : LemmaScript.Nullish Int) returns (res : Int)
-  ensures ensures_1: (x = LemmaScript.Nullish.Undefined → res = 1 : Prop)
-  ensures ensures_2: (x = LemmaScript.Nullish.Null → res = 2 : Prop)
-  ensures ensures_3: ((match x with | .Value _value88 => res = _value88 | .Null => true | .Undefined => true) : Prop)
+  ensures ensures_1: ((match x with | .Value _ => false | .Null => false | .Undefined => true) → res = 1 : Prop)
+  ensures ensures_2: ((match x with | .Value _ => false | .Null => true | .Undefined => false) → res = 2 : Prop)
+  ensures ensures_3: ((match x with | .Value _value139 => res = _value139 | .Null => true | .Undefined => true) : Prop)
   do
     let mut result : Int := 0
     if h_x : (x).isValue = true then
-      let _value92 := (x).get h_x
-      let _x_val := Option.some _value92
+      let _value143 := (x).get h_x
+      let _x_val := Option.some _value143
       if h__x_val : (_x_val).isSome = true then
         let _x_val := (_x_val).get h__x_val
         result := _x_val
@@ -94,7 +94,7 @@ method classifyMethod (x : LemmaScript.Nullish Int) returns (res : Int)
     return result
 
 method lookupNullable (m : Std.HashMap String (Option Int)) (key : String) returns (res : LemmaScript.Nullish Int)
-  ensures ensures_1: (¬(m.contains key) → res = LemmaScript.Nullish.Undefined : Prop)
-  ensures ensures_2: (m.contains key → res = (match m.get! key with | .some _optional100 => LemmaScript.Nullish.Value _optional100 | .none => LemmaScript.Nullish.Null) : Prop)
+  ensures ensures_1: (¬(m.contains key) → (match res with | .Value _ => false | .Null => false | .Undefined => true) : Prop)
+  ensures ensures_2: (m.contains key → res = (match m.get! key with | .some _optional160 => LemmaScript.Nullish.Value _optional160 | .none => LemmaScript.Nullish.Null) : Prop)
   do
     return Pure.lookupNullable m key

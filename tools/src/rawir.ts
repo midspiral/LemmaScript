@@ -74,15 +74,14 @@ export interface RawLambdaParam {
 }
 
 export interface RawLet {
-  // tsType: explicit source annotation when present (`const x: T = ...`),
-  // otherwise null — resolve infers from the initializer. Letting ts-morph's
-  // inferred type string leak in here was unsafe for brownfield code where
-  // the imported declaration's shape collapses to `any` (e.g. complex
-  // schema-derived unions), losing the LS-visible structure.
   kind: "let";
   name: string;
   mutable: boolean;
+  /** Explicit source annotation (or synthesized declaration), otherwise null. */
   tsType: string | null;
+  /** Checker inference supplies context, not a declaration constraint. It
+   * may be narrower than our model (e.g. an inferred predicate in find). */
+  inferredTsType?: string;
   init: RawExpr;
   line: number;
 }
