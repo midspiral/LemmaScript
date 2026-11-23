@@ -9,6 +9,7 @@ TS source (.ts)
   → extract    (ts-morph → Raw IR)
   → resolve    (Raw IR → Typed IR; types, callback bindings, type narrowing)
   → narrow     (Typed IR → Typed IR; structural narrowing — `someMatch` rewrites)
+  → sequence   (Typed IR → Typed IR; assignment expressions → statements)
   → transform  (Typed IR → IR; includes shared callback lowering)
   → peephole   (IR → IR, local rewrites that eliminate Some/None ceremony)
   → emit       (IR → Lean text or Dafny text)
@@ -22,7 +23,7 @@ Structured AST from ts-morph. Expressions are nodes, not strings. Has declared t
 
 Lambda parameters keep their `rest` marker and `defaultValue` for resolve to bind against the call's argument list.
 
-- `RawExpr`: var, num, str, bool, binop, unop, call, index, field, record, arrayLiteral, lambda, conditional, optChain (`obj?.…`), nullish (`a ?? b`), emptyCollection (`new Map`/`new Set`), nonNull (`e!`); spec-only: result (`\result`), forall, exists, havoc
+- `RawExpr`: var, num, str, bool, binop, unop, assignment (`=`, compound assignments, `++`/`--`), call, index, field, record, arrayLiteral, lambda, conditional, optChain (`obj?.…`), nullish (`a ?? b`), emptyCollection (`new Map`/`new Set`), nonNull (`e!`); spec-only: result (`\result`), forall, exists, havoc
 - `RawStmt`: let, assign, return, break, continue, expr, if, while, switch, forof, throw; spec-only: ghostLet, ghostAssign, assert
 - `//@ ` annotations remain as strings (parsed by specparser in the resolve pass)
 
@@ -34,6 +35,7 @@ Each expression carries:
 - `ty: Ty` — resolved LemmaScript type (nat, int, bool, array, user, etc.)
 - Calls carry `callKind` (pure, method, spec-pure, unknown)
 - Discriminant fields identified
+- Assignments carry `resultName` for the assigned value and `storedValue` for its target representation (e.g. `Some(resultName)`); `postfix` marks updates whose expression returns the old value.
 
 Each statement carries type information for variables. Unsupported patterns (data-carrying variant equality, return in loop) are rejected here with source locations.
 
@@ -51,7 +53,9 @@ Type names: `Expr`, `Stmt`, `Module`, `MatchArm`, `StmtMatchArm`, and `Decl` = `
 
 **Narrow** (`narrow.ts`): Typed IR → Typed IR. Owns all structural narrowing — both for optional checks and for discriminated unions. Optional patterns rewrite to `someMatch`; discriminant patterns (`x.kind === "v"`, `'k' in x`, `Array.isArray(x)` for synthesized array-unions, `x.kind !== "v") return; ...`) rewrite to `tagMatch`. Also handles `==>` premise narrowing in specs, `left ?? right` (nullish coalescing), `k in m ? m[k] : default` for map-typed `m`, and `obj?.<chain>` for any combination of `?.field`, `?.foo()`, `?.[i]`, and continuations (via the `optChain` IR node). Rules fire for pure access paths (`var(x)`, `field(purePath, name)`); `optChain` and `nullish` are the sole paths for complex scrutinees. The pass owns *where* a condition sits; *what* a condition establishes lives in `condition-facts.ts` (shared with resolve). See [Narrow rules](#narrow-rules) below.
 
-**Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None — substituting the binder for any pure access path scrutinee, or lowering naively when the scrutinee is complex (narrow pre-bound the someBody). No optional-narrowing logic of its own.
+**Sequence** (`sequence.ts`): Typed IR → Typed IR. Called at the start of `transformModule`, after narrowing. Hoists assignment expressions into statements, preserving left-to-right evaluation, postfix results, and short-circuiting. Effects in conditional and match arms stay in their selected branch. Effectful loop tests run on every test, including the final failed test; `done_with` describes that final state. Remaining `assignment` nodes are statement-level element/field writes with effect-free operands; transform lowers these by rebuilding the updated value to its root.
+
+**Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None — substituting the binder for any pure access path scrutinee, or lowering naively when the scrutinee is complex (narrow pre-bound the someBody). Method-call lifting remains here. No optional-narrowing logic of its own.
 
 For array callbacks, transform invokes `lowerIndexedCallback` from `callback-lowering.ts` after lowering the receiver and arguments. This shared adapter constructs ordinary IR inside transform; it does not run as a separate module-wide phase.
 
@@ -116,8 +120,9 @@ The specparser (`specparser.ts`) parses `//@ ` annotation expressions into `RawE
 1. **Extract**: add the TS construct to Raw IR.
 2. **Resolve**: add type resolution and classification for the new construct.
 3. **Narrow** (only if it introduces a narrowing pattern): add a rule that detects the pattern and rewrites to `someMatch`.
-4. **Transform**: add an IR lowering rule that pattern-matches on the typed node.
-5. **Emit**: add backend-specific rendering in each emitter if the new IR node needs special syntax.
+4. **Sequence** (if it can contain assignment expressions): preserve operand evaluation order and keep conditional effects in their branch.
+5. **Transform**: add an IR lowering rule that pattern-matches on the typed node.
+6. **Emit**: add backend-specific rendering in each emitter if the new IR node needs special syntax.
 
 ## Scoping
 
@@ -156,6 +161,7 @@ TS source (.ts)
   → extract    (ts-morph → Raw IR)
   → resolve    (Raw IR → Typed IR)
   → narrow     (Typed IR → Typed IR)
+  → sequence   (Typed IR → Typed IR)
   → transform  (Typed IR → IR, with LEAN_OPTIONS)
   → peephole   (IR → IR)
   → emit       (IR → Lean text)
@@ -178,6 +184,7 @@ TS source (.ts)
   → extract    (ts-morph → Raw IR)
   → resolve    (Raw IR → Typed IR)
   → narrow     (Typed IR → Typed IR)
+  → sequence   (Typed IR → Typed IR)
   → transform  (Typed IR → IR, with DAFNY_OPTIONS)
   → peephole   (IR → IR)
   → dafny-emit (IR → Dafny text)
@@ -326,6 +333,7 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 | `resolve.ts` | Resolve | Raw IR → Typed IR (types and type-narrowing) |
 | `typedir.ts` | Types | Typed IR type definitions (incl. `someMatch`/`tagMatch`) |
 | `narrow.ts` | Narrow | Typed IR → Typed IR (structural narrowing → `someMatch` / `tagMatch`) |
+| `sequence.ts` | Sequence | Typed IR → Typed IR (hoists assignment expressions, preserves evaluation order) |
 | `condition-facts.ts` | (shared) | What a condition establishes — detection + materializers, used by narrow, resolve, transform |
 | `ir.ts` | Types | Backend-neutral IR type definitions |
 | `transform.ts` | Transform | Typed IR → IR |
