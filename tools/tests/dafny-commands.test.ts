@@ -33,6 +33,22 @@ test("identical content passes", () => fixture("method M() {}\n", "method M() {}
 test("proof additions pass", () => fixture("method M() {}\n", "method M() {}\nlemma Proof() {}\n", (g, p) => {
   assert.equal(dafnyCheckDiff(g, p), true);
 }));
+const largeProofAddition = "// " + "proof notes ".repeat(180_000) + "\n";
+
+test("proof additions larger than the child-process output buffer pass", () => {
+  const generated = "method M() {}\n";
+  fixture(generated, generated + largeProofAddition, (g, p) => assert.equal(dafnyCheckDiff(g, p), true));
+});
+
+test("a generated deletion after a large addition is reported as a deletion", (t) => {
+  const unchanged = Array.from({ length: 10 }, (_, i) => `method Kept${i}() {}\n`).join("");
+  const error = t.mock.method(console, "error", () => {});
+  fixture(unchanged + "method Deleted() {}\n", largeProofAddition + unchanged, (g, p) => {
+    assert.equal(dafnyCheckDiff(g, p), false);
+    assert.match(error.mock.calls.map(call => call.arguments.join(" ")).join("\n"), /modifications to generated lines/);
+  });
+});
+
 test("generated modifications fail", () => fixture("method M() {}\n", "method Changed() {}\n", (g, p) => {
   assert.equal(dafnyCheckDiff(g, p), false);
 }));
@@ -40,6 +56,18 @@ test("missing inputs fail closed", () => fixture("x\n", "x\n", (g, p, dir) => {
   assert.equal(dafnyCheckDiff(join(dir, "missing"), p), false);
   assert.equal(dafnyCheckDiff(g, join(dir, "missing")), false);
 }));
+
+test("Git summary handles control characters in distinct input paths", { skip: process.platform === "win32" }, () => {
+  fixture("", "", (_g, _p, dir) => {
+    const generated = join(dir, "-gen \t\n雪.dfy.gen");
+    const proof = join(dir, "-proof \n\tλ.dfy");
+    writeFileSync(generated, "method M() {}\n");
+    writeFileSync(proof, "method M() {}\nlemma L() {}\n");
+    assert.equal(dafnyCheckDiff(generated, proof), true);
+    writeFileSync(proof, "method Changed() {}\n");
+    assert.equal(dafnyCheckDiff(generated, proof), false);
+  });
+});
 
 test("forced Git color cannot hide deleted generated lines", () => {
   env({ GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "color.ui", GIT_CONFIG_VALUE_0: "always" }, () => {
@@ -73,6 +101,22 @@ for (const script of ["exit 1", "printf 'not a patch\\n'; exit 1", "printf 'part
       writeFileSync(command, `#!/bin/sh\n${script}\n`);
       chmodSync(command, 0o755);
       env({ PATH: dir }, () => assert.equal(dafnyCheckDiff(g, p), false));
+    });
+  });
+}
+
+for (const [exit, reason] of [
+  ["exit 2", /git exited 2/],
+  ["kill -TERM $$", /signal SIGTERM/],
+  ["exit 0", /invalid numstat output/],
+] as const) {
+  test(`Git status must agree with its summary: ${exit}`, { skip: process.platform === "win32" }, (t) => {
+    const error = t.mock.method(console, "error", () => {});
+    fixture("method M() {}\n", "method M() {}\nlemma L() {}\n", (g, p, dir) => {
+      const command = join(dir, "git");
+      writeFileSync(command, `#!/bin/sh\nprintf '1\\t0\\t\\000old\\000new\\000'\n${exit}\n`, { mode: 0o755 });
+      env({ PATH: dir }, () => assert.equal(dafnyCheckDiff(g, p), false));
+      assert.match(error.mock.calls.map(call => call.arguments.join(" ")).join("\n"), reason);
     });
   });
 }

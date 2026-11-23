@@ -3,7 +3,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "fs";
-import { execFileSync } from "child_process";
+import { execFileSync, spawnSync } from "child_process";
 import path from "path";
 import { DEFAULT_OPTIONS, parseOptionValue, type LscOptions } from "./config.js";
 import type { RunLog } from "./run-log.js";
@@ -48,42 +48,33 @@ function additionsOnly(genPath: string, dfyPath: string): boolean {
     return false;
   }
 
-  let diff = "";
-  try {
-    diff = execFileSync(
-      "git",
-      ["diff", "--no-index", "--minimal", "--no-color", "--no-ext-diff", "--no-textconv", "--text", "--", genPath, dfyPath],
-      { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+  const diff = spawnSync(
+    "git",
+    ["diff", "--no-index", "--minimal", "--numstat", "-z", "--no-color", "--no-ext-diff", "--no-textconv", "--text", "--", genPath, dfyPath],
+    { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  // Numstat returns counts and NUL-delimited paths, with no patch body.
+  const summary = /^\d+\t(\d+)\t(?:[^\0]+\0|\0[^\0]+\0[^\0]+\0)$/.exec(diff.stdout ?? "");
+  const complete = diff.status === 0 ? diff.stdout === ""
+    : diff.status === 1 && summary !== null && summary[0] === diff.stdout;
+  if (diff.error || diff.signal || !complete) {
+    const code = diff.error && "code" in diff.error && typeof diff.error.code === "string" ? diff.error.code : undefined;
+    const reason = code === "ENOENT" ? "git not found on PATH"
+      : diff.error ? code ?? diff.error.message
+      : diff.signal ? `signal ${diff.signal}`
+      : diff.status === 0 || diff.status === 1 ? `invalid numstat output (git exited ${diff.status})`
+      : `git exited ${diff.status}`;
+    const detail = diff.stderr?.trim();
+    console.error(
+      `ERROR: could not run \`git diff\` to verify ${path.basename(dfyPath)} is additions-only (${reason})` +
+      `${detail ? `: ${detail}` : ""}`,
     );
-  } catch (e: any) {
-    // `git diff --no-index` exits 1 for a valid, non-empty comparison. Every
-    // other exit shape means the comparison did not complete, even when git
-    // happened to return partial stdout.
-    const status = e?.status;
-    const stdout = typeof e?.stdout === "string" ? e.stdout : "";
-    if (status !== 1 || e?.signal != null || e?.code != null || !stdout.startsWith("diff --git ")) {
-      const detail = typeof e?.stderr === "string" ? e.stderr.trim() : "";
-      console.error(
-        `ERROR: could not run \`git diff\` to verify ${path.basename(dfyPath)} is additions-only` +
-        `${status === undefined ? " (is git installed?)" : ` (git exited ${status})`}` +
-        `${detail ? `: ${detail}` : ""}`,
-      );
-      return false;
-    }
-    diff = stdout;
+    return false;
   }
-  // Only file headers are metadata. Inside a hunk, even a line beginning
-  // with "---" is a deletion (for example, text inside a multiline string).
-  const deletions: string[] = [];
-  let inHunk = false;
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("diff --git ")) inHunk = false;
-    else if (line.startsWith("@@ ")) inHunk = true;
-    else if (inHunk && line.startsWith("-")) deletions.push(line);
-  }
-  if (deletions.length > 0) {
-    console.error(`WARNING: ${path.basename(dfyPath)} has modifications to generated lines (not additions-only):`);
-    for (const d of deletions.slice(0, 5)) console.error("  " + d);
+  if (summary && summary[1] !== "0") {
+    console.error(
+      `WARNING: ${path.basename(dfyPath)} has modifications to generated lines (not additions-only): ${summary[1]} deleted line(s)`,
+    );
     return false;
   }
   // Added lines must not bypass the verifier or change its options.
