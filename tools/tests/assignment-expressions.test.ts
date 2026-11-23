@@ -51,10 +51,18 @@ const cases = [
   ["arraySpreadSnapshot", "const a = [1]; const b = [...a, (a[0] = 7)]; return b[0] + b[1] + a[0];", 15],
   ["freshNames", "const _assigned0 = 1, _eval0 = 2, _branch0 = 3; let x = p; return (x = 7) + _assigned0 + _eval0 + _branch0;", 13],
   ["compound", "let x = 1; const y = (x += (x = 7)); return x + y;", 16],
+  ["compoundSubtract", "let x = 10; const y = (x -= 3); return x + y;", 14],
+  ["compoundMultiply", "let x = 2; const y = (x *= 3); return x + y;", 12],
+  ["compoundBigIntDivide", "let x = -15n; const y = (x /= 2n); return x + y === -14n ? 1 : 0;", 1],
+  ["compoundRemainder", "let x = 10; const y = (x %= 3); return x + y;", 2],
   ["postfixUpdate", "let x = 1; const y = x++; return x + y;", 3],
   ["prefixUpdate", "let x = 1; const y = ++x; return x + y;", 4],
+  ["postfixDecrement", "let x = 2; const y = x--; return x + y;", 3],
+  ["prefixDecrement", "let x = 2; const y = --x; return x + y;", 2],
   ["logicalAssign", "let x = p; const y = (x ||= 7); return x + y;", 14],
   ["skipLogicalAssign", "let x = 1; const y = (x ||= (x = 7)); return x + y;", 2],
+  ["andAssign", "let x = 1; const y = (x &&= 7); return x + y;", 14],
+  ["skipAndAssign", "let x = p; const y = (x &&= 7); return x + y;", 0],
   ["nullishAssign", "let x: number | undefined = p === 0 ? undefined : p; const y = (x ??= 7); return y;", 7],
   ["skipNullish", "let x = p; const y = p === 0 ? 1 : undefined; const z = y ?? (x = 7); return x + z;", 1],
   ["takeNullish", "let x = p; const y = p === 0 ? undefined : 1; const z = y ?? (x = 7); return x + z;", 14],
@@ -167,6 +175,16 @@ test("assignment-expression results and side effects agree with JavaScript", () 
   const output = dafny();
   const result = verify(output);
   assert.equal(result.status, 0, result.output + "\n" + output);
+});
+
+test("Dafny preserves the write in a Math.abs argument", () => {
+  const result = verify(dafny(`export function builtinArgument(p: number): number {
+    //@ ensures \\result === 0
+    let x = p;
+    const y = Math.abs(x = -7);
+    return x + y;
+  }`));
+  assert.equal(result.status, 0, result.output);
 });
 
 for (const name of ["parenWholeAssign", "assignInInit"]) {
