@@ -30,6 +30,10 @@ const cases = [
   ["skipOr", "let x = 1; const y = p === 0 || (x = 7) > 0; return x;", 1],
   ["numberOr", "let x = 1; const y = x || (x = 7); return x + y;", 2],
   ["numberAnd", "let x = 1; const y = x && (x = 7); return x + y;", 14],
+  ["leftAssignSkipAnd", "let x = 1; return (x = 0) && checked(0);", 0],
+  ["leftAssignTakeAnd", "let x = 0; return (x = 7) && checked(7);", 7],
+  ["leftAssignSkipOr", "let x = 0; return (x = 7) || checked(0);", 7],
+  ["leftAssignTakeOr", "let x = 1; return (x = 0) || checked(7);", 7],
   ["arrayElements", "let x = 1; const a = [x, (x = 7), x]; return a[0] + a[1] + a[2];", 15],
   ["recordFields", "let x = 1; let r: Pair = { a: x, b: (x = 7) }; return r.a + r.b + x;", 15],
   ["fieldTarget", "let r: Pair = { a: 1, b: 2 }; const y = (r.a = 7); return y + r.a + r.b;", 16],
@@ -38,6 +42,7 @@ const cases = [
   ["computedTarget", "const a = [1, 2]; let i = p; const y = (a[i++] = 7); return 100 * i + 10 * a[0] + a[1] + y;", 179],
   ["indexMutation", "const a = [1]; return a[(a[0] = 7) - 7];", 7],
   ["assignedReceiver", "let a = [1]; return (a = [2])[(a[0] = 7) - 7];", 7],
+  ["reboundAssignedReceiver", "let a = [1]; const x = (a = [2])[(a = [7])[0] - 7]; return x + a[0];", 9],
   ["replacedReceiver", "let a = [1]; const x = a[(a = [7])[0] - 7]; return x + a[0];", 8],
   ["spreadSnapshot", "let r: Pair = { a: 1, b: 2 }; let s: Pair = { ...r, a: (r.b = 7) }; return s.a + s.b + r.b;", 16],
   ["arraySpreadSnapshot", "const a = [1]; const b = [...a, (a[0] = 7)]; return b[0] + b[1] + a[0];", 15],
@@ -56,6 +61,13 @@ const cases = [
   ["parameter", "return (p = 7);", 7],
   ["objectCondition", "let a: number[] = []; if (a = [7]) return a[0]; return 0;", 7],
   ["forOfIterable", "let a = [1]; for (const n of (a = [7])) {} return a[0];", 7],
+  ["forOfReboundIterable", `let a = [0, 0], sum = 0;
+    for (const n of (a = [1, 2])) {
+      //@ invariant a.length === 2
+      //@ invariant sum === (_n_idx === 0 ? 0 : _n_idx === 1 ? 1 : 3)
+      sum += n; a = [10, 20];
+    }
+    return sum;`, 3],
   ["switchCondition", 'let tag = "a"; switch (tag = p === 0 ? "b" : "a") { case "b": return tag === "b" ? 8 : 0; default: return 0; }', 8],
   ["loopCondition", `let x = p;
     while ((x = x + 1) < 3) {
@@ -94,12 +106,15 @@ function checked(n: number): number {
   //@ ensures \\result === n
   let value = n; value += 0; return value;
 }
-export function tagged(c: string | number[]): number {
+export function tagged(c: string | number[], x: number): number {
   //@ ensures Array.isArray(c) ==> \\result === 14
   //@ ensures !Array.isArray(c) ==> \\result === 16
-  let x = 0;
   const y = Array.isArray(c) ? (x = 7) : (x = 8);
   return x + y;
+}
+export function nullishParameter(p: number, q: number | undefined): number {
+  //@ ensures \\result === (q === undefined ? 7 : q)
+  return q ?? (p = 7);
 }
 ` + cases.map(([name, body, expected]) => `export function ${name}(p: number): number {
   ${name.startsWith("loop") ? "//@ type p nat\n  //@ type x nat\n  //@ type i nat" : ""}
@@ -137,13 +152,15 @@ function verify(text: string) {
 }
 
 test("assignment-expression results and side effects agree with JavaScript", () => {
-  const exports: Record<string, (p: unknown) => number> = {};
+  const exports: Record<string, (...args: unknown[]) => number> = {};
   new Function("exports", ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ESNext },
   }).outputText)(exports);
   for (const [name, , expected] of cases) assert.equal(exports[name](0), expected, name);
-  assert.equal(exports.tagged([1]), 14);
-  assert.equal(exports.tagged("s"), 16);
+  assert.equal(exports.tagged([1], 0), 14);
+  assert.equal(exports.tagged("s", 0), 16);
+  assert.equal(exports.nullishParameter(0, undefined), 7);
+  assert.equal(exports.nullishParameter(0, 5), 5);
   const output = dafny();
   const result = verify(output);
   assert.equal(result.status, 0, result.output + "\n" + output);
@@ -160,6 +177,23 @@ for (const name of ["parenWholeAssign", "assignInInit"]) {
     assert.match(result.output, /postcondition could not be proved/);
   });
 }
+
+test("Dafny rejects a false result from following a rebound iterable", () => {
+  const result = verify(dafny(`export function reboundIterable(): number {
+    //@ ensures \\result === 21
+    let a = [0, 0], sum = 0;
+    for (const n of (a = [1, 2])) {
+      //@ invariant a.length === 2
+      //@ invariant _n_idx === 0 ==> a[0] === 1 && a[1] === 2
+      //@ invariant _n_idx > 0 ==> a[0] === 10 && a[1] === 20
+      //@ invariant sum === (_n_idx === 0 ? 0 : _n_idx === 1 ? 1 : 21)
+      sum += n; a = [10, 20];
+    }
+    return sum;
+  }`));
+  assert.notEqual(result.status, 0, result.output);
+  assert.match(result.output, /invariant could not be proved/);
+});
 
 test("explicitly pure functions retain assignments in their by-method implementation", () => {
   const output = dafny(`//@ pure
@@ -193,8 +227,9 @@ test("Lean proves the assignment-expression contracts", {
   const proofs = "prove_correct pair by\n  velvet_vcgen [pair] with (tactic => simp [Pure.pair])\n\n" +
     "prove_correct checked by\n  velvet_vcgen [checked] with finish\n\n" +
     "prove_correct tagged by\n  velvet_vcgen [tagged] with finish\n\n" +
+    "prove_correct nullishParameter by\n  velvet_vcgen [nullishParameter] with finish\n\n" +
     cases.map(([name]) =>
-      `prove_correct ${name} by\n  velvet_vcgen [${name}] with ${name === "replacedReceiver" ? "(tactic => simp_all)" : "finish"}\n`).join("\n");
+      `prove_correct ${name} by\n  velvet_vcgen [${name}] with ${["replacedReceiver", "reboundAssignedReceiver"].includes(name) ? "(tactic => simp_all)" : "finish"}\n`).join("\n");
   const dir = mkdtempSync(join(tmpdir(), "lsc-assignments-lean-"));
   try {
     const file = join(dir, "Assignments.lean");

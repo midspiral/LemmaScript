@@ -43,14 +43,16 @@ function bind(e: TExpr, out: TStmt[], prefix = "eval"): TExpr {
  *  its reference, so a stable access path stays live across later element or
  *  field writes; only a later rebinding of the path needs a snapshot. */
 function save(e: TExpr, out: TStmt[], later: TExpr[], copy: boolean): TExpr {
-  const path = asTAccessPath(e);
+  const value = seq(e, out);
+  const reference = e.kind === "assignment" && e.op === "=" && tyEqual(e.ty, e.target.ty) ? e.target : value;
+  const path = asTAccessPath(reference);
   const rebinds = (node: TExpr) => {
     const target = node.kind === "assignment" ? asTAccessPath(node.target) : null;
     return !!target && target.rootVar === path!.rootVar && target.fields.length <= path!.fields.length &&
       target.fields.every((field, i) => field === path!.fields[i]);
   };
-  if (!copy && path && REFERENCE_KINDS.includes(e.ty.kind) && !later.some(next => anyTExpr(next, rebinds))) return e;
-  return bind(e, out);
+  if (!copy && path && REFERENCE_KINDS.includes(e.ty.kind) && !later.some(next => anyTExpr(next, rebinds))) return reference;
+  return bind(value, out);
 }
 
 /** Map immediate operands in evaluation order, keeping call dispatch metadata. */
@@ -114,10 +116,7 @@ function seqAssignment(e: Assignment, out: TStmt[]): TExpr {
     : target.kind === "field" && target.obj.kind === "var" && target.obj.name === "this" ? `this.${target.field}` : null;
   out.push(name ? { kind: "assign", target: name, value: e.storedValue }
     : { kind: "expr", expr: { ...e, op: "=", target, value: e.storedValue, postfix: undefined } });
-  if (e.postfix) return old!;
-  // An assigned collection is read through its (new) reference.
-  return REFERENCE_KINDS.includes(e.ty.kind) && tyEqual(e.ty, target.ty) && asTAccessPath(target)
-    ? target : variable(e.resultName, e.ty);
+  return e.postfix ? old! : variable(e.resultName, e.ty);
 }
 
 /** An assignment-free expression for `e`'s value; `e`'s effects go to `out`. */
@@ -146,7 +145,7 @@ function seq(e: TExpr, out: TStmt[]): TExpr {
         fallthrough: e.fallthrough ? arms[arms.length - 1] : [] })) ?? { ...e, scrutinee };
     }
   }
-  if (e.kind === "binop" && (e.op === "&&" || e.op === "||") && hasAssignment(e.right)) {
+  if (e.kind === "binop" && (e.op === "&&" || e.op === "||")) {
     const left = bind(seq(e.left, out), out);
     return seq({ kind: "conditional", cond: truthy(left), ty: e.ty,
       then: e.op === "&&" ? e.right : left, else: e.op === "&&" ? left : e.right }, out);
@@ -156,8 +155,7 @@ function seq(e: TExpr, out: TStmt[]): TExpr {
   let next = 0;
   return mapOperands(e, (operand, copy) => {
     const later = operands.slice(++next);
-    const value = seq(operand, out);
-    return later.some(hasAssignment) ? save(value, out, later, copy) : value;
+    return later.some(hasAssignment) ? save(operand, out, later, copy) : seq(operand, out);
   });
 }
 
