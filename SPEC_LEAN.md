@@ -132,7 +132,7 @@ def foo (params...) : RetType :=
 end Pure
 ```
 
-This enables proofs by standard Lean induction over sequences of calls. The Velvet method is also generated, but as a thin wrapper: `return Pure.foo params`. This avoids termination issues (the pure `def` handles termination natively) while keeping the method callable from other Velvet methods via `←`.
+This enables proofs by standard Lean induction over sequences of calls. The Velvet method is also generated, but as a thin wrapper: `return Pure.foo params`. This avoids termination issues (the pure `def` handles termination natively) while keeping the method callable from other Velvet methods via `←`. If a mirror name conflicts with a built-in declaration such as `Pure.mk`, the module uses `Pure'` consistently for its mirrors, wrappers, and spec references.
 
 Functions containing checked min/max spreads, and their callers, remain methods without a pure mirror so their nonempty-input obligations are preserved. Use their method contracts for composition.
 

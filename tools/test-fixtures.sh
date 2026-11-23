@@ -61,6 +61,8 @@ cp tools/fixtures/optional-enum-fields.ts "$fixture_dir/optional-enum-fields.ts"
 cp tools/fixtures/class-dependencies.ts "$fixture_dir/class-dependencies.ts"
 cp tools/fixtures/const-enum.ts "$fixture_dir/const-enum.ts"
 cp tools/fixtures/numeric-union-truthiness.ts "$fixture_dir/numeric-union-truthiness.ts"
+cp examples/inlineParameterRecords.ts "$fixture_dir/inline-parameter-records.ts"
+cp examples/inlineLocalRecords.ts "$fixture_dir/inline-local-records.ts"
 cp examples/conditionalCalls.ts "$fixture_dir/conditional-calls.ts"
 
 npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/impure.ts"
@@ -118,6 +120,22 @@ if ! grep -Fq 'function SafeSlice' "$fixture_dir/legacy-safe-slice.dfy.gen"; the
   exit 1
 fi
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-binder-collisions.ts"
+
+# Inline parameter records must retain optional fields and fallback priority.
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/inline-parameter-records.ts"
+sed 's/context.b ?? 0/context.b ?? 1/' \
+  examples/inlineParameterRecords.ts > "$fixture_dir/inline-parameter-records-mutated.ts"
+expect_failure \
+  "Dafny accepted the wrong default for an inline parameter record" \
+  npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/inline-parameter-records-mutated.ts"
+
+# Local records must connect the constructed value to its accessed field.
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/inline-local-records.ts"
+sed 's/{ k: n };/{ k: n + 1 };/' \
+  examples/inlineLocalRecords.ts > "$fixture_dir/inline-local-records-mutated.ts"
+expect_failure \
+  "Dafny accepted the wrong field value for an inline local record" \
+  npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/inline-local-records-mutated.ts"
 
 # Project configuration: nearest-ancestor discovery, generic file overrides,
 # extern defaults, safe-slice, and mirrored Dafny artifact routing. Work from a

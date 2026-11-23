@@ -1287,7 +1287,7 @@ return { res: true, done: true, rec: true };
 
 **Record index by enum key** (`rec[k]`, `k` ranging over field names) lowers so the dynamic access verifies like a static one: a named string-union key becomes `match k { case f => rec.f }`; an inline union key (`"a" | "b"`) becomes an equality chain `if k === "a" then rec.a else …`. The chain/match covers exactly the key's members, so a key that is a subset of the fields stays sound. See [`examples/recordIndexByEnum.ts`](examples/recordIndexByEnum.ts).
 
-**Inline object types:** Anonymous object types in interface fields (e.g., `decision?: { decision: string; rationale: string }`) are extracted as named datatypes with synthetic names (e.g., `SpecEntryDecision`). The parent field references the generated name.
+**Inline object types:** Anonymous object types in interface fields (e.g., `decision?: { decision: string; rationale: string }`) are extracted as named datatypes with synthetic names (e.g., `SpecEntryDecision`). Function and method parameters and annotated locals also support inline records, including nested records and optional/null wrappers; `f(entry: { y?: number } | undefined)` gets a synthetic `FEntry` record with an optional `y` field. References and local constructors use the generated name, disambiguated on collision. See [`examples/inlineParameterRecords.ts`](examples/inlineParameterRecords.ts) and [`examples/inlineLocalRecords.ts`](examples/inlineLocalRecords.ts).
 
 **Anonymous return types:** Functions returning inline object types (e.g., `(): { modules: Module[]; claims: Claim[] }`) get a synthetic return type (e.g., `ParseSpecYamlResult`). Named type aliases (e.g., `type Foo = { ... }`) are resolved by their alias name instead.
 

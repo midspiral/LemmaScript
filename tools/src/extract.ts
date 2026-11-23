@@ -9,9 +9,9 @@ import path from "path";
 import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
-import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
+import type { RawExpr, RawStmt, RawLet, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
 import { normalizeBigIntLiteral } from "./rawir.js";
-import { setUserNames, freshName } from "./names.js";
+import { setUserNames, freshName, userNames } from "./names.js";
 import { DEFAULT_OPTIONS, fileCommentLines, isOptionDirective, type LscOptions } from "./config.js";
 
 // ── Expression extraction ────────────────────────────────────
@@ -63,6 +63,29 @@ let _validateDependency: (source: SourceFile) => void = () => {};
 /** Counter for synthetic names used by let-statement array destructuring
  *  when the initializer isn't a bare variable (single-eval temp). */
 let _destrCounter = 0;
+/** Source identity for annotated locals, retained until record registration.
+ *  Names/line numbers cannot distinguish shadowed or same-line declarations. */
+let _localRecordSources = new WeakMap<RawLet, VariableDeclaration>();
+
+function trackLocalRecord(raw: RawLet, source: VariableDeclaration): RawLet {
+  if (Node.isIdentifier(source.getNameNode()) && inlineRecordNode(source.getTypeNode())) {
+    _localRecordSources.set(raw, source);
+  }
+  return raw;
+}
+
+/** Include locals inside branches, loops, and callback bodies. */
+function localRecords(body: RawStmt[]): { raw: RawLet; source: VariableDeclaration }[] {
+  const found: { raw: RawLet; source: VariableDeclaration }[] = [];
+  const walk = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    const source = _localRecordSources.get(value as RawLet);
+    if (source) found.push({ raw: value as RawLet, source });
+    for (const child of Object.values(value)) walk(child);
+  };
+  walk(body);
+  return found;
+}
 
 /** Register the call's callee as a cross-file extern if applicable, then
  *  walk the source declaration's body for nested cross-file calls (so the
@@ -1151,7 +1174,33 @@ function extractInterface(decl: InterfaceDeclaration, extraDecls?: TypeDeclInfo[
   return extractRecord(decl.getName(), decl.getType(), decl, overrides, extraDecls);
 }
 
-function extractRecord(name: string, type: Type, locationNode: Node, overrides?: Map<string, string>, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
+/** Recognize an inline record, preserving explicit null/undefined wrappers. */
+function inlineRecordNode(node: Node | undefined): { node: import("ts-morph").TypeLiteralNode; optional: boolean } | null {
+  if (!node) return null;
+  if (Node.isParenthesizedTypeNode(node)) return inlineRecordNode(node.getTypeNode());
+  if (Node.isUnionTypeNode(node)) {
+    const isNullish = (n: Node): boolean => Node.isParenthesizedTypeNode(n) ? isNullish(n.getTypeNode()) :
+      n.getKind() === SyntaxKind.UndefinedKeyword ||
+      (Node.isLiteralTypeNode(n) && n.getLiteral().getKind() === SyntaxKind.NullKeyword);
+    const arms = node.getTypeNodes().filter(n => !isNullish(n));
+    if (arms.length !== 1) return null;
+    const inner = inlineRecordNode(arms[0]);
+    return inner ? { ...inner, optional: inner.optional || arms.length !== node.getTypeNodes().length } : null;
+  }
+  return Node.isTypeLiteral(node) && node.getMembers().every(Node.isPropertySignature)
+    ? { node, optional: false } : null;
+}
+
+interface InlineRecordContext {
+  allocateName: (hint: string) => string;
+  typeParams: string[];
+}
+
+function recordTypeReference(name: string, typeParams: string[]): string {
+  return typeParams.length ? `${name}<${typeParams.join(", ")}>` : name;
+}
+
+function extractRecord(name: string, type: Type, locationNode: Node, overrides?: Map<string, string>, extraDecls?: TypeDeclInfo[], recordContext?: InlineRecordContext): TypeDeclInfo | null {
   const props = type.getProperties();
   if (props.length === 0) return null;
   const fields: FieldInfo[] = [];
@@ -1176,10 +1225,12 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
 
     // Inline anonymous object types: ts-morph names them __type.
     // Generate a synthetic named record and reference it by name instead.
-    if (extraDecls && tsType.includes("__type")) {
-      let innerType = propType;
-      let isOptional = false;
-      if (propType.isUnion()) {
+    const inline = recordContext && propDecl && Node.isPropertySignature(propDecl)
+      ? inlineRecordNode(propDecl.getTypeNode()) : null;
+    if (extraDecls && (inline || tsType.includes("__type"))) {
+      let innerType = inline ? inline.node.getType() : propType;
+      let isOptional = inline ? inline.optional || !!optionalKey.optionalKey : false;
+      if (!inline && propType.isUnion()) {
         const uTypes = propType.getUnionTypes();
         const nonUndef = uTypes.filter(t => !t.isUndefined());
         if (uTypes.some(t => t.isUndefined()) && nonUndef.length === 1) {
@@ -1189,18 +1240,21 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
       }
       if (innerType.isObject() && !innerType.isArray()) {
         const fName = prop.getName();
-        const synName = name + fName.charAt(0).toUpperCase() + fName.slice(1);
-        const extracted = extractRecord(synName, innerType, locationNode, undefined, extraDecls);
+        const hint = name + fName.charAt(0).toUpperCase() + fName.slice(1);
+        const synName = recordContext ? recordContext.allocateName(hint) : hint;
+        const extracted = extractRecord(synName, innerType, locationNode, undefined, extraDecls, recordContext);
         if (extracted) {
           extraDecls.push(extracted);
-          tsType = isOptional ? `${synName} | undefined` : synName;
+          const ref = recordTypeReference(synName, recordContext?.typeParams ?? []);
+          tsType = isOptional ? `${ref} | undefined` : ref;
         }
       }
     }
 
     fields.push({ name: prop.getName(), tsType, ...optionalKey });
   }
-  return { name, kind: "record", fields };
+  return { name, kind: "record", fields,
+    ...(recordContext?.typeParams.length ? { typeParams: recordContext.typeParams } : {}) };
 }
 
 function findDiscriminant(members: Type[]): string | null {
@@ -1478,7 +1532,12 @@ function renameRawStmt(s: RawStmt, from: string, to: string): RawStmt {
   const r = (x: RawExpr) => renameRawExpr(x, from, to);
   const sp = (x: string) => renameSpec(x, from, to);
   switch (s.kind) {
-    case "let": return { ...s, init: r(s.init) };  // name kept: a shadowing binding is a different variable
+    case "let": {
+      const renamed = { ...s, init: r(s.init) }; // Keep the name of a shadowing binding.
+      const source = _localRecordSources.get(s);
+      if (source) _localRecordSources.set(renamed, source);
+      return renamed;
+    }
     case "assign": return { ...s, target: s.target === from ? to : s.target, value: r(s.value) };
     case "return": return { ...s, value: r(s.value) };
     case "expr": return { ...s, expr: r(s.expr) };
@@ -1779,14 +1838,15 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         const inferred = annotatedText ? null : _eraseGenerics(typeToString(declType));
         const tsType: string | null = havocType
           ?? (annotatedText ? _eraseGenerics(annotatedText) : (inferred === "any" ? null : inferred));
-        result.push({
+        const raw: RawLet = {
           kind: "let",
           name: d.getName(),
           mutable: s.getDeclarationKind() === "let",
           tsType,
           init,
           line,
-        });
+        };
+        result.push(havocType ? raw : trackLocalRecord(raw, d));
       }
       continue;
     }
@@ -1890,11 +1950,11 @@ function extractStmts(stmts: Node[]): RawStmt[] {
           ?? typeNode?.getText() ?? typeToString(decl.getType());
         const initExpr = decl.getInitializer();
         if (!initExpr) throw new Error(`for(...) at line ${line}: missing initializer for ${name}`);
-        hoisted.push({
+        hoisted.push(trackLocalRecord({
           kind: "let", name, mutable: true, tsType,
           init: extractExpr(initExpr as Expression),
           line: decl.getStartLineNumber(),
-        });
+        }, decl));
       }
 
       let extractedBody = extractStmts(bodyStmts);
@@ -2290,6 +2350,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   // tests) must not leak a havoc key, temp-name counter, or function-local maps.
   _havocKey = null;
   _destrCounter = 0;
+  _localRecordSources = new WeakMap();
   _typeParamMap = new Map();
   _reservedForCounterNames = new Set();
   // Seed the fresh-name check (names.ts) before anything mints: every
@@ -2873,7 +2934,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     typeDecls.splice(0, typeDecls.length, ...typeDecls.filter(d => neededTypes.has(d.name) || declaredNames.has(d.name)));
   }
 
-  // Resolve imported types: extract types referenced in function signatures but not in this file
+  // Resolve types referenced by selected functions and class fields, including imports.
   const knownTypes = new Set([...typeDecls.map(d => d.name), ...classes.map(c => c.name)]);
   const builtins = new Set(["Map", "Set", "Array", "String", "Number", "Boolean", "Promise", "Date", "RegExp", "Error"]);
   const visitedTypes = new Set<unknown>();
@@ -2955,6 +3016,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       }
     }
   }
+  const localsByFunction = new Map(selected.map(f => [f.fn, localRecords(f.fn.body)]));
   for (const f of selected) {
     const fn = f.fn;
     // Skip params whose TS type was overridden by `//@ type <param> <Override>`
@@ -2965,6 +3027,9 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     for (const p of f.node.getParameters()) {
       if (overriddenNames.has(p.getName())) continue;
       resolveType(p.getType(), p);
+    }
+    for (const { raw, source } of localsByFunction.get(fn)!) {
+      if (!overriddenNames.has(raw.name)) resolveType(source.getType(), source);
     }
     if (f.owner && !overriddenNames.has("\\result")) resolveType(f.node.getReturnType(), f.node);
   }
@@ -3051,6 +3116,53 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       }
     }
   }
+
+  // Inline binding annotations need declarations just like anonymous return
+  // types. Without one, field lookup yields unknown and loses optionality in
+  // expressions such as `context.a ?? entry.y ?? context.b ?? 0`.
+  // Run after dependency discovery so names cannot collide with imported or
+  // synthesized types. Keep existing field/return synthesis names unchanged.
+  const recordNames = new Set([...userNames(), ...typeDecls.map(d => d.name), ...classes.map(c => c.name)]);
+  function allocateRecordName(hint: string): string {
+    let name = hint;
+    for (let suffix = 2; recordNames.has(name); suffix++) name = `${hint}${suffix}`;
+    recordNames.add(name);
+    return name;
+  }
+  for (const { node, fn, owner } of selected) {
+    const typeParams = node.getTypeParameters().map(p => p.getName());
+    const typeArgs = node.getTypeParameters().map(p => fn.typeParams.includes(p.getName())
+      ? p.getName() : p.getConstraint()?.getText() ?? p.getName());
+    // Switch fall-through and loop rewriting can reuse a source declaration.
+    const recordRefs = new Map<Node, string>();
+    const registerInlineRecord = (raw: { name: string; tsType: string | null }, source: Node, annotation: Node | undefined, optional = false): string | undefined => {
+      if (fn.typeAnnotations.some(a => a.name === raw.name)) return;
+      const registered = recordRefs.get(source);
+      if (registered) return raw.tsType = registered;
+      const inline = inlineRecordNode(annotation);
+      if (!inline) return;
+      const title = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+      const name = allocateRecordName(owner + title(fn.name) + title(raw.name));
+      const extra: TypeDeclInfo[] = [];
+      const info = extractRecord(name, inline.node.getType(), source, undefined, extra,
+        { allocateName: allocateRecordName, typeParams });
+      if (!info) return;
+      typeDecls.push(...extra, info);
+      const ref = recordTypeReference(name, typeArgs);
+      raw.tsType = inline.optional || optional ? `${ref} | undefined` : ref;
+      recordRefs.set(source, raw.tsType);
+      return raw.tsType;
+    };
+    for (const param of node.getParameters()) {
+      const raw = fn.params.find(p => p.name === param.getName());
+      if (raw) registerInlineRecord(raw, param, param.getTypeNode(), param.hasQuestionToken());
+    }
+    for (const { raw, source } of localsByFunction.get(fn)!) {
+      const ref = registerInlineRecord(raw, source, source.getTypeNode());
+      if (ref && raw.init.kind === "havoc") raw.init.tsType = ref;
+    }
+  }
+  _localRecordSources = new WeakMap();
 
   // Clear the synth-union accumulator so typeToString reverts to plain
   // union stringification outside of an extractModule call.

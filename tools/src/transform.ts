@@ -15,6 +15,7 @@ import { freshName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
 import { lowerIndexedCallback } from "./callback-lowering.js";
 import { isFalsyCapableTy } from "./condition-facts.js";
+import { needsRecordType } from "./lean-inference.js";
 import { declOf, declOfKind, declOfTy, unionDeclOfTy, declWithVariant, tyBaseName } from "./typedecls.js";
 
 // ── Generic IR walkers ──────────────────────────────────────
@@ -205,6 +206,7 @@ let _typeDecls: TypeDeclInfo[] = [];
  *  in a higher-order position resolves to the monadic method, so it must be
  *  redirected to the pure mirror. Set once per module transform. */
 let _pureDefNames: Set<string> = new Set();
+let _pureNamespaceName = "Pure";
 
 /** Discriminated unions whose tag is read as a *value* (`x.kind` compared
  *  to another union's tag, passed as an argument, …). Each gets a generated
@@ -261,6 +263,12 @@ function isArray(ty: Ty): boolean { return ty.kind === "array"; }
 function isUser(ty: Ty): boolean { return ty.kind === "user"; }
 function isRecordType(ty: Ty): boolean {
   return declOfTy(_typeDecls, ty)?.kind === "record";
+}
+
+/** Lean cannot infer a record literal's type from its field names. */
+function leanRecordLetType(ty: Ty, value: Expr): { type?: Ty } {
+  return _opts.backend === "lean" && isRecordType(ty.kind === "optional" ? ty.inner : ty) && needsRecordType(value)
+    ? { type: ty } : {};
 }
 
 /** Truthiness test for a *lowered* value of source type `ty`, used by `||`
@@ -335,7 +343,7 @@ function flattenLambdaBody(stmts: Stmt[]): Expr | null {
   if (first.kind === "return") return first.value;
   if (first.kind === "let" && !first.mutable) {
     const body = flattenLambdaBody(rest);
-    return body === null ? null : { kind: "let", name: first.name, value: first.value, body };
+    return body === null ? null : { kind: "let", name: first.name, ...leanRecordLetType(first.type, first.value), value: first.value, body };
   }
   if (first.kind === "if") {
     const thenTerminates = flattenLambdaBody(first.then);
@@ -1021,7 +1029,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           // method; redirect to its pure `Pure.` mirror.
           if (_opts.backend === "lean" && isHOF &&
               lowered.kind === "var" && _pureDefNames.has(lowered.name)) {
-            return { kind: "var" as const, name: `Pure.${lowered.name}` };
+            return { kind: "var" as const, name: `${_pureNamespaceName}.${lowered.name}` };
           }
           // Array index args must be nat in Lean: `with`'s index (0), includes/indexOf `from` (1)
           // — registry `intArgPositions`.
@@ -1066,7 +1074,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       }
       if (e.fn.kind !== "var")
         throw new Error(`Unsupported call expression: ${e.fn.kind}`);
-      const prefix = e.callKind === "spec-pure" && _opts.backend === "lean" ? "Pure." : "";
+      const prefix = e.callKind === "spec-pure" && _opts.backend === "lean" ? `${_pureNamespaceName}.` : "";
       return { kind: "app", fn: prefix + e.fn.name, args: e.args.map(a => lowerExpr(a, binds)) };
     }
 
@@ -2347,7 +2355,8 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
       case "let": {
         const restExpr = transformPureBody(rest, typeDecls);
         if (!restExpr) return null;
-        return { kind: "let", name: s.name, value: transformExpr(s.init), body: restExpr };
+        const value = transformExpr(s.init);
+        return { kind: "let", name: s.name, ...leanRecordLetType(s.ty, value), value, body: restExpr };
       }
       case "if": {
         // Append rest to both branches so nested ifs that fall through
@@ -2596,6 +2605,10 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   _typeDecls = mod.typeDecls;
   _neededKindHelpers = new Map();
   _pureDefNames = new Set(mod.functions.filter(f => f.isPure).map(f => f.name));
+  // Lean's built-in Pure class already owns these declaration names. Move
+  // the module's mirrors together so bare calls retain their lexical binding.
+  const pureBuiltins = ["mk", "pure", "rec", "recOn", "casesOn", "noConfusion", "noConfusionType"];
+  _pureNamespaceName = _opts.backend === "lean" && pureBuiltins.some(n => _pureDefNames.has(n)) ? "Pure'" : "Pure";
   const typeDecls = mod.typeDecls.map(transformTypeDecl);
 
   // Module-level constants
@@ -2710,7 +2723,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
 
     _forofCounters.clear();
     let body = pureDefNames.has(fn.name)
-      ? [{ kind: "return" as const, value: { kind: "app" as const, fn: _opts.backend === "lean" ? `Pure.${fn.name}` : fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) } }]
+      ? [{ kind: "return" as const, value: { kind: "app" as const, fn: _opts.backend === "lean" ? `${_pureNamespaceName}.${fn.name}` : fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) } }]
       : promoteAssignedLets(transformStmts(fn.body, mod.typeDecls));
 
     // Lean-only method-body rewrites (Velvet can't WP-synthesize monadic matches
@@ -2828,7 +2841,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   const typesImports: string[] = ["LemmaScript"];
   let typesFile: Module | null = null;
   const pureNamespace: Decl[] = pureDefs.length > 0
-    ? [{ kind: "namespace", name: "Pure", decls: pureDefs }]
+    ? [{ kind: "namespace", name: _pureNamespaceName, decls: pureDefs }]
     : [];
   if (typeDecls.length > 0 || pureDefs.length > 0 || externDecls.length > 0 || opaqueImports.length > 0) {
     // Declaration order differs by backend. Dafny allows forward references, so
