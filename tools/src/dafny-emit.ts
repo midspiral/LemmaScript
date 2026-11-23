@@ -6,7 +6,6 @@ import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
 import { decimalNumberLiteral, exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshNameWhere, userNames } from "./names.js";
-import { renameFreeVar } from "./transform.js";
 import { DEFAULT_OPTIONS, resolveOptions, type LscOptions } from "./config.js";
 
 /** Appended to a function's name for the lemma that carries its `//@ ensures`. */
@@ -21,19 +20,13 @@ function freshBinder(base: string, ...wrapped: Expr[]): string {
   return freshNameWhere(base, name => wrapped.some(w => usesName(w, name)));
 }
 
-/** Binder + body for lowering a single-return lambda to a comprehension whose
- *  receiver is emitted inside the binder's scope. TS scoping keeps the receiver
- *  outside the lambda, so a lambda param sharing a name with anything free in
- *  the receiver would capture it — e.g. `mk(n).some(n => …)` naively emitting
- *  `exists n :: n in mk(n) && …`. Alpha-rename the param out of the way (and
- *  its free uses in the body); the zero-param default must also dodge free
- *  names in the body. */
-function comprehensionBinder(lam: Extract<Expr, { kind: "lambda" }>, value: Expr, receiver: Expr): { binder: string; body: Expr } {
-  const rawName = lam.params[0]?.name;
-  if (rawName === undefined) return { binder: escapeName(freshBinder("x", receiver, value)), body: value };
-  if (!usesName(receiver, rawName)) return { binder: escapeName(rawName), body: value };
-  const fresh = freshBinder(rawName, receiver, value);
-  return { binder: escapeName(fresh), body: renameFreeVar(value, rawName, fresh) };
+/** Binder for lowering a single-return lambda to a comprehension whose
+ *  receiver is emitted inside the binder's scope. A source parameter is used
+ *  as is: extraction renames one that shares a name with anything its receiver
+ *  reads (see LexicalNames), so `mk(n).some(n => …)` arrives as `n_2 => …`.
+ *  The zero-param default is minted here and must dodge free names itself. */
+function comprehensionBinder(lam: Extract<Expr, { kind: "lambda" }>, value: Expr, receiver: Expr): string {
+  return escapeName(lam.params[0]?.name ?? freshBinder("x", receiver, value));
 }
 
 // ── Ty → Dafny type string ─────────────────────────────────
@@ -464,9 +457,8 @@ function emitExpr(e: Expr): string {
           const lam = e.args[0];
           let p: string, body: string;
           if (lam.kind === "lambda" && lam.body.length === 1 && lam.body[0].kind === "return") {
-            const cb = comprehensionBinder(lam, lam.body[0].value, e.obj);
-            p = cb.binder;
-            body = emitExpr(cb.body);
+            p = comprehensionBinder(lam, lam.body[0].value, e.obj);
+            body = emitExpr(lam.body[0].value);
           } else {
             p = escapeName(freshBinder("x", e.obj, e.args[0]));
             body = `${args[0]}(${p})`;
@@ -586,8 +578,8 @@ function emitExpr(e: Expr): string {
           const lam = e.args[0];
           const ret = lam.body[0];
           if (ret.kind !== "return") throw new Error("unreachable");
-          const { binder: p, body: v } = comprehensionBinder(lam, ret.value, e.obj);
-          const body = emitExpr(v);
+          const p = comprehensionBinder(lam, ret.value, e.obj);
+          const body = emitExpr(ret.value);
           return `(set ${p} | ${p} in ${obj} && ${body})`;
         }
       }

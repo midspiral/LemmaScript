@@ -21,6 +21,19 @@ function bindings(node: Node): Identifier[] {
   return [];
 }
 
+/** `recv.method(callback)`: backends may emit the receiver inside the scope
+ *  of the callback's parameter (a comprehension), so the parameter must not
+ *  share a name with anything the receiver mentions, library globals included. */
+function receiverMentions(callback: Node, name: string): boolean {
+  const call = callback.getParent();
+  if (!Node.isCallExpression(call) || !call.getArguments().includes(callback)) return false;
+  const callee = call.getExpression();
+  if (!Node.isPropertyAccessExpression(callee)) return false;
+  const receiver = callee.getExpression();
+  return [receiver, ...receiver.getDescendantsOfKind(SyntaxKind.Identifier)]
+    .some(n => Node.isIdentifier(n) && n.getText() === name);
+}
+
 function valueSymbol(node: Identifier): Symbol | undefined {
   const parent = node.getParent();
   return Node.isShorthandPropertyAssignment(parent) ? parent.getValueSymbol() : node.getSymbol();
@@ -28,7 +41,9 @@ function valueSymbol(node: Identifier): Symbol | undefined {
 
 /** Bare blocks and counting-for initializers lose their braces in extraction.
  *  Branch blocks keep separate arms but can absorb their parent's continuation.
- *  Loop and lambda scopes remain barriers; sibling scopes there need no rename. */
+ *  `mayCapture` marks a scope that can therefore reach names outside the
+ *  function. Loop and lambda scopes remain barriers; siblings there need no
+ *  rename, but a binding that shadows an enclosing one always gets one. */
 function loweredScope(decl: Node): { scope: Node; mayCapture: boolean } {
   let scope = scopeOf(decl);
   let mayCapture = Node.isForStatement(scope) || Node.isCaseBlock(scope);
@@ -42,7 +57,9 @@ function loweredScope(decl: Node): { scope: Node; mayCapture: boolean } {
   return { scope, mayCapture };
 }
 
-/** Source binding identity survives block flattening and continuation splicing.
+/** After extraction no binding in a function shadows another: a local, loop
+ *  variable, or callback parameter that reuses an enclosing name is renamed.
+ *  Later passes may therefore identify a variable by its name alone.
  *  Allocate before extracting any expressions, without mutating the TS tree.
  *  Unambiguous locals and public parameter names keep their existing spelling. */
 export class LexicalNames {
@@ -60,25 +77,38 @@ export class LexicalNames {
     const specNames = (root.getFullText().match(/\/\/@[^\r\n]*/g) ?? [])
       .flatMap(comment => comment.match(/[A-Za-z_]\w*/g) ?? []);
     this.taken = new Set([...this.sourceNames, ...specNames]);
-    const outer = new Set<string>();
+    // Names bound outside the function. A scope that keeps its braces cannot
+    // capture a library global, so only this file's own declarations count there.
+    const outer = new Set<string>(), moduleNames = new Set<string>();
+    const file = root.getSourceFile();
     for (const symbol of root.getSymbolsInScope(ts.SymbolFlags.Value)) {
-      if (!symbol.getDeclarations().some(d => d.getAncestors().includes(root))) outer.add(symbol.getName());
+      const declarations = symbol.getDeclarations();
+      if (declarations.some(d => d.getAncestors().includes(root))) continue;
+      outer.add(symbol.getName());
+      if (declarations.some(d => d.getSourceFile() === file)) moduleNames.add(symbol.getName());
     }
     const locals: { name: string; scope: Node }[] = [];
     // Prefer enclosing locals even if they occur later in source order. This
     // also preserves the existing names of counters hoisted out of for-loops.
-    const declarations = root.getDescendantsOfKind(SyntaxKind.VariableDeclaration).sort((a, b) =>
+    // Callback parameters are bindings too; the function's own stay public.
+    const declarations = [...root.getDescendantsOfKind(SyntaxKind.VariableDeclaration),
+      ...root.getDescendantsOfKind(SyntaxKind.Parameter).filter(p => {
+        const owner = p.getParent();
+        return owner !== root && functionLike(owner);
+      })].sort((a, b) =>
       scopeOf(a).getAncestors().length - scopeOf(b).getAncestors().length || a.getStart() - b.getStart());
     for (const decl of declarations) {
+      const owner = Node.isParameterDeclaration(decl) ? decl.getParent() : undefined;
       for (const id of bindings(decl.getNameNode())) {
         const name = id.getText();
         const { scope, mayCapture } = loweredScope(decl);
-        const parameterClash = decl.getAncestors().some(a => functionLike(a)
+        const parameterClash = decl.getAncestors().some(a => a !== owner && functionLike(a)
           && a.getChildrenOfKind(SyntaxKind.Parameter).some(p => bindings(p.getNameNode()).some(b => b.getText() === name)));
         const symbol = id.getSymbol();
         const localClash = locals.some(l => l.name === name && (l.scope === scope || scope.getAncestors().includes(l.scope)));
         let emitted = name;
-        if (symbol && mayCapture && (outer.has(name) || parameterClash || localClash)) {
+        if (symbol && ((mayCapture ? outer : moduleNames).has(name) || parameterClash || localClash
+            || (owner && receiverMentions(owner, name)))) {
           const fresh = this.fresh(name);
           emitted = fresh;
           this.renamed.set(symbol.compilerSymbol, fresh);
@@ -129,6 +159,9 @@ export class LexicalNames {
   }
 
   specName(name: string, location: Node, pos = location.getStart()): string {
+    // `_x_idx` is the position of for-of variable `x`; it follows x's rename.
+    const index = /^_(.+)_idx$/.exec(name);
+    if (index && !this.sourceNames.has(name)) return `_${this.specName(index[1], location, pos)}_idx`;
     // Leading comments belong to the statement's enclosing scope, including
     // when the statement itself is a block or another loop.
     const symbol = location.getProject().getTypeChecker().resolveName(name, location.getParent(), ts.SymbolFlags.Value, false);

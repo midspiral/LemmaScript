@@ -15,8 +15,10 @@ import { peepholeModule } from "../src/peephole.ts";
 import { renameSpecVariables } from "../src/specparser.ts";
 import { isUserName } from "../src/names.ts";
 import * as runtime from "../fixtures/lexical-scopes.ts";
+import * as narrowingRuntime from "../fixtures/narrowing-shadowing.ts";
 
 const fixture = readFileSync(new URL("../fixtures/lexical-scopes.ts", import.meta.url), "utf8");
+const narrowingFixture = readFileSync(new URL("../fixtures/narrowing-shadowing.ts", import.meta.url), "utf8");
 
 function source(text: string) {
   const project = new Project({ useInMemoryFileSystem: true, compilerOptions: {
@@ -158,4 +160,80 @@ test("both backends retain distinct inner and outer bindings", () => {
   }`;
   assert.match(generate(text), /var p_2 := 5;\s+p\b/);
   assert.match(generate(text, "lean"), /let p_2 := 5\s+p\b/);
+});
+
+test("narrowing respects loop locals, field roots, lambda parameters, and quantified variables", () => {
+  assert.equal(narrowingRuntime.whileShadow(3), 5);
+  assert.equal(narrowingRuntime.forOfShadow(3), 5);
+  assert.equal(narrowingRuntime.fieldShadow({ value: 3 }), 8);
+  assert.equal(narrowingRuntime.lambdaScopes(3), 13);
+  assert.equal(narrowingRuntime.lambdaTernary(3), 8);
+  assert.equal(narrowingRuntime.quantifierScope(3), 3);
+  assert.equal(narrowingRuntime.variantShadow({ kind: "a", n: 3 }), 8);
+  assert.equal(narrowingRuntime.switchShadow({ kind: "a", n: 3 }), 8);
+  const result = verify(generate(narrowingFixture));
+  assert.equal(result.status, 0, result.output);
+  const lean = generate(narrowingFixture, "lean");
+  // Each shadowing binding has its own name, so no later pass can confuse them.
+  assert.match(lean, /total := total \+ p_2\b/);
+  assert.match(lean, /total := total \+ box_2\.value\b/);
+  assert.match(lean, /fun p_2 => p_2\b/);
+  assert.match(lean, /∃ p' : Int, 0 ≤ p' ∧ p' < xs\.size/);
+});
+
+test("narrowing cannot prove the outer value was read through a shadowing loop local", () => {
+  const correct = source(narrowingFixture).getFunctionOrThrow("whileShadow").getFullText();
+  const falseContract = correct.replace("\\result === 5", "\\result === 3");
+  // Before the fix, replacing the invariant too made this false proof succeed.
+  const reported = falseContract.replace("total === i * 5", "total === i * 3")
+    .replace("function whileShadow", "function reportedFalseProof");
+  const reportedResult = verify(generate(reported));
+  assert.notEqual(reportedResult.status, 0, reportedResult.output);
+  assert.match(reportedResult.output, /invariant.*could not be proved/);
+  assert.doesNotMatch(reportedResult.output, /resolution\/type errors|unresolved identifier|timed out/);
+  const result = verify(generate(falseContract));
+  assert.notEqual(result.status, 0, result.output);
+  assert.match(result.output, /a postcondition could not be proved/);
+  assert.doesNotMatch(result.output, /resolution\/type errors|unresolved identifier|timed out/);
+});
+
+for (const name of ["variantShadow", "switchShadow"]) {
+  test(`variant narrowing cannot read a shadowing local as the scrutinee: ${name}`, () => {
+    const file = source(narrowingFixture);
+    const helpers = ["Shape", "Plain"].map(t => file.getTypeAliasOrThrow(t).getFullText()).join("") +
+      file.getFunctionOrThrow("plain").getFullText();
+    const falseContract = helpers + file.getFunctionOrThrow(name).getFullText()
+      .replace("\\result === 8", "\\result === 6").replace("total === i * 5", "total === i * 3");
+    const result = verify(generate(falseContract));
+    assert.notEqual(result.status, 0, result.output);
+    assert.match(result.output, /invariant.*could not be proved/);
+    assert.doesNotMatch(result.output, /resolution\/type errors|unresolved identifier|timed out/);
+  });
+}
+
+const loopAnnotations = `export function narrowedLoopAnnotations(p: number[] | undefined): number {
+  //@ type i nat
+  //@ ensures p !== undefined ==> \\result === p.length
+  if (p !== undefined) {
+    let i = 0;
+    while (i < p.length) {
+      //@ invariant i <= p.length
+      //@ decreases p.length - i
+      //@ done_with i === p.length
+      i++;
+    }
+    return i;
+  }
+  return 0;
+}`;
+
+test("narrowing reaches a loop's termination measure", () => {
+  const result = verify(generate(loopAnnotations));
+  assert.equal(result.status, 0, result.output);
+});
+
+test("Lean loop annotations use the narrowed value", () => {
+  const lean = generate(loopAnnotations, "lean");
+  assert.match(lean, /decreasing _p_val\.size - i/);
+  assert.match(lean, /done_with \(i = _p_val\.size : Prop\)/);
 });
