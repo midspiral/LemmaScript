@@ -314,11 +314,17 @@ test("a match on a variable just bound to an Option or Nullish constructor selec
     // The selected arm replaces the binding; an unused binder binds nothing.
     assert.deepEqual(optimize(bind("o", some(variable("v")), match("o", "_", variable("a"), variable("b"))), backend), variable("a"));
     assert.deepEqual(optimize(bind("o", none, match("o", "x", variable("x"), zero)), backend), zero);
-    // A used binder is bound to the payload, also when it shadows the binding.
-    assert.deepEqual(optimize(bind("o", some(variable("v")), match("o", "x", variable("x"), zero)), backend),
-      bind("x", variable("v"), variable("x")));
-    assert.deepEqual(optimize(bind("o", some(variable("v")), match("o", "o", variable("o"), zero)), backend),
-      bind("o", variable("v"), variable("o")));
+    // A variable payload replaces a used binder, also when it shadows the binding.
+    assert.deepEqual(optimize(bind("o", some(variable("v")), match("o", "x", variable("x"), zero)), backend), variable("v"));
+    assert.deepEqual(optimize(bind("o", some(variable("v")), match("o", "o", variable("o"), zero)), backend), variable("v"));
+    assert.deepEqual(optimize(bind("o", some(variable("x")), match("o", "x", variable("x"), zero)), backend), variable("x"));
+    // ... unless the arm rebinds the payload's name, which would capture it.
+    const rebinds = bind("v", zero, variable("x"));
+    assert.deepEqual(optimize(bind("o", some(variable("v")), match("o", "x", rebinds, zero)), backend),
+      bind("x", variable("v"), rebinds));
+    // Any other payload is bound to a used binder.
+    assert.deepEqual(optimize(bind("o", some(zero), match("o", "x", variable("x"), zero)), backend),
+      bind("x", zero, variable("x")));
     // The binding stays when the arm reads it, or when its payload is not trivial.
     const call: Expr = { kind: "app", fn: "f", args: [variable("v")] };
     assert.deepEqual(optimize(bind("o", some(variable("v")), match("o", "_", variable("o"), none)), backend),

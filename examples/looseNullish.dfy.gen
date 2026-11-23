@@ -52,8 +52,7 @@ function looseDefault(x: Nullish<int>): int
 {
   match x {
     case Value(i_value11) =>
-      var i_x_val: int := i_value11;
-      i_x_val
+      i_value11
     case Null =>
       7
     case Undefined =>
@@ -63,7 +62,7 @@ function looseDefault(x: Nullish<int>): int
 
 lemma looseDefault_ensures(x: Nullish<int>)
   ensures ((!x.Value?) ==> (looseDefault(x) == 7))
-  ensures (match x { case Value(i_value17) => (var i_x_val: int := i_value17; (looseDefault(x) == i_x_val)) case Null => true case Undefined => true })
+  ensures (match x { case Value(i_value17) => (looseDefault(x) == i_value17) case Null => true case Undefined => true })
 {
 }
 
@@ -71,8 +70,7 @@ function looseEarlyReturn(x: Nullish<int>): int
 {
   match x {
     case Value(i_value20) =>
-      var i_x_val: int := i_value20;
-      i_x_val
+      i_value20
     case Null =>
       7
     case Undefined =>
@@ -82,7 +80,7 @@ function looseEarlyReturn(x: Nullish<int>): int
 
 lemma looseEarlyReturn_ensures(x: Nullish<int>)
   ensures ((!x.Value?) ==> (looseEarlyReturn(x) == 7))
-  ensures (match x { case Value(i_value25) => (var i_x_val := i_value25; (looseEarlyReturn(x) == i_x_val)) case Null => true case Undefined => true })
+  ensures (match x { case Value(i_value25) => (looseEarlyReturn(x) == i_value25) case Null => true case Undefined => true })
 {
 }
 
@@ -90,8 +88,7 @@ function loosePositive(x: Nullish<int>): bool
 {
   match x {
     case Value(i_value29) =>
-      var i_x_val: int := i_value29;
-      (i_x_val > 0)
+      (i_value29 > 0)
     case Null =>
       false
     case Undefined =>
@@ -101,7 +98,7 @@ function loosePositive(x: Nullish<int>): bool
 
 lemma loosePositive_ensures(x: Nullish<int>)
   ensures ((!x.Value?) ==> !(loosePositive(x)))
-  ensures (match x { case Value(i_value35) => (var i_x_val: int := i_value35; (loosePositive(x) == (i_x_val > 0))) case Null => true case Undefined => true })
+  ensures (match x { case Value(i_value35) => (loosePositive(x) == (i_value35 > 0)) case Null => true case Undefined => true })
 {
 }
 
@@ -109,8 +106,7 @@ function looseAbsentOrPositive(x: Nullish<int>): bool
 {
   match x {
     case Value(i_value38) =>
-      var i_x_val: int := i_value38;
-      (i_x_val > 0)
+      (i_value38 > 0)
     case Null =>
       true
     case Undefined =>
@@ -120,7 +116,7 @@ function looseAbsentOrPositive(x: Nullish<int>): bool
 
 lemma looseAbsentOrPositive_ensures(x: Nullish<int>)
   ensures ((!x.Value?) ==> looseAbsentOrPositive(x))
-  ensures (match x { case Value(i_value44) => (var i_x_val: int := i_value44; (looseAbsentOrPositive(x) == (i_x_val > 0))) case Null => true case Undefined => true })
+  ensures (match x { case Value(i_value44) => (looseAbsentOrPositive(x) == (i_value44 > 0)) case Null => true case Undefined => true })
 {
 }
 
@@ -128,8 +124,7 @@ function looseField(box: LooseBox): int
 {
   match box.value {
     case Value(i_value47) =>
-      var i_box_value_val: int := i_value47;
-      i_box_value_val
+      i_value47
     case Null =>
       7
     case Undefined =>
@@ -139,7 +134,7 @@ function looseField(box: LooseBox): int
 
 lemma looseField_ensures(box: LooseBox)
   ensures ((var i_optional50: Nullish<int> := box.value; (var i_optional51: () := (); (!i_optional50.Value?))) ==> (looseField(box) == 7))
-  ensures (match box.value { case Value(i_value53) => (var i_box_value_val: int := i_value53; (looseField(box) == i_box_value_val)) case Null => true case Undefined => true })
+  ensures (match box.value { case Value(i_value53) => (looseField(box) == i_value53) case Null => true case Undefined => true })
 {
 }
 

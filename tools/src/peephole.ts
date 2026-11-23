@@ -18,6 +18,7 @@
  */
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
 import { patternCtor, patternBinders, usesName, usesNameInStmts } from "./ir.js";
+import { bindToVar } from "./transform.js";
 
 // ── Shape detection ──────────────────────────────────────────
 
@@ -121,8 +122,9 @@ function ruleLetMatchOnMapGetExpr(e: Expr): Expr | null {
  *  constructor selects that constructor's arm. Narrowing produces this shape
  *  when it re-represents a value at a smaller type (Nullish → Option) and the
  *  narrowed test then inspects it.
- *  The binding stays when the arm still reads it, or when dropping it would
- *  drop the evaluation of a non-trivial payload. */
+ *  A variable payload is substituted for the arm's binder; any other payload
+ *  is bound to it. The outer binding stays when the arm still reads it, or
+ *  when dropping it would drop the evaluation of a non-trivial payload. */
 function ruleLetKnownConstructorMatch(e: Expr): Expr | null {
   if (e.kind !== "let" || e.value.kind !== "constructor" ||
       (e.value.type !== "Option" && e.value.type !== "LemmaScript.Nullish")) return null;
@@ -136,8 +138,9 @@ function ruleLetKnownConstructorMatch(e: Expr): Expr | null {
   if (binders.length > args.length) return null;
   let body = arm.body;
   for (let i = binders.length - 1; i >= 0; i--) {
-    if (binders[i] !== "_" && usesName(body, binders[i]))
-      body = { kind: "let", name: binders[i], value: args[i], body };
+    if (binders[i] === "_" || !usesName(body, binders[i])) continue;
+    const arg = args[i];
+    body = arg.kind === "var" ? bindToVar(binders[i], arg, body) : { kind: "let", name: binders[i], value: arg, body };
   }
   const trivial = (a: Expr) => ["var", "num", "bigint", "bool", "str"].includes(a.kind);
   // A binder of the same name shadows the binding inside the arm.

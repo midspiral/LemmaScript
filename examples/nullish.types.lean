@@ -9,8 +9,7 @@ namespace Pure
 def classify (x : LemmaScript.Nullish Int) : Int :=
   match x with
   | .Value _value0 =>
-    let _x_val := _value0
-    _x_val
+    _value0
   | .Null =>
     2
   | .Undefined =>
@@ -19,8 +18,7 @@ def classify (x : LemmaScript.Nullish Int) : Int :=
 def reverse (x : LemmaScript.Nullish Int) : Int :=
   match x with
   | .Value _value8 =>
-    let _x_val := _value8
-    _x_val
+    _value8
   | .Null =>
     2
   | .Undefined =>
@@ -29,8 +27,7 @@ def reverse (x : LemmaScript.Nullish Int) : Int :=
 def disjunction (x : LemmaScript.Nullish Int) : Int :=
   match x with
   | .Value _value16 =>
-    let _x_val : Int := _value16
-    _x_val
+    _value16
   | .Null =>
     0
   | .Undefined =>
@@ -61,8 +58,7 @@ def retainUndefined (x : LemmaScript.Nullish Int) : Option Int :=
 def positive (x : LemmaScript.Nullish Int) : Bool :=
   match x with
   | .Value _value31 =>
-    let _x_val := _value31
-    _x_val > 0
+    _value31 > 0
   | .Null =>
     false
   | .Undefined =>
@@ -71,8 +67,7 @@ def positive (x : LemmaScript.Nullish Int) : Bool :=
 def absentOrPositive (x : LemmaScript.Nullish Int) : Bool :=
   match x with
   | .Value _value41 =>
-    let _x_val := _value41
-    _x_val > 0
+    _value41 > 0
   | .Null =>
     true
   | .Undefined =>

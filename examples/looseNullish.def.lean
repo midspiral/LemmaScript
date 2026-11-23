@@ -24,25 +24,25 @@ method looseNullable (x : Option Int) returns (res : Bool)
 
 method looseDefault (x : LemmaScript.Nullish Int) returns (res : Int)
   ensures ensures_1: ((match x with | .Value _ => false | .Null => true | .Undefined => true) → res = 7 : Prop)
-  ensures ensures_2: ((match x with | .Value _value67 => (let _x_val : Int := _value67; res = _x_val) | .Null => true | .Undefined => true) : Prop)
+  ensures ensures_2: ((match x with | .Value _value67 => res = _value67 | .Null => true | .Undefined => true) : Prop)
   do
     return Pure.looseDefault x
 
 method looseEarlyReturn (x : LemmaScript.Nullish Int) returns (res : Int)
   ensures ensures_1: ((match x with | .Value _value70 => false | .Null => true | .Undefined => true) → res = 7 : Prop)
-  ensures ensures_2: ((match x with | .Value _value72 => (let _x_val := _value72; res = _x_val) | .Null => true | .Undefined => true) : Prop)
+  ensures ensures_2: ((match x with | .Value _value72 => res = _value72 | .Null => true | .Undefined => true) : Prop)
   do
     return Pure.looseEarlyReturn x
 
 method loosePositive (x : LemmaScript.Nullish Int) returns (res : Bool)
   ensures ensures_1: ((match x with | .Value _ => false | .Null => true | .Undefined => true) → ¬(res) : Prop)
-  ensures ensures_2: ((match x with | .Value _value79 => (let _x_val : Int := _value79; res = (_x_val > 0)) | .Null => true | .Undefined => true) : Prop)
+  ensures ensures_2: ((match x with | .Value _value79 => res = (_value79 > 0) | .Null => true | .Undefined => true) : Prop)
   do
     return Pure.loosePositive x
 
 method looseAbsentOrPositive (x : LemmaScript.Nullish Int) returns (res : Bool)
   ensures ensures_1: ((match x with | .Value _ => false | .Null => true | .Undefined => true) → res : Prop)
-  ensures ensures_2: ((match x with | .Value _value85 => (let _x_val : Int := _value85; res = (_x_val > 0)) | .Null => true | .Undefined => true) : Prop)
+  ensures ensures_2: ((match x with | .Value _value85 => res = (_value85 > 0) | .Null => true | .Undefined => true) : Prop)
   do
     return Pure.looseAbsentOrPositive x
 
@@ -50,7 +50,7 @@ method looseField (box : LooseBox) returns (res : Int)
   ensures ensures_1: ((let _optional88 : LemmaScript.Nullish Int := box.value
 let _optional89 : Unit := ()
 (match _optional88 with | .Value _ => false | .Null => true | .Undefined => true)) → res = 7 : Prop)
-  ensures ensures_2: ((match box.value with | .Value _value91 => (let _box_value_val : Int := _value91; res = _box_value_val) | .Null => true | .Undefined => true) : Prop)
+  ensures ensures_2: ((match box.value with | .Value _value91 => res = _value91 | .Null => true | .Undefined => true) : Prop)
   do
     return Pure.looseField box
 

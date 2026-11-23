@@ -122,6 +122,27 @@ export function renameFreeVar(e: Expr, from: string, to: string): Expr {
   return mapExpr(e, f);
 }
 
+/** Does `e` bind `name` anywhere inside it? A reference renamed to `name`
+ *  under such a binder would be captured. */
+function bindsName(e: Expr, name: string): boolean {
+  return anyExpr(e, x =>
+    (x.kind === "let" && x.name === name) ||
+    ((x.kind === "forall" || x.kind === "exists") && x.var === name) ||
+    (x.kind === "match" && x.arms.some(a => patternBinds(a.pattern, name))) ||
+    (x.kind === "lambda" && (x.params.some(p => p.name === name) || bindsNameInStmts(x.body, name))));
+}
+
+/** `body` with `binder` standing for the variable `v`: substituted when that
+ *  is capture-free and complete, otherwise bound. */
+export function bindToVar(binder: string, v: Extract<Expr, { kind: "var" }>, body: Expr, type?: Ty): Expr {
+  if (binder === v.name) return body;
+  if (!bindsName(body, v.name)) {
+    const renamed = renameFreeVar(body, binder, v.name);
+    if (!usesName(renamed, binder)) return renamed;
+  }
+  return { kind: "let", name: binder, ...(type ? { type } : {}), value: v, body };
+}
+
 
 
 /** Map over all sub-expressions in a TExpr (typed IR). */
@@ -528,6 +549,7 @@ function refinementCases<R>(expr: Expr, e: OptionalMatch,
 function bindOptionalExpr(b: ReturnType<typeof optionalBranch>, body: Expr): Expr {
   if (b.value.kind === "var" && b.value.name === b.binder) return body;
   if (!usesName(body, b.binder) && b.value.kind === "tupleLiteral") return body;
+  if (b.value.kind === "var") return bindToVar(b.binder, b.value, body, b.binderTy);
   return { kind: "let", name: b.binder, type: b.binderTy, value: b.value, body };
 }
 

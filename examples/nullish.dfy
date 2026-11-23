@@ -8,8 +8,7 @@ function classify(x: Nullish<int>): int
 {
   match x {
     case Value(i_value0) =>
-      var i_x_val := i_value0;
-      i_x_val
+      i_value0
     case Null =>
       2
     case Undefined =>
@@ -20,7 +19,7 @@ function classify(x: Nullish<int>): int
 lemma classify_ensures(x: Nullish<int>)
   ensures (x.Undefined? ==> (classify(x) == 1))
   ensures (x.Null? ==> (classify(x) == 2))
-  ensures (match x { case Value(i_value4) => (var i_x_val := i_value4; (classify(x) == i_x_val)) case Null => true case Undefined => true })
+  ensures (match x { case Value(i_value4) => (classify(x) == i_value4) case Null => true case Undefined => true })
 {
 }
 
@@ -28,8 +27,7 @@ function reverse(x: Nullish<int>): int
 {
   match x {
     case Value(i_value8) =>
-      var i_x_val := i_value8;
-      i_x_val
+      i_value8
     case Null =>
       2
     case Undefined =>
@@ -40,7 +38,7 @@ function reverse(x: Nullish<int>): int
 lemma reverse_ensures(x: Nullish<int>)
   ensures (x.Null? ==> (reverse(x) == 2))
   ensures (x.Undefined? ==> (reverse(x) == 1))
-  ensures (match x { case Value(i_value12) => (var i_x_val := i_value12; (reverse(x) == i_x_val)) case Null => true case Undefined => true })
+  ensures (match x { case Value(i_value12) => (reverse(x) == i_value12) case Null => true case Undefined => true })
 {
 }
 
@@ -48,8 +46,7 @@ function disjunction(x: Nullish<int>): int
 {
   match x {
     case Value(i_value16) =>
-      var i_x_val: int := i_value16;
-      i_x_val
+      i_value16
     case Null =>
       0
     case Undefined =>
@@ -58,7 +55,7 @@ function disjunction(x: Nullish<int>): int
 }
 
 lemma disjunction_ensures(x: Nullish<int>)
-  ensures (match x { case Value(i_value19) => (var i_x_val := i_value19; (disjunction(x) == i_x_val)) case Null => true case Undefined => true })
+  ensures (match x { case Value(i_value19) => (disjunction(x) == i_value19) case Null => true case Undefined => true })
 {
 }
 
@@ -104,8 +101,7 @@ function positive(x: Nullish<int>): bool
 {
   match x {
     case Value(i_value31) =>
-      var i_x_val := i_value31;
-      (i_x_val > 0)
+      (i_value31 > 0)
     case Null =>
       false
     case Undefined =>
@@ -115,7 +111,7 @@ function positive(x: Nullish<int>): bool
 
 lemma positive_ensures(x: Nullish<int>)
   ensures ((!x.Value?) ==> !(positive(x)))
-  ensures (match x { case Value(i_value37) => (var i_x_val := i_value37; (positive(x) == (i_x_val > 0))) case Null => true case Undefined => true })
+  ensures (match x { case Value(i_value37) => (positive(x) == (i_value37 > 0)) case Null => true case Undefined => true })
 {
 }
 
@@ -123,8 +119,7 @@ function absentOrPositive(x: Nullish<int>): bool
 {
   match x {
     case Value(i_value41) =>
-      var i_x_val := i_value41;
-      (i_x_val > 0)
+      (i_value41 > 0)
     case Null =>
       true
     case Undefined =>
@@ -134,7 +129,7 @@ function absentOrPositive(x: Nullish<int>): bool
 
 lemma absentOrPositive_ensures(x: Nullish<int>)
   ensures ((!x.Value?) ==> absentOrPositive(x))
-  ensures (match x { case Value(i_value47) => (var i_x_val := i_value47; (absentOrPositive(x) == (i_x_val > 0))) case Null => true case Undefined => true })
+  ensures (match x { case Value(i_value47) => (absentOrPositive(x) == (i_value47 > 0)) case Null => true case Undefined => true })
 {
 }
 
@@ -211,7 +206,7 @@ lemma lookupNullable_ensures(m: map<string, Option<int>>, key: string)
 method classifyMethod(x: Nullish<int>) returns (res: int)
   ensures (x.Undefined? ==> (res == 1))
   ensures (x.Null? ==> (res == 2))
-  ensures (match x { case Value(i_value88) => (var i_x_val := i_value88; (res == i_x_val)) case Null => true case Undefined => true })
+  ensures (match x { case Value(i_value88) => (res == i_value88) case Null => true case Undefined => true })
 {
   var result := 0;
   match x {

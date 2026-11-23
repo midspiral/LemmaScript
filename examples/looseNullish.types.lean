@@ -38,8 +38,7 @@ def looseNullable (x : Option Int) : Bool :=
 def looseDefault (x : LemmaScript.Nullish Int) : Int :=
   match x with
   | .Value _value11 =>
-    let _x_val : Int := _value11
-    _x_val
+    _value11
   | .Null =>
     7
   | .Undefined =>
@@ -48,8 +47,7 @@ def looseDefault (x : LemmaScript.Nullish Int) : Int :=
 def looseEarlyReturn (x : LemmaScript.Nullish Int) : Int :=
   match x with
   | .Value _value20 =>
-    let _x_val : Int := _value20
-    _x_val
+    _value20
   | .Null =>
     7
   | .Undefined =>
@@ -58,8 +56,7 @@ def looseEarlyReturn (x : LemmaScript.Nullish Int) : Int :=
 def loosePositive (x : LemmaScript.Nullish Int) : Bool :=
   match x with
   | .Value _value29 =>
-    let _x_val : Int := _value29
-    _x_val > 0
+    _value29 > 0
   | .Null =>
     false
   | .Undefined =>
@@ -68,8 +65,7 @@ def loosePositive (x : LemmaScript.Nullish Int) : Bool :=
 def looseAbsentOrPositive (x : LemmaScript.Nullish Int) : Bool :=
   match x with
   | .Value _value38 =>
-    let _x_val : Int := _value38
-    _x_val > 0
+    _value38 > 0
   | .Null =>
     true
   | .Undefined =>
@@ -78,8 +74,7 @@ def looseAbsentOrPositive (x : LemmaScript.Nullish Int) : Bool :=
 def looseField (box : LooseBox) : Int :=
   match box.value with
   | .Value _value47 =>
-    let _box_value_val : Int := _value47
-    _box_value_val
+    _value47
   | .Null =>
     7
   | .Undefined =>
