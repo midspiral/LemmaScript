@@ -14,12 +14,14 @@ import { emitDafnyFile } from "../src/dafny-emit.ts";
 import { emitLeanFile, resetLeanModule } from "../src/lean-emit.ts";
 import { peepholeModule } from "../src/peephole.ts";
 import * as runtime from "../fixtures/optional-assignment-narrowing.ts";
+import * as lookups from "../fixtures/optional-lookup-bindings.ts";
 
 const fixture = readFileSync(new URL("../fixtures/optional-assignment-narrowing.ts", import.meta.url), "utf8");
+const lookupFixture = readFileSync(new URL("../fixtures/optional-lookup-bindings.ts", import.meta.url), "utf8");
 
-function typed(text: string) {
+function typed(text: string, strictNullChecks = true) {
   const project = new Project({ compilerOptions: {
-    strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true,
+    strict: true, strictNullChecks, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true,
   } });
   const source = project.createSourceFile("optional-assignment.ts", text);
   const diagnostics = project.getPreEmitDiagnostics();
@@ -27,17 +29,17 @@ function typed(text: string) {
   return narrowModule(resolveModule(extractModule(source)));
 }
 
-function generate(text: string): string {
-  const { typesFile, defFile } = transformModuleDafny(typed(text));
+function generate(text: string, strictNullChecks = true): string {
+  const { typesFile, defFile } = transformModuleDafny(typed(text, strictNullChecks));
   return emitDafnyFile(peepholeModule({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] }, "dafny"));
 }
 
-function verify(text: string) {
+function verify(text: string, strictNullChecks = true) {
   const dir = mkdtempSync(join(tmpdir(), "lsc-optional-assignment-"));
   try {
     const path = join(dir, "test.dfy");
-    writeFileSync(path, generate(text));
-    const result = spawnSync("dafny", ["verify", "--verification-time-limit=10", path],
+    writeFileSync(path, generate(text, strictNullChecks));
+    const result = spawnSync("dafny", ["verify", "--standard-libraries", "--verification-time-limit=10", path],
       { encoding: "utf8", timeout: 60_000 });
     assert.ifError(result.error);
     return { status: result.status, output: result.stdout + result.stderr };
@@ -61,6 +63,20 @@ test("optional assignment narrowing agrees with JavaScript, including later abse
   const result = verify(fixture);
   assert.equal(result.status, 0, result.output);
 });
+
+for (const strictNullChecks of [true, false]) {
+  test(`lookup bindings preserve absence with strictNullChecks=${strictNullChecks}`, () => {
+    assert.equal(lookups.guardedLookup({}, "missing"), -1);
+    assert.equal(lookups.guardedLookup({ present: 5 }, "present"), 5);
+    assert.equal(lookups.annotatedLookup({}, "missing"), 7);
+    assert.equal(lookups.annotatedLookup({ present: 5 }, "present"), 5);
+    assert.deepEqual(lookups.lastMatch([], 7), { value: 7 });
+    const last = { value: 7 };
+    assert.equal(lookups.lastMatch([{ value: 7 }, { value: 5 }, last], 7), last);
+    const result = verify(lookupFixture, strictNullChecks);
+    assert.equal(result.status, 0, result.output);
+  });
+}
 
 test("assignment narrowing does not prove a false postcondition", () => {
   const result = verify(fixture.replace("flag ==> \\result === 7", "flag ==> \\result === 5"));

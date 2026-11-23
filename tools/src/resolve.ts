@@ -1683,14 +1683,6 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       const initCtx = (declTy.kind === "user" || declTy.kind === "array" || declTy.kind === "optional")
         ? { ...ctx, returnTy: declTy } : ctx;
       let init = coerceStr(resolveExpr(s.init, initCtx), declTy, ctx.typeDecls);
-      // Under noUncheckedIndexedAccess, TS gives `const e = arr[i]` type T | undefined
-      // while the index expression itself resolves to T. Leave that mismatch intact:
-      // narrow.ts's ruleOptionalIndexBinding adds the runtime bounds guard and the
-      // corresponding Some/None branches. Wrapping here would turn it into an
-      // unconditional Some(arr[i]) and prevent that JS-semantics rewrite from firing.
-      const deferOptionalIndex = declTy.kind === "optional" && init.kind === "index" &&
-        init.obj.ty.kind === "array" && init.ty.kind !== "optional";
-      if (!deferOptionalIndex) init = coerceToTargetTy(init, declTy, ctx.typeDecls);
       let ty: Ty;
       if (isUnmodeledTy(declTy, ctx.typeDecls) && !isUnmodeledTy(init.ty, ctx.typeDecls)) {
         // ts-morph's declared type is opaque to us (an expanded union it made
@@ -1713,6 +1705,16 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         // Map indexing: TS says T, but access can fail → use Optional<T> from init
         ty = (declTy.kind !== "optional" && init.ty.kind === "optional") ? init.ty : declTy;
       }
+      // Infer storage before converting: a lookup can be optional in the model
+      // even when TypeScript reports T (unchecked indexing or loose null checks).
+      // Under noUncheckedIndexedAccess, TS gives `const e = arr[i]` type T | undefined
+      // while the index expression itself resolves to T. Leave that mismatch intact:
+      // narrow.ts's ruleOptionalIndexBinding adds the runtime bounds guard and the
+      // corresponding Some/None branches. Wrapping here would turn it into an
+      // unconditional Some(arr[i]) and prevent that JS-semantics rewrite from firing.
+      const deferOptionalIndex = ty.kind === "optional" && init.kind === "index" &&
+        init.obj.ty.kind === "array" && init.ty.kind !== "optional";
+      if (!deferOptionalIndex) init = coerceToTargetTy(init, ty, ctx.typeDecls);
       // const collections are mutable in value-semantics world (TS mutates in place, Dafny/Lean reassign)
       const mutable = s.mutable || isRefMutableInTS(ty);
       return [{ kind: "let", name: s.name, ty, mutable, init }, extend(ctx.env, s.name, ty)];
