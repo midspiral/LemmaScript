@@ -2312,19 +2312,55 @@ function matchesAccessPath(e: TExpr, path: AccessPath): boolean {
   return collected.every((f, i) => f === path.fields[i]);
 }
 
-/** Replace every TExpr matching `path` with `var(binder, binderTy)`. */
+/** Replace free reads of `path`, respecting bindings of its root. Extraction
+ *  preserves loop and lambda scopes, so equal spellings there can still denote
+ *  different source variables. */
 function replacePathInTExpr(expr: TExpr, path: AccessPath, binder: string, binderTy: Ty): TExpr {
-  return mapTExpr(expr, e =>
-    matchesAccessPath(e, path)
-      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
-  );
+  const re = (e: TExpr) => replacePathInTExpr(e, path, binder, binderTy);
+  return mapTExpr(expr, e => {
+    if (matchesAccessPath(e, path)) return { kind: "var", name: binder, ty: binderTy };
+    if ((e.kind === "forall" || e.kind === "exists") && e.var === path.rootVar) return e;
+    if (e.kind === "lambda") {
+      if (e.params.some(p => p.name === path.rootVar)) return e;
+      return { ...e,
+        params: e.params.map(p => p.defaultValue ? { ...p, defaultValue: re(p.defaultValue) } : p),
+        body: replacePathInTStmts(e.body, path, binder, binderTy) };
+    }
+    if (e.kind === "someMatch") return { ...e, scrutinee: re(e.scrutinee),
+      someBody: e.binder === path.rootVar ? e.someBody : re(e.someBody), noneBody: re(e.noneBody) };
+    return null;
+  });
 }
 
 function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, binderTy: Ty): TStmt[] {
-  return stmts.map(s => mapTStmt(s, e =>
-    matchesAccessPath(e, path)
-      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
-  ));
+  const re = (e: TExpr) => replacePathInTExpr(e, path, binder, binderTy);
+  const rs = (ss: TStmt[]) => replacePathInTStmts(ss, path, binder, binderTy);
+  let shadowed = false;
+  return stmts.map(s => {
+    if (shadowed) return s;
+    switch (s.kind) {
+      case "let": case "ghostLet":
+        // The initializer uses the incoming environment; the new binding
+        // shadows the root for the rest of this block only.
+        shadowed = s.name === path.rootVar;
+        return { ...s, init: re(s.init) };
+      case "if": return { ...s, cond: re(s.cond), then: rs(s.then), else: rs(s.else) };
+      case "while": return { ...s, cond: re(s.cond), invariants: s.invariants.map(re),
+        decreases: s.decreases ? re(s.decreases) : null,
+        doneWith: s.doneWith ? re(s.doneWith) : null, body: rs(s.body) };
+      case "forof":
+        return s.names.includes(path.rootVar) ? { ...s, iterable: re(s.iterable) }
+          : { ...s, iterable: re(s.iterable), invariants: s.invariants.map(re),
+            doneWith: s.doneWith ? re(s.doneWith) : null, body: rs(s.body) };
+      case "switch": return { ...s, expr: re(s.expr),
+        cases: s.cases.map(c => ({ ...c, body: rs(c.body) })), defaultBody: rs(s.defaultBody) };
+      case "someMatch": return { ...s, scrutinee: re(s.scrutinee),
+        someBody: s.binder === path.rootVar ? s.someBody : rs(s.someBody), noneBody: rs(s.noneBody) };
+      case "tagMatch": return { ...s, scrutinee: re(s.scrutinee),
+        cases: s.cases.map(c => ({ ...c, body: rs(c.body) })), fallthrough: rs(s.fallthrough) };
+      default: return mapTStmt(s, re);
+    }
+  });
 }
 
 

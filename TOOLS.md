@@ -133,6 +133,8 @@ When extending extraction:
 - Keep decisions about lost or extended scopes in `scopeOf` / `loweredScope`. Update those rules when adding a construct whose lowering changes a binding's scope.
 - Use `freshName` for compiler-generated names. `LexicalNames` registers source and ghost renames with `reserveName` so later passes avoid them; preserve this reservation when adding a renaming path.
 
+Later path substitution must respect shadowing in the scopes extraction retains. `replacePathInTExpr` / `replacePathInTStmts` stop at bindings of the path's root, while still substituting free references captured by lambdas.
+
 `rejectForwardLocalCaptures` checks arrow bodies before extraction: a closure over a local `let`/`const` declared later cannot be constructed in the current backend model. Callback parameter defaults use their separate initialization rules in resolve.
 
 The resolve pass uses linked environments (Scheme-style). Each binding is a frame with one name, one type, and a pointer to the parent:
