@@ -352,6 +352,18 @@ function _eraseGenerics(tsType: string): string {
   return tsType;
 }
 
+function unwrapParens(expr: Expression): Expression {
+  while (Node.isParenthesizedExpression(expr)) expr = expr.getExpression();
+  return expr;
+}
+
+function unsupportedAssignmentExpr(node: Expression): never {
+  const source = node.getSourceFile();
+  const { line, column } = source.getLineAndColumnAtPos(node.getStart());
+  const kind = Node.isBinaryExpression(node) ? "assignment" : "update";
+  throw new Error(`Unsupported ${kind} expression at ${source.getFilePath()}:${line}:${column}: ${node.getText().slice(0, 80)}. Use a separate assignment statement.`);
+}
+
 function extractExpr(node: Expression): RawExpr {
   // Havoc key matching: replace matching calls or new expressions with havoc expression
   if (_havocKey && (Node.isCallExpression(node) || Node.isNewExpression(node))) {
@@ -510,17 +522,22 @@ function extractExpr(node: Expression): RawExpr {
 
   // Binary expression: a + b, a === b, etc.
   if (Node.isBinaryExpression(node)) {
-    const op = node.getOperatorToken().getText();
-    // Assignment: a = b → handled at statement level, but can appear in expressions
-    if (op === "=") {
-      // This is an assignment expression; extract as binop for now
-      return { kind: "binop", op: "=", left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
+    const token = node.getOperatorToken().getKind();
+    if (token >= SyntaxKind.FirstAssignment && token <= SyntaxKind.LastAssignment) {
+      unsupportedAssignmentExpr(node);
     }
+    const op = node.getOperatorToken().getText();
     // Nullish coalescing: a ?? b — single-eval, narrow rewrites to someMatch
     if (op === "??") {
       return { kind: "nullish", left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
     }
     return { kind: "binop", op, left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
+  }
+
+  // Updates are supported only where desugarStmtExpr can preserve the write.
+  if ((Node.isPrefixUnaryExpression(node) || Node.isPostfixUnaryExpression(node)) &&
+      (node.getOperatorToken() === SyntaxKind.PlusPlusToken || node.getOperatorToken() === SyntaxKind.MinusMinusToken)) {
+    unsupportedAssignmentExpr(node);
   }
 
   // Prefix unary: !x, -x
@@ -1350,14 +1367,16 @@ const COMPOUND_OPS: Record<string, string> = {
  *  `ExpressionStatement` extraction (wrapped) and the C-style for-loop
  *  incrementor (bare Expression — same shape, no `;` wrapper). */
 function desugarStmtExpr(expr: Expression, line: number): RawStmt | null {
+  expr = unwrapParens(expr);
   if (Node.isBinaryExpression(expr)) {
     const opText = expr.getOperatorToken().getText();
-    const left = expr.getLeft();
+    const left = unwrapParens(expr.getLeft());
     if (opText === "=" && Node.isElementAccessExpression(left)) {
-      const obj = extractExpr(left.getExpression());
+      const receiver = unwrapParens(left.getExpression());
+      const obj = extractExpr(receiver);
       const idx = extractExpr(left.getArgumentExpression()!);
       const val = extractExpr(expr.getRight());
-      const target = sourceName(left.getExpression());
+      const target = sourceName(receiver);
       const withCall: RawExpr = { kind: "call", fn: { kind: "field", obj, field: "with" }, args: [idx, val] };
       return { kind: "assign", target, value: withCall, line };
     }
@@ -1376,7 +1395,7 @@ function desugarStmtExpr(expr: Expression, line: number): RawStmt | null {
   }
   if ((Node.isPostfixUnaryExpression(expr) || Node.isPrefixUnaryExpression(expr)) &&
       (expr.getOperatorToken() === SyntaxKind.PlusPlusToken || expr.getOperatorToken() === SyntaxKind.MinusMinusToken)) {
-    const target = sourceName(expr.getOperand());
+    const target = sourceName(unwrapParens(expr.getOperand()));
     const op = expr.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+" : "-";
     return {
       kind: "assign", target,
@@ -1914,16 +1933,17 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
     }
 
     if (Node.isExpressionStatement(s)) {
-      const expr = s.getExpression();
+      const expr = unwrapParens(s.getExpression());
       // //@ havoc before `x = e` — discard the RHS, assign a nondeterministic
       // value of x's type. Only applies to plain `=` with an identifier LHS;
       // compound assigns, `arr[i] = v`, and `x++` fall through to desugaring.
       const havoc = havocDirective(s);
+      const left = Node.isBinaryExpression(expr) ? unwrapParens(expr.getLeft()) : null;
       if (havoc && !havoc.key && Node.isBinaryExpression(expr)
           && expr.getOperatorToken().getText() === "="
-          && Node.isIdentifier(expr.getLeft())) {
-        const target = sourceName(expr.getLeft());
-        const tsType = havoc.type ?? _eraseGenerics(typeToString(expr.getLeft().getType()));
+          && left && Node.isIdentifier(left)) {
+        const target = sourceName(left);
+        const tsType = havoc.type ?? _eraseGenerics(typeToString(left.getType()));
         result.push({ kind: "assign", target, value: { kind: "havoc", tsType }, line });
         continue;
       }
