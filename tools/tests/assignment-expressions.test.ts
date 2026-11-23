@@ -16,6 +16,9 @@ import { emitLeanFile, resetLeanModule } from "../src/lean-emit.ts";
 const cases = [
   ["parenWholeAssign", "let x = p; (x = 7); return x;", 7],
   ["parenthesizedTarget", "let x = p; (((x) = 7)); return x;", 7],
+  ["scopedAssignment", "let total = 0; { let p = 1; const y = ((p) = 7); total = p + y; } return p + total;", 14],
+  ["scopedUpdates", "let total = 0; { let p = 1; (p)++; ++(p); total = p; } return p + total;", 3],
+  ["scopedElementWrite", "const a = [1]; let total = 0; { const a = [2]; (a)[0] = 7; total = a[0]; } return total + a[0];", 8],
   ["assignInInit", "let x = p; const y = (x = 7); return x;", 7],
   ["assignedValue", "let x = p; const y = (x = 7); return x + y;", 14],
   ["chain", "let x = p, y = p; const z = (x = y = 7); return x + y + z;", 21],
@@ -193,6 +196,19 @@ test("Dafny rejects a false result from following a rebound iterable", () => {
   }`));
   assert.notEqual(result.status, 0, result.output);
   assert.match(result.output, /invariant could not be proved/);
+});
+
+test("havoc respects a parenthesized shadowed assignment target", () => {
+  const result = verify(dafny(`export function scopedHavoc(p: number): number {
+    //@ ensures \\result === p
+    {
+      let p = 1;
+      //@ havoc
+      (p) = 7;
+    }
+    return p;
+  }`));
+  assert.equal(result.status, 0, result.output);
 });
 
 test("explicitly pure functions retain assignments in their by-method implementation", () => {
