@@ -15,8 +15,10 @@ import { peepholeModule } from "../src/peephole.ts";
 import { renameSpecVariables } from "../src/specparser.ts";
 import { isUserName } from "../src/names.ts";
 import * as runtime from "../fixtures/lexical-scopes.ts";
+import * as narrowingRuntime from "../fixtures/narrowing-shadowing.ts";
 
 const fixture = readFileSync(new URL("../fixtures/lexical-scopes.ts", import.meta.url), "utf8");
+const narrowingFixture = readFileSync(new URL("../fixtures/narrowing-shadowing.ts", import.meta.url), "utf8");
 
 function source(text: string) {
   const project = new Project({ useInMemoryFileSystem: true, compilerOptions: {
@@ -158,4 +160,44 @@ test("both backends retain distinct inner and outer bindings", () => {
   }`;
   assert.match(generate(text), /var p_2 := 5;\s+p\b/);
   assert.match(generate(text, "lean"), /let p_2 := 5\s+p\b/);
+});
+
+test("narrowing respects loop locals, field roots, lambda parameters, and quantified variables", () => {
+  assert.equal(narrowingRuntime.whileShadow(3), 5);
+  assert.equal(narrowingRuntime.forOfShadow(3), 5);
+  assert.equal(narrowingRuntime.fieldShadow({ value: 3 }), 8);
+  assert.equal(narrowingRuntime.lambdaScopes(3), 13);
+  assert.equal(narrowingRuntime.lambdaTernary(3), 8);
+  assert.equal(narrowingRuntime.quantifierScope(3), 3);
+  const result = verify(generate(narrowingFixture));
+  assert.equal(result.status, 0, result.output);
+  const lean = generate(narrowingFixture, "lean");
+  assert.match(lean, /total := total \+ p\b/);
+  assert.match(lean, /total := total \+ box\.value\b/);
+  assert.match(lean, /fun p => p\b/);
+  assert.match(lean, /∃ p : Int, 0 ≤ p ∧ p < xs\.size/);
+});
+
+test("narrowing cannot prove the outer value was read through a shadowing loop local", () => {
+  const correct = source(narrowingFixture).getFunctionOrThrow("whileShadow").getFullText();
+  const falseContract = correct.replace("\\result === 5", "\\result === 3");
+  // Before the fix, replacing the invariant too made this false proof succeed.
+  const reported = falseContract.replace("total === i * 5", "total === i * 3")
+    .replace("function whileShadow", "function reportedFalseProof");
+  const reportedResult = verify(generate(reported));
+  assert.notEqual(reportedResult.status, 0, reportedResult.output);
+  assert.match(reportedResult.output, /invariant.*could not be proved/);
+  assert.doesNotMatch(reportedResult.output, /resolution\/type errors|unresolved identifier|timed out/);
+  const result = verify(generate(falseContract));
+  assert.notEqual(result.status, 0, result.output);
+  assert.match(result.output, /a postcondition could not be proved/);
+  assert.doesNotMatch(result.output, /resolution\/type errors|unresolved identifier|timed out/);
+});
+
+test("shadowing remains lexical when narrowing three-case nullish values", () => {
+  const text = narrowingFixture.replaceAll("number | undefined", "number | null | undefined")
+    .replaceAll("p !== undefined", "p != null")
+    .replaceAll("box.value !== undefined", "box.value != null");
+  const result = verify(generate(text));
+  assert.equal(result.status, 0, result.output);
 });
