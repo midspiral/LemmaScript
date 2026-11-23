@@ -86,7 +86,9 @@ Both backends share the same TypeScript source, `//@ ` annotations, and pipeline
        └──→ TypeScript IS the production output. No erasure.
 ```
 
-See [ARCHITECTURE_NARROWING.md](ARCHITECTURE_NARROWING.md) for the
+See [DESIGN_LEXICAL.md](DESIGN_LEXICAL.md) for how source bindings survive
+block flattening and continuation lowering,
+[ARCHITECTURE_NARROWING.md](ARCHITECTURE_NARROWING.md) for the
 design choices in the resolve/narrow/transform split, and
 [TOOLS.md](TOOLS.md) for the implementation surface.
 
