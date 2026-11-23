@@ -41,7 +41,9 @@ function verify(text: string) {
   try {
     const path = join(dir, "scopes.dfy");
     writeFileSync(path, text);
-    const result = spawnSync("dafny", ["verify", "--standard-libraries", "--verification-time-limit=15", path],
+    // As `lsc check` does: load the standard library only for text that uses it.
+    const stdlib = text.includes("Std.") ? ["--standard-libraries"] : [];
+    const result = spawnSync("dafny", ["verify", ...stdlib, "--verification-time-limit=15", path],
       { encoding: "utf8", timeout: 120_000 });
     assert.ifError(result.error);
     return { status: result.status, output: result.stdout + result.stderr };
