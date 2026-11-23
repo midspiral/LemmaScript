@@ -90,6 +90,9 @@ const LEAN_KEYWORDS = new Set([
   "variable", "axiom", "constant", "private", "protected", "noncomputable",
   "partial", "unsafe", "macro", "syntax", "by", "fun", "have", "show",
   "at", "from", "to", "deriving", "extends", "true", "false",
+  // Velvet's command keywords also reserve otherwise ordinary TS identifiers.
+  "method", "returns", "given", "requires", "signals", "ensures", "prove_correct",
+  "invariant", "done_with",
 ]);
 
 // The return-value identifier for the method currently being emitted. Default
@@ -491,9 +494,9 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         }
       }
       const obj = emitExpr(e.obj);
-      if (e.field === "collectionSize") return `${obj}.size`;
       const wrap = e.obj.kind !== "var" && e.obj.kind !== "num" && e.obj.kind !== "bigint" && e.obj.kind !== "bool";
-      return wrap ? `(${obj}).${escapeName(e.field)}` : `${obj}.${escapeName(e.field)}`;
+      const field = e.field === "collectionSize" ? "size" : escapeName(e.field);
+      return wrap ? `(${obj}).${field}` : `${obj}.${field}`;
     }
 
     case "toNat": {
