@@ -7,6 +7,8 @@ on:
     branches: [main]
 
 jobs:
+  # The former single `tools` job, split so its four slow parts run in
+  # parallel: fixture checks (here), unit tests, and the two drift checks.
   tools:
     runs-on: ubuntu-latest
     steps:
@@ -33,8 +35,51 @@ jobs:
 
       - uses: ./.github/actions/setup-dafny
 
-      - name: Reject implicit declaration skips
-        run: ./tools/test-fixtures.sh
+      - name: Fixture checks (reject implicit declaration skips, CLI, Dafny fixtures)
+        run: ./tools/test-fixtures.sh --fixtures
+
+  # Sharded by test file. Tests within one file run in sequence, so the slowest
+  # file bounds a shard however many shards there are.
+  unit-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install tools dependencies
+        working-directory: tools
+        run: npm ci
+
+      - uses: ./.github/actions/setup-dafny
+
+      - name: Unit tests (shard ${{ matrix.shard }} of 2)
+        run: ./tools/test-fixtures.sh --unit --test-shard=${{ matrix.shard }}/2
+
+  generated-lean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install tools dependencies
+        working-directory: tools
+        run: npm ci
 
       - name: Regenerate Lean from TypeScript
         run: ./regen-lean.sh
@@ -49,8 +94,24 @@ jobs:
             exit 1
           fi
 
-      # Drift + additions-only only; `dafny verify` runs in the sharded
-      # `examples-dafny` job below (parallel), off this job's critical path.
+  # Drift + additions-only only, which needs no Dafny install; `dafny verify`
+  # runs in the sharded `examples-dafny` job below.
+  generated-dafny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install tools dependencies
+        working-directory: tools
+        run: npm ci
+
       - name: Regenerate Dafny (drift + additions-only; verify runs in examples-dafny)
         run: ./regen-dafny.sh --no-verify
 
@@ -76,7 +137,7 @@ jobs:
       - name: Build
         run: lake build
 
-  # Dafny verification of the examples, sharded across runners. The `tools` job
+  # Dafny verification of the examples, sharded across runners. `generated-dafny`
   # enforces drift + additions-only (regen --no-verify); this job runs the actual
   # `dafny verify` in parallel. Files are split by index (i % N == shard), so no
   # hand-maintained file list. Each shard also re-checks drift for its own slice.
@@ -210,6 +271,7 @@ jobs:
             staging="$DEFAULT_BRANCH-$LS_BRANCH"
             if git ls-remote --exit-code --heads "$repo" "$staging" >/dev/null; then
               echo "Using staging branch $staging (default: $DEFAULT_BRANCH)"
+              echo "- \`${{ matrix.repo }}\`: staging branch \`$staging\` in place of \`$DEFAULT_BRANCH\`" >> "$GITHUB_STEP_SUMMARY"
               branch="$staging"
             fi
           fi
@@ -310,6 +372,7 @@ jobs:
             staging="$DEFAULT_BRANCH-$LS_BRANCH"
             if git ls-remote --exit-code --heads "$repo" "$staging" >/dev/null; then
               echo "Using staging branch $staging (default: $DEFAULT_BRANCH)"
+              echo "- \`${{ matrix.repo }}\`: staging branch \`$staging\` in place of \`$DEFAULT_BRANCH\`" >> "$GITHUB_STEP_SUMMARY"
               branch="$staging"
             fi
           fi
