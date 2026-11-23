@@ -15,7 +15,7 @@ import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
 import { recognizeBuiltin, builtinSpec, callbackArgumentTypes, callbackBaseArity } from "./builtins.js";
 import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName } from "./typedecls.js";
-import { presentFact, variantFact } from "./condition-facts.js";
+import { presentFact, variantFact, noneDetector } from "./condition-facts.js";
 import { accessPath, samePath as accessPathsEqual, containsPath, targetPath, type AccessPath } from "./access-path.js";
 import { continuationWrites, loopWrites } from "./write-effects.js";
 
@@ -219,7 +219,18 @@ function conditionContext(cond: TExpr, ctx: Ctx, truth: boolean): Ctx {
     if (access) ctx = { ...ctx, safeSpecAccesses: [...(ctx.safeSpecAccesses ?? []), access] };
   }
   const fact = presentFact(cond);
-  if (!fact) return truth ? collectAndChainNarrowings(cond, ctx) : ctx;
+  if (!fact) {
+    // A false `obj?.field !== value` establishes presence when value's type
+    // excludes undefined.
+    // Use the same detector as narrow's early-return and disjunction rules
+    // so subsequent reads have the type their branch binding represents.
+    const absent = !truth ? noneDetector(cond, { decls: ctx.typeDecls, oc: { n: 0 } }) : null;
+    if (absent) {
+      const path = asTExprAccessPath(absent.scrutinee);
+      if (path) return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: absent.innerTy }] };
+    }
+    return truth ? collectAndChainNarrowings(cond, ctx) : ctx;
+  }
   const positive = truth !== fact.negated;
   if (!positive && fact.truthiness) return ctx;
   const path = asTExprAccessPath(fact.scrutinee);

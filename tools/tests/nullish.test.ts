@@ -204,6 +204,29 @@ export function sentinels(flag: boolean): null | undefined {
   assert.equal(result.status, 0, result.output + result.text);
 });
 
+test("optional-chain exit guards narrow subsequent reads and disjunction operands", () => {
+  const result = verify(String.raw`
+interface Row { key: string; amount: number }
+export function guarded(row: Row | undefined): number {
+  //@ ensures row === undefined ==> \result === 0
+  //@ ensures row !== undefined && row.key === "ok" ==> \result === row.amount
+  if (row?.key !== "ok") return 0;
+  return row.amount;
+}
+export function disjunction(row: Row | null | undefined): number {
+  //@ ensures \result >= 0
+  if (row?.key !== "ok" || row.amount <= 0) return 0;
+  return row.amount;
+}
+export function undefinedGuard(row: Row | undefined): boolean {
+  //@ ensures row === undefined ==> \result
+  if (row?.key !== undefined) return false;
+  return row === undefined;
+}
+`);
+  assert.equal(result.status, 0, result.output + result.text);
+});
+
 test("collection results, callback defaults and conversions preserve null", () => {
   const result = verify(String.raw`
 export function lookup(m: Map<string, number | null>, key: string): number {
