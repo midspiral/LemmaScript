@@ -60,7 +60,7 @@ function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
     case "havoc":
       return e;
     case "binop": return { ...e, left: re(e.left), right: re(e.right) };
-    case "unop": return { ...e, expr: re(e.expr) };
+    case "unop": case "coerce": return { ...e, expr: re(e.expr) };
     case "call": return { ...e, fn: re(e.fn), args: e.args.map(re) };
     case "index": return { ...e, obj: re(e.obj), idx: re(e.idx) };
     case "field": return { ...e, obj: re(e.obj) };
@@ -508,7 +508,7 @@ function containsMethodCall(e: TExpr): boolean {
     case "havoc":
       return false;
     case "binop": return containsMethodCall(e.left) || containsMethodCall(e.right);
-    case "unop": return containsMethodCall(e.expr);
+    case "unop": case "coerce": return containsMethodCall(e.expr);
     case "call": return containsMethodCall(e.fn) || e.args.some(containsMethodCall);
     case "index": return containsMethodCall(e.obj) || containsMethodCall(e.idx);
     case "field": return containsMethodCall(e.obj);

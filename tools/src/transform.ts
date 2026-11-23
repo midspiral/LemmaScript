@@ -131,7 +131,7 @@ function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
   switch (e.kind) {
     case "var": case "num": case "bigint": case "str": case "bool": case "havoc": return e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
-    case "unop": return { ...e, expr: r(e.expr) };
+    case "unop": case "coerce": return { ...e, expr: r(e.expr) };
     case "call": return { ...e, fn: r(e.fn), args: e.args.map(r) };
     case "index": return { ...e, obj: r(e.obj), idx: r(e.idx) };
     case "field": return { ...e, obj: r(e.obj) };
@@ -369,9 +369,8 @@ function flattenLambdaBody(stmts: Stmt[]): Expr | null {
  *
  * When `binds` is non-null, embedded method calls are extracted into
  * `let ← ` binds (monadic lifting / selective ANF).  Lifting propagates
- * through binop, unop, and call arguments — the expression kinds where
- * a method call can appear inline in TS.  It does NOT propagate into
- * field, index, record, forall, or exists sub-expressions.
+ * through expression operands, including field receivers and indices.
+ * Specifications are lowered without a statement context.
  */
 
 /** JS truthiness coercion for `if`/`while`/`?:` conditions.
@@ -516,6 +515,18 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     case "str":
       if (e.ty.kind === "user") return { kind: "constructor", name: e.value, type: e.ty.name, args: [] };
       return { kind: "str", value: e.value };
+
+    case "coerce": {
+      const expr = lowerExpr(e.expr, binds);
+      // A surrounding match may already have supplied the payload.
+      if (e.expr.ty.kind !== "optional") return expr;
+      if (_opts.backend === "dafny") return { kind: "field", obj: expr, field: "value" };
+      const value: Expr = { kind: "app", fn: "LemmaScript.optionValue", args: [expr] };
+      if (!binds) return value;
+      const name = freshName(`_t${_liftCounter++}`);
+      binds.push({ kind: "let-bind", name, value });
+      return varE(name);
+    }
 
     case "unop":
       // Only `num` folds. A `bigint` payload is a string, so negating it here
@@ -793,13 +804,14 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       };
     }
 
-    case "field":
+    case "field": {
+      const obj = lowerExpr(e.obj, binds);
       if (e.field === "length" && isArray(e.obj.ty))
-        return { kind: "field", obj: transformExpr(e.obj), field: "size" };
+        return { kind: "field", obj, field: "size" };
       if (e.field === "length" && e.obj.ty.kind === "string")
-        return { kind: "field", obj: transformExpr(e.obj), field: "length" };
+        return { kind: "field", obj, field: "length" };
       if (e.field === "size" && (e.obj.ty.kind === "map" || e.obj.ty.kind === "set"))
-        return { kind: "field", obj: transformExpr(e.obj), field: "collectionSize" };
+        return { kind: "field", obj, field: "collectionSize" };
       // Boolean discriminant bare access: `result.ok` where Result has variants
       // {ok: true, ...} | {ok: false, ...}. String discriminants are always used via
       // comparison (x.kind === 'Foo' → x.Foo?), but boolean discriminants are used
@@ -808,7 +820,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.isDiscriminant && e.obj.ty.kind === "user") {
         const decl = unionDeclOfTy(_typeDecls, e.obj.ty);
         if (decl?.variants?.some(v => v.name === "true")) {
-          return { kind: "field", obj: transformExpr(e.obj), field: "true_?" };
+          return { kind: "field", obj, field: "true_?" };
         }
         // Surviving string-discriminant read (`x.kind` used as a value —
         // compared against another union's tag, passed as an argument, …):
@@ -817,7 +829,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         // *checks*; this catches reads that survive as values.
         if (decl?.variants && decl.discriminant && decl.discriminant !== "__isArray__") {
           _neededKindHelpers.set(decl.name, decl);
-          return { kind: "app", fn: kindHelperName(decl), args: [lowerExpr(e.obj, binds)] };
+          return { kind: "app", fn: kindHelperName(decl), args: [obj] };
         }
       }
       // Union destructor: `x.field` where x is a discriminated union and `field`
@@ -840,29 +852,31 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           });
           const matching = differ ? owners.filter(v => { const t = ownerTy(v); return t && tyEqual(t, e.ty); }) : [];
           const ctor = e.ofVariant ?? (matching.length === 1 ? matching[0].name : undefined);
-          return { kind: "field", obj: transformExpr(e.obj), field: e.field, fromUnion: baseName, ctor, datatypeField: true };
+          return { kind: "field", obj, field: e.field, fromUnion: baseName, ctor, datatypeField: true };
         }
       }
-      return { kind: "field", obj: transformExpr(e.obj), field: e.field, datatypeField: isRecordType(e.obj.ty) };
+      return { kind: "field", obj, field: e.field, datatypeField: isRecordType(e.obj.ty) };
+    }
 
     case "index": {
+      const obj = lowerExpr(e.obj, binds);
+      const idx = lowerExpr(e.idx, binds);
       if (e.obj.ty.kind === "string") {
-        return { kind: "stringIndex", str: lowerExpr(e.obj, binds), idx: lowerExpr(e.idx, binds) };
+        return { kind: "stringIndex", str: obj, idx };
       }
-      const idx = transformExpr(e.idx);
       if (e.obj.ty.kind === "tuple") {
         // resolve guarantees a numeric-literal index here; project at that slot.
-        return { kind: "tupleProj", obj: transformExpr(e.obj), index: (e.idx as { value: number }).value, arity: e.obj.ty.elems.length };
+        return { kind: "tupleProj", obj, index: (e.idx as { value: number }).value, arity: e.obj.ty.elems.length };
       }
       if (e.obj.ty.kind === "map") {
         // Mirrors the .get() → .getDirect switch at line ~453: when resolve has
         // narrowed the index type to non-optional (via `k in m` atoms in scope),
         // emit direct access; otherwise keep the Option-producing `get`.
         const method = e.ty.kind !== "optional" ? "getDirect" : "get";
-        return { kind: "methodCall", obj: transformExpr(e.obj), objTy: e.obj.ty, method, args: [idx], monadic: false };
+        return { kind: "methodCall", obj, objTy: e.obj.ty, method, args: [idx], monadic: false };
       }
       const wrappedIdx = isArray(e.obj.ty) && !isNat(e.idx.ty) ? { kind: "toNat" as const, expr: idx } : idx;
-      return { kind: "index", arr: transformExpr(e.obj), idx: wrappedIdx };
+      return { kind: "index", arr: obj, idx: wrappedIdx };
     }
 
     case "call": {
@@ -2293,6 +2307,7 @@ function projectStructuralCallArgsInTStmts(
 interface AccessPath { rootVar: string; fields: string[] }
 
 function asTAccessPath(e: TExpr): AccessPath | null {
+  if (e.kind === "coerce") return asTAccessPath(e.expr);
   if (e.kind === "var") return { rootVar: e.name, fields: [] };
   if (e.kind === "field") {
     const inner = asTAccessPath(e.obj);
@@ -2304,12 +2319,10 @@ function asTAccessPath(e: TExpr): AccessPath | null {
 
 /** Does TExpr `e` match the given access path exactly? */
 function matchesAccessPath(e: TExpr, path: AccessPath): boolean {
-  const collected: string[] = [];
-  let cur = e;
-  while (cur.kind === "field") { collected.unshift(cur.field); cur = cur.obj; }
-  if (cur.kind !== "var" || cur.name !== path.rootVar) return false;
-  if (collected.length !== path.fields.length) return false;
-  return collected.every((f, i) => f === path.fields[i]);
+  const candidate = asTAccessPath(e);
+  return candidate !== null && candidate.rootVar === path.rootVar &&
+    candidate.fields.length === path.fields.length &&
+    candidate.fields.every((f, i) => f === path.fields[i]);
 }
 
 /** Replace every TExpr matching `path` with `var(binder, binderTy)`. */
@@ -2646,9 +2659,9 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   }
 
   if (_opts.backend === "lean") {
-    // A pure mirror would erase the failure on an empty spread. Keep these
-    // functions and their transitive callers as methods, where WP checks it.
-    const checked = new Set(["LemmaScript.maxOfArray", "LemmaScript.minOfArray"]);
+    // A pure mirror would erase failure on an empty spread or absent optional.
+    // Keep these functions and their transitive callers as methods, where WP checks it.
+    const checked = new Set(["LemmaScript.maxOfArray", "LemmaScript.minOfArray", "LemmaScript.optionValue"]);
     let changed = true;
     while (changed) {
       changed = false;

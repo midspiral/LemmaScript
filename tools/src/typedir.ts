@@ -89,6 +89,7 @@ export type TExpr =
   | { kind: "bool"; value: boolean; ty: Ty }
   | { kind: "binop"; op: string; left: TExpr; right: TExpr; ty: Ty }
   | { kind: "unop"; op: string; expr: TExpr; ty: Ty }
+  | { kind: "coerce"; expr: TExpr; ty: Ty }   // representation conversion; optional payload reads require presence
   | { kind: "call"; fn: TExpr; args: TExpr[]; ty: Ty; callKind: CallKind;
       builtinId?: BuiltinId;
       /** Resolved parameter types for a named callee. Kept so nominal

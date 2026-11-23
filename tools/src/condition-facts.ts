@@ -69,7 +69,10 @@ export interface PresentFact {
 function pathParts(e: TExpr): string[] | null {
   const fields: string[] = [];
   let cur = e;
-  while (cur.kind === "field") { fields.unshift(cur.field); cur = cur.obj; }
+  while (cur.kind === "field" || cur.kind === "coerce") {
+    if (cur.kind === "coerce") cur = cur.expr;
+    else { fields.unshift(cur.field); cur = cur.obj; }
+  }
   if (cur.kind !== "var") return null;
   return [cur.name, ...fields];
 }

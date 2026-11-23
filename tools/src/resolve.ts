@@ -69,6 +69,7 @@ interface AccessPath {
 }
 
 function asRawAccessPath(e: RawExpr): AccessPath | null {
+  if (e.kind === "nonNull") return asRawAccessPath(e.expr);
   if (e.kind === "var") return { rootVar: e.name, fields: [] };
   if (e.kind === "field") {
     const inner = asRawAccessPath(e.obj);
@@ -189,6 +190,13 @@ function wrapSome(value: TExpr, optionalTy: Ty): TExpr {
   };
 }
 
+/** Read a payload when an operation needs T but storage still has optional<T>.
+ *  Branch narrowing can eliminate the conversion; otherwise verification
+ *  must establish presence. Writes retain the declared storage type. */
+function optionalValue(expr: TExpr): TExpr {
+  return expr.ty.kind === "optional" ? { kind: "coerce", expr, ty: expr.ty.inner } : expr;
+}
+
 /** Find the synth array-union TypeDecl named `name` (discriminant `__isArray__`). */
 function findSynthArrayUnion(name: string, typeDecls: TypeDeclInfo[]): TypeDeclInfo | null {
   const decl = declOf(typeDecls, name);
@@ -197,13 +205,17 @@ function findSynthArrayUnion(name: string, typeDecls: TypeDeclInfo[]): TypeDeclI
 }
 
 /** Coerce `value` to `targetTy` at an assignment-position. Contextually types
- *  real literals, then mirrors TS subtyping for the upcast shapes LS synthesizes:
+ *  real literals and makes representation changes explicit:
+ *    - `optional<T>` into a `T` slot → checked payload read
  *    - `T` into `optional<T>` slot  → wrap with `Some(...)`
  *    - `T[]` into a synth `T[] | U` slot → wrap with `ArrayBranch(...)`
  *    - `U`   into a synth `T[] | U` slot → wrap with `NonArrayBranch(...)`
  *  Returns `value` unchanged if no coercion applies (types already match,
  *  source is unknown, or no rule matches). */
 function coerceToTargetTy(value: TExpr, targetTy: Ty, typeDecls: TypeDeclInfo[]): TExpr {
+  if (targetTy.kind !== "optional" && targetTy.kind !== "unknown" && targetTy.kind !== "void") {
+    value = optionalValue(value);
+  }
   value = coerceStr(value, targetTy, typeDecls);
   // Real targets also type integer literals, including negative literals and
   // conditional arms. Coerce optional payloads before adding Some wrappers.
@@ -279,6 +291,7 @@ function negatedVariantCheck(cond: TExpr): NarrowedPath | null {
 /** TExpr → AccessPath. Counterpart to `asRawAccessPath` for resolved trees.
  *  Used by `extractInAtoms` when pulling atoms out of typed spec expressions. */
 function asTExprAccessPath(e: TExpr): AccessPath | null {
+  if (e.kind === "coerce") return asTExprAccessPath(e.expr);
   if (e.kind === "var") return { rootVar: e.name, fields: [] };
   if (e.kind === "field") {
     const inner = asTExprAccessPath(e.obj);
@@ -1043,8 +1056,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
           expr.fn.obj.ty.kind === "map" && expr.fn.field === "get") {
         return { ...expr, ty: expr.fn.obj.ty.value };
       }
-      const ty = expr.ty.kind === "optional" ? expr.ty.inner : expr.ty;
-      return { ...expr, ty };
+      return optionalValue(expr);
     }
 
     case "binop": {
@@ -1057,6 +1069,10 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         rightCtx = collectAndChainNarrowings(left, ctx);
       }
       let right = resolveExpr(rawRight, rightCtx);
+      if (["+", "-", "*", "/", "%"].includes(e.op)) {
+        left = optionalValue(left);
+        right = optionalValue(right);
+      }
       if (e.op === "===" || e.op === "!==") {
         left = coerceStr(left, right.ty, ctx.typeDecls);
         right = coerceStr(right, left.ty, ctx.typeDecls);
@@ -1090,7 +1106,8 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "unop": {
-      const expr = resolveExpr(e.expr, ctx);
+      let expr = resolveExpr(e.expr, ctx);
+      if (e.op === "-" || e.op === "+" || e.op === "~") expr = optionalValue(expr);
       const ty: Ty = e.op === "!" ? { kind: "bool" } : e.op === "typeof" ? { kind: "string" }
         : e.op === "-" && expr.ty.kind === "nat" ? { ...expr.ty, kind: "int" } : expr.ty;
       return { kind: "unop", op: e.op, expr, ty };
@@ -1221,8 +1238,9 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         const member = resolveConstEnumMember(e.obj, e.idx.value, ctx);
         if (member) return member;
       }
-      const obj = resolveExpr(e.obj, ctx);
-      const idx = resolveExpr(e.idx, ctx);
+      const obj = optionalValue(resolveExpr(e.obj, ctx));
+      const idx = coerceToTargetTy(resolveExpr(e.idx, ctx),
+        obj.ty.kind === "map" ? obj.ty.key : { kind: "int" }, ctx.typeDecls);
       // Map bracket access: default to Option<V>. But if the enclosing scope has a
       // known `k in m` atom matching (obj, idx) — from requires, assert, an enclosing
       // `if (k in m)`, or a loop invariant — narrow to V. Parallels how `narrowedPaths`
@@ -1261,7 +1279,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       if (pack && e.field === "length") return { kind: "num", value: pack.length, ty: { kind: "nat" } };
       const member = resolveConstEnumMember(e.obj, e.field, ctx);
       if (member) return member;
-      const obj = resolveExpr(e.obj, ctx);
+      const obj = optionalValue(resolveExpr(e.obj, ctx));
       let isDiscriminant = false;
       let ty: Ty = { kind: "unknown" };
 
@@ -1303,15 +1321,14 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       // or just left's type, unified with right's type.
       const left = resolveExpr(e.left, ctx);
       const inner: Ty = left.ty.kind === "optional" ? left.ty.inner : left.ty;
-      // The default shares the result type, so coerce a string literal to a
-      // string-union enum (e.g. `availableLevels[0] ?? "off"`).
-      const right = coerceToTargetTy(resolveExpr(e.right, ctx), inner, ctx.typeDecls);
+      const right = resolveExpr(e.right, ctx);
       // `??` is only total when its default is: with a nullable right operand
       // (rule-chain style `ruleA(e) ?? ruleB(e) ?? null`), the result stays
       // optional — otherwise the enclosing chain level loses its optionality
       // and narrowing can't rewrite it.
       const ty: Ty = right.ty.kind === "optional" ? right.ty : inner;
-      return { kind: "nullish", left, right, ty };
+      // Coerce against the joined result, which may itself be optional.
+      return { kind: "nullish", left, right: coerceToTargetTy(right, ty, ctx.typeDecls), ty };
     }
 
     case "optChain": {
