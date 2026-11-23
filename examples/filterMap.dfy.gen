@@ -15,7 +15,7 @@ datatype Out = Out(n: int)
 
 function pick(items: seq<In>): seq<Out>
 {
-  SeqFilterSome(seq(|items|, i_map requires 0 <= i_map < |items| => var it := items[i_map]; (if it.keep then Some(Out(it.n)) else None)))
+  SeqFilterSome(seq(|items|, i_map requires 0 <= i_map < |items| => var it := items[i_map]; (if it.keep then Option.Some(Out(it.n)) else Option.None)))
 }
 
 lemma pick_ensures(items: seq<In>)

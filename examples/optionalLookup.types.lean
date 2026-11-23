@@ -7,8 +7,8 @@ namespace Pure
 
 def optionalLookup (enabled : Bool) (values : Std.HashMap String Int) (key : String) : Option Int :=
   if enabled then
-    Option.some (if values.contains key then let _oc0_val := values[key]!
-_oc0_val else 0)
+    Option.some (if values.contains key then (let _nc0 := values[key]!
+_nc0) else 0)
   else
     Option.none
 

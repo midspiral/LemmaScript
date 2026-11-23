@@ -23,13 +23,13 @@ deriving Repr, Inhabited, DecidableEq
 namespace Pure
 
 def budgetFor (b : Budgets) (level : Level) : Int :=
-  match level with
-  | .low =>
+  if level = Level.low then
     b.low
-  | .medium =>
-    b.medium
-  | .high =>
-    b.high
+  else
+    if level = Level.medium then
+      b.medium
+    else
+      b.high
 
 def maybeBudget (b : OptBudgets) (level : String) : Option Int :=
   if level = "low" then

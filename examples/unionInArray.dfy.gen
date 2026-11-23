@@ -4,12 +4,10 @@ datatype Shape = circle(r: int) | rect(w: int, h: int)
 
 function area(s: Shape): int
 {
-  match s {
-    case circle(i_s_r) =>
-      ((3 * i_s_r) * i_s_r)
-    case rect(i_s_w, i_s_h) =>
-      (i_s_w * i_s_h)
-  }
+  if s.circle? then
+    ((3 * s.r) * s.r)
+  else
+    (s.w * s.h)
 }
 
 function shapes(): seq<Shape>

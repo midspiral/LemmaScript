@@ -94,7 +94,7 @@ export type TExpr =
   | { kind: "bool"; value: boolean; ty: Ty }
   | { kind: "binop"; op: string; left: TExpr; right: TExpr; ty: Ty }
   | { kind: "unop"; op: string; expr: TExpr; ty: Ty }
-  | { kind: "coerce"; expr: TExpr; ty: Ty; checked?: boolean }
+  | { kind: "coerce"; expr: TExpr; ty: Ty; checked?: boolean; variant?: string }
   | { kind: "call"; fn: TExpr; args: TExpr[]; ty: Ty; callKind: CallKind;
       builtinId?: BuiltinId;
       /** Resolved parameter types for a named callee. Kept so nominal
@@ -104,15 +104,13 @@ export type TExpr =
   | { kind: "field"; obj: TExpr; field: string; ty: Ty;
       isDiscriminant?: boolean;             // true if this is a discriminant field access
       ofVariant?: string }                  // which union variant the field is read from, when narrowing determined it
-  | { kind: "record"; spread: TExpr | null; fields: { name: string; value: TExpr }[]; ty: Ty }
+  | { kind: "record"; spread: TExpr | null; fields: { name: string; value: TExpr }[]; ty: Ty;
+      ctor?: string; ctorOf?: string }
   | { kind: "arrayLiteral"; elems: TExpr[]; ty: Ty }
   | { kind: "lambda"; params: { name: string; ty: Ty; rest?: true; defaultValue?: TExpr }[]; body: TStmt[]; ty: Ty }
   | { kind: "conditional"; cond: TExpr; then: TExpr; else: TExpr; ty: Ty }
   | { kind: "optChain"; obj: TExpr; chain: TChainStep[]; ty: Ty }
   | { kind: "nullish"; left: TExpr; right: TExpr; ty: Ty }
-  | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
-      cases: { variant: string; body: TExpr }[];
-      fallthrough: TExpr | null; ty: Ty }
   // Spec-only (from //@ annotations):
   // Note: \result is desugared by resolve.ts into a regular var named "\\result";
   // there is no kind: "result" variant in the typed IR.
@@ -146,9 +144,6 @@ export type TStmt =
   | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
   | { kind: "ghostAssign"; target: string; value: TExpr }
   | { kind: "assert"; expr: TExpr; assumed?: boolean }
-  | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
-      cases: { variant: string; body: TStmt[] }[];
-      fallthrough: TStmt[] }
 
 /** Statement kinds that unconditionally leave the enclosing block. Shared by
  *  resolve (block-tail narrowing) and narrow (isTerminating); works on raw and

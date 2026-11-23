@@ -2,10 +2,10 @@
  * condition-facts — shared condition detection for spec narrowing,
  * `.filter()` recognition, array bounds, and variant narrowing.
  *
- * Optional/nullish narrowing no longer rewrites control flow into `someMatch`;
- * it uses checked local `coerce` nodes instead. This module keeps the small
- * pure fact detectors used by `resolve.ts` (specs / non-TS frontends),
- * `narrow.ts` (array bounds + variant `tagMatch`), and `transform.ts`
+ * Optional/nullish and variant narrowing no longer rewrite control flow into
+ * `someMatch`/`tagMatch`; they use checked local coercions and projections
+ * instead. This module keeps the small pure fact detectors used by `resolve.ts`
+ * (specs / non-TS frontends), `narrow.ts` (array bounds), and `transform.ts`
  * (`.filter` narrowing).
  */
 
@@ -130,7 +130,7 @@ export function isNarrowablePath(e: TExpr): boolean {
 }
 
 export interface VariantFact {
-  scrutinee: TExpr & { kind: "var" };
+  scrutinee: TExpr;
   typeName: string;
   variant: string;
 }
@@ -146,7 +146,8 @@ export function isArrayFact(call: TExpr, ctx: CondCtx): (IsArrayFact & { variant
   if (call.fn.kind !== "field" || call.fn.field !== "isArray") return null;
   if (call.fn.obj.kind !== "var" || call.fn.obj.name !== "Array") return null;
   if (call.args.length !== 1) return null;
-  const arg = call.args[0];
+  const rawArg = call.args[0];
+  const arg = rawArg.kind === "coerce" && rawArg.variant ? rawArg.expr : rawArg;
   if (!isNarrowablePath(arg) || arg.ty.kind !== "user") return null;
   const decl = unionDeclOfTy(ctx.decls, arg.ty);
   if (decl?.discriminant !== "__isArray__") return null;
@@ -155,10 +156,11 @@ export function isArrayFact(call: TExpr, ctx: CondCtx): (IsArrayFact & { variant
 
 export function typeofStringFact(e: TExpr, ctx: CondCtx): (IsArrayFact & { variant: "NonArrayBranch" }) | null {
   if (e.kind !== "binop" || (e.op !== "===" && e.op !== "==")) return null;
-  const tof = e.left.kind === "unop" && e.left.op === "typeof" ? e.left.expr
+  const rawTof = e.left.kind === "unop" && e.left.op === "typeof" ? e.left.expr
     : e.right.kind === "unop" && e.right.op === "typeof" ? e.right.expr : null;
   const lit = e.left.kind === "str" ? e.left.value : e.right.kind === "str" ? e.right.value : null;
-  if (!tof || lit !== "string") return null;
+  if (!rawTof || lit !== "string") return null;
+  const tof = rawTof.kind === "coerce" && rawTof.variant ? rawTof.expr : rawTof;
   if (!isNarrowablePath(tof) || tof.ty.kind !== "user") return null;
   const decl = unionDeclOfTy(ctx.decls, tof.ty);
   if (decl?.discriminant !== "__isArray__") return null;
@@ -167,18 +169,20 @@ export function typeofStringFact(e: TExpr, ctx: CondCtx): (IsArrayFact & { varia
   return { scrutinee: tof, typeName: tof.ty.name, variant: "NonArrayBranch" };
 }
 
-export function leadingIsArray(cond: TExpr, ctx: CondCtx) {
-  return extractConjunct(cond, e => isArrayFact(e, ctx));
-}
-
 export function variantFact(cond: TExpr, ctx: CondCtx): VariantFact | null {
   if (cond.kind === "binop" && (cond.op === "===" || cond.op === "==") && cond.right.kind === "str" &&
       cond.left.kind === "field" && cond.left.isDiscriminant &&
-      cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
+      isNarrowablePath(cond.left.obj) && cond.left.obj.ty.kind === "user") {
     return { scrutinee: cond.left.obj, typeName: cond.left.obj.ty.name, variant: cond.right.value };
   }
+  if (cond.kind === "field" && cond.isDiscriminant && isNarrowablePath(cond.obj) && cond.obj.ty.kind === "user") {
+    const decl = unionDeclOfTy(ctx.decls, cond.obj.ty);
+    if (decl?.variants?.some(v => v.name === "true")) {
+      return { scrutinee: cond.obj, typeName: cond.obj.ty.name, variant: "true" };
+    }
+  }
   if (cond.kind === "binop" && cond.op === "in" &&
-      cond.left.kind === "str" && cond.right.kind === "var" &&
+      cond.left.kind === "str" && isNarrowablePath(cond.right) &&
       cond.right.ty.kind === "user") {
     const key = cond.left.value;
     const typeName = cond.right.ty.name;
@@ -191,23 +195,26 @@ export function variantFact(cond: TExpr, ctx: CondCtx): VariantFact | null {
     }
   }
   const arrCheck = isArrayFact(cond, ctx);
-  if (arrCheck && arrCheck.scrutinee.kind === "var") {
-    return { scrutinee: arrCheck.scrutinee, typeName: arrCheck.typeName, variant: arrCheck.variant };
-  }
+  if (arrCheck) return arrCheck;
+  const tofCheck = typeofStringFact(cond, ctx);
+  if (tofCheck) return tofCheck;
   return null;
 }
 
 export function negVariantFact(cond: TExpr, ctx: CondCtx): VariantFact | null {
   if (cond.kind === "binop" && (cond.op === "!==" || cond.op === "!=") && cond.right.kind === "str" &&
       cond.left.kind === "field" && cond.left.isDiscriminant &&
-      cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
+      isNarrowablePath(cond.left.obj) && cond.left.obj.ty.kind === "user") {
     return { scrutinee: cond.left.obj, typeName: cond.left.obj.ty.name, variant: cond.right.value };
   }
   if (cond.kind === "unop" && cond.op === "!") {
-    const arrCheck = isArrayFact(cond.expr, ctx);
-    if (arrCheck && arrCheck.scrutinee.kind === "var") {
-      return { scrutinee: arrCheck.scrutinee, typeName: arrCheck.typeName, variant: "NonArrayBranch" };
-    }
+    const vf = variantFact(cond.expr, ctx);
+    if (vf) return vf;
+  }
+  if (cond.kind === "binop" && (cond.op === "!==" || cond.op === "!=")) {
+    const eq = { ...cond, op: "===" };
+    const tof = typeofStringFact(eq, ctx);
+    if (tof) return tof;
   }
   return null;
 }

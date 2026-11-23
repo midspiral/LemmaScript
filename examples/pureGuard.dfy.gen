@@ -6,15 +6,10 @@ datatype Post = Post(title: Option<string>)
 
 function suffixed(post: Post, suffix: Option<string>): string
 {
-  match suffix {
-    case Some(i_suffix_val) =>
-      if (match (match post.title { case Some(i_oc0_val) => Option.Some((|i_oc0_val| >= |i_suffix_val| && i_oc0_val[|i_oc0_val|-|i_suffix_val|..] == i_suffix_val)) case None => Option.None }) { case Some(i_oc1_val) => i_oc1_val case None => false }) then
-        "yes"
-      else
-        "no"
-    case None =>
-      "no"
-  }
+  if (suffix.Some? && (var i_nc1 := (var i_oc0 := post.title; (if i_oc0.Some? then Option.Some((|i_oc0.value| >= |suffix.value| && i_oc0.value[|i_oc0.value|-|suffix.value|..] == suffix.value)) else Option.None)); (i_nc1.Some? && i_nc1.value))) then
+    "yes"
+  else
+    "no"
 }
 
 lemma suffixed_ensures(post: Post, suffix: Option<string>)

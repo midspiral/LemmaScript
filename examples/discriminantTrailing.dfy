@@ -4,27 +4,24 @@ datatype Shape = circle | square | triangle
 
 function classify(s: Shape): string
 {
-  match s {
-    case circle =>
-      "round"
-    case square =>
+  if s.circle? then
+    "round"
+  else
+    if s.square? then
       "boxy"
-    case triangle =>
+    else
       "other"
-  }
 }
 
 method tally(s: Shape) returns (res: int)
   ensures (res >= 10)
 {
   var n := 0;
-  match s {
-    case circle =>
-      n := 1;
-    case square =>
-      n := 2;
-    case triangle =>
-
+  if s.circle? {
+    n := 1;
+  }
+  if s.square? {
+    n := 2;
   }
   return (n + 10);
 }

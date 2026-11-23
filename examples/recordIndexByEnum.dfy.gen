@@ -10,14 +10,13 @@ datatype OptBudgets = OptBudgets(low: Option<int>, high: Option<int>)
 
 function budgetFor(b: Budgets, level: Level): int
 {
-  match level {
-    case low =>
-      b.low
-    case medium =>
+  if level.low? then
+    b.low
+  else
+    if level.medium? then
       b.medium
-    case high =>
+    else
       b.high
-  }
 }
 
 lemma budgetFor_ensures(b: Budgets, level: Level)

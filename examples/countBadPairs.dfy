@@ -618,7 +618,7 @@ method countBadPairs(nums: seq<int>) returns (res: int)
     }
     ghost var npair: set<Pair> :=
       if diffInOld then CosetToPairInPlusOne(oldDiffCosets[diff], nums, i) else {};
-    var count := (if (diff in diffMap) then (var i_oc0_val := diffMap[diff]; i_oc0_val) else 0);
+    var count := (if (diff in diffMap) then (var i_nc0 := diffMap[diff]; i_nc0) else 0);
     goodCount := (goodCount + count);
     diffMap := diffMap[diff := (count + 1)];
     if diffInOld {

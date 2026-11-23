@@ -3,19 +3,20 @@
   Do not edit — re-run `lsc gen` to regenerate.
 -/
 import «spec.types»
+import LemmaScript.Option
 
 set_option velvet.semantics.termination "total"
 
 method evalPartial (e : Expr) returns (res : Int)
-  ensures ensures_1: ((match e with | .lit _e_val => res = _e_val | _ => true) : Prop)
-  ensures ensures_2: ((match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true) : Prop)
+  ensures ensures_1: ((if _h0 : (Expr.is_lit e) then (decide (res = ((Expr.proj_lit_val e).get (by grind)))) else true) = true : Prop)
+  ensures ensures_2: ((if _h1 : (Expr.is_add e) then (decide (res = ((Expr.proj_add_a e).get (by grind)) + ((Expr.proj_add_b e).get (by grind)))) else true) = true : Prop)
   do
     return Pure.evalPartial e
 
 method evalSwitch (e : Expr) returns (res : Int)
-  ensures ensures_1: ((match e with | .lit _e_val => res = _e_val | _ => true) : Prop)
-  ensures ensures_2: ((match e with | .add _e_a _e_b => res = _e_a + _e_b | _ => true) : Prop)
-  ensures ensures_3: ((match e with | .neg _e_inner => res = 0 - _e_inner | _ => true) : Prop)
+  ensures ensures_1: ((if _h2 : (Expr.is_lit e) then (decide (res = ((Expr.proj_lit_val e).get (by grind)))) else true) = true : Prop)
+  ensures ensures_2: ((if _h3 : (Expr.is_add e) then (decide (res = ((Expr.proj_add_a e).get (by grind)) + ((Expr.proj_add_b e).get (by grind)))) else true) = true : Prop)
+  ensures ensures_3: ((if _h4 : (Expr.is_neg e) then (decide (res = 0 - ((Expr.proj_neg_inner e).get (by grind)))) else true) = true : Prop)
   do
     return Pure.evalSwitch e
 
@@ -175,9 +176,9 @@ method search (arr : Array Int) (target : Int) returns (res : Int)
 method sumSearchResults (arr : Array Int) (a : Int) (b : Int) returns (res : Int)
   do
     let mut sum : Int := 0
-    let _t0 ← search arr a
-    let _t1 ← search arr b
-    sum := _t0 + _t1
+    let _t3 ← search arr a
+    let _t4 ← search arr b
+    sum := _t3 + _t4
     return sum
 
 method forOfContains (arr : Array Int) (target : Int) returns (res : Bool)
@@ -202,53 +203,53 @@ method clampedItem (x : Int) returns (res : PriorityItem)
   ensures ensures_1: (res.level = Priority.high : Prop)
   do
     let mut tmp : Int := x
-    let _t2 ← clampTernary tmp 0 100
-    return { level := Priority.high, value := _t2 }
+    let _t5 ← clampTernary tmp 0 100
+    return { level := Priority.high, value := _t5 }
 
 method clampedMidpoint (a : Int) (b : Int) returns (res : Int)
   requires require_1: (a ≤ b : Prop)
   ensures ensures_1: (res ≥ a : Prop)
   ensures ensures_2: (res ≤ b : Prop)
   do
-    let _t3 ← midpoint a b
-    let mut mid : Int := _t3
-    let _t4 ← clampTernary mid a b
-    return _t4
+    let _t6 ← midpoint a b
+    let mut mid : Int := _t6
+    let _t7 ← clampTernary mid a b
+    return _t7
 
 method deepAccess (t : Tree) returns (res : Int)
-  ensures ensures_1: ((match t.middle with | .some _t_middle_val => (match _t_middle_val.leaf with | .some _t_middle_leaf_val => res = _t_middle_leaf_val.value | .none => true) | .none => true) : Prop)
-  ensures ensures_2: ((match t.middle with | .some _ => false | .none => true) → res = 0 : Prop)
+  ensures ensures_1: ((if _h6 : t.middle.isSome then (if _h5 : ((t.middle.get (by grind))).leaf.isSome then (decide (res = ((((t.middle.get (by grind))).leaf.get (by grind))).value)) else true) else true) = true : Prop)
+  ensures ensures_2: (¬(t.middle.isSome) → res = 0 : Prop)
   do
     return Pure.deepAccess t
 
 method ocField (o : Option Outer) returns (res : Option Inner)
-  ensures ensures_1: ((match o with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) : Prop)
-  ensures ensures_2: ((match o with | .some _o_val => res = _o_val.inner | .none => true) : Prop)
+  ensures ensures_1: (¬(o.isSome) → ¬(res.isSome) : Prop)
+  ensures ensures_2: ((if _h7 : o.isSome then (decide (res = ((o.get (by grind))).inner)) else true) = true : Prop)
   do
     return Pure.ocField o
 
 method ocChain (o : Option Outer) returns (res : Option Int)
-  ensures ensures_1: ((match o with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) : Prop)
-  ensures ensures_2: ((match o with | .some _o_val => (match _o_val.inner with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) | .none => true) : Prop)
-  ensures ensures_3: ((match o with | .some _o_val => (match _o_val.inner with | .some _o_inner_val => (match res with | .some _value => _value == _o_inner_val.val | .none => false) | .none => true) | .none => true) : Prop)
+  ensures ensures_1: (¬(o.isSome) → ¬(res.isSome) : Prop)
+  ensures ensures_2: ((if _h9 : o.isSome then (if _h8 : (decide (!(((o.get (by grind))).inner.isSome))) then (decide (!(res.isSome))) else true) else true) = true : Prop)
+  ensures ensures_3: ((if _h11 : o.isSome then (if _h10 : ((o.get (by grind))).inner.isSome then (decide (res = Option.some ((((o.get (by grind))).inner.get (by grind))).val)) else true) else true) = true : Prop)
   do
     return Pure.ocChain o
 
 method ocMethodCall (s : Option (Std.HashSet String)) (k : String) returns (res : Option Bool)
-  ensures ensures_1: ((match s with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) : Prop)
-  ensures ensures_2: ((match s with | .some _s_val => (match res with | .some _value => _value == _s_val.contains k | .none => false) | .none => true) : Prop)
+  ensures ensures_1: (¬(s.isSome) → ¬(res.isSome) : Prop)
+  ensures ensures_2: ((if _h12 : s.isSome then (decide (res = Option.some ((s.get (by grind)).contains k))) else true) = true : Prop)
   do
     return Pure.ocMethodCall s k
 
 method ocIndex (m : Option (Std.HashMap String String)) (k : String) returns (res : Option String)
-  ensures ensures_1: ((match m with | .some _ => false | .none => true) → (match res with | .some _ => false | .none => true) : Prop)
-  ensures ensures_2: ((match m with | .some _m_val => res = _m_val.get? k | .none => true) : Prop)
+  ensures ensures_1: (¬(m.isSome) → ¬(res.isSome) : Prop)
+  ensures ensures_2: ((if _h13 : m.isSome then (decide (res = (m.get (by grind)).get? k)) else true) = true : Prop)
   do
     return Pure.ocIndex m k
 
 method nullishVar (o : Option Inner) (fallback : Int) returns (res : Int)
-  ensures ensures_1: ((match o with | .some _ => false | .none => true) → res = fallback : Prop)
-  ensures ensures_2: ((match o with | .some _o_val => res = _o_val.val | .none => true) : Prop)
+  ensures ensures_1: (¬(o.isSome) → res = fallback : Prop)
+  ensures ensures_2: ((if _h14 : o.isSome then (decide (res = ((o.get (by grind))).val)) else true) = true : Prop)
   do
     return Pure.nullishVar o fallback
 
@@ -260,8 +261,7 @@ method nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) 
 
 method inCheckRecordGet (m : Std.HashMap String Int) (k : String) (fallback : Int) returns (res : Int)
   ensures ensures_1: (¬(m.contains k) → res = fallback : Prop)
-  ensures ensures_2: (m.contains k → if m.contains k then let _value := m[k]!
-_value == res else false : Prop)
+  ensures ensures_2: (m.contains k → Option.some res = m.get? k : Prop)
   do
     return Pure.inCheckRecordGet m k fallback
 
@@ -272,22 +272,19 @@ method requiresInMap (m : Std.HashMap String Int) (k : String) returns (res : In
     return Pure.requiresInMap m k
 
 method ifInMapBlock (m : Std.HashMap String Int) (k : String) (fallback : Int) returns (res : Int)
-  ensures ensures_1: (m.contains k → if m.contains k then let _value := m[k]!
-_value == res else false : Prop)
+  ensures ensures_1: (m.contains k → Option.some res = m.get? k : Prop)
   ensures ensures_2: (¬(m.contains k) → res = fallback : Prop)
   do
     return Pure.ifInMapBlock m k fallback
 
 method ifNotInMapEarlyReturn (m : Std.HashMap String Int) (k : String) (fallback : Int) returns (res : Int)
   ensures ensures_1: (¬(m.contains k) → res = fallback : Prop)
-  ensures ensures_2: (m.contains k → if m.contains k then let _value := m[k]!
-_value == res else false : Prop)
+  ensures ensures_2: (m.contains k → Option.some res = m.get? k : Prop)
   do
     return Pure.ifNotInMapEarlyReturn m k fallback
 
 method assertInMap (m : Std.HashMap String Int) (k : String) (fallback : Int) returns (res : Int)
-  ensures ensures_1: (m.contains k → if m.contains k then let _value := m[k]!
-_value == res else false : Prop)
+  ensures ensures_1: (m.contains k → Option.some res = m.get? k : Prop)
   ensures ensures_2: (¬(m.contains k) → res = fallback : Prop)
   do
     if !(m.contains k) then
@@ -312,44 +309,44 @@ method whileInvariantInMap (m : Std.HashMap String Int) (k : String) (reps : Nat
     return total
 
 method negVar (o : Option Inner) (fallback : Int) returns (res : Int)
-  ensures ensures_1: ((match o with | .some _ => false | .none => true) → res = fallback : Prop)
-  ensures ensures_2: ((match o with | .some _o_val => res = _o_val.val | .none => true) : Prop)
+  ensures ensures_1: (¬(o.isSome) → res = fallback : Prop)
+  ensures ensures_2: ((if _h15 : o.isSome then (decide (res = ((o.get (by grind))).val)) else true) = true : Prop)
   do
     return Pure.negVar o fallback
 
 method negField (o : Outer) (fallback : Int) returns (res : Int)
-  ensures ensures_1: ((match o.inner with | .some _ => false | .none => true) → res = fallback : Prop)
-  ensures ensures_2: ((match o.inner with | .some _o_inner_val => res = _o_inner_val.val | .none => true) : Prop)
+  ensures ensures_1: (¬(o.inner.isSome) → res = fallback : Prop)
+  ensures ensures_2: ((if _h16 : o.inner.isSome then (decide (res = ((o.inner.get (by grind))).val)) else true) = true : Prop)
   do
     return Pure.negField o fallback
 
 method truthyVar (o : Option Inner) (fallback : Int) returns (res : Int)
-  ensures ensures_1: ((match o with | .some _o_val => res = _o_val.val | .none => true) : Prop)
-  ensures ensures_2: ((match o with | .some _ => false | .none => true) → res = fallback : Prop)
+  ensures ensures_1: ((if _h17 : o.isSome then (decide (res = ((o.get (by grind))).val)) else true) = true : Prop)
+  ensures ensures_2: (¬(o.isSome) → res = fallback : Prop)
   do
     return Pure.truthyVar o fallback
 
 method nestedAndTernary (o : Option Outer) (fallback : Int) returns (res : Int)
-  ensures ensures_1: ((match o with | .some _ => false | .none => true) → res = fallback : Prop)
-  ensures ensures_2: ((match o with | .some _o_val => (match _o_val.inner with | .some _ => false | .none => true) → res = fallback | .none => true) : Prop)
-  ensures ensures_3: ((match o with | .some _o_val => (match _o_val.inner with | .some _o_inner_val => res = _o_inner_val.val | .none => true) | .none => true) : Prop)
+  ensures ensures_1: (¬(o.isSome) → res = fallback : Prop)
+  ensures ensures_2: ((if _h19 : o.isSome then (if _h18 : (decide (!(((o.get (by grind))).inner.isSome))) then (decide (res = fallback)) else true) else true) = true : Prop)
+  ensures ensures_3: ((if _h21 : o.isSome then (if _h20 : ((o.get (by grind))).inner.isSome then (decide (res = ((((o.get (by grind))).inner.get (by grind))).val)) else true) else true) = true : Prop)
   do
     return Pure.nestedAndTernary o fallback
 
 method area (s : Shape) returns (res : Int)
-  ensures ensures_1: ((match s with | .circle _s_radius => res = _s_radius * _s_radius | _ => true) : Prop)
-  ensures ensures_2: ((match s with | .square _s_side => res = _s_side * _s_side | _ => true) : Prop)
+  ensures ensures_1: ((if _h22 : (Shape.is_circle s) then (decide (res = ((Shape.proj_circle_radius s).get (by grind)) * ((Shape.proj_circle_radius s).get (by grind)))) else true) = true : Prop)
+  ensures ensures_2: ((if _h23 : (Shape.is_square s) then (decide (res = ((Shape.proj_square_side s).get (by grind)) * ((Shape.proj_square_side s).get (by grind)))) else true) = true : Prop)
   do
     return Pure.area s
 
 method describeIfCircle (s : Shape) (fallback : Int) returns (res : Int)
-  ensures ensures_1: ((match s with | .circle _s_radius => res = _s_radius * _s_radius | _ => true) : Prop)
-  ensures ensures_2: ((match s with | .square _s_side => res = fallback | _ => true) : Prop)
+  ensures ensures_1: ((if _h24 : (Shape.is_circle s) then (decide (res = ((Shape.proj_circle_radius s).get (by grind)) * ((Shape.proj_circle_radius s).get (by grind)))) else true) = true : Prop)
+  ensures ensures_2: ((Shape.is_square s) → res = fallback : Prop)
   do
     return Pure.describeIfCircle s fallback
 
 method ternarySpecOpt (o : Option Inner) (fallback : Int) returns (res : Int)
-  ensures ensures_1: (res = (match o with | .some _o_val => _o_val.val | .none => fallback) : Prop)
+  ensures ensures_1: (res = ((if _h25 : o.isSome then ((o.get (by grind))).val else fallback)) : Prop)
   do
     return Pure.ternarySpecOpt o fallback
 
@@ -359,7 +356,7 @@ method projectedCodePure (error : RpcErrorView) returns (res : Int)
     return Pure.projectedCodePure error
 
 method dispatchProjectedPure (outcome : ProjectedOutcome) returns (res : Int)
-  ensures ensures_1: ((match outcome with | .«rpc-error» _outcome_code _outcome_message _outcome_data => res = _outcome_code | _ => true) : Prop)
+  ensures ensures_1: ((if _h26 : (ProjectedOutcome.«is_rpc-error» outcome) then (decide (res = ((ProjectedOutcome.«proj_rpc-error_code» outcome).get (by grind)))) else true) = true : Prop)
   do
     return Pure.dispatchProjectedPure outcome
 
@@ -370,13 +367,13 @@ method projectedCode (error : RpcErrorView) returns (res : Int)
     return code
 
 method dispatchProjected (outcome : ProjectedOutcome) returns (res : Int)
-  ensures ensures_1: ((match outcome with | .«rpc-error» _outcome_code _outcome_message _outcome_data => res = _outcome_code | _ => true) : Prop)
+  ensures ensures_1: ((if _h27 : (ProjectedOutcome.«is_rpc-error» outcome) then (decide (res = ((ProjectedOutcome.«proj_rpc-error_code» outcome).get (by grind)))) else true) = true : Prop)
   do
-    if (match outcome with | .«rpc-error» .. => true | _ => false) then
-      let _outcome_code := (match outcome with | .«rpc-error» _v _ _ => _v | _ => (default : Int))
-      let _outcome_message := (match outcome with | .«rpc-error» _ _v _ => _v | _ => (default : String))
-      let _outcome_data := (match outcome with | .«rpc-error» _ _ _v => _v | _ => (default : Option String))
-      let _t5 ← projectedCode { code := _outcome_code, message := _outcome_message, data := _outcome_data }
-      return _t5
+    if (ProjectedOutcome.«is_rpc-error» outcome) then
+      let _v9 ← LemmaScript.optionValue (ProjectedOutcome.«proj_rpc-error_code» outcome)
+      let _v10 ← LemmaScript.optionValue (ProjectedOutcome.«proj_rpc-error_message» outcome)
+      let _v11 ← LemmaScript.optionValue (ProjectedOutcome.«proj_rpc-error_data» outcome)
+      let _t8 ← projectedCode { code := _v9, message := _v10, data := _v11 }
+      return _t8
     else
       return 0

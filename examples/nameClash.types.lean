@@ -7,11 +7,31 @@ inductive ClashVerdict where
   | ok : ClashVerdict
   | error (error : String) : ClashVerdict
 deriving Repr, Inhabited
+attribute [grind cases] ClashVerdict
+@[grind] def ClashVerdict.tag : ClashVerdict → Nat | .ok => 0 | .error .. => 1
+theorem ClashVerdict.tag_lt (x : ClashVerdict) : ClashVerdict.tag x < 2 := by cases x <;> simp [ClashVerdict.tag]
+grind_pattern ClashVerdict.tag_lt => ClashVerdict.tag x
+@[grind] def ClashVerdict.is_ok : ClashVerdict → Bool | .ok => true | _ => false
+@[grind =] theorem ClashVerdict.is_ok_eq (x : ClashVerdict) : ClashVerdict.is_ok x = (ClashVerdict.tag x == 0) := by cases x <;> rfl
+@[grind] def ClashVerdict.is_error : ClashVerdict → Bool | .error .. => true | _ => false
+@[grind =] theorem ClashVerdict.is_error_eq (x : ClashVerdict) : ClashVerdict.is_error x = (ClashVerdict.tag x == 1) := by cases x <;> rfl
+@[grind] def ClashVerdict.proj_error_error : ClashVerdict → Option (String) | .error _v => some _v | _ => none
+@[grind =] theorem ClashVerdict.isSome_proj_error_error (x : ClashVerdict) : (ClashVerdict.proj_error_error x).isSome = ClashVerdict.is_error x := by cases x <;> rfl
 
 inductive HyphenVerdict where
   | ok : HyphenVerdict
   | «rpc-error» (code : Int) : HyphenVerdict
 deriving Repr, Inhabited
+attribute [grind cases] HyphenVerdict
+@[grind] def HyphenVerdict.tag : HyphenVerdict → Nat | .ok => 0 | .«rpc-error» .. => 1
+theorem HyphenVerdict.tag_lt (x : HyphenVerdict) : HyphenVerdict.tag x < 2 := by cases x <;> simp [HyphenVerdict.tag]
+grind_pattern HyphenVerdict.tag_lt => HyphenVerdict.tag x
+@[grind] def HyphenVerdict.is_ok : HyphenVerdict → Bool | .ok => true | _ => false
+@[grind =] theorem HyphenVerdict.is_ok_eq (x : HyphenVerdict) : HyphenVerdict.is_ok x = (HyphenVerdict.tag x == 0) := by cases x <;> rfl
+@[grind] def HyphenVerdict.«is_rpc-error» : HyphenVerdict → Bool | .«rpc-error» .. => true | _ => false
+@[grind =] theorem HyphenVerdict.«is_rpc-error_eq» (x : HyphenVerdict) : HyphenVerdict.«is_rpc-error» x = (HyphenVerdict.tag x == 1) := by cases x <;> rfl
+@[grind] def HyphenVerdict.«proj_rpc-error_code» : HyphenVerdict → Option (Int) | .«rpc-error» _v => some _v | _ => none
+@[grind =] theorem HyphenVerdict.«isSome_proj_rpc-error_code» (x : HyphenVerdict) : (HyphenVerdict.«proj_rpc-error_code» x).isSome = HyphenVerdict.«is_rpc-error» x := by cases x <;> rfl
 
 structure _Box where
   x : Int
@@ -50,7 +70,7 @@ def constructorVsLocal (error : String) : ClashVerdict :=
   ClashVerdict.error error
 
 def isRpcError (verdict : HyphenVerdict) : Bool :=
-  (match verdict with | .«rpc-error» .. => true | _ => false)
+  (HyphenVerdict.«is_rpc-error» verdict)
 
 def _foo (x : Int) : Int :=
   x

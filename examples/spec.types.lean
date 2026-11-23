@@ -15,6 +15,24 @@ inductive Expr where
   | add (a : Int) (b : Int) : Expr
   | neg (inner : Int) : Expr
 deriving Repr, Inhabited
+attribute [grind cases] Expr
+@[grind] def Expr.tag : Expr → Nat | .lit .. => 0 | .add .. => 1 | .neg .. => 2
+theorem Expr.tag_lt (x : Expr) : Expr.tag x < 3 := by cases x <;> simp [Expr.tag]
+grind_pattern Expr.tag_lt => Expr.tag x
+@[grind] def Expr.is_lit : Expr → Bool | .lit .. => true | _ => false
+@[grind =] theorem Expr.is_lit_eq (x : Expr) : Expr.is_lit x = (Expr.tag x == 0) := by cases x <;> rfl
+@[grind] def Expr.proj_lit_val : Expr → Option (Int) | .lit _v => some _v | _ => none
+@[grind =] theorem Expr.isSome_proj_lit_val (x : Expr) : (Expr.proj_lit_val x).isSome = Expr.is_lit x := by cases x <;> rfl
+@[grind] def Expr.is_add : Expr → Bool | .add .. => true | _ => false
+@[grind =] theorem Expr.is_add_eq (x : Expr) : Expr.is_add x = (Expr.tag x == 1) := by cases x <;> rfl
+@[grind] def Expr.proj_add_a : Expr → Option (Int) | .add _v _ => some _v | _ => none
+@[grind =] theorem Expr.isSome_proj_add_a (x : Expr) : (Expr.proj_add_a x).isSome = Expr.is_add x := by cases x <;> rfl
+@[grind] def Expr.proj_add_b : Expr → Option (Int) | .add _ _v => some _v | _ => none
+@[grind =] theorem Expr.isSome_proj_add_b (x : Expr) : (Expr.proj_add_b x).isSome = Expr.is_add x := by cases x <;> rfl
+@[grind] def Expr.is_neg : Expr → Bool | .neg .. => true | _ => false
+@[grind =] theorem Expr.is_neg_eq (x : Expr) : Expr.is_neg x = (Expr.tag x == 2) := by cases x <;> rfl
+@[grind] def Expr.proj_neg_inner : Expr → Option (Int) | .neg _v => some _v | _ => none
+@[grind =] theorem Expr.isSome_proj_neg_inner (x : Expr) : (Expr.proj_neg_inner x).isSome = Expr.is_neg x := by cases x <;> rfl
 
 structure Config where
   threshold : Nat
@@ -51,6 +69,18 @@ inductive Shape where
   | circle (radius : Int) : Shape
   | square (side : Int) : Shape
 deriving Repr, Inhabited
+attribute [grind cases] Shape
+@[grind] def Shape.tag : Shape → Nat | .circle .. => 0 | .square .. => 1
+theorem Shape.tag_lt (x : Shape) : Shape.tag x < 2 := by cases x <;> simp [Shape.tag]
+grind_pattern Shape.tag_lt => Shape.tag x
+@[grind] def Shape.is_circle : Shape → Bool | .circle .. => true | _ => false
+@[grind =] theorem Shape.is_circle_eq (x : Shape) : Shape.is_circle x = (Shape.tag x == 0) := by cases x <;> rfl
+@[grind] def Shape.proj_circle_radius : Shape → Option (Int) | .circle _v => some _v | _ => none
+@[grind =] theorem Shape.isSome_proj_circle_radius (x : Shape) : (Shape.proj_circle_radius x).isSome = Shape.is_circle x := by cases x <;> rfl
+@[grind] def Shape.is_square : Shape → Bool | .square .. => true | _ => false
+@[grind =] theorem Shape.is_square_eq (x : Shape) : Shape.is_square x = (Shape.tag x == 1) := by cases x <;> rfl
+@[grind] def Shape.proj_square_side : Shape → Option (Int) | .square _v => some _v | _ => none
+@[grind =] theorem Shape.isSome_proj_square_side (x : Shape) : (Shape.proj_square_side x).isSome = Shape.is_square x := by cases x <;> rfl
 
 structure RpcErrorView where
   code : Int
@@ -62,26 +92,40 @@ inductive ProjectedOutcome where
   | «rpc-error» (code : Int) (message : String) (data : Option String) : ProjectedOutcome
   | done : ProjectedOutcome
 deriving Repr, Inhabited
+attribute [grind cases] ProjectedOutcome
+@[grind] def ProjectedOutcome.tag : ProjectedOutcome → Nat | .«rpc-error» .. => 0 | .done => 1
+theorem ProjectedOutcome.tag_lt (x : ProjectedOutcome) : ProjectedOutcome.tag x < 2 := by cases x <;> simp [ProjectedOutcome.tag]
+grind_pattern ProjectedOutcome.tag_lt => ProjectedOutcome.tag x
+@[grind] def ProjectedOutcome.«is_rpc-error» : ProjectedOutcome → Bool | .«rpc-error» .. => true | _ => false
+@[grind =] theorem ProjectedOutcome.«is_rpc-error_eq» (x : ProjectedOutcome) : ProjectedOutcome.«is_rpc-error» x = (ProjectedOutcome.tag x == 0) := by cases x <;> rfl
+@[grind] def ProjectedOutcome.«proj_rpc-error_code» : ProjectedOutcome → Option (Int) | .«rpc-error» _v _ _ => some _v | _ => none
+@[grind =] theorem ProjectedOutcome.«isSome_proj_rpc-error_code» (x : ProjectedOutcome) : (ProjectedOutcome.«proj_rpc-error_code» x).isSome = ProjectedOutcome.«is_rpc-error» x := by cases x <;> rfl
+@[grind] def ProjectedOutcome.«proj_rpc-error_message» : ProjectedOutcome → Option (String) | .«rpc-error» _ _v _ => some _v | _ => none
+@[grind =] theorem ProjectedOutcome.«isSome_proj_rpc-error_message» (x : ProjectedOutcome) : (ProjectedOutcome.«proj_rpc-error_message» x).isSome = ProjectedOutcome.«is_rpc-error» x := by cases x <;> rfl
+@[grind] def ProjectedOutcome.«proj_rpc-error_data» : ProjectedOutcome → Option (Option String) | .«rpc-error» _ _ _v => some _v | _ => none
+@[grind =] theorem ProjectedOutcome.«isSome_proj_rpc-error_data» (x : ProjectedOutcome) : (ProjectedOutcome.«proj_rpc-error_data» x).isSome = ProjectedOutcome.«is_rpc-error» x := by cases x <;> rfl
+@[grind] def ProjectedOutcome.is_done : ProjectedOutcome → Bool | .done => true | _ => false
+@[grind =] theorem ProjectedOutcome.is_done_eq (x : ProjectedOutcome) : ProjectedOutcome.is_done x = (ProjectedOutcome.tag x == 1) := by cases x <;> rfl
 
 namespace Pure
 
 def evalPartial (e : Expr) : Int :=
-  match e with
-  | .lit _e_val =>
-    _e_val
-  | .add _e_a _e_b =>
-    _e_a + _e_b
-  | .neg _e_inner =>
-    0
+  if _h0 : (Expr.is_lit e) then
+    ((Expr.proj_lit_val e).get (by grind))
+  else
+    if _h1 : (Expr.is_add e) then
+      ((Expr.proj_add_a e).get (by grind)) + ((Expr.proj_add_b e).get (by grind))
+    else
+      0
 
 def evalSwitch (e : Expr) : Int :=
-  match e with
-  | .lit _e_val =>
-    _e_val
-  | .add _e_a _e_b =>
-    _e_a + _e_b
-  | .neg _e_inner =>
-    0 - _e_inner
+  if _h2 : (Expr.is_lit e) then
+    ((Expr.proj_lit_val e).get (by grind))
+  else
+    if _h3 : (Expr.is_add e) then
+      ((Expr.proj_add_a e).get (by grind)) + ((Expr.proj_add_b e).get (by grind))
+    else
+      0 - ((Expr.proj_neg_inner e).get (by grind))
 
 def isHighPriority (p : Priority) : Bool :=
   if p = Priority.high then
@@ -165,55 +209,47 @@ def getSlice (s : String) (start : Nat) («end» : Nat) : String :=
   JSString.slice s start «end»
 
 def deepAccess (t : Tree) : Int :=
-  match t.middle with
-  | .some _t_middle_val =>
-    match _t_middle_val.leaf with
-    | .some _t_middle_leaf_val =>
-      _t_middle_leaf_val.value
-    | .none =>
-      0
-  | .none =>
+  if _h4 : (if _h5 : t.middle.isSome then ((t.middle.get (by grind))).leaf.isSome else False) then
+    ((((t.middle.get (by grind))).leaf.get (by grind))).value
+  else
     0
 
 def ocField (o : Option Outer) : Option Inner :=
-  match o with
-  | .some _oc0_val =>
-    _oc0_val.inner
-  | .none =>
+  if _h6 : o.isSome then
+    ((o.get (by grind))).inner
+  else
     Option.none
 
 def ocChain (o : Option Outer) : Option Int :=
-  match (match o with | .some _oc1_val => _oc1_val.inner | .none => Option.none) with
-  | .some _oc2_val =>
-    Option.some _oc2_val.val
-  | .none =>
+  let _oc0 := (if _h7 : o.isSome then ((o.get (by grind))).inner else Option.none)
+  if _h8 : _oc0.isSome then
+    Option.some ((_oc0.get (by grind))).val
+  else
     Option.none
 
 def ocMethodCall (s : Option (Std.HashSet String)) (k : String) : Option Bool :=
-  match s with
-  | .some _oc3_val =>
-    Option.some (_oc3_val.contains k)
-  | .none =>
+  if _h9 : s.isSome then
+    Option.some ((s.get (by grind)).contains k)
+  else
     Option.none
 
 def ocIndex (m : Option (Std.HashMap String String)) (k : String) : Option String :=
-  match m with
-  | .some _oc4_val =>
-    _oc4_val.get? k
-  | .none =>
+  if _h10 : m.isSome then
+    (m.get (by grind)).get? k
+  else
     Option.none
 
 def nullishVar (o : Option Inner) (fallback : Int) : Int :=
-  match (match o with | .some _oc5_val => Option.some _oc5_val.val | .none => Option.none) with
-  | .some _oc6_val =>
-    _oc6_val
-  | .none =>
+  let _nc1 := (if _h11 : o.isSome then Option.some ((o.get (by grind))).val else Option.none)
+  if _h12 : _nc1.isSome then
+    (_nc1.get (by grind))
+  else
     fallback
 
 def nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) : Int :=
   if m.contains k then
-    let _oc7_val := m[k]!
-    _oc7_val
+    let _nc2 := m[k]!
+    _nc2
   else
     fallback
 
@@ -239,66 +275,54 @@ def ifNotInMapEarlyReturn (m : Std.HashMap String Int) (k : String) (fallback : 
     m.get! k
 
 def negVar (o : Option Inner) (fallback : Int) : Int :=
-  match o with
-  | .some _o_val =>
-    _o_val.val
-  | .none =>
+  if _h13 : ¬(o.isSome) then
     fallback
+  else
+    ((o.get (by grind))).val
 
 def negField (o : Outer) (fallback : Int) : Int :=
-  match o.inner with
-  | .some _o_inner_val =>
-    _o_inner_val.val
-  | .none =>
+  if _h14 : ¬(o.inner.isSome) then
     fallback
+  else
+    ((o.inner.get (by grind))).val
 
 def truthyVar (o : Option Inner) (fallback : Int) : Int :=
-  match o with
-  | .some _o_val =>
-    _o_val.val
-  | .none =>
+  if _h15 : o.isSome then
+    ((o.get (by grind))).val
+  else
     fallback
 
 def nestedAndTernary (o : Option Outer) (fallback : Int) : Int :=
-  match o with
-  | .some _o_val =>
-    match _o_val.inner with
-    | .some _o_inner_val =>
-      _o_inner_val.val
-    | .none =>
-      fallback
-  | .none =>
+  if _h16 : (if _h17 : o.isSome then ((o.get (by grind))).inner.isSome else False) then
+    ((((o.get (by grind))).inner.get (by grind))).val
+  else
     fallback
 
 def area (s : Shape) : Int :=
-  match s with
-  | .circle _s_radius =>
-    _s_radius * _s_radius
-  | .square _s_side =>
-    _s_side * _s_side
+  if _h18 : (Shape.is_circle s) then
+    ((Shape.proj_circle_radius s).get (by grind)) * ((Shape.proj_circle_radius s).get (by grind))
+  else
+    ((Shape.proj_square_side s).get (by grind)) * ((Shape.proj_square_side s).get (by grind))
 
 def describeIfCircle (s : Shape) (fallback : Int) : Int :=
-  match s with
-  | .circle _s_radius =>
-    _s_radius * _s_radius
-  | .square _s_side =>
+  if _h19 : ¬((Shape.is_circle s)) then
     fallback
+  else
+    ((Shape.proj_circle_radius s).get (by grind)) * ((Shape.proj_circle_radius s).get (by grind))
 
 def ternarySpecOpt (o : Option Inner) (fallback : Int) : Int :=
-  match o with
-  | .some _o_val =>
-    _o_val.val
-  | .none =>
+  if _h20 : o.isSome then
+    ((o.get (by grind))).val
+  else
     fallback
 
 def projectedCodePure (error : RpcErrorView) : Int :=
   error.code
 
 def dispatchProjectedPure (outcome : ProjectedOutcome) : Int :=
-  match outcome with
-  | .«rpc-error» _outcome_code _outcome_message _outcome_data =>
-    projectedCodePure { code := _outcome_code, message := _outcome_message, data := _outcome_data }
-  | .done =>
+  if _h21 : (ProjectedOutcome.«is_rpc-error» outcome) then
+    projectedCodePure { code := ((ProjectedOutcome.«proj_rpc-error_code» outcome).get (by grind)), message := ((ProjectedOutcome.«proj_rpc-error_message» outcome).get (by grind)), data := ((ProjectedOutcome.«proj_rpc-error_data» outcome).get (by grind)) }
+  else
     0
 
 end Pure

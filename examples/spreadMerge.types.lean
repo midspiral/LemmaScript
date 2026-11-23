@@ -19,13 +19,12 @@ def mergeComplete (base : Budgets) (over : Budgets) : Budgets :=
   { low := over.low, high := over.high }
 
 def withDefaults (base : Config) (over : Config) : Config :=
-  { retries := (match over.retries with | .some _m0 => Option.some _m0 | .none => base.retries), timeout := (match over.timeout with | .some _m1 => Option.some _m1 | .none => base.timeout) }
+  { retries := if over.retries.isSome then over.retries else base.retries, timeout := if over.timeout.isSome then over.timeout else base.timeout }
 
 def applyOverride (base : Budgets) (over : Option Budgets) : Budgets :=
-  match over with
-  | .some _mo2 =>
-    { low := _mo2.low, high := _mo2.high }
-  | .none =>
+  if _h0 : over.isSome then
+    { low := ((over.get (by grind))).low, high := ((over.get (by grind))).high }
+  else
     base
 
 def mergeChain (a : Budgets) (b : Budgets) (c : Budgets) : Budgets :=

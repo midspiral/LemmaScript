@@ -10,6 +10,7 @@ method delKey (d : Std.HashMap String Int) (k : String) returns (res : Std.HashM
   ensures ensures_1: (¬(res.contains k) : Prop)
   ensures ensures_2: (∀ j : String, j ≠ k → d.contains j → res.contains j ∧ res.get! j = d.get! j : Prop)
   do
+    let mut d : Std.HashMap String Int := d
     return Pure.delKey d k
 
 method single (n : Int) returns (res : Array Int)
@@ -82,13 +83,13 @@ method resAssignOnly (x : Int) returns (res' : Int)
     return x
 
 method constructorVsLocal (error : String) returns (res : ClashVerdict)
-  ensures ensures_1: ((match res with | .error .. => true | _ => false) : Prop)
-  ensures ensures_2: ((match res with | .error _result_error => _result_error = error | _ => true) : Prop)
+  ensures ensures_1: ((ClashVerdict.is_error res) : Prop)
+  ensures ensures_2: ((if _h0 : (ClashVerdict.is_error res) then (decide (((ClashVerdict.proj_error_error res).get (by grind)) = error)) else true) = true : Prop)
   do
     return Pure.constructorVsLocal error
 
 method isRpcError (verdict : HyphenVerdict) returns (res : Bool)
-  ensures ensures_1: (res → (match verdict with | .«rpc-error» .. => true | _ => false) : Prop)
+  ensures ensures_1: (res → (HyphenVerdict.«is_rpc-error» verdict) : Prop)
   do
     return Pure.isRpcError verdict
 

@@ -90,49 +90,47 @@ lemma flipDoc_ensures(lang: Lang)
 
 function orDefault(lang: Option<Lang>, toRu: bool): Lang
 {
-  match lang {
-    case Some(i_oc0_val) =>
-      i_oc0_val
-    case None =>
-      if toRu then
-        Lang.ru
-      else
-        Lang.en
-  }
+  if lang.Some? then
+    lang.value
+  else
+    if toRu then
+      Lang.ru
+    else
+      Lang.en
 }
 
 lemma orDefault_ensures(lang: Option<Lang>, toRu: bool)
-  ensures (match lang { case Some(i_lang_val) => (orDefault(lang, toRu) == i_lang_val) case None => true })
+  ensures (lang.Some? ==> (orDefault(lang, toRu) == lang.value))
 {
 }
 
 function pick(n: int): Option<Color>
 {
   if (n == 1) then
-    Some(Color.red)
+    Option.Some(Color.red)
   else
     if (n == 2) then
-      Some(Color.blue)
+      Option.Some(Color.blue)
     else
-      None
+      Option.None
 }
 
 lemma pick_ensures(n: int)
-  ensures ((n == 1) ==> (match pick(n) { case Some(i_value) => i_value.red? case None => false }))
-  ensures ((n != 1) ==> (n != 2) ==> (match pick(n) { case Some(i_) => false case None => true }))
+  ensures ((n == 1) ==> (pick(n) == Option.Some(Color.red)))
+  ensures ((n != 1) ==> (n != 2) ==> !((pick(n)).Some?))
 {
 }
 
 function pickNull(n: int): Option<Color>
 {
   if (n == 1) then
-    Some(Color.red)
+    Option.Some(Color.red)
   else
-    None
+    Option.None
 }
 
 lemma pickNull_ensures(n: int)
-  ensures ((n == 1) ==> (match pickNull(n) { case Some(i_value) => i_value.red? case None => false }))
+  ensures ((n == 1) ==> (pickNull(n) == Option.Some(Color.red)))
 {
 }
 
@@ -143,22 +141,20 @@ function pickLet(n: int): Option<Color>
 }
 
 lemma pickLet_ensures(n: int)
-  ensures ((n == 1) ==> (match pickLet(n) { case Some(i_value) => i_value.red? case None => false }))
+  ensures ((n == 1) ==> (pickLet(n) == Option.Some(Color.red)))
 {
 }
 
 function nameOf(n: int): string
 {
   var c := pick(n);
-  match c {
-    case Some(i_c_val) =>
-      if i_c_val.red? then
-        "red"
-      else
-        "blue"
-    case None =>
-      "none"
-  }
+  if !(c.Some?) then
+    "none"
+  else
+    if c.value.red? then
+      "red"
+    else
+      "blue"
 }
 
 lemma nameOf_ensures(n: int)

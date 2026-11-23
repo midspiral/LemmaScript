@@ -3,6 +3,7 @@
   Do not edit — re-run `lsc gen` to regenerate.
 -/
 import «hof.types»
+import LemmaScript.Option
 
 set_option velvet.semantics.termination "total"
 
@@ -25,6 +26,17 @@ method hasNegative (arr : Array Int) returns (res : Bool)
 
 method visibleElementsForQuote (comparisonElements : QuoteElements) (quoteId : String) returns (res : Array QuoteElement)
   ensures ensures_1: (res.size ≤ (comparisonElements.Elements).size : Prop)
-  ensures ensures_2: (∀ e : QuoteElement, res.contains e → e.QuoteId = quoteId ∧ (match e.ConditionallyHidden with | .some _value => ¬(_value) | .none => true) : Prop)
+  ensures ensures_2: (∀ e : QuoteElement, (if _h2 : res.contains e then (decide ((if _h0 : (decide (e.QuoteId = quoteId)) then (decide (!((if _h1 : e.ConditionallyHidden.isSome then (e.ConditionallyHidden.get (by grind)) else false)))) else false))) else true) = true : Prop)
   do
-    return Pure.visibleElementsForQuote comparisonElements quoteId
+    let _t2 ← comparisonElements.Elements.filterM (fun _lambdaParam0 => do
+    let QuoteId := _lambdaParam0.QuoteId
+    let ConditionallyHidden := _lambdaParam0.ConditionallyHidden
+    let mut _branch3 : Bool := QuoteId = quoteId
+    if _branch3 then
+      let mut _branch2 : Bool := ConditionallyHidden.isSome
+      if _branch2 then
+        let _v1 ← LemmaScript.optionValue ConditionallyHidden
+        _branch2 := _v1
+      _branch3 := !(_branch2)
+    return _branch3)
+    return _t2

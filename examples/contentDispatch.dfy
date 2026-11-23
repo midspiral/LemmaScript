@@ -6,16 +6,14 @@ datatype ArrayOf_Part_Or_string = ArrayBranch(arr: seq<Part>) | NonArrayBranch(v
 
 function partsOrEmpty(content: ArrayOf_Part_Or_string): seq<Part>
 {
-  match content {
-    case ArrayBranch(i_content_arr) =>
-      i_content_arr
-    case NonArrayBranch(i_content_val) =>
-      []
-  }
+  if content.ArrayBranch? then
+    content.arr
+  else
+    []
 }
 
 lemma partsOrEmpty_ensures(content: ArrayOf_Part_Or_string)
-  ensures (match content { case ArrayBranch(i_content_arr) => (|partsOrEmpty(content)| == |i_content_arr|) case _ => true })
-  ensures (match content { case NonArrayBranch(i_content_val) => (|partsOrEmpty(content)| == 0) case _ => true })
+  ensures (content.ArrayBranch? ==> (|partsOrEmpty(content)| == |content.arr|))
+  ensures (!(content.ArrayBranch?) ==> (|partsOrEmpty(content)| == 0))
 {
 }

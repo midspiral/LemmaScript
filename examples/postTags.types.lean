@@ -14,20 +14,17 @@ def hasTagFrom (tags : Array String) (tag : String) («from» : Int) : Bool :=
   (tags.extract «from».toNat tags.size).contains tag
 
 def visibility (post : Post) : String :=
-  match post.tags with
-  | .some _post_tags_val =>
-    if _post_tags_val.contains "draft" then
-      "draft"
-    else
-      "live"
-  | .none =>
+  if (if _h0 : post.tags.isSome then (post.tags.get (by grind)).contains "draft" else False) then
+    "draft"
+  else
     "live"
 
 def hasTag (post : Post) (tag : String) : Bool :=
-  match (match post.tags with | .some _oc0_val => Option.some (_oc0_val.contains tag) | .none => Option.none) with
-  | .some _oc1_val =>
-    _oc1_val
-  | .none =>
+  let _nc1 := (let _oc0 := post.tags
+(if _h1 : _oc0.isSome then Option.some ((_oc0.get (by grind)).contains tag) else Option.none))
+  if _h2 : _nc1.isSome then
+    (_nc1.get (by grind))
+  else
     false
 
 end Pure

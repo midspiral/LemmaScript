@@ -8,16 +8,26 @@ inductive Shape where
   | square : Shape
   | triangle : Shape
 deriving Repr, Inhabited
+attribute [grind cases] Shape
+@[grind] def Shape.tag : Shape → Nat | .circle => 0 | .square => 1 | .triangle => 2
+theorem Shape.tag_lt (x : Shape) : Shape.tag x < 3 := by cases x <;> simp [Shape.tag]
+grind_pattern Shape.tag_lt => Shape.tag x
+@[grind] def Shape.is_circle : Shape → Bool | .circle => true | _ => false
+@[grind =] theorem Shape.is_circle_eq (x : Shape) : Shape.is_circle x = (Shape.tag x == 0) := by cases x <;> rfl
+@[grind] def Shape.is_square : Shape → Bool | .square => true | _ => false
+@[grind =] theorem Shape.is_square_eq (x : Shape) : Shape.is_square x = (Shape.tag x == 1) := by cases x <;> rfl
+@[grind] def Shape.is_triangle : Shape → Bool | .triangle => true | _ => false
+@[grind =] theorem Shape.is_triangle_eq (x : Shape) : Shape.is_triangle x = (Shape.tag x == 2) := by cases x <;> rfl
 
 namespace Pure
 
 def classify (s : Shape) : String :=
-  match s with
-  | .circle =>
+  if (Shape.is_circle s) then
     "round"
-  | .square =>
-    "boxy"
-  | .triangle =>
-    "other"
+  else
+    if (Shape.is_square s) then
+      "boxy"
+    else
+      "other"
 
 end Pure

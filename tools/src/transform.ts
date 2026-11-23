@@ -10,7 +10,6 @@ import { isBigInt, tyEqual } from "./typedir.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
 import { anyExpr, anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
-import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
 import { lowerIndexedCallback } from "./callback-lowering.js";
@@ -43,6 +42,8 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "toReal": return { ...e, expr: r(e.expr) };
     case "nullishTest": return { ...e, expr: r(e.expr) };
     case "nullishCoerce": return { ...e, expr: r(e.expr) };
+    case "tagTest": return { ...e, expr: r(e.expr) };
+    case "unionProj": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
     case "stringIndex": return { ...e, str: r(e.str), idx: r(e.idx) };
     case "tupleLiteral": return { ...e, elems: e.elems.map(r) };
@@ -60,29 +61,6 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "let": return { ...e, value: r(e.value), body: r(e.body) };
     case "methodCall": return { ...e, obj: r(e.obj), args: e.args.map(r) };
     case "lambda": return e;
-  }
-}
-
-/** Map over all expressions in a statement tree. */
-function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
-  const r = (e: Expr) => mapExpr(e, f);
-  switch (s.kind) {
-    case "let": return { ...s, value: r(s.value) };
-    case "assign": return { ...s, value: r(s.value) };
-    case "bind": return { ...s, value: r(s.value) };
-    case "let-bind": return { ...s, value: r(s.value) };
-    case "return": return { ...s, value: r(s.value) };
-    case "break": case "continue": return s;
-    case "if": return { ...s, cond: r(s.cond), then: s.then.map(t => mapStmt(t, f)), else: s.else.map(t => mapStmt(t, f)) };
-    case "match": {
-      const scr = r(s.scrutinee);
-      return { ...s, scrutinee: scr, arms: s.arms.map(a => ({ ...a, body: a.body.map(t => mapStmt(t, f)) })) };
-    }
-    case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r), body: s.body.map(t => mapStmt(t, f)) };
-    case "forin": return { ...s, bound: r(s.bound), invariants: s.invariants.map(r), body: s.body.map(t => mapStmt(t, f)) };
-    case "ghostLet": return { ...s, value: r(s.value) };
-    case "ghostAssign": return { ...s, value: r(s.value) };
-    case "assert": return { ...s, expr: r(s.expr) };
   }
 }
 
@@ -108,9 +86,6 @@ function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
         : s.kind === "index" ? { ...s, idx: r(s.idx) }
         : s) };
     case "nullish": return { ...e, left: r(e.left), right: r(e.right) };
-    case "tagMatch": return { ...e, scrutinee: r(e.scrutinee),
-      cases: e.cases.map(c => ({ ...c, body: r(c.body) })),
-      fallthrough: e.fallthrough ? r(e.fallthrough) : null };
     case "forall": return { ...e, body: r(e.body) };
     case "exists": return { ...e, body: r(e.body) };
     case "lambda": return e;
@@ -136,9 +111,6 @@ function mapTStmt(s: TStmt, f: (e: TExpr) => TExpr | null): TStmt {
     case "ghostLet": return { ...s, init: r(s.init) };
     case "ghostAssign": return { ...s, value: r(s.value) };
     case "assert": return { ...s, expr: r(s.expr) };
-    case "tagMatch": return { ...s, scrutinee: r(s.scrutinee),
-      cases: s.cases.map(c => ({ ...c, body: c.body.map(t => mapTStmt(t, f)) })),
-      fallthrough: s.fallthrough.map(t => mapTStmt(t, f)) };
   }
 }
 
@@ -200,24 +172,6 @@ function kindHelperDecl(decl: TypeDeclInfo): Decl {
       })),
     },
   };
-}
-
-/** Prefix match-bound field names to avoid capturing user variables.
- *  When prefix is given (the scrutinee name), include it to avoid
- *  collisions in nested matches on different variables. `freshName` closes
- *  the residual gap: a user variable literally named `_value`/`_x_field` in an
- *  arm body would still be captured, so prime on any module-wide collision.
- *  Deterministic, so the pattern binder and its body substitutions agree. */
-function matchBinder(fieldName: string, prefix?: string): string {
-  const safePrefix = prefix === "\\result"
-    ? "result"
-    : prefix?.replace(/[^A-Za-z0-9_]/g, "_");
-  return freshName(safePrefix ? `_${safePrefix}_${fieldName}` : `_${fieldName}`);
-}
-
-/** Build a match arm pattern like `.VariantName _v_field1 _v_field2` from variant info. */
-function buildMatchPattern(variantName: string, fields: { name: string }[], scopePrefix?: string): MatchPattern {
-  return pCtor(variantName, ...fields.map(f => matchBinder(f.name, scopePrefix)));
 }
 
 const _forofCounters = new Map<string, number>();
@@ -420,14 +374,17 @@ function lowerCoerce(expr: Expr, fromTy: Ty, toTy: Ty, binds: Stmt[] | null): Ex
   return expr;
 }
 
-/** Legacy helper kept for tagMatch optional branches. */
-function wrapOptionalBranch(expr: Expr, raw: TExpr, targetTy?: Ty): Expr {
-  if (targetTy?.kind === "optional") return wrapForOptional(expr, raw.ty, targetTy);
-  if (raw.kind === "var" && (raw.name === "undefined" || raw.name === "null")) {
-    return { kind: "constructor", name: "none", type: "Option", args: [] };
+/** Checked projection of a discriminated-union or synth array-union variant field.
+ *  - Dafny & Lean pure/specs: emits `unionProj` (`x.field` / `(T.proj_v_f x).get (by grind)`).
+ *  - Lean Velvet methods: lifts via `← LemmaScript.optionValue (T.proj_v_f x)`. */
+function lowerUnionProj(expr: Expr, typeName: string, ctor: string, field: string, binds: Stmt[] | null): Expr {
+  if (_opts.monadic && binds) {
+    const name = freshName(`_v${_liftCounter++}`);
+    const opt: Expr = { kind: "unionProj", expr, typeName, ctor, field, raw: true };
+    binds.push({ kind: "let-bind", name, value: { kind: "app", fn: "LemmaScript.optionValue", args: [opt] } });
+    return { kind: "var", name };
   }
-  if (raw.ty.kind === "optional") return expr;
-  return { kind: "constructor", name: "some", type: "Option", args: [expr] };
+  return { kind: "unionProj", expr, typeName, ctor, field };
 }
 
 /** Lean needs `let mut` for any local that is later reassigned. A const local
@@ -470,8 +427,14 @@ function buildNestedUpdate(recv: TExpr, newVal: Expr, binds: Stmt[] | null): { r
     const wrapped = wrapForOptional(newVal, recv.ty, recv.expr.ty);
     return buildNestedUpdate(recv.expr, wrapped, binds);
   }
+  if (recv.kind === "coerce" && recv.variant && recv.expr.ty.kind === "user") {
+    const wrapped: Expr = { kind: "app", fn: recv.variant, args: [newVal], ctorOf: tyBaseName(recv.expr.ty.name) };
+    return buildNestedUpdate(recv.expr, wrapped, binds);
+  }
   if (recv.kind === "field") {
-    const upd: Expr = { kind: "record", spread: lowerExpr(recv.obj, binds), fields: [{ name: recv.field, value: newVal }] };
+    const ctorOf = recv.ofVariant && recv.obj.ty.kind === "user" ? tyBaseName(recv.obj.ty.name) : undefined;
+    const upd: Expr = { kind: "record", spread: lowerExpr(recv.obj, binds), fields: [{ name: recv.field, value: newVal }],
+      ...(recv.ofVariant && ctorOf ? { ctor: recv.ofVariant, ctorOf } : {}) };
     return buildNestedUpdate(recv.obj, upd, binds);
   }
   return null;
@@ -551,6 +514,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
 
     case "coerce": {
       const inner = lowerExpr(e.expr, binds);
+      if (e.variant && e.expr.ty.kind === "user") {
+        const baseName = tyBaseName(e.expr.ty.name);
+        const field = e.variant === "ArrayBranch" ? "arr" : "val";
+        return lowerUnionProj(inner, baseName, e.variant, field, binds);
+      }
       return lowerCoerce(inner, e.expr.ty, e.ty, binds);
     }
 
@@ -643,16 +611,59 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const isVal: Expr = { kind: "nullishTest", expr, test: "isValue" };
         return neg ? isVal : { kind: "unop", op: "¬", expr: isVal };
       }
-      // Discriminant check: x.discriminant === "foo" → x = .foo
-      if ((e.op === "===" || e.op === "!==" || e.op === "==" || e.op === "!=") &&
-          e.left.kind === "field" && e.left.isDiscriminant && e.right.kind === "str") {
-        const objTy = e.left.obj.ty.kind === "user" ? e.left.obj.ty.name : undefined;
-        return {
-          kind: "binop",
-          op: (e.op === "===" || e.op === "==") ? "=" : "≠",
-          left: lowerExpr(e.left.obj, binds),
-          right: { kind: "constructor", name: e.right.value, type: objTy, args: [] },
-        };
+      // Discriminant check: `x.discriminant === "foo"` (or reversed) → `tagTest`
+      if (e.op === "===" || e.op === "!==" || e.op === "==" || e.op === "!=") {
+        const discField = e.left.kind === "field" && e.left.isDiscriminant && e.right.kind === "str"
+          ? { field: e.left, tag: e.right.value }
+          : e.right.kind === "field" && e.right.isDiscriminant && e.left.kind === "str"
+            ? { field: e.right, tag: e.left.value }
+            : null;
+        if (discField && discField.field.obj.ty.kind === "user") {
+          const baseName = tyBaseName(discField.field.obj.ty.name);
+          if (declOfKind(_typeDecls, baseName, "discriminated-union")) {
+            const t: Expr = { kind: "tagTest", expr: lowerExpr(discField.field.obj, binds), typeName: baseName, ctor: discField.tag };
+            return (e.op === "===" || e.op === "==") ? t : { kind: "unop", op: "¬", expr: t };
+          }
+        }
+        // `typeof x === "string"` / `!== "string"` on a synth array-union whose NonArrayBranch is `string`
+        const rawTof = e.left.kind === "unop" && e.left.op === "typeof" && e.right.kind === "str" && e.right.value === "string"
+          ? e.left.expr
+          : e.right.kind === "unop" && e.right.op === "typeof" && e.left.kind === "str" && e.left.value === "string"
+            ? e.right.expr
+            : null;
+        if (rawTof) {
+          const tof = rawTof.kind === "coerce" && rawTof.variant ? rawTof.expr : rawTof;
+          if (tof.ty.kind === "user") {
+            const decl = unionDeclOfTy(_typeDecls, tof.ty);
+            const valTy = decl?.discriminant === "__isArray__"
+              ? decl.variants?.find(v => v.name === "NonArrayBranch")?.fields.find(f => f.name === "val")?.type
+              : undefined;
+            if (valTy?.kind === "string") {
+              const t: Expr = { kind: "tagTest", expr: lowerExpr(tof, binds), typeName: tyBaseName(tof.ty.name), ctor: "NonArrayBranch" };
+              return (e.op === "===" || e.op === "==") ? t : { kind: "unop", op: "¬", expr: t };
+            }
+          }
+        }
+      }
+      // `"field" in x` on a discriminated union → tagTest (or disjunction of tagTests)
+      if (e.op === "in" && e.left.kind === "str" && e.right.ty.kind === "user") {
+        const decl = unionDeclOfTy(_typeDecls, e.right.ty);
+        if (decl?.kind === "discriminated-union" && decl.variants) {
+          const baseName = tyBaseName(e.right.ty.name);
+          const fieldName = e.left.value;
+          const owners = decl.variants.filter(v => v.fields.some(f => f.name === fieldName));
+          if (owners.length === 0) return { kind: "bool", value: false };
+          const obj = lowerExpr(e.right, binds);
+          if (owners.length === 1) {
+            return { kind: "tagTest", expr: obj, typeName: baseName, ctor: owners[0].name };
+          }
+          const ref: Expr = obj.kind === "var" ? obj : { kind: "var", name: freshName(`_in${_liftCounter++}`) };
+          let disj: Expr = { kind: "tagTest", expr: ref, typeName: baseName, ctor: owners[0].name };
+          for (let i = 1; i < owners.length; i++) {
+            disj = { kind: "binop", op: "∨", left: disj, right: { kind: "tagTest", expr: ref, typeName: baseName, ctor: owners[i].name } };
+          }
+          return obj.kind === "var" ? disj : { kind: "let", name: (ref as { kind: "var"; name: string }).name, value: obj, body: disj };
+        }
       }
       // String literal comparison — constructor if user type, string literal if string.
       if ((e.op === "===" || e.op === "!==" || e.op === "==" || e.op === "!=") &&
@@ -842,7 +853,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.isDiscriminant && e.obj.ty.kind === "user") {
         const decl = unionDeclOfTy(_typeDecls, e.obj.ty);
         if (decl?.variants?.some(v => v.name === "true")) {
-          return { kind: "field", obj, field: "true_?" };
+          return { kind: "tagTest", expr: obj, typeName: tyBaseName(e.obj.ty.name), ctor: "true" };
         }
         if (decl?.variants && decl.discriminant && decl.discriminant !== "__isArray__") {
           _neededKindHelpers.set(decl.name, decl);
@@ -860,8 +871,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             return a && b && !tyEqual(a, b);
           });
           const matching = differ ? owners.filter(v => { const t = ownerTy(v); return t && tyEqual(t, e.ty); }) : [];
-          const ctor = e.ofVariant ?? (matching.length === 1 ? matching[0].name : undefined);
-          return { kind: "field", obj, field: e.field, fromUnion: baseName, ctor, datatypeField: true };
+          const ctor = e.ofVariant ?? (owners.length === 1 ? owners[0].name : matching.length === 1 ? matching[0].name : undefined);
+          if (ctor) {
+            return lowerUnionProj(obj, baseName, ctor, e.field, binds);
+          }
+          return { kind: "field", obj, field: e.field, fromUnion: baseName, datatypeField: true };
         }
       }
       return { kind: "field", obj, field: e.field, datatypeField: isRecordType(e.obj.ty) };
@@ -891,20 +905,19 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         return { kind: "app", fn: real ? `${e.fn.name}Real` : e.fn.name,
           args: [lowerMinMaxSequence(e.args[0], real, binds)] };
       }
-      // Array.isArray(x) on a synth array-union (discriminant "__isArray__")
-      // → constructor predicate `x.ArrayBranch?`. Used in spec ensures and
-      // anywhere `Array.isArray` escapes the narrowing rule (narrow rewrites
-      // top-level if-cond Array.isArray uses; this catches the rest).
+      // Array.isArray(x) on a synth array-union (discriminant "__isArray__") → tagTest
       if (e.fn.kind === "field" && e.fn.obj.kind === "var" && e.fn.obj.name === "Array" &&
           e.fn.field === "isArray" && e.args.length === 1) {
-        const arg = e.args[0];
+        const rawArg = e.args[0];
+        const arg = rawArg.kind === "coerce" && rawArg.variant ? rawArg.expr : rawArg;
         if (arg.ty.kind === "user") {
-          const decl = declOfTy(_typeDecls, arg.ty);
+          const decl = unionDeclOfTy(_typeDecls, arg.ty);
           if (decl?.kind === "discriminated-union" && decl.discriminant === "__isArray__") {
             return {
-              kind: "binop", op: "=",
-              left: lowerExpr(arg, binds),
-              right: { kind: "constructor", name: "ArrayBranch", type: arg.ty.name, args: [] },
+              kind: "tagTest",
+              expr: lowerExpr(arg, binds),
+              typeName: tyBaseName(arg.ty.name),
+              ctor: "ArrayBranch",
             };
           }
         }
@@ -1168,7 +1181,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           }
           return { name: f.name, value };
         });
-        return { kind: "record", spread: lowerExpr(e.spread, binds), fields: loweredFields };
+        return {
+          kind: "record", spread: lowerExpr(e.spread, binds), fields: loweredFields,
+          ...(e.ctor ? { ctor: e.ctor } : {}),
+          ...(e.ctorOf ? { ctorOf: e.ctorOf } : {}),
+        };
       }
       // Empty record with map type → empty map
       if (e.fields.length === 0 && !e.spread && e.ty.kind === "map") {
@@ -1338,46 +1355,6 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         return { kind: "var", name };
       }
       return { kind: "havoc", type: e.ty };
-
-    case "tagMatch": {
-      // Expression-form tagMatch — emitted by `ruleImplArrayIsArray` for spec
-      // implications like `Array.isArray(x) ==> B` and by
-      // `ruleConditionalArrayIsArray` for ternary narrowing. Substitutes
-      // scrutinee field accesses and (for synth array-unions) scrutinee
-      // path occurrences inside each arm with the variant's payload binder.
-      // Path scrutinees (e.g. `m.content`) get a synthesized hint derived
-      // from the last field/var name so the binder reads naturally.
-      const scrutinee = lowerExpr(e.scrutinee, binds);
-      const decl = declOf(_typeDecls, e.typeName);
-      const isSynthArrayUnion = decl?.discriminant === "__isArray__";
-      const varName = e.scrutinee.kind === "var" ? e.scrutinee.name : undefined;
-      const pathHint = varName ?? scrutineeHint(e.scrutinee);
-      const wrapOpt = e.ty.kind === "optional";
-      const arms: MatchArm[] = e.cases.map(c => {
-        const variant = decl?.variants?.find(v => v.name === c.variant);
-        const fields = variant?.fields ?? [];
-        let body = lowerExpr(c.body, binds);
-        if (varName && fields.length > 0) {
-          body = replaceFieldAccess(body, varName, fields, c.variant, tyBaseName(e.typeName));
-          if (isSynthArrayUnion && fields.length === 1) {
-            body = replaceVarInExpr(body, varName, matchBinder(fields[0].name, varName));
-          }
-        } else if (!varName && isSynthArrayUnion && fields.length === 1) {
-          // Path scrutinee (e.g. `m.content`): replace structural occurrences
-          // with the binder var ref.
-          const binderName = matchBinder(fields[0].name, pathHint);
-          body = replaceExprInExpr(body, scrutinee, { kind: "var", name: binderName });
-        }
-        if (wrapOpt) body = wrapOptionalBranch(body, c.body);
-        return { pattern: buildMatchPattern(c.variant, fields, pathHint), body };
-      });
-      if (e.fallthrough) {
-        let body = lowerExpr(e.fallthrough, binds);
-        if (wrapOpt) body = wrapOptionalBranch(body, e.fallthrough);
-        arms.push({ pattern: pWild(), body });
-      }
-      return { kind: "match", scrutinee: varName !== undefined ? varE(varName) : scrutinee, arms };
-    }
   }
 }
 
@@ -1393,94 +1370,6 @@ function flattenImpl(e: TExpr): { premises: TExpr[]; conclusion: TExpr } {
 function splitConj(e: TExpr): TExpr[] {
   if (e.kind === "binop" && e.op === "&&") return [...splitConj(e.left), ...splitConj(e.right)];
   return [e];
-}
-
-// ── Ensures-to-match for discriminated unions ────────────────
-
-function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): Expr | null {
-  if (e.kind !== "binop" || e.op !== "==>") return null;
-  if (e.left.kind !== "binop" || e.left.op !== "===") return null;
-  if (e.left.left.kind !== "field" || !e.left.left.isDiscriminant || e.left.right.kind !== "str") return null;
-
-  const obj = e.left.left.obj;
-  if (obj.kind !== "var" || obj.ty.kind !== "user") return null;
-  const typeName = obj.ty.name;
-  const decl = declOfKind(typeDecls, typeName, "discriminated-union");
-  if (!decl) return null;
-
-  const variantName = e.left.right.value;
-  const variant = decl.variants?.find(v => v.name === variantName);
-  if (!variant) return null;
-
-  const fields = variant.fields;
-  const pattern = buildMatchPattern(variantName, fields, obj.name);
-
-  let rhs = transformExpr(e.right);
-  rhs = replaceFieldAccess(rhs, obj.name, fields);
-
-  return { kind: "match", scrutinee: varE(obj.name), arms: [{ pattern, body: rhs }, { pattern: pWild(), body: { kind: "bool", value: true } }] };
-}
-
-function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; tsType: string }[], ctorName?: string, ctorOf?: string): Expr {
-  return mapExpr(e, x => {
-    if (x.kind === "field" && x.obj.kind === "var" && x.obj.name === varName) {
-      const f = fields.find(f => f.name === x.field);
-      if (f) return { kind: "var", name: matchBinder(f.name, varName) };
-    }
-    // Datatype update of the scrutinee (`{ ...vn, f: v }`): the arm knows the
-    // variant, so stamp it — emitters need it for per-constructor destructor
-    // names. Recurse manually (returning a node stops mapExpr's own descent).
-    if (ctorName && x.kind === "record" && !x.ctor && x.spread &&
-        x.spread.kind === "var" && x.spread.name === varName) {
-      return { ...x, ctor: ctorName, ctorOf,
-        fields: x.fields.map(f => ({ ...f, value: replaceFieldAccess(f.value, varName, fields, ctorName, ctorOf) })) };
-    }
-    // If this let shadows the matched variable, stop replacing in the body
-    if (x.kind === "let" && x.name === varName) return { ...x, value: replaceFieldAccess(x.value, varName, fields, ctorName, ctorOf) };
-    return null;
-  });
-}
-
-/** Replace bare `var(oldName)` references → `var(newName)` in lowered IR.
- *  Used inside synth array-union match arms: the user code refers to the
- *  scrutinee by its bare name (`content`), but in the arm body that name
- *  must refer to the variant's sole payload binder (`i_content_arr`). */
-function replaceVarInExpr(e: Expr, oldName: string, newName: string): Expr {
-  return mapExpr(e, x => {
-    if (x.kind === "var" && x.name === oldName) return { kind: "var", name: newName };
-    // If a binding shadows the name, stop substituting inside its body.
-    if (x.kind === "let" && x.name === oldName) return { ...x, value: replaceVarInExpr(x.value, oldName, newName) };
-    return null;
-  });
-}
-
-/** Structural equality on Expr access-paths (var / field chain). Enough to
- *  match the scrutinee `m.content` against later occurrences in a match arm. */
-function exprPathEqual(a: Expr, b: Expr): boolean {
-  if (a.kind !== b.kind) return false;
-  if (a.kind === "var" && b.kind === "var") return a.name === b.name;
-  if (a.kind === "field" && b.kind === "field") return a.field === b.field && exprPathEqual(a.obj, b.obj);
-  return false;
-}
-
-/** Substitute every occurrence of `target` (an access-path Expr) with `repl`
- *  inside `e`. Mirror of `replaceVarInExpr` but keyed on a sub-path rather
- *  than a bare name — needed when the narrowing scrutinee is `m.content`
- *  (field access) rather than a bare `content` (var). */
-function replaceExprInExpr(e: Expr, target: Expr, repl: Expr): Expr {
-  return mapExpr(e, x => {
-    if (exprPathEqual(x, target)) return repl;
-    return null;
-  });
-}
-
-/** Extract a short reader-friendly hint for a TExpr access-path: the last
- *  field name in a field chain, or the var name. Used to derive a stable
- *  binder prefix when the scrutinee isn't a bare var. */
-function scrutineeHint(e: TExpr): string {
-  if (e.kind === "var") return e.name;
-  if (e.kind === "field") return e.field;
-  return "x";
 }
 
 // ── Transform statements ─────────────────────────────────────
@@ -2065,7 +1954,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       throw new Error("forof should be transformed to forin (range loop) in transformStmts");
 
     case "switch":
-      return [emitSwitchStmt(s, typeDecls)];
+      return emitSwitchStmt(s, typeDecls);
 
     case "ghostLet":
       return [{ kind: "ghostLet", name: s.name, type: s.ty, value: transformExpr(s.init) }];
@@ -2075,46 +1964,29 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
 
     case "assert":
       return [{ kind: "assert", expr: transformExpr(s.expr), assumed: s.assumed }];
-
-    case "tagMatch":
-      return [emitMatchStmt(s.scrutinee, s.typeName, s.cases, s.fallthrough, typeDecls)];
   }
 }
 
-// ── Discriminant if-chain detection ──────────────────────────
+// ── Switch lowering ──────────────────────────────────────────
 
-interface Chain {
-  varName: string;
-  typeName: string;
-  cases: { variant: string; body: TStmt[] }[];
-  fallthrough: TStmt[];
-}
-
-/** Build match arms from variant cases — shared by imperative and pure paths.
- *  Looks up variant fields from typeDecls, builds patterns via buildMatchPattern,
- *  and delegates body transformation to the caller-provided function.
- *  Returns null if any body transformation returns null (pure path abort). */
+/** Build match arms for a switch on a fieldless string-union enum. */
 function buildMatchArms<T>(
   cases: { name: string; body: TStmt[] }[],
-  varName: string | undefined, typeName: string, typeDecls: TypeDeclInfo[],
-  transformBody: (body: TStmt[], varName: string | undefined, fields: { name: string; tsType: string }[], ctorName?: string) => T | null
+  typeName: string, typeDecls: TypeDeclInfo[],
+  transformBody: (body: TStmt[]) => T | null
 ): { pattern: MatchPattern; body: T }[] | null {
   const decl = declOf(typeDecls, typeName);
-  if (!decl || (decl.kind !== "string-union" && decl.kind !== "discriminated-union")) {
-    throw new Error(`match type ${typeName} is not a declared union`);
+  if (!decl || decl.kind !== "string-union") {
+    throw new Error(`match type ${typeName} is not a declared string-union`);
   }
   const arms: { pattern: MatchPattern; body: T }[] = [];
   for (const c of cases) {
-    const variant = decl?.variants?.find(v => v.name === c.name);
-    const declared = decl.kind === "string-union"
-      ? decl.values?.includes(c.name)
-      : !!variant;
-    if (!declared) throw new Error(`case ${JSON.stringify(c.name)} is not a variant of ${typeName}`);
-    const fields = variant?.fields ?? [];
-    const pattern = buildMatchPattern(c.name, fields, varName);
-    const body = transformBody(c.body, varName, fields, c.name);
+    if (!decl.values?.includes(c.name)) {
+      throw new Error(`case ${JSON.stringify(c.name)} is not a variant of ${typeName}`);
+    }
+    const body = transformBody(c.body);
     if (body === null) return null;
-    arms.push({ pattern, body });
+    arms.push({ pattern: pCtor(c.name), body });
   }
   return arms;
 }
@@ -2133,91 +2005,6 @@ function buildLiteralMatchArms<T>(
     arms.push({ pattern: pLiteral(c.name), body });
   }
   return arms;
-}
-
-function emitMatchStmt(
-  scrutinee: TExpr,
-  typeName: string,
-  cases: { variant: string; body: TStmt[] }[],
-  fallthrough: TStmt[],
-  typeDecls: TypeDeclInfo[],
-): Stmt {
-  const decl = declOf(typeDecls, typeName);
-  // Synth array-unions (discriminant "__isArray__") have single-field variants
-  // ArrayBranch(arr) / NonArrayBranch(val). The matched arm refers to the
-  // scrutinee by its bare name/path (`content`, `m.content`), not `.arr`, so
-  // we substitute that whole reference with the variant's sole field binder.
-  const isSynthArrayUnion = decl?.discriminant === "__isArray__";
-  // The scrutinee is a bare var (`current`) or a field-access path
-  // (`current.content`). `prefix` names the binder scope — the var name, or a
-  // safe id derived from the path (`current.content` → `current_content`) —
-  // and is used for both pattern binders and arm-body substitution so they
-  // always agree. A var scrutinee has empty `fields`, so `prefix` is just its
-  // name and the emitted code is unchanged from before this generalization.
-  const path = asTAccessPath(scrutinee);
-  const isPath = !!path && path.fields.length > 0;
-  const prefix = path ? [path.rootVar, ...path.fields].join("_") : "?";
-  function transformArmBody(body: TStmt[], fields: { name: string; tsType: string; type?: Ty }[]): Stmt[] {
-    let stmts: TStmt[];
-    if (isPath && path) {
-      // Path scrutinee: the matched value is referred to by the bare path, so
-      // substitute the whole path (only the synth single-field shape arises
-      // here — discriminant chains require a var scrutinee).
-      stmts = isSynthArrayUnion && fields.length === 1
-        ? replacePathInTStmts(body, path, matchBinder(fields[0].name, prefix), fields[0].type ?? parseTsType(fields[0].tsType))
-        : body;
-    } else {
-      stmts = replaceFieldAccessInTStmts(body, prefix, fields);
-      if (isSynthArrayUnion && fields.length === 1) {
-        const f = fields[0];
-        stmts = replaceVarInTStmts(stmts, prefix, matchBinder(f.name, prefix), f.type ?? parseTsType(f.tsType));
-      }
-    }
-    return transformStmts(stmts, typeDecls);
-  }
-  const armCases = cases.map(c => ({ name: c.variant, body: c.body }));
-  const arms = buildMatchArms(armCases, prefix, typeName, typeDecls,
-    (body, _vn, fields) => transformArmBody(body, fields))!;
-  // Add the fallthrough arm whenever the listed cases don't cover every
-  // variant — needed for exhaustiveness even when there's no `else`
-  // (`fallthrough` empty), e.g. `if (Array.isArray(x)) {...}` with no else
-  // becomes `match x { case ArrayBranch(..) => ... case NonArrayBranch(..) => }`.
-  const allCovered = !!decl?.variants && cases.length >= decl.variants.length;
-  if (!allCovered) {
-    const remaining = remainingVariant(typeName, cases, typeDecls);
-    if (remaining) {
-      // Exactly one variant left — destructure so the fallthrough body can
-      // access variant-specific fields (Lean requires this; Dafny tolerates `_`).
-      const pattern = buildMatchPattern(remaining.name, remaining.fields, prefix);
-      const body = transformArmBody(fallthrough, remaining.fields);
-      arms.push({ pattern, body });
-    } else {
-      arms.push({ pattern: pWild(), body: transformStmts(fallthrough, typeDecls) });
-    }
-  }
-  return { kind: "match", scrutinee: isPath ? transformExpr(scrutinee) : varE(prefix), arms };
-}
-
-/** Replace bare `var(oldName)` references → `var(newName)` with the given type.
- *  Used by emitMatchStmt for synth array-unions where the variant has a single
- *  payload field and the user code refers to the scrutinee by its bare name. */
-function replaceVarInTStmts(stmts: TStmt[], oldName: string, newName: string, newTy: Ty): TStmt[] {
-  return stmts.map(s => mapTStmt(s, e => {
-    if (e.kind === "var" && e.name === oldName) {
-      return { kind: "var", name: newName, ty: newTy } as TExpr;
-    }
-    return null;
-  }));
-}
-
-/** If the chain has matched all variants but one, return that remaining variant. */
-function remainingVariant(typeName: string, cases: { variant: string }[], typeDecls: TypeDeclInfo[]): { name: string; fields: { name: string; tsType: string; type?: Ty }[] } | null {
-  const decl = declOf(typeDecls, typeName);
-  if (!decl?.variants) return null;
-  const matched = new Set(cases.map(c => c.variant));
-  const remaining = decl.variants.filter(v => !matched.has(v.name));
-  if (remaining.length !== 1) return null;
-  return remaining[0];
 }
 
 /** `switch(obj.field)` is stripped at extraction to scrutinee `obj` + discriminant
@@ -2247,23 +2034,7 @@ function switchCtorDecl(typeDecls: TypeDeclInfo[], ty: Ty | undefined): TypeDecl
   return decl?.kind === "string-union" || decl?.kind === "discriminated-union" ? decl : undefined;
 }
 
-/** Stamp variant ctor info onto datatype updates of the match scrutinee in
- *  lowered arm bodies (`{ ...vn, f: v }`) — the statement-path twin of
- *  `replaceFieldAccess`'s stamping. Emitters need the pin to use
- *  per-constructor destructor names for collision-renamed fields. */
-function stampScrutineeUpdates(body: Stmt[], varName: string, ctorName: string, ctorOf: string): Stmt[] {
-  const stamp = (x: Expr): Expr | null => {
-    if (x.kind === "record" && !x.ctor && x.spread &&
-        x.spread.kind === "var" && x.spread.name === varName) {
-      return { ...x, ctor: ctorName, ctorOf,
-        fields: x.fields.map(f => ({ ...f, value: mapExpr(f.value, stamp) })) };
-    }
-    return null;
-  };
-  return body.map(st => mapStmt(st, stamp));
-}
-
-function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Stmt {
+function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Stmt[] {
   const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
   const ef = enumFieldSwitch(s, typeDecls);
   const matchTy = ef ? ef.fieldTy : s.expr.ty;
@@ -2273,155 +2044,41 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
     const typeName = !matchTy ? "unknown" : matchTy.kind === "user" ? matchTy.name : matchTy.kind;
     throw new Error(`switch scrutinee must be string-typed or a declared union, got ${typeName}`);
   }
-  const baseName = s.expr.ty.kind === "user" ? tyBaseName(s.expr.ty.name) : undefined;
-  const arms = literalCases
-    ? buildLiteralMatchArms(cases, (body) => transformStmts(body, typeDecls))!
-    : ef
-      ? buildMatchArms(cases, undefined, ctorDecl!.name, typeDecls, (body) => transformStmts(body, typeDecls))!
-      : buildMatchArms(cases, s.expr.kind === "var" ? s.expr.name : "?", ctorDecl!.name, typeDecls,
-        (body, vn, fields, ctorName) => {
-          let out = transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls);
-          if (ctorName && vn && baseName) out = stampScrutineeUpdates(out, vn, ctorName, baseName);
-          return out;
-        })!;
-  if (s.defaultBody.length > 0) arms.push({ pattern: pWild(), body: transformStmts(s.defaultBody, typeDecls) });
-  return { kind: "match", scrutinee: ef ? ef.scrutinee : varE(s.expr.kind === "var" ? s.expr.name : "?"), arms };
-}
-
-/** Replace obj.field → replacement var in typed IR.
- *  Uses the TExpr's resolved type when available, falling back to `fallbackTy`. */
-function replaceFieldsInTStmts(
-  stmts: TStmt[], objName: string,
-  replacements: { fieldName: string; newName: string; fallbackTy: Ty }[]
-): TStmt[] {
-  if (replacements.length === 0) return stmts;
-  return stmts.map(s => mapTStmt(s, e => {
-    if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === objName) {
-      const r = replacements.find(r => r.fieldName === e.field);
-      if (r) {
-        const ty = e.ty.kind !== "unknown" ? e.ty : r.fallbackTy;
-        return { kind: "var", name: r.newName, ty } as TExpr;
+  // Discriminated-union switch lowers directly to `if (tagTest) ... else if ...`
+  // so narrowed variant field reads use checked projections with no match binders.
+  if (!ef && ctorDecl?.kind === "discriminated-union") {
+    for (const c of s.cases) {
+      if (!ctorDecl.variants?.some(v => v.name === c.label)) {
+        throw new Error(`case ${JSON.stringify(c.label)} is not a variant of ${ctorDecl.name}`);
       }
     }
-    return null;
-  }));
-}
-
-/** Replace all variant fields of obj → match binder vars in typed IR.
- *  Before replacing field reads, realize TypeScript's structural argument
- *  conversion for calls such as `helper(outcome)` inside a narrowed union arm.
- *  The source value is still the enclosing union in typed IR, while Dafny and
- *  Lean expect the helper's nominal record. Rebuild that record solely from
- *  the fields bound by this arm's match pattern. */
-function replaceFieldAccessInTStmts(stmts: TStmt[], varName: string, fields: { name: string; tsType: string; type?: Ty }[]): TStmt[] {
-  const projected = projectStructuralCallArgsInTStmts(stmts, varName, fields);
-  return replaceFieldsInTStmts(projected, varName, fields.map(f => ({
-    fieldName: f.name,
-    newName: matchBinder(f.name, varName),
-    fallbackTy: f.type ?? parseTsType(f.tsType),
-  })));
-}
-
-/** Project a narrowed union scrutinee into a named structural record expected
- *  by a same-module/extern call. Resolution stamps named calls with paramTys;
- *  this pass fires only when every target record field has an identically typed
- *  match-bound source field. That deliberately avoids inventing a broad cast:
- *  it is the nominal-backend witness for the structural call TS already accepts. */
-function projectStructuralCallArgsInTStmts(
-  stmts: TStmt[], varName: string,
-  fields: { name: string; tsType: string; type?: Ty }[],
-): TStmt[] {
-  const sourceFields = fields.map(f => ({
-    ...f,
-    resolvedTy: f.type ?? parseTsType(f.tsType),
-  }));
-
-  return stmts.map(s => mapTStmt(s, e => {
-    if (e.kind !== "call" || !e.paramTys) return null;
-    const paramTys = e.paramTys;
-    let changed = false;
-    const args = e.args.map((arg, i) => {
-      if (arg.kind !== "var" || arg.name !== varName || i >= paramTys.length) return arg;
-      const targetTy = paramTys[i];
-      const targetDecl = declOfTy(_typeDecls, targetTy);
-      if (targetTy.kind !== "user" || targetDecl?.kind !== "record" || !targetDecl.fields) return arg;
-
-      const matched: { targetField: typeof targetDecl.fields[number]; sourceField: typeof sourceFields[number] }[] = [];
-      for (const targetField of targetDecl.fields) {
-        const sourceField = sourceFields.find(f => f.name === targetField.name);
-        const targetFieldTy = targetField.type ?? parseTsType(targetField.tsType);
-        if (!sourceField || !tyEqual(sourceField.resolvedTy, targetFieldTy)) return arg;
-        matched.push({ targetField, sourceField });
+    const { binds: scrBinds, expr: scrExpr } = liftMethodCalls(s.expr);
+    const baseName = s.expr.ty.kind === "user" ? tyBaseName(s.expr.ty.name) : ctorDecl.name;
+    const covered = new Set(s.cases.map(c => c.label));
+    const exhaustive = s.defaultBody.length === 0 && !!ctorDecl.variants &&
+      ctorDecl.variants.every(v => covered.has(v.name));
+    let elseBranch: Stmt[] = transformStmts(s.defaultBody, typeDecls);
+    for (let k = s.cases.length - 1; k >= 0; k--) {
+      const body = transformStmts(s.cases[k].body, typeDecls);
+      if (exhaustive && k === s.cases.length - 1) {
+        elseBranch = body;
+        continue;
       }
-
-      changed = true;
-      return {
-        kind: "record" as const,
-        spread: null,
-        fields: matched.map(m => ({
-          name: m.targetField.name,
-          value: {
-            kind: "var" as const,
-            name: matchBinder(m.sourceField.name, varName),
-            ty: m.sourceField.resolvedTy,
-          },
-        })),
-        ty: targetTy,
-      };
-    });
-    return changed ? { ...e, args } : null;
-  }));
-}
-
-/** A pure access path — chain of field accesses rooted at a var. */
-interface AccessPath { rootVar: string; fields: string[] }
-
-function asTAccessPath(e: TExpr): AccessPath | null {
-  if (e.kind === "coerce") return asTAccessPath(e.expr);
-  if (e.kind === "var") return { rootVar: e.name, fields: [] };
-  if (e.kind === "field") {
-    const inner = asTAccessPath(e.obj);
-    if (!inner) return null;
-    return { rootVar: inner.rootVar, fields: [...inner.fields, e.field] };
+      const cond: Expr = { kind: "tagTest", expr: scrExpr, typeName: baseName, ctor: s.cases[k].label };
+      elseBranch = [{ kind: "if", cond, then: body, else: elseBranch }];
+    }
+    return [...scrBinds, ...elseBranch];
   }
-  return null;
+  const arms = literalCases
+    ? buildLiteralMatchArms(cases, (body) => transformStmts(body, typeDecls))!
+    : buildMatchArms(cases, ctorDecl!.name, typeDecls, (body) => transformStmts(body, typeDecls))!;
+  if (s.defaultBody.length > 0) arms.push({ pattern: pWild(), body: transformStmts(s.defaultBody, typeDecls) });
+  return [{ kind: "match", scrutinee: ef ? ef.scrutinee : transformExpr(s.expr), arms }];
 }
-
-/** Does TExpr `e` match the given access path exactly? */
-function matchesAccessPath(e: TExpr, path: AccessPath): boolean {
-  const candidate = asTAccessPath(e);
-  return candidate !== null && candidate.rootVar === path.rootVar &&
-    candidate.fields.length === path.fields.length &&
-    candidate.fields.every((f, i) => f === path.fields[i]);
-}
-
-function replacePathInTExpr(expr: TExpr, path: AccessPath, binder: string, binderTy: Ty): TExpr {
-  return mapTExpr(expr, e => {
-    if (matchesAccessPath(e, path)) return { kind: "var", name: binder, ty: binderTy };
-    if (e.kind === "lambda") return { ...e,
-      params: e.params.map(p => p.defaultValue
-        ? { ...p, defaultValue: replacePathInTExpr(p.defaultValue, path, binder, binderTy) } : p),
-      body: replacePathInTStmts(e.body, path, binder, binderTy) };
-    return null;
-  });
-}
-
-function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, binderTy: Ty): TStmt[] {
-  return stmts.map(s => mapTStmt(s, e => replacePathInTExpr(e, path, binder, binderTy)));
-}
-
 
 // ── Pure function generation ─────────────────────────────────
 
 function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | null {
-  // tagMatch (from narrow's discriminant detection) is the leading stmt and consumes the rest.
-  if (stmts.length > 0 && stmts[0].kind === "tagMatch") {
-    const t = stmts[0];
-    const varName = t.scrutinee.kind === "var" ? t.scrutinee.name : "?";
-    const chain: Chain = { varName, typeName: t.typeName, cases: t.cases, fallthrough: t.fallthrough };
-    return transformPureMatch(chain, typeDecls);
-  }
-
   for (let i = 0; i < stmts.length; i++) {
     const s = stmts[i];
     const rest = stmts.slice(i + 1);
@@ -2442,26 +2099,26 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
         if (!elseExpr) return null;
         return { kind: "if", cond: transformExpr(asCondition(s.cond)), then: thenExpr, else: elseExpr };
       }
-      case "switch": return transformPureSwitch(s, typeDecls);
+      case "switch": return transformPureSwitch(s, rest, typeDecls);
       default: return null;
     }
   }
   return null;
 }
 
-function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Expr | null {
+function transformPureSwitch(s: TStmt & { kind: "switch" }, rest: TStmt[], typeDecls: TypeDeclInfo[]): Expr | null {
   const ef = enumFieldSwitch(s, typeDecls);
   if (ef) {
-    const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
+    const cases = s.cases.map(c => ({ name: c.label, body: [...c.body, ...rest] }));
     const literalCases = ef.fieldTy?.kind === "string";
     const ctorDecl = switchCtorDecl(typeDecls, ef.fieldTy);
     if (!literalCases && !ctorDecl) return null;
     const arms = literalCases
       ? buildLiteralMatchArms(cases, (body) => transformPureBody(body, typeDecls))
-      : buildMatchArms(cases, undefined, ctorDecl!.name, typeDecls, (body) => transformPureBody(body, typeDecls));
+      : buildMatchArms(cases, ctorDecl!.name, typeDecls, (body) => transformPureBody(body, typeDecls));
     if (!arms) return null;
-    if (s.defaultBody.length > 0) {
-      const body = transformPureBody(s.defaultBody, typeDecls);
+    if (s.defaultBody.length > 0 || rest.length > 0) {
+      const body = transformPureBody([...s.defaultBody, ...rest], typeDecls);
       if (!body) return null;
       arms.push({ pattern: pWild(), body });
     }
@@ -2469,69 +2126,43 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
   }
   const ctorDecl = switchCtorDecl(typeDecls, s.expr.ty);
   if (!ctorDecl) return null;
-  const typeName = ctorDecl.name;
-  const varName = s.expr.kind === "var" ? s.expr.name : undefined;
-  const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
-  const arms = buildMatchArms(cases, varName, typeName, typeDecls,
-    (body, vn, fields, ctorName) => {
-      const projected = vn ? projectStructuralCallArgsInTStmts(body, vn, fields) : body;
-      let result = transformPureBody(projected, typeDecls);
-      if (!result) return null;
-      if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields, ctorName, tyBaseName(typeName));
-      return result;
-    });
+  if (ctorDecl.kind === "discriminated-union") {
+    for (const c of s.cases) {
+      if (!ctorDecl.variants?.some(v => v.name === c.label)) {
+        throw new Error(`case ${JSON.stringify(c.label)} is not a variant of ${ctorDecl.name}`);
+      }
+    }
+    const scrExpr = transformExpr(s.expr);
+    const baseName = s.expr.ty.kind === "user" ? tyBaseName(s.expr.ty.name) : ctorDecl.name;
+    const hasFallthrough = s.defaultBody.length > 0 || rest.length > 0;
+    let elseExpr: Expr | null;
+    let lastIdx: number;
+    if (hasFallthrough) {
+      elseExpr = transformPureBody([...s.defaultBody, ...rest], typeDecls);
+      lastIdx = s.cases.length - 1;
+    } else {
+      if (s.cases.length === 0) return null;
+      elseExpr = transformPureBody(s.cases[s.cases.length - 1].body, typeDecls);
+      lastIdx = s.cases.length - 2;
+    }
+    if (!elseExpr) return null;
+    for (let k = lastIdx; k >= 0; k--) {
+      const thenExpr = transformPureBody([...s.cases[k].body, ...rest], typeDecls);
+      if (!thenExpr) return null;
+      const cond: Expr = { kind: "tagTest", expr: scrExpr, typeName: baseName, ctor: s.cases[k].label };
+      elseExpr = { kind: "if", cond, then: thenExpr, else: elseExpr };
+    }
+    return elseExpr;
+  }
+  const cases = s.cases.map(c => ({ name: c.label, body: [...c.body, ...rest] }));
+  const arms = buildMatchArms(cases, ctorDecl.name, typeDecls, (body) => transformPureBody(body, typeDecls));
   if (!arms) return null;
-  if (s.defaultBody.length > 0) {
-    const body = transformPureBody(s.defaultBody, typeDecls);
+  if (s.defaultBody.length > 0 || rest.length > 0) {
+    const body = transformPureBody([...s.defaultBody, ...rest], typeDecls);
     if (!body) return null;
     arms.push({ pattern: pWild(), body });
   }
-  if (s.expr.kind !== "var") return null;
-  return { kind: "match", scrutinee: varE(s.expr.name), arms };
-}
-
-function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | null {
-  const cases = chain.cases.map(c => ({ name: c.variant, body: c.body }));
-  const decl = declOf(typeDecls, chain.typeName);
-  // Synth array-unions have single-field variants and user code refers to the
-  // scrutinee by its bare name, not field-accessed. See emitMatchStmt for
-  // the statement-level counterpart of this substitution.
-  const isSynthArrayUnion = decl?.discriminant === "__isArray__";
-  const arms = buildMatchArms(cases, chain.varName, chain.typeName, typeDecls,
-    (body, vn, fields, ctorName) => {
-      const projected = vn ? projectStructuralCallArgsInTStmts(body, vn, fields) : body;
-      let result = transformPureBody(projected, typeDecls);
-      if (!result) return null;
-      if (fields.length > 0 && vn) result = replaceFieldAccess(result, vn, fields, ctorName, tyBaseName(chain.typeName));
-      if (isSynthArrayUnion && fields.length === 1 && vn) {
-        result = replaceVarInExpr(result, vn, matchBinder(fields[0].name, vn));
-      }
-      return result;
-    });
-  if (!arms) return null;
-  // Idiomatic TS often has an unreachable fallthrough after exhaustive if-chains on
-  // discriminated unions. Skip the catch-all arm when all variants are matched,
-  // since Lean errors on redundant match arms.
-  const allCovered = decl?.variants && chain.cases.length >= decl.variants.length;
-  if (chain.fallthrough.length > 0 && !allCovered) {
-    const remaining = remainingVariant(chain.typeName, chain.cases, typeDecls);
-    if (remaining) {
-      // Exactly one variant left — destructure for variant-specific field access.
-      const projected = projectStructuralCallArgsInTStmts(chain.fallthrough, chain.varName, remaining.fields);
-      let body = transformPureBody(projected, typeDecls);
-      if (!body) return null;
-      if (remaining.fields.length > 0) body = replaceFieldAccess(body, chain.varName, remaining.fields, remaining.name, tyBaseName(chain.typeName));
-      if (isSynthArrayUnion && remaining.fields.length === 1) {
-        body = replaceVarInExpr(body, chain.varName, matchBinder(remaining.fields[0].name, chain.varName));
-      }
-      arms.push({ pattern: buildMatchPattern(remaining.name, remaining.fields, chain.varName), body });
-    } else {
-      const body = transformPureBody(chain.fallthrough, typeDecls);
-      if (!body) return null;
-      arms.push({ pattern: pWild(), body });
-    }
-  }
-  return { kind: "match", scrutinee: varE(chain.varName), arms };
+  return { kind: "match", scrutinee: transformExpr(s.expr), arms };
 }
 
 // ── Generate type declarations ───────────────────────────────
@@ -2594,7 +2225,6 @@ function findReassignedNames(stmts: TStmt[], names: Set<string>): Set<string> {
       if (s.kind === "while") scan(s.body);
       if (s.kind === "forof") scan(s.body);
       if (s.kind === "switch") { for (const c of s.cases) scan(c.body); scan(s.defaultBody); }
-      if (s.kind === "tagMatch") { for (const c of s.cases) scan(c.body); scan(s.fallthrough); }
     }
   }
   scan(stmts);
@@ -2784,12 +2414,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   // def-by-method functions also skip their method wrappers
   const pureDefNames = new Set([...pureDefs.map(d => d.name), ...defByMethods.map(d => d.name)]);
   const methods: FnMethod[] = mod.functions.map(fn => {
-    const ensures: Expr[] = [];
-    for (const e of fn.ensures) {
-      const m = ensuresToMatch(e, mod.typeDecls);
-      if (m) ensures.push(m);
-      else ensures.push(transformExpr(e));
-    }
+    const ensures: Expr[] = fn.ensures.map(e => transformExpr(e));
 
     _forofCounters.clear();
     let body = pureDefNames.has(fn.name)

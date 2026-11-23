@@ -19,30 +19,28 @@ lemma mergeComplete_ensures(base: Budgets, over: Budgets)
 
 function withDefaults(base: Config, over: Config): Config
 {
-  Config((match over.retries { case Some(i_m0) => Option.Some(i_m0) case None => base.retries }), (match over.timeout { case Some(i_m1) => Option.Some(i_m1) case None => base.timeout }))
+  Config((if over.retries.Some? then over.retries else base.retries), (if over.timeout.Some? then over.timeout else base.timeout))
 }
 
 lemma withDefaults_ensures(base: Config, over: Config)
-  ensures ((match over.retries { case Some(i_) => false case None => true }) ==> (withDefaults(base, over).retries == base.retries))
-  ensures (match over.retries { case Some(i_over_retries_val) => (match withDefaults(base, over).retries { case Some(i_value) => (i_value == i_over_retries_val) case None => false }) case None => true })
-  ensures ((match over.timeout { case Some(i_) => false case None => true }) ==> (withDefaults(base, over).timeout == base.timeout))
-  ensures (match over.timeout { case Some(i_over_timeout_val) => (match withDefaults(base, over).timeout { case Some(i_value) => (i_value == i_over_timeout_val) case None => false }) case None => true })
+  ensures (!(over.retries.Some?) ==> (withDefaults(base, over).retries == base.retries))
+  ensures (over.retries.Some? ==> (withDefaults(base, over).retries == over.retries))
+  ensures (!(over.timeout.Some?) ==> (withDefaults(base, over).timeout == base.timeout))
+  ensures (over.timeout.Some? ==> (withDefaults(base, over).timeout == over.timeout))
 {
 }
 
 function applyOverride(base: Budgets, over: Option<Budgets>): Budgets
 {
-  match over {
-    case Some(i_mo2) =>
-      Budgets(i_mo2.low, i_mo2.high)
-    case None =>
-      base
-  }
+  if over.Some? then
+    Budgets(over.value.low, over.value.high)
+  else
+    base
 }
 
 lemma applyOverride_ensures(base: Budgets, over: Option<Budgets>)
-  ensures ((match over { case Some(i_) => false case None => true }) ==> (applyOverride(base, over) == base))
-  ensures (match over { case Some(i_over_val) => (applyOverride(base, over) == i_over_val) case None => true })
+  ensures (!(over.Some?) ==> (applyOverride(base, over) == base))
+  ensures (over.Some? ==> (applyOverride(base, over) == over.value))
 {
 }
 

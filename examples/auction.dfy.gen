@@ -13,18 +13,13 @@ method highestBid(bids: seq<Option<Bid>>, key: string, reserve: int) returns (re
     invariant (best >= reserve)
   {
     var bid := bids[i];
-    match bid {
-      case Some(i_bid_val) =>
-        if (i_bid_val.key != key) {
-          i := (i + 1);
-          continue;
-        }
-        if (i_bid_val.amount > best) {
-          best := i_bid_val.amount;
-        }
-        i := (i + 1);
-      case None =>
-        i := (i + 1);
+    if (!(bid.Some?) || (bid.value.key != key)) {
+      i := (i + 1);
+    } else {
+      if (bid.value.amount > best) {
+        best := bid.value.amount;
+      }
+      i := (i + 1);
     }
   }
   return best;
@@ -40,19 +35,14 @@ method winningBidder(bids: seq<Option<Bid>>, key: string, reserve: int) returns 
     invariant ((winner == -1) || ((0 <= winner) && (winner < |bids|)))
   {
     var bid := bids[i];
-    match bid {
-      case Some(i_bid_val) =>
-        if (i_bid_val.key != key) {
-          i := (i + 1);
-          continue;
-        }
-        if (i_bid_val.amount > best) {
-          best := i_bid_val.amount;
-          winner := i;
-        }
-        i := (i + 1);
-      case None =>
-        i := (i + 1);
+    if (!(bid.Some?) || (bid.value.key != key)) {
+      i := (i + 1);
+    } else {
+      if (bid.value.amount > best) {
+        best := bid.value.amount;
+        winner := i;
+      }
+      i := (i + 1);
     }
   }
   return winner;
@@ -69,21 +59,16 @@ method secondPrice(bids: seq<Option<Bid>>, key: string, reserve: int) returns (r
     invariant (best >= second)
   {
     var bid := bids[i];
-    match bid {
-      case Some(i_bid_val) =>
-        if (i_bid_val.key != key) {
-          i := (i + 1);
-          continue;
-        }
-        if (i_bid_val.amount > best) {
-          second := best;
-          best := i_bid_val.amount;
-        } else if (i_bid_val.amount > second) {
-          second := i_bid_val.amount;
-        }
-        i := (i + 1);
-      case None =>
-        i := (i + 1);
+    if (!(bid.Some?) || (bid.value.key != key)) {
+      i := (i + 1);
+    } else {
+      if (bid.value.amount > best) {
+        second := best;
+        best := bid.value.amount;
+      } else if (bid.value.amount > second) {
+        second := bid.value.amount;
+      }
+      i := (i + 1);
     }
   }
   return second;
@@ -98,16 +83,11 @@ method firstFunded(bids: seq<Option<Bid>>, key: string) returns (res: int)
     invariant (i <= |bids|)
   {
     var bid := bids[i];
-    match bid {
-      case Some(i_bid_val) =>
-        if ((i_bid_val.key != key) || (i_bid_val.amount <= 0)) {
-          i := (i + 1);
-          continue;
-        }
-        return i;
-        i := (i + 1);
-      case None =>
-        i := (i + 1);
+    if ((var i_eq0 := (if bid.Some? then Option.Some(bid.value.key) else Option.None); (!(i_eq0.Some?) || (i_eq0.value != key))) || (bid.value.amount <= 0)) {
+      i := (i + 1);
+    } else {
+      return i;
+      i := (i + 1);
     }
   }
   return -1;

@@ -7,15 +7,28 @@ inductive Shape where
   | circle (r : Int) : Shape
   | rect (w : Int) (h : Int) : Shape
 deriving Repr, Inhabited
+attribute [grind cases] Shape
+@[grind] def Shape.tag : Shape → Nat | .circle .. => 0 | .rect .. => 1
+theorem Shape.tag_lt (x : Shape) : Shape.tag x < 2 := by cases x <;> simp [Shape.tag]
+grind_pattern Shape.tag_lt => Shape.tag x
+@[grind] def Shape.is_circle : Shape → Bool | .circle .. => true | _ => false
+@[grind =] theorem Shape.is_circle_eq (x : Shape) : Shape.is_circle x = (Shape.tag x == 0) := by cases x <;> rfl
+@[grind] def Shape.proj_circle_r : Shape → Option (Int) | .circle _v => some _v | _ => none
+@[grind =] theorem Shape.isSome_proj_circle_r (x : Shape) : (Shape.proj_circle_r x).isSome = Shape.is_circle x := by cases x <;> rfl
+@[grind] def Shape.is_rect : Shape → Bool | .rect .. => true | _ => false
+@[grind =] theorem Shape.is_rect_eq (x : Shape) : Shape.is_rect x = (Shape.tag x == 1) := by cases x <;> rfl
+@[grind] def Shape.proj_rect_w : Shape → Option (Int) | .rect _v _ => some _v | _ => none
+@[grind =] theorem Shape.isSome_proj_rect_w (x : Shape) : (Shape.proj_rect_w x).isSome = Shape.is_rect x := by cases x <;> rfl
+@[grind] def Shape.proj_rect_h : Shape → Option (Int) | .rect _ _v => some _v | _ => none
+@[grind =] theorem Shape.isSome_proj_rect_h (x : Shape) : (Shape.proj_rect_h x).isSome = Shape.is_rect x := by cases x <;> rfl
 
 namespace Pure
 
 def area (s : Shape) : Int :=
-  match s with
-  | .circle _s_r =>
-    3 * _s_r * _s_r
-  | .rect _s_w _s_h =>
-    _s_w * _s_h
+  if _h0 : (Shape.is_circle s) then
+    3 * ((Shape.proj_circle_r s).get (by grind)) * ((Shape.proj_circle_r s).get (by grind))
+  else
+    ((Shape.proj_rect_w s).get (by grind)) * ((Shape.proj_rect_h s).get (by grind))
 
 def shapes  : Array Shape :=
   #[Shape.circle 2, Shape.rect 3 4]

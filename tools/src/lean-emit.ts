@@ -221,6 +221,7 @@ function renderLeanPattern(p: MatchPattern): string {
 // through the `match`. Under a Prop connective (∧/∨/¬) such an operand is a type
 // error, so its presence forces the whole body to Bool connectives.
 function isCheckedNullishCoerce(e: Expr): boolean {
+  if (e.kind === "unionProj" && !e.raw) return true;
   return e.kind === "nullishCoerce" &&
     (e.op === "optionGet" || e.op === "nullishGet" ||
      e.op === "nullishExcludeUndefined" || e.op === "nullishExcludeNull");
@@ -253,7 +254,7 @@ function emitAsBool(e: Expr): string {
 
 function isNonCoercibleBoolAtom(e: Expr): boolean {
   if (e.kind === "match") return true;
-  if (e.kind === "nullishTest") return false;
+  if (e.kind === "nullishTest" || e.kind === "tagTest") return false;
   if (hasCheckedCoerce(e)) return true;
   if (e.kind === "binop" && (e.op === "=" || e.op === "≠") && e.right.kind === "constructor") {
     const rhs = e.right; // capture the narrowed node so it survives the closure below
@@ -550,15 +551,29 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // access with a discriminator test, so that branch is never reached.
       if (e.fromUnion) {
         const ctors = _unionCtors.get(e.fromUnion);
-        // Pin the owning ctor when given (field names repeat across variants);
-        // otherwise fall back to the sole variant carrying this field name.
-        const owner = (e.ctor ? ctors?.find(c => c.name === e.ctor) : undefined)
-          ?? ctors?.find(c => c.fields.some(f => f.name === e.field));
-        if (owner) {
-          const idx = owner.fields.findIndex(f => f.name === e.field);
-          const pats = owner.fields.map((_, i) => (i === idx ? "_v" : "_")).join(" ");
-          const fty = tyToLean(owner.fields[idx].type);
-          return `(match ${emitExpr(e.obj)} with | .${leanCtorName(owner.name)} ${pats} => _v | _ => (default : ${fty}))`;
+        if (e.ctor) {
+          const owner = ctors?.find(c => c.name === e.ctor);
+          if (owner) {
+            const idx = owner.fields.findIndex(f => f.name === e.field);
+            const pats = owner.fields.map((_, i) => (i === idx ? "_v" : "_")).join(" ");
+            const fty = tyToLean(owner.fields[idx].type);
+            return `(match ${emitExpr(e.obj)} with | .${leanCtorName(owner.name)} ${pats} => _v | _ => (default : ${fty}))`;
+          }
+        } else if (ctors) {
+          // Shared field accessed on an unnarrowed union: match every variant carrying it.
+          const owners = ctors.filter(c => c.fields.some(f => f.name === e.field));
+          if (owners.length > 0) {
+            const arms = owners.map(c => {
+              const idx = c.fields.findIndex(f => f.name === e.field);
+              const pats = c.fields.map((_, i) => (i === idx ? "_v" : "_")).join(" ");
+              return `| .${leanCtorName(c.name)} ${pats} => _v`;
+            });
+            if (owners.length < ctors.length) {
+              const fty = tyToLean(owners[0].fields.find(f => f.name === e.field)!.type);
+              arms.push(`| _ => (default : ${fty})`);
+            }
+            return `(match ${emitExpr(e.obj)} with ${arms.join(" ")})`;
+          }
         }
       }
       const obj = emitExpr(e.obj);
@@ -607,6 +622,23 @@ function emitExpr(e: Expr, parentPrec?: number): string {
           _needsNullish = true;
           return `(LemmaScript.Nullish.ofOptionNull (${inner}))`;
       }
+    }
+
+    case "tagTest": {
+      const inner = emitExpr(e.expr);
+      const arg = e.expr.kind === "var" || e.expr.kind === "field" ? inner : `(${inner})`;
+      return `(${e.typeName}.${leanCtorName(`is_${e.ctor}`)} ${arg})`;
+    }
+
+    case "unionProj": {
+      const inner = emitExpr(e.expr);
+      const arg = e.expr.kind === "var" || e.expr.kind === "field" ? inner : `(${inner})`;
+      const proj = `(${e.typeName}.${leanCtorName(`proj_${e.ctor}_${e.field}`)} ${arg})`;
+      if (e.raw) {
+        _needsOption = true;
+        return proj;
+      }
+      return `(${proj}.get (by grind))`;
     }
 
     case "stringIndex":
@@ -868,7 +900,42 @@ function emitDecl(d: Decl): string {
           lines.push(`  | ${leanCtorName(c.name)} ${params} : ${d.name}`);
         }
       }
-      return lines.join("\n") + emitDeriving(d.name, d.deriving);
+      let out = lines.join("\n") + emitDeriving(d.name, d.deriving);
+      // Discriminated unions (including synth array-unions) get @[grind] tag
+      // predicates and Option-returning field projectors for checked narrowing.
+      const needsHelpers = d.constructors.length > 0 &&
+        (!d.deriving.includes("DecidableEq") || d.constructors.some(c => c.fields.length > 0));
+      if (needsHelpers) {
+        const refs = new Set<string>();
+        for (const c of d.constructors) for (const f of c.fields) collectUserRefs(f.type, refs);
+        const isRecursive = refs.has(d.name);
+        const multi = d.constructors.length > 1;
+        const helperLines: string[] = [];
+        if (multi && !isRecursive) helperLines.push(`attribute [grind cases] ${d.name}`);
+        if (multi) {
+          const tagArms = d.constructors.map((c, i) => `| .${leanCtorName(c.name)}${c.fields.length > 0 ? " .." : ""} => ${i}`).join(" ");
+          helperLines.push(`@[grind] def ${d.name}.tag : ${d.name} → Nat ${tagArms}`);
+          helperLines.push(`theorem ${d.name}.tag_lt (x : ${d.name}) : ${d.name}.tag x < ${d.constructors.length} := by cases x <;> simp [${d.name}.tag]`);
+          helperLines.push(`grind_pattern ${d.name}.tag_lt => ${d.name}.tag x`);
+        }
+        d.constructors.forEach((c, ci) => {
+          const ctor = leanCtorName(c.name);
+          const isName = leanCtorName(`is_${c.name}`);
+          const dots = c.fields.length > 0 ? " .." : "";
+          helperLines.push(`@[grind] def ${d.name}.${isName} : ${d.name} → Bool | .${ctor}${dots} => true${multi ? " | _ => false" : ""}`);
+          if (multi) {
+            helperLines.push(`@[grind =] theorem ${d.name}.${leanCtorName(`is_${c.name}_eq`)} (x : ${d.name}) : ${d.name}.${isName} x = (${d.name}.tag x == ${ci}) := by cases x <;> rfl`);
+          }
+          c.fields.forEach((f, idx) => {
+            const projName = leanCtorName(`proj_${c.name}_${f.name}`);
+            const pats = c.fields.map((_, i) => (i === idx ? "_v" : "_")).join(" ");
+            helperLines.push(`@[grind] def ${d.name}.${projName} : ${d.name} → Option (${tyToLean(f.type)}) | .${ctor} ${pats} => some _v${multi ? " | _ => none" : ""}`);
+            helperLines.push(`@[grind =] theorem ${d.name}.${leanCtorName(`isSome_proj_${c.name}_${f.name}`)} (x : ${d.name}) : (${d.name}.${projName} x).isSome = ${d.name}.${isName} x := by cases x <;> rfl`);
+          });
+        });
+        out += "\n" + helperLines.join("\n");
+      }
+      return out;
     }
 
     case "structure": {

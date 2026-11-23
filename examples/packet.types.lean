@@ -9,18 +9,39 @@ inductive Packet where
   | data (seq : Int) (len : Int) : Packet
   | fin : Packet
 deriving Repr, Inhabited
+attribute [grind cases] Packet
+@[grind] def Packet.tag : Packet → Nat | .syn .. => 0 | .ack .. => 1 | .data .. => 2 | .fin => 3
+theorem Packet.tag_lt (x : Packet) : Packet.tag x < 4 := by cases x <;> simp [Packet.tag]
+grind_pattern Packet.tag_lt => Packet.tag x
+@[grind] def Packet.is_syn : Packet → Bool | .syn .. => true | _ => false
+@[grind =] theorem Packet.is_syn_eq (x : Packet) : Packet.is_syn x = (Packet.tag x == 0) := by cases x <;> rfl
+@[grind] def Packet.proj_syn_seq : Packet → Option (Int) | .syn _v => some _v | _ => none
+@[grind =] theorem Packet.isSome_proj_syn_seq (x : Packet) : (Packet.proj_syn_seq x).isSome = Packet.is_syn x := by cases x <;> rfl
+@[grind] def Packet.is_ack : Packet → Bool | .ack .. => true | _ => false
+@[grind =] theorem Packet.is_ack_eq (x : Packet) : Packet.is_ack x = (Packet.tag x == 1) := by cases x <;> rfl
+@[grind] def Packet.proj_ack_seq : Packet → Option (Int) | .ack _v => some _v | _ => none
+@[grind =] theorem Packet.isSome_proj_ack_seq (x : Packet) : (Packet.proj_ack_seq x).isSome = Packet.is_ack x := by cases x <;> rfl
+@[grind] def Packet.is_data : Packet → Bool | .data .. => true | _ => false
+@[grind =] theorem Packet.is_data_eq (x : Packet) : Packet.is_data x = (Packet.tag x == 2) := by cases x <;> rfl
+@[grind] def Packet.proj_data_seq : Packet → Option (Int) | .data _v _ => some _v | _ => none
+@[grind =] theorem Packet.isSome_proj_data_seq (x : Packet) : (Packet.proj_data_seq x).isSome = Packet.is_data x := by cases x <;> rfl
+@[grind] def Packet.proj_data_len : Packet → Option (Int) | .data _ _v => some _v | _ => none
+@[grind =] theorem Packet.isSome_proj_data_len (x : Packet) : (Packet.proj_data_len x).isSome = Packet.is_data x := by cases x <;> rfl
+@[grind] def Packet.is_fin : Packet → Bool | .fin => true | _ => false
+@[grind =] theorem Packet.is_fin_eq (x : Packet) : Packet.is_fin x = (Packet.tag x == 3) := by cases x <;> rfl
 
 namespace Pure
 
 def nextSeq (state : Int) (pkt : Packet) : Int :=
-  match pkt with
-  | .syn _pkt_seq =>
-    _pkt_seq
-  | .ack _pkt_seq =>
-    state
-  | .data _pkt_seq _pkt_len =>
-    state + _pkt_len
-  | .fin =>
-    state
+  if _h0 : (Packet.is_syn pkt) then
+    ((Packet.proj_syn_seq pkt).get (by grind))
+  else
+    if _h1 : (Packet.is_ack pkt) then
+      state
+    else
+      if _h2 : (Packet.is_data pkt) then
+        state + ((Packet.proj_data_len pkt).get (by grind))
+      else
+        state
 
 end Pure

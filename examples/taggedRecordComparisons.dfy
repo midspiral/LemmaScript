@@ -28,12 +28,10 @@ lemma hasDifferentRecipient_ensures(delivery: Delivery, recipient: Recipient)
 
 function shouldSendEmail(delivery: Delivery): bool
 {
-  match delivery {
-    case sent(i_delivery_channel, i_delivery_recipient) =>
-      false
-    case queued(i_delivery_channel, i_delivery_recipient) =>
-      (usesEmailChannel(delivery) && hasDifferentRecipient(delivery, Recipient("")))
-  }
+  if delivery.sent? then
+    false
+  else
+    (usesEmailChannel(delivery) && hasDifferentRecipient(delivery, Recipient("")))
 }
 
 lemma shouldSendEmail_ensures(delivery: Delivery)

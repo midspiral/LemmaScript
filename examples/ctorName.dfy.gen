@@ -4,15 +4,13 @@ datatype CallKind = spec_pure(depth: int) | plain
 
 function depthOf(k: CallKind): int
 {
-  match k {
-    case spec_pure(i_k_depth) =>
-      if (i_k_depth >= 0) then
-        i_k_depth
-      else
-        0
-    case plain =>
+  if k.spec_pure? then
+    if (k.depth >= 0) then
+      k.depth
+    else
       0
-  }
+  else
+    0
 }
 
 lemma depthOf_ensures(k: CallKind)

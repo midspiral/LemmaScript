@@ -5,14 +5,14 @@ datatype Option<T> = None | Some(value: T)
 function optionalLookup(enabled: bool, values: map<string, int>, key: string): Option<int>
 {
   if enabled then
-    Option.Some((if (key in values) then (var i_oc0_val := values[key]; i_oc0_val) else 0))
+    Option.Some((if (key in values) then (var i_nc0 := values[key]; i_nc0) else 0))
   else
     Option.None
 }
 
 lemma optionalLookup_ensures(enabled: bool, values: map<string, int>, key: string)
-  ensures (!(enabled) ==> (match optionalLookup(enabled, values, key) { case Some(i_) => false case None => true }))
-  ensures (enabled ==> !((key in values)) ==> (match optionalLookup(enabled, values, key) { case Some(i_value) => (i_value == 0) case None => false }))
-  ensures (enabled ==> (key in values) ==> (match optionalLookup(enabled, values, key) { case Some(i_value) => (i_value == values[key]) case None => false }))
+  ensures (!(enabled) ==> !((optionalLookup(enabled, values, key)).Some?))
+  ensures (enabled ==> !((key in values)) ==> (optionalLookup(enabled, values, key) == Option.Some(0)))
+  ensures (enabled ==> (key in values) ==> (optionalLookup(enabled, values, key) == Option.Some(values[key])))
 {
 }

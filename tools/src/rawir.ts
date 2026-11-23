@@ -38,7 +38,7 @@ export type RawChainStep =
 export type TsNullishHint = "none" | "null" | "undefined" | "both";
 
 export type RawExpr =
-  | { kind: "var"; name: string; tsNullish?: TsNullishHint }
+  | { kind: "var"; name: string; tsNullish?: TsNullishHint; tsVariant?: string }
   | { kind: "num"; value: number }
   | { kind: "bigint"; value: string }   // BigInt literal (123n) — canonical decimal, no `n`
   | { kind: "str"; value: string }
@@ -47,7 +47,7 @@ export type RawExpr =
   | { kind: "unop"; op: string; expr: RawExpr }
   | { kind: "call"; fn: RawExpr; args: RawExpr[] }
   | { kind: "index"; obj: RawExpr; idx: RawExpr; tsNullish?: TsNullishHint }
-  | { kind: "field"; obj: RawExpr; field: string; tsNullish?: TsNullishHint }
+  | { kind: "field"; obj: RawExpr; field: string; tsNullish?: TsNullishHint; tsVariant?: string }
   | { kind: "record"; spread: RawExpr | null; fields: { name: string; value: RawExpr }[]; assertedTsType?: string }
   | { kind: "recordMerge"; base: RawExpr; override: RawExpr }   // { ...base, ...override } — field-wise merge; resolve expands to a record using the result type's fields
   | { kind: "arrayLiteral"; elems: RawExpr[] }

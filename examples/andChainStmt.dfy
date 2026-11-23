@@ -38,38 +38,24 @@ lemma plain_ensures(p: bool, q: bool)
 
 method single(b: Option<Box>)
 {
-  match b {
-    case Some(i_b_val) =>
-      var i_t0 := total(i_b_val.items);
-      var _ := i_t0;
-    case None =>
-
+  if b.Some? {
+    var i_t0 := total(b.value.items);
+    var _ := i_t0;
   }
 }
 
 method chained(b: Option<Box>)
 {
-  match b {
-    case Some(i_b_val) =>
-      match i_b_val.inner {
-        case Some(i_b_inner_val) =>
-          var i_t1 := use(i_b_inner_val.val);
-          var _ := i_t1;
-        case None =>
-
-      }
-    case None =>
-
+  if (b.Some? && b.value.inner.Some?) {
+    var i_t1 := use(b.value.inner.value.val);
+    var _ := i_t1;
   }
 }
 
 method fieldPath(b: Box)
 {
-  match b.inner {
-    case Some(i_b_inner_val) =>
-      var i_t2 := use(i_b_inner_val.val);
-      var _ := i_t2;
-    case None =>
-
+  if b.inner.Some? {
+    var i_t2 := use(b.inner.value.val);
+    var _ := i_t2;
   }
 }

@@ -21,12 +21,10 @@ function makeArrayClaims(): Claims
 
 function audiences(aud: ArrayOf_string_Or_string): seq<string>
 {
-  match aud {
-    case ArrayBranch(i_aud_arr) =>
-      i_aud_arr
-    case NonArrayBranch(i_aud_val) =>
-      [("" + i_aud_val)]
-  }
+  if aud.ArrayBranch? then
+    aud.arr
+  else
+    [("" + aud.val)]
 }
 
 function literalAudiences(): seq<string>

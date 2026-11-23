@@ -770,6 +770,19 @@ function emitExpr(e: Expr): string {
       }
     }
 
+    case "tagTest": {
+      const inner = emitExpr(e.expr);
+      const recv = e.expr.kind === "var" || e.expr.kind === "field" || e.expr.kind === "unionProj" || e.expr.kind === "nullishCoerce" ? inner : `(${inner})`;
+      return `${recv}.${dafnyCtorName(e.ctor)}?`;
+    }
+
+    case "unionProj": {
+      const inner = emitExpr(e.expr);
+      const recv = e.expr.kind === "var" || e.expr.kind === "field" || e.expr.kind === "unionProj" || e.expr.kind === "nullishCoerce" ? inner : `(${inner})`;
+      const renamed = _ctorFieldRenames.get(`${e.typeName}.${e.ctor}.${e.field}`);
+      return `${recv}.${escapeName(renamed ?? e.field)}`;
+    }
+
     case "stringIndex":
       // TS indexing returns a string; Dafny's native string subscript is a
       // char. The singleton sequence preserves the native bounds obligation.

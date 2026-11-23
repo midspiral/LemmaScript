@@ -19,6 +19,6 @@ method visibility (post : Post) returns (res : String)
     return Pure.visibility post
 
 method hasTag (post : Post) (tag : String) returns (res : Bool)
-  ensures ensures_1: ((match post.tags with | .some _ => false | .none => true) → res = false : Prop)
+  ensures ensures_1: (¬(post.tags.isSome) → res = false : Prop)
   do
     return Pure.hasTag post tag

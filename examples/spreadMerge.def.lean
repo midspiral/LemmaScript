@@ -13,16 +13,16 @@ method mergeComplete (base : Budgets) (over : Budgets) returns (res : Budgets)
     return Pure.mergeComplete base over
 
 method withDefaults (base : Config) (over : Config) returns (res : Config)
-  ensures ensures_1: ((match over.retries with | .some _ => false | .none => true) → res.retries = base.retries : Prop)
-  ensures ensures_2: ((match over.retries with | .some _over_retries_val => (match res.retries with | .some _value => _value == _over_retries_val | .none => false) | .none => true) : Prop)
-  ensures ensures_3: ((match over.timeout with | .some _ => false | .none => true) → res.timeout = base.timeout : Prop)
-  ensures ensures_4: ((match over.timeout with | .some _over_timeout_val => (match res.timeout with | .some _value => _value == _over_timeout_val | .none => false) | .none => true) : Prop)
+  ensures ensures_1: (¬(over.retries.isSome) → res.retries = base.retries : Prop)
+  ensures ensures_2: (over.retries.isSome → res.retries = over.retries : Prop)
+  ensures ensures_3: (¬(over.timeout.isSome) → res.timeout = base.timeout : Prop)
+  ensures ensures_4: (over.timeout.isSome → res.timeout = over.timeout : Prop)
   do
     return Pure.withDefaults base over
 
 method applyOverride (base : Budgets) (over : Option Budgets) returns (res : Budgets)
-  ensures ensures_1: ((match over with | .some _ => false | .none => true) → res = base : Prop)
-  ensures ensures_2: ((match over with | .some _over_val => res = _over_val | .none => true) : Prop)
+  ensures ensures_1: (¬(over.isSome) → res = base : Prop)
+  ensures ensures_2: ((if _h0 : over.isSome then (decide (res = (over.get (by grind)))) else true) = true : Prop)
   do
     return Pure.applyOverride base over
 

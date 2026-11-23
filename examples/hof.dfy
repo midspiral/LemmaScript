@@ -33,11 +33,11 @@ function hasNegative(arr: seq<int>): bool
 
 function visibleElementsForQuote(comparisonElements: QuoteElements, quoteId: string): seq<QuoteElement>
 {
-  Std.Collections.Seq.Filter((i_lambdaParam0: QuoteElement) => (var QuoteId := i_lambdaParam0.QuoteId; (var ConditionallyHidden := i_lambdaParam0.ConditionallyHidden; ((QuoteId == quoteId) && (match ConditionallyHidden { case Some(i_value) => !(i_value) case None => true })))), comparisonElements.Elements)
+  Std.Collections.Seq.Filter((i_lambdaParam0: QuoteElement) => (var QuoteId := i_lambdaParam0.QuoteId; (var ConditionallyHidden := i_lambdaParam0.ConditionallyHidden; ((QuoteId == quoteId) && !((ConditionallyHidden.Some? && ConditionallyHidden.value))))), comparisonElements.Elements)
 }
 
 lemma visibleElementsForQuote_ensures(comparisonElements: QuoteElements, quoteId: string)
   ensures (|visibleElementsForQuote(comparisonElements, quoteId)| <= |comparisonElements.Elements|)
-  ensures forall e: QuoteElement :: ((e in visibleElementsForQuote(comparisonElements, quoteId)) ==> ((e.QuoteId == quoteId) && (match e.ConditionallyHidden { case Some(i_value) => !(i_value) case None => true })))
+  ensures forall e: QuoteElement :: ((e in visibleElementsForQuote(comparisonElements, quoteId)) ==> ((e.QuoteId == quoteId) && !((e.ConditionallyHidden.Some? && e.ConditionallyHidden.value))))
 {
 }

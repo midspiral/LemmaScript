@@ -83,7 +83,6 @@ function forEachChildExpr(e: TExpr, f: (c: TExpr) => void): void {
     case "optChain": f(e.obj); return;
     case "nullish": f(e.left); f(e.right); return;
     case "forall": case "exists": f(e.body); return;
-    case "tagMatch": f(e.scrutinee); e.cases.forEach(c => f(c.body)); if (e.fallthrough) f(e.fallthrough); return;
     case "lambda": e.body.forEach(s => forEachChildExprInStmt(s, f)); return;
   }
 }
@@ -99,7 +98,6 @@ function forEachChildExprInStmt(s: TStmt, f: (c: TExpr) => void): void {
     case "while": f(s.cond); s.body.forEach(st => forEachChildExprInStmt(st, f)); return;
     case "forof": f(s.iterable); s.body.forEach(st => forEachChildExprInStmt(st, f)); return;
     case "switch": f(s.expr); s.cases.forEach(c => c.body.forEach(st => forEachChildExprInStmt(st, f))); s.defaultBody.forEach(st => forEachChildExprInStmt(st, f)); return;
-    case "tagMatch": f(s.scrutinee); s.cases.forEach(c => c.body.forEach(st => forEachChildExprInStmt(st, f))); s.fallthrough.forEach(st => forEachChildExprInStmt(st, f)); return;
   }
 }
 
@@ -187,7 +185,6 @@ function localNames(stmts: TStmt[], seed: Set<string>): Set<string> {
       if (s.kind === "if") { inStmts(s.then); inStmts(s.else); }
       else if (s.kind === "while" || s.kind === "forof") inStmts(s.body);
       else if (s.kind === "switch") { s.cases.forEach(c => inStmts(c.body)); inStmts(s.defaultBody); }
-      else if (s.kind === "tagMatch") { s.cases.forEach(c => inStmts(c.body)); inStmts(s.fallthrough); }
     }
   };
   inStmts(stmts);
@@ -249,9 +246,6 @@ function rewriteExpr(e: TExpr, hoisted: TStmt[]): TExpr {
     case "optChain": return { ...e, obj: rewriteExpr(e.obj, hoisted) };
     case "nullish": return { ...e, left: rewriteExpr(e.left, hoisted), right: rewriteExpr(e.right, hoisted) };
     case "forall": case "exists": return { ...e, body: rewriteExpr(e.body, hoisted) };
-    case "tagMatch": return { ...e, scrutinee: rewriteExpr(e.scrutinee, hoisted),
-      cases: e.cases.map(c => ({ ...c, body: rewriteExpr(c.body, hoisted) })),
-      fallthrough: e.fallthrough ? rewriteExpr(e.fallthrough, hoisted) : null };
     // A lambda body is its own statement scope; rewrite it independently
     // (its hoists belong inside the lambda, not the enclosing statement).
     case "lambda": return { ...e, body: rewriteStmts(e.body) };
@@ -310,9 +304,6 @@ function rewriteStmt(s: TStmt): TStmt[] {
     case "switch": { const expr = rw(s.expr); return [...h, { ...s, expr,
       cases: s.cases.map(c => ({ ...c, body: rewriteStmts(c.body) })),
       defaultBody: rewriteStmts(s.defaultBody) }]; }
-    case "tagMatch": { const scrutinee = rw(s.scrutinee); return [...h, { ...s, scrutinee,
-      cases: s.cases.map(c => ({ ...c, body: rewriteStmts(c.body) })),
-      fallthrough: rewriteStmts(s.fallthrough) }]; }
     case "break": case "continue": case "throw": return [s];
   }
 }

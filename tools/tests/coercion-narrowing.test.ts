@@ -254,13 +254,56 @@ export function statefulNullish(x: number | null | undefined): number {
   else { out = x + 1; }
   return out;
 }
+
+// Phase 2: Optional discriminated union (narrowed in both optionality and variant)
+//@ ensures sh !== undefined && sh.kind === "circle" ==> \\result === sh.r
+//@ ensures sh !== undefined && sh.kind === "square" ==> \\result === sh.s
+export function optDiscriminatedUnion(sh: Shape | undefined): number {
+  if (sh === undefined) return 0;
+  if (sh.kind === "circle") return sh.r;
+  return sh.s;
+}
+
+// Phase 2: "field" in union check
+//@ ensures sh.kind === "circle" ==> \\result === sh.r
+export function inOperatorDU(sh: Shape): number {
+  if ("r" in sh) return sh.r;
+  return sh.s;
+}
+
+// Phase 2: switch on discriminated union (pure & stateful)
+//@ ensures sh.kind === "circle" ==> \\result === sh.r + 1
+//@ ensures sh.kind === "square" ==> \\result === sh.s + 2
+export function switchDUStateful(sh: Shape): number {
+  let out = 0;
+  switch (sh.kind) {
+    case "circle": out = sh.r + 1; break;
+    case "square": out = sh.s + 2; break;
+  }
+  return out;
+}
+
+// Phase 2: Array.isArray + typeof + push on narrowed synth array-union
+//@ ensures Array.isArray(v) ==> \\result === v.length + 1
+//@ ensures !Array.isArray(v) ==> \\result === v.length
+export function synthArrayUnionPush(v: string | number[]): number {
+  let cur = v;
+  if (Array.isArray(cur)) {
+    cur.push(42);
+    return cur.length;
+  }
+  return typeof cur === "string" ? cur.length : 0;
+}
 `;
 
-test("coercion narrowing verifies all 14 narrowing/nullish issues in Dafny and emits clean Lean", () => {
+test("coercion narrowing verifies all 14 narrowing/nullish issues + Phase 2 DU/Array.isArray in Dafny and emits clean Lean", () => {
   const { dafny, leanTypes, leanDef } = compile(ALL_ISSUES_SOURCE);
   assert.match(dafny, /datatype Nullish<T> = Undefined \| Null \| Value\(value: T\)/);
   assert.match(leanTypes, /LemmaScript\.Nullish Int/);
   assert.match(leanTypes, /x\.excludeUndefined \(by grind\)/);
+  assert.match(leanTypes, /attribute \[grind cases\] Shape/);
+  assert.match(leanTypes, /Shape\.is_circle/);
+  assert.match(leanTypes, /Shape\.proj_circle_r/);
   assert.match(leanDef, /LemmaScript\.optionValue/);
   assert.match(leanDef, /LemmaScript\.nullishValue/);
   const res = verifyDafny(dafny);

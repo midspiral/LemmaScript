@@ -21,20 +21,14 @@ datatype Entry = Entry(key: string, val: int)
 function lookup(entries: seq<Entry>, key: string): int
 {
   var e := SeqFind(entries, (x: Entry) => (x.key == key));
-  match (match e { case Some(i_oc0_val) => Option.Some(i_oc0_val.val) case None => Option.None }) {
-    case Some(i_oc1_val) =>
-      i_oc1_val
-    case None =>
-      0
-  }
+  var i_nc0 := (if e.Some? then Option.Some(e.value.val) else Option.None);
+  if i_nc0.Some? then
+    i_nc0.value
+  else
+    0
 }
 
 function hasEntry(entries: seq<Entry>, key: string): bool
 {
-  match SeqFind(entries, (x: Entry) => (x.key == key)) {
-    case Some(i_) =>
-      true
-    case None =>
-      false
-  }
+  (SeqFind(entries, (x: Entry) => (x.key == key))).Some?
 }

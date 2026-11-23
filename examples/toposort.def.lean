@@ -3,6 +3,7 @@
   Do not edit — re-run `lsc gen` to regenerate.
 -/
 import «toposort.spec»
+import LemmaScript.Option
 
 set_option velvet.semantics.termination "total"
 
@@ -39,10 +40,12 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
     do
       let _id_idx2 : Nat := _id_idx2
       let id := nodeIds[_id_idx2]!
-      if deps.contains id then
-        let _nodeDeps_val := deps[id]!
-        inDegree := inDegree.insert id _nodeDeps_val.size
-        let _dep_seq := _nodeDeps_val.toArray
+      let nodeDeps := deps.get? id
+      if nodeDeps.isSome then
+        let _v0 ← LemmaScript.optionValue nodeDeps
+        inDegree := inDegree.insert id _v0.size
+        let _v1 ← LemmaScript.optionValue nodeDeps
+        let _dep_seq := _v1.toArray
         let _rangeStop2 : Nat := _dep_seq.size
         for _dep_idx in [:_rangeStop2]
           invariant invariant_12: (_dep_idx ≤ _dep_seq.size : Prop)
@@ -52,9 +55,10 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
         do
           let _dep_idx : Nat := _dep_idx
           let dep := _dep_seq[_dep_idx]!
-          if adjacency.contains dep then
-            let _adj_val := adjacency[dep]!
-            adjacency := adjacency.insert dep (_adj_val ++ #[id])
+          let adj := adjacency.get? dep
+          if adj.isSome then
+            let _v2 ← LemmaScript.optionValue adj
+            adjacency := adjacency.insert dep (_v2 ++ #[id])
     let mut enqueued : Std.HashSet String := ∅
     let mut queue : Array String := #[]
     let _rangeStop3 : Nat := nodeIds.size
@@ -72,8 +76,7 @@ method topologicalSort (nodeIds : Array String) (deps : Std.HashMap String (Std.
     do
       let _id_idx3 : Nat := _id_idx3
       let id := nodeIds[_id_idx3]!
-      if if inDegree.contains id then let _value := inDegree[id]!
-_value == 0 else false then
+      if inDegree.get? id = Option.some 0 then
         assertGadget (¬(enqueued.contains id))
         queue := queue ++ #[id]
         enqueued := enqueued.insert id
@@ -96,11 +99,12 @@ _value == 0 else false then
       let id := queue[qHead.toNat]!
       sorted := sorted ++ #[id]
       qHead := qHead + 1
-      if adjacency.contains id then
-        let _neighbors_val := adjacency[id]!
-        let _rangeStop4 : Nat := _neighbors_val.size
+      let neighbors := adjacency.get? id
+      if _h0 : (neighbors.isSome) = true then
+        let _v3 ← LemmaScript.optionValue neighbors
+        let _rangeStop4 : Nat := _v3.size
         for _neighbor_idx in [:_rangeStop4]
-          invariant invariant_35: (_neighbor_idx ≤ _neighbors_val.size : Prop)
+          invariant invariant_35: (_neighbor_idx ≤ _v3.size : Prop)
           invariant invariant_36: (qHead ≤ queue.size : Prop)
           invariant invariant_37: (sorted.size = qHead : Prop)
           invariant invariant_38: (enqueued.size ≤ nodeIds.size : Prop)
@@ -110,15 +114,16 @@ _value == 0 else false then
           invariant invariant_42: (∀ k : String, enqueued.contains k → nodeIdSet.contains k : Prop)
           invariant invariant_43: (nodeIdSet.size ≤ nodeIds.size : Prop)
           invariant invariant_44: (∀ k : String, adjacency.contains k → ∀ v : String, (adjacency.get! k).contains v → nodeIdSet.contains v : Prop)
-          invariant invariant_45: (∀ v : String, _neighbors_val.contains v → nodeIdSet.contains v : Prop)
-          done_with (let _neighbor_idx : Nat := _rangeStop4; (_neighbor_idx ≤ _neighbors_val.size : Prop) ∧ (qHead ≤ queue.size : Prop) ∧ (sorted.size = qHead : Prop) ∧ (enqueued.size ≤ nodeIds.size : Prop) ∧ (enqueued.size ≤ queue.size : Prop) ∧ (queue.size ≤ enqueued.size : Prop) ∧ (∀ k : String, enqueued.contains k → inDegree.contains k ∧ inDegree.get! k ≤ 0 : Prop) ∧ (∀ k : String, enqueued.contains k → nodeIdSet.contains k : Prop) ∧ (nodeIdSet.size ≤ nodeIds.size : Prop) ∧ (∀ k : String, adjacency.contains k → ∀ v : String, (adjacency.get! k).contains v → nodeIdSet.contains v : Prop) ∧ (∀ v : String, _neighbors_val.contains v → nodeIdSet.contains v : Prop))
+          invariant invariant_45: (∀ v : String, (neighbors.get (by grind)).contains v → nodeIdSet.contains v : Prop)
+          done_with (let _neighbor_idx : Nat := _rangeStop4; (_neighbor_idx ≤ _v3.size : Prop) ∧ (qHead ≤ queue.size : Prop) ∧ (sorted.size = qHead : Prop) ∧ (enqueued.size ≤ nodeIds.size : Prop) ∧ (enqueued.size ≤ queue.size : Prop) ∧ (queue.size ≤ enqueued.size : Prop) ∧ (∀ k : String, enqueued.contains k → inDegree.contains k ∧ inDegree.get! k ≤ 0 : Prop) ∧ (∀ k : String, enqueued.contains k → nodeIdSet.contains k : Prop) ∧ (nodeIdSet.size ≤ nodeIds.size : Prop) ∧ (∀ k : String, adjacency.contains k → ∀ v : String, (adjacency.get! k).contains v → nodeIdSet.contains v : Prop) ∧ (∀ v : String, (neighbors.get (by grind)).contains v → nodeIdSet.contains v : Prop))
         do
           let _neighbor_idx : Nat := _neighbor_idx
-          let neighbor := _neighbors_val[_neighbor_idx]!
+          let neighbor := _v3[_neighbor_idx]!
           assertGadget ((nodeIdSet.contains neighbor) = true)
-          if inDegree.contains neighbor then
-            let _deg_val := inDegree[neighbor]!
-            let newDeg := _deg_val - 1
+          let deg := inDegree.get? neighbor
+          if deg.isSome then
+            let _v4 ← LemmaScript.optionValue deg
+            let newDeg := _v4 - 1
             inDegree := inDegree.insert neighbor newDeg
             if newDeg = 0 then
               assertGadget (¬(enqueued.contains neighbor))

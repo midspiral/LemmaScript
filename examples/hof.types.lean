@@ -26,9 +26,4 @@ def allPositive (arr : Array Int) : Bool :=
 def hasNegative (arr : Array Int) : Bool :=
   arr.any (fun x => x < 0)
 
-def visibleElementsForQuote (comparisonElements : QuoteElements) (quoteId : String) : Array QuoteElement :=
-  comparisonElements.Elements.filter (fun _lambdaParam0 => let QuoteId := _lambdaParam0.QuoteId
-let ConditionallyHidden := _lambdaParam0.ConditionallyHidden
-QuoteId = quoteId && (match ConditionallyHidden with | .some _value => !(_value) | .none => true))
-
 end Pure

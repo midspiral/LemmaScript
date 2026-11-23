@@ -14,8 +14,8 @@ method tally (s : Shape) returns (res : Int)
   ensures ensures_1: (res ≥ 10 : Prop)
   do
     let mut n : Int := 0
-    if (match s with | .circle => true | _ => false) then
+    if (Shape.is_circle s) then
       n := 1
-    else if (match s with | .square => true | _ => false) then
+    if (Shape.is_square s) then
       n := 2
     return n + 10

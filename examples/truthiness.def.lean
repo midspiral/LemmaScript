@@ -88,28 +88,28 @@ method carryScan (digits : Array Int) returns (res : Int)
     return i
 
 method optNumCond (o : Option Int) returns (res : Int)
-  ensures ensures_1: ((match o with | .some _ => false | .none => true) → res = 0 : Prop)
-  ensures ensures_2: ((match o with | .some _value => _value == 0 | .none => false) → res = 0 : Prop)
-  ensures ensures_3: ((match o with | .some _o_val => _o_val ≠ 0 → res = 1 | .none => true) : Prop)
+  ensures ensures_1: (¬(o.isSome) → res = 0 : Prop)
+  ensures ensures_2: (o = Option.some 0 → res = 0 : Prop)
+  ensures ensures_3: ((if _h1 : o.isSome then (if _h0 : (decide ((o.get (by grind)) ≠ 0)) then (decide (res = 1)) else true) else true) = true : Prop)
   do
     return Pure.optNumCond o
 
 method optNumNot (o : Option Int) returns (res : Int)
-  ensures ensures_1: ((match o with | .some _ => false | .none => true) → res = 1 : Prop)
-  ensures ensures_2: ((match o with | .some _value => _value == 0 | .none => false) → res = 1 : Prop)
-  ensures ensures_3: ((match o with | .some _o_val => _o_val ≠ 0 → res = 0 | .none => true) : Prop)
+  ensures ensures_1: (¬(o.isSome) → res = 1 : Prop)
+  ensures ensures_2: (o = Option.some 0 → res = 1 : Prop)
+  ensures ensures_3: ((if _h3 : o.isSome then (if _h2 : (decide ((o.get (by grind)) ≠ 0)) then (decide (res = 0)) else true) else true) = true : Prop)
   do
     return Pure.optNumNot o
 
 method optStrCond (o : Option String) returns (res : Int)
-  ensures ensures_1: ((match o with | .some _ => false | .none => true) → res = 0 : Prop)
-  ensures ensures_2: ((match o with | .some _value => _value == "" | .none => false) → res = 0 : Prop)
-  ensures ensures_3: ((match o with | .some _o_val => _o_val ≠ "" → res = 1 | .none => true) : Prop)
+  ensures ensures_1: (¬(o.isSome) → res = 0 : Prop)
+  ensures ensures_2: (o = Option.some "" → res = 0 : Prop)
+  ensures ensures_3: ((if _h5 : o.isSome then (if _h4 : (decide ((o.get (by grind)) ≠ "")) then (decide (res = 1)) else true) else true) = true : Prop)
   do
     return Pure.optStrCond o
 
 method optPresent (o : Option Int) returns (res : Int)
-  ensures ensures_1: ((match o with | .some _o_val => res = 1 | .none => true) : Prop)
-  ensures ensures_2: ((match o with | .some _ => false | .none => true) → res = 0 : Prop)
+  ensures ensures_1: (o.isSome → res = 1 : Prop)
+  ensures ensures_2: (¬(o.isSome) → res = 0 : Prop)
   do
     return Pure.optPresent o

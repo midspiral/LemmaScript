@@ -105,8 +105,8 @@ method choiceArgument (enabled : Bool) returns (res : Int)
     return _t9
 
 method optionalChoice (enabled : Bool) returns (res : Option Int)
-  ensures ensures_1: (enabled → (match res with | .some _value => _value == 1 | .none => false) : Prop)
-  ensures ensures_2: (¬(enabled) → (match res with | .some _ => false | .none => true) : Prop)
+  ensures ensures_1: (enabled → res = Option.some 1 : Prop)
+  ensures ensures_2: (¬(enabled) → ¬(res.isSome) : Prop)
   do
     let mut _branch8 : Option Int := (default : Option Int)
     if enabled then

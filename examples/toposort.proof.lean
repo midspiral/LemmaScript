@@ -146,43 +146,48 @@ theorem joint_insert_preserves_inDegree_le_zero
       · simp [hkv]; exact (hold k h).2
 
 /-- Else-branch variant: only inDegree is inserted with `newDeg = oldDeg - 1`.
-    For k ∈ enqueued: if k = v, newDeg = inDegree[v] - 1 ≤ -1 ≤ 0; else unchanged.
-    Uses `[v]!` (getElem) syntax to match Loom's emitted form. -/
+    For k ∈ enqueued: if k = v, newDeg = oldDeg - 1 ≤ -1 ≤ 0; else unchanged. -/
 theorem inDegree_insert_preserves_decrement
     (enqueued : Std.HashSet String) (inDegree : Std.HashMap String Int)
-    (v : String)
+    (v : String) (oldDeg : Int)
+    (hdeg : inDegree.get? v = some oldDeg)
     (hold : ∀ k : String, enqueued.contains k = true →
             inDegree.contains k = true ∧ inDegree.get! k ≤ 0) :
     ∀ k : String, enqueued.contains k = true →
-      (inDegree.insert v (inDegree[v]! - 1)).contains k = true ∧
-      (inDegree.insert v (inDegree[v]! - 1)).get! k ≤ 0 := by
+      (inDegree.insert v (oldDeg - 1)).contains k = true ∧
+      (inDegree.insert v (oldDeg - 1)).get! k ≤ 0 := by
   intro k hk
   rw [Std.HashMap.contains_insert]
   refine ⟨?_, ?_⟩
   · simp only [Bool.or_eq_true, beq_iff_eq]
     right; exact (hold k hk).1
-  · show (inDegree.insert v (inDegree[v]! - 1))[k]! ≤ 0
+  · show (inDegree.insert v (oldDeg - 1))[k]! ≤ 0
     rw [Std.HashMap.getElem!_insert]
     by_cases hkv : (v == k) = true
     · simp [hkv]
       have heq : v = k := eq_of_beq hkv
       subst heq
       have h1 : inDegree.get! v ≤ 0 := (hold v hk).2
-      have h2 : inDegree.get! v = inDegree[v]! := rfl
+      have h2 : inDegree.get! v = oldDeg := LemmaScript.hashmap_get?_eq_some_get! hdeg
       omega
     · simp [hkv]; exact (hold k hk).2
 
-/-- Establishment of `∀ v ∈ adjacency[id]!, nodeIdSet.contains v`
-    when `adjacency.contains id` and the outer adjacency invariant holds. -/
+/-- Establishment of `∀ v ∈ (adjacency.get? id).get h, nodeIdSet.contains v`
+    when `(adjacency.get? id).isSome` and the outer adjacency invariant holds. -/
 theorem neighbors_in_nodeIdSet
     (adjacency : Std.HashMap String (Array String))
     (nodeIdSet : Std.HashSet String) (id : String)
-    (hid : adjacency.contains id = true)
+    (h : (adjacency.get? id).isSome = true)
     (hold : ∀ k : String, adjacency.contains k = true →
             ∀ v : String, (adjacency.get! k).contains v = true → nodeIdSet.contains v = true) :
-    ∀ v : String, adjacency[id]!.contains v = true → nodeIdSet.contains v = true := by
+    ∀ v : String, ((adjacency.get? id).get h).contains v = true → nodeIdSet.contains v = true := by
   intro v hv
-  exact hold id hid v hv
+  obtain ⟨arr, hget⟩ := Option.isSome_iff_exists.mp h
+  have hc : adjacency.contains id = true := LemmaScript.hashmap_get?_eq_some_contains hget
+  have heq : adjacency.get! id = arr := LemmaScript.hashmap_get?_eq_some_get! hget
+  have hget_val : (adjacency.get? id).get h = arr := by grind
+  rw [hget_val, ← heq] at hv
+  exact hold id hc v hv
 
 /-- Phase-1 emptiness invariants: after inserting `id ↦ #[]`,
     every keyed array remains `#[]`. -/
@@ -208,17 +213,20 @@ theorem adj_invariant_preserved
     (adjacency : Std.HashMap String (Array String))
     (nodeIdSet : Std.HashSet String)
     (id dep : String)
+    (oldAdj : Array String)
     (hid : nodeIdSet.contains id = true)
-    (hdep : adjacency.contains dep = true)
+    (hdep : adjacency.get? dep = some oldAdj)
     (hold : ∀ k : String, adjacency.contains k = true →
             ∀ v : String, (adjacency.get! k).contains v = true → nodeIdSet.contains v = true) :
     ∀ k : String,
-      (adjacency.insert dep (adjacency[dep]! ++ #[id])).contains k = true →
+      (adjacency.insert dep (oldAdj ++ #[id])).contains k = true →
       ∀ v : String,
-        ((adjacency.insert dep (adjacency[dep]! ++ #[id])).get! k).contains v = true →
+        ((adjacency.insert dep (oldAdj ++ #[id])).get! k).contains v = true →
         nodeIdSet.contains v = true := by
   intro k hk v hv
-  have hv' : ((adjacency.insert dep (adjacency.get! dep ++ #[id]))[k]!).contains v = true := hv
+  have hdep_c : adjacency.contains dep = true := LemmaScript.hashmap_get?_eq_some_contains hdep
+  have hdep_v : adjacency.get! dep = oldAdj := LemmaScript.hashmap_get?_eq_some_get! hdep
+  have hv' : ((adjacency.insert dep (oldAdj ++ #[id]))[k]!).contains v = true := hv
   rw [Std.HashMap.contains_insert] at hk
   rw [Std.HashMap.getElem!_insert] at hv'
   by_cases hkd : (dep == k) = true
@@ -226,11 +234,12 @@ theorem adj_invariant_preserved
     have hkd' : dep = k := eq_of_beq hkd
     subst hkd'
     rcases hv' with h | h
-    · exact hold dep hdep v (Array.contains_iff.mpr h)
+    · rw [← hdep_v] at h
+      exact hold dep hdep_c v (Array.contains_iff_mem.mpr h)
     · subst h; exact hid
   · simp [hkd] at hv'
     have hk' : adjacency.contains k = true := by simp [hkd] at hk; exact hk
-    exact hold k hk' v (Array.contains_iff.mpr hv')
+    exact hold k hk' v (Array.contains_iff_mem.mpr hv')
 
 section TopoProof
 set_option hygiene false in

@@ -189,7 +189,7 @@ function replaceOptionGetVar(e: Expr, name: string, replacement: Expr): Expr | n
       const inner = replaceOptionGetVar(e.expr, name, replacement);
       return inner ? { ...e, expr: inner } : null;
     }
-    case "nullishCoerce": {
+    case "nullishCoerce": case "tagTest": case "unionProj": {
       const inner = replaceOptionGetVar(e.expr, name, replacement);
       return inner ? { ...e, expr: inner } : null;
     }
@@ -363,6 +363,8 @@ function rewriteChildrenExpr(e: Expr): Expr {
     case "toReal": return { ...e, expr: r(e.expr) };
     case "nullishTest": return { ...e, expr: r(e.expr) };
     case "nullishCoerce": return { ...e, expr: r(e.expr) };
+    case "tagTest": return { ...e, expr: r(e.expr) };
+    case "unionProj": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
     case "stringIndex": return { ...e, str: r(e.str), idx: r(e.idx) };
     case "tupleLiteral": return { ...e, elems: e.elems.map(r) };

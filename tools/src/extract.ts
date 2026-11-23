@@ -78,6 +78,60 @@ function tsNullishHint(node: Expression): TsNullishHint | undefined {
   if (hasUndefined) return "undefined";
   return "none";
 }
+
+function isArrayLikeTsType(t: Type): boolean {
+  if (t.isArray()) return true;
+  const sym = t.getSymbol();
+  return sym?.getName() === "ReadonlyArray";
+}
+
+/** Observe TypeScript's control-flow narrowed variant at a read site for:
+ *  1. Synth array-unions (`T | U[]` → `"ArrayBranch"` / `"NonArrayBranch"`),
+ *  2. Discriminated unions (`{ kind: "a"; ... } | { kind: "b"; ... }` → `"a"` / `"true"`).
+ *  Only emits a hint when the symbol's declared type is a union narrowed to one branch. */
+function tsVariantHint(node: Expression): string | undefined {
+  const sym = node.getSymbol();
+  const decl = sym?.getValueDeclaration() ?? sym?.getDeclarations()[0];
+  if (!sym || !decl) return undefined;
+  const dt = sym.getTypeAtLocation(decl);
+  const dtNonNull = (dt.isUnion() ? dt.getUnionTypes() : [dt]).filter(m => !m.isNull() && !m.isUndefined());
+  if (dtNonNull.length < 2) return undefined;
+
+  const t = node.getType();
+  if (t.isAny() || t.isUnknown() || t.isNever()) return undefined;
+  const tNonNull = (t.isUnion() ? t.getUnionTypes() : [t]).filter(m => !m.isNull() && !m.isUndefined());
+  if (tNonNull.length === 0) return undefined;
+
+  const declHasArr = dtNonNull.some(isArrayLikeTsType);
+  const declHasNonArr = dtNonNull.some(m => !isArrayLikeTsType(m));
+  if (declHasArr && declHasNonArr) {
+    if (tNonNull.every(isArrayLikeTsType)) return "ArrayBranch";
+    if (tNonNull.every(m => !isArrayLikeTsType(m))) return "NonArrayBranch";
+    return undefined;
+  }
+
+  if (dtNonNull.every(m => m.isObject() && !isArrayLikeTsType(m))) {
+    for (const prop of dtNonNull[0].getProperties()) {
+      const propName = prop.getName();
+      const litOf = (m: Type): string | null => {
+        const p = m.getProperty(propName);
+        if (!p) return null;
+        const pt = p.getTypeAtLocation(node);
+        if (pt.isStringLiteral()) return String(pt.getLiteralValue());
+        if (pt.isBooleanLiteral()) return pt.getText();
+        return null;
+      };
+      const declLits = dtNonNull.map(litOf);
+      if (declLits.some(v => v === null)) continue;
+      const curLits = new Set(tNonNull.map(litOf));
+      if (curLits.size === 1) {
+        const only = [...curLits][0];
+        if (only !== null) return only;
+      }
+    }
+  }
+  return undefined;
+}
 /** True only while extracting a function body. Module-level constants that
  *  reference cross-file callees (e.g., `BusEvent.define(...)` inside a
  *  module-level record) would otherwise pollute the output with externs
@@ -453,7 +507,8 @@ function extractExpr(node: Expression): RawExpr {
   if (Node.isIdentifier(node)) {
     const name = sourceName(node);
     const hint = name === "undefined" ? undefined : tsNullishHint(node);
-    return hint ? { kind: "var", name, tsNullish: hint } : { kind: "var", name };
+    const variant = name === "undefined" ? undefined : tsVariantHint(node);
+    return { kind: "var", name, ...(hint ? { tsNullish: hint } : {}), ...(variant ? { tsVariant: variant } : {}) };
   }
 
   // this
@@ -489,7 +544,8 @@ function extractExpr(node: Expression): RawExpr {
       return { ...obj, chain: [...obj.chain, { kind: "field", name: field }] };
     }
     const hint = tsNullishHint(node);
-    return hint ? { kind: "field", obj, field, tsNullish: hint } : { kind: "field", obj, field };
+    const variant = tsVariantHint(node);
+    return { kind: "field", obj, field, ...(hint ? { tsNullish: hint } : {}), ...(variant ? { tsVariant: variant } : {}) };
   }
 
   // Element access: arr[i] or arr?.[i]

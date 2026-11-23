@@ -14,40 +14,36 @@ datatype Tree = Nil | Node(val: int, left: Tree, right: Tree)
 
 function preorderTraversal(root: Tree): seq<Tree>
 {
-  match root {
-    case Nil =>
-      []
-    case Node(i_root_val, i_root_left, i_root_right) =>
-      if ((!i_root_left.Nil?) && (!i_root_right.Nil?)) then
-        (([root] + preorderTraversal(i_root_left)) + preorderTraversal(i_root_right))
+  if root.Nil? then
+    []
+  else
+    if (!(root.left.Nil?) && !(root.right.Nil?)) then
+      (([root] + preorderTraversal(root.left)) + preorderTraversal(root.right))
+    else
+      if !(root.left.Nil?) then
+        ([root] + preorderTraversal(root.left))
       else
-        if (!i_root_left.Nil?) then
-          ([root] + preorderTraversal(i_root_left))
+        if !(root.right.Nil?) then
+          ([root] + preorderTraversal(root.right))
         else
-          if (!i_root_right.Nil?) then
-            ([root] + preorderTraversal(i_root_right))
-          else
-            [root]
-  }
+          [root]
 }
 
 function childStack(node: Tree): seq<Tree>
 {
-  match node {
-    case Nil =>
-      []
-    case Node(i_node_val, i_node_left, i_node_right) =>
-      if (i_node_right.Node? && i_node_left.Node?) then
-        [i_node_right, i_node_left]
+  if node.Nil? then
+    []
+  else
+    if (node.right.Node? && node.left.Node?) then
+      [node.right, node.left]
+    else
+      if node.right.Node? then
+        [node.right]
       else
-        if i_node_right.Node? then
-          [i_node_right]
+        if node.left.Node? then
+          [node.left]
         else
-          if i_node_left.Node? then
-            [i_node_left]
-          else
-            []
-  }
+          []
 }
 
 // ═════════════════════ Hand-written proof scaffolding ═════════════════════

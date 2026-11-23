@@ -3,6 +3,7 @@
   Do not edit — re-run `lsc gen` to regenerate.
 -/
 import «andChainStmt.types»
+import LemmaScript.Option
 
 set_option velvet.semantics.termination "total"
 
@@ -18,34 +19,25 @@ method use (v : Int) returns (res : Int)
 
 method single (b : Option Box) returns (res : Unit)
   do
-    if h_b : (b).isSome = true then
-      let _b_val := (b).get h_b
-      let _t0 ← total _b_val.items
+    if b.isSome then
+      let _v1 ← LemmaScript.optionValue b
+      let _t0 ← total _v1.items
       _ := _t0
-    else
-      pure ()
 
 method chained (b : Option Box) returns (res : Unit)
   do
-    if h_b : (b).isSome = true then
-      let _b_val := (b).get h_b
-      if h__b_val_inner : (_b_val.inner).isSome = true then
-        let _b_inner_val := (_b_val.inner).get h__b_val_inner
-        let _t1 ← use _b_inner_val.val
-        _ := _t1
-      else
-        pure ()
-    else
-      pure ()
+    if (if _h0 : b.isSome then ((b.get (by grind))).inner.isSome else false) then
+      let _v3 ← LemmaScript.optionValue b
+      let _v4 ← LemmaScript.optionValue _v3.inner
+      let _t2 ← use _v4.val
+      _ := _t2
 
 method fieldPath (b : Box) returns (res : Unit)
   do
-    if h_b_inner : (b.inner).isSome = true then
-      let _b_inner_val := (b.inner).get h_b_inner
-      let _t2 ← use _b_inner_val.val
-      _ := _t2
-    else
-      pure ()
+    if b.inner.isSome then
+      let _v6 ← LemmaScript.optionValue b.inner
+      let _t5 ← use _v6.val
+      _ := _t5
 
 method plain (p : Bool) (q : Bool) returns (res : Bool)
   ensures ensures_1: (res = (p ∧ q) : Prop)

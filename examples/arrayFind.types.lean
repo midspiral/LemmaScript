@@ -12,17 +12,13 @@ namespace Pure
 
 def lookup (entries : Array Entry) (key : String) : Int :=
   let e := entries.find? (fun x => x.key = key)
-  match (match e with | .some _oc0_val => Option.some _oc0_val.val | .none => Option.none) with
-  | .some _oc1_val =>
-    _oc1_val
-  | .none =>
+  let _nc0 := (if _h0 : e.isSome then Option.some ((e.get (by grind))).val else Option.none)
+  if _h1 : _nc0.isSome then
+    (_nc0.get (by grind))
+  else
     0
 
 def hasEntry (entries : Array Entry) (key : String) : Bool :=
-  match entries.find? (fun x => x.key = key) with
-  | .some _ =>
-    true
-  | .none =>
-    false
+  (entries.find? (fun x => x.key = key)).isSome
 
 end Pure

@@ -105,8 +105,8 @@ function constructorVsLocal(error: string): ClashVerdict
 }
 
 lemma constructorVsLocal_ensures(error: string)
-  ensures constructorVsLocal(error).error?
-  ensures (constructorVsLocal(error).error? ==> (constructorVsLocal(error).error == error))
+  ensures (constructorVsLocal(error)).error?
+  ensures ((constructorVsLocal(error)).error? ==> ((constructorVsLocal(error)).error == error))
 {
 }
 

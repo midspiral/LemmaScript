@@ -13,8 +13,8 @@ import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
 import { recognizeBuiltin, builtinSpec, callbackArgumentTypes, callbackBaseArity } from "./builtins.js";
-import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName } from "./typedecls.js";
-import { presentFact, variantFact } from "./condition-facts.js";
+import { declOf, declOfKind, declOfDotted, declOfTy, unionDeclOfTy, tyBaseName } from "./typedecls.js";
+import { presentFact, variantFact, negVariantFact } from "./condition-facts.js";
 import {
   UNDEFINED, NULL, optional, excludeNullish, includesNullish,
   narrowByTsNullish, joinTypes,
@@ -186,32 +186,71 @@ function unwrapOptional(expr: TExpr, checked?: boolean): TExpr {
   return expr.ty.kind === "optional" ? coerceExpr(expr, expr.ty.inner, checked) : expr;
 }
 
+/** Return the narrowed union variant for a raw/resolved expression, consulting
+ *  TypeScript's `tsVariant` hint in TS bodies and `ctx.narrowedPaths` in specs/fallback. */
+function getNarrowedVariant(raw: RawExpr, resolved: TExpr, ctx: Ctx): string | undefined {
+  if (!ctx.inSpec && (raw.kind === "var" || raw.kind === "field") && raw.tsVariant) {
+    return raw.tsVariant;
+  }
+  const path = asRawAccessPath(raw) ?? asTExprAccessPath(resolved);
+  if (path && ctx.narrowedPaths.length > 0) {
+    for (let i = ctx.narrowedPaths.length - 1; i >= 0; i--) {
+      const np = ctx.narrowedPaths[i];
+      if (np.variant && accessPathsEqual(np.path, path)) return np.variant;
+    }
+  }
+  return undefined;
+}
+
 /** Apply narrowing at a read site (`var` / `field` / `\result`).
- *  - In TS bodies with strictNullChecks, trust TypeScript's control-flow hint.
+ *  - In TS bodies with strictNullChecks, trust TypeScript's control-flow hints.
  *  - In `//@` specs (or when no TS hint is present), consult `ctx.narrowedPaths`.
+ *  - For synth array-unions (`T | U[]`), coerce to the narrowed variant's payload type.
  *  Storage types in `ctx.env` are never mutated, so mutations & shadowing are safe. */
 function applyReadNarrowing(
   base: TExpr,
   rawPath: AccessPath | null,
   tsNullish: TsNullishHint | undefined,
+  tsVariant: string | undefined,
   ctx: Ctx,
 ): TExpr {
-  if (base.ty.kind !== "optional") return base;
-  if (!ctx.inSpec && tsNullish !== undefined) {
-    const narrowed = narrowByTsNullish(base.ty, tsNullish);
-    if (!tyEqual(narrowed, base.ty)) return coerceExpr(base, narrowed);
-    return base;
-  }
-  if (rawPath && ctx.narrowedPaths.length > 0) {
-    for (let i = ctx.narrowedPaths.length - 1; i >= 0; i--) {
-      const np = ctx.narrowedPaths[i];
-      if (!np.variant && accessPathsEqual(np.path, rawPath)) {
-        if (!tyEqual(np.narrowedTy, base.ty)) return coerceExpr(base, np.narrowedTy);
-        return base;
+  let cur = base;
+  if (cur.ty.kind === "optional") {
+    if (!ctx.inSpec && tsNullish !== undefined) {
+      const narrowed = narrowByTsNullish(cur.ty, tsNullish);
+      if (!tyEqual(narrowed, cur.ty)) cur = coerceExpr(cur, narrowed);
+    } else if (rawPath && ctx.narrowedPaths.length > 0) {
+      for (let i = ctx.narrowedPaths.length - 1; i >= 0; i--) {
+        const np = ctx.narrowedPaths[i];
+        if (!np.variant && accessPathsEqual(np.path, rawPath)) {
+          if (!tyEqual(np.narrowedTy, cur.ty)) cur = coerceExpr(cur, np.narrowedTy);
+          break;
+        }
       }
     }
   }
-  return base;
+  // Synth array-union (`__isArray__`) narrowing: coerce directly to the branch payload type.
+  if (cur.ty.kind === "user") {
+    const decl = unionDeclOfTy(ctx.typeDecls, cur.ty);
+    if (decl?.discriminant === "__isArray__") {
+      let variant = !ctx.inSpec ? tsVariant : undefined;
+      if (!variant && rawPath && ctx.narrowedPaths.length > 0) {
+        for (let i = ctx.narrowedPaths.length - 1; i >= 0; i--) {
+          const np = ctx.narrowedPaths[i];
+          if (np.variant && accessPathsEqual(np.path, rawPath)) { variant = np.variant; break; }
+        }
+      }
+      if (variant) {
+        const vInfo = decl.variants?.find(v => v.name === variant);
+        const f = vInfo?.fields[0];
+        if (f) {
+          const payloadTy = f.type ?? parseTsType(f.tsType);
+          return { kind: "coerce", expr: cur, ty: payloadTy, variant };
+        }
+      }
+    }
+  }
+  return cur;
 }
 
 /** Find the synth array-union TypeDecl named `name` (discriminant `__isArray__`). */
@@ -328,23 +367,36 @@ function negatedPresencePath(cond: TExpr): NarrowedPath | null {
   return null;
 }
 
-/** Collect all path narrowings established when `cond` is FALSE (handles `||` chains). */
-function collectFalseNarrowings(cond: TExpr): NarrowedPath[] {
-  if (cond.kind === "binop" && cond.op === "||") {
-    return [...collectFalseNarrowings(cond.left), ...collectFalseNarrowings(cond.right)];
-  }
-  const n = negatedPresencePath(cond);
-  return n ? [n] : [];
+/** For a 2-variant union, return the complementary variant name. */
+function otherVariant(ty: Ty, variant: string, typeDecls: TypeDeclInfo[]): string | null {
+  if (ty.kind !== "user") return null;
+  const decl = unionDeclOfTy(typeDecls, ty);
+  if (!decl?.variants || decl.variants.length !== 2) return null;
+  const other = decl.variants.find(v => v.name !== variant);
+  return other ? other.name : null;
 }
 
-/** Negated discriminant check (`path.kind !== "lit"`) on a var or field path. */
-function negatedVariantCheck(cond: TExpr): NarrowedPath | null {
-  if (cond.kind === "binop" && (cond.op === "!==" || cond.op === "!=") && cond.right.kind === "str" &&
-      cond.left.kind === "field" && cond.left.isDiscriminant && cond.left.obj.ty.kind === "user") {
-    const path = asTExprAccessPath(cond.left.obj);
-    if (path) return { path, narrowedTy: cond.left.obj.ty, variant: cond.right.value };
+/** Collect all path narrowings established when `cond` is FALSE (handles `||` chains). */
+function collectFalseNarrowings(cond: TExpr, ctx: Ctx): NarrowedPath[] {
+  if (cond.kind === "binop" && cond.op === "||") {
+    return [...collectFalseNarrowings(cond.left, ctx), ...collectFalseNarrowings(cond.right, ctx)];
   }
-  return null;
+  const out: NarrowedPath[] = [];
+  const n = negatedPresencePath(cond);
+  if (n) out.push(n);
+  const nvf = negVariantFact(cond, { decls: ctx.typeDecls });
+  if (nvf) {
+    const path = asTExprAccessPath(nvf.scrutinee);
+    if (path) out.push({ path, narrowedTy: nvf.scrutinee.ty, variant: nvf.variant });
+  } else {
+    const vf = variantFact(cond, { decls: ctx.typeDecls });
+    if (vf) {
+      const other = otherVariant(vf.scrutinee.ty, vf.variant, ctx.typeDecls);
+      const path = asTExprAccessPath(vf.scrutinee);
+      if (other && path) out.push({ path, narrowedTy: vf.scrutinee.ty, variant: other });
+    }
+  }
+  return out;
 }
 
 /** Walk `e` collecting top-level `k in m` atoms where both sides are pure
@@ -406,8 +458,7 @@ function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
     if (path) return withNarrowedPath(ctx, { path, narrowedTy: f.innerTy });
     return ctx;
   }
-  // Positive discriminant check (`x.kind === "bool"`): record the variant so
-  // field reads on the path resolve against that variant's field types.
+  // Positive discriminant / Array.isArray / typeof check: record the narrowed variant.
   const vf = variantFact(cond, { decls: ctx.typeDecls });
   if (vf) {
     const path = asTExprAccessPath(vf.scrutinee);
@@ -415,12 +466,21 @@ function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
       return withNarrowedPath(ctx, { path, narrowedTy: vf.scrutinee.ty, variant: vf.variant });
     }
   }
+  // Negated discriminant / !Array.isArray check on a 2-variant union: record the other variant.
+  const nvf = negVariantFact(cond, { decls: ctx.typeDecls });
+  if (nvf) {
+    const other = otherVariant(nvf.scrutinee.ty, nvf.variant, ctx.typeDecls);
+    const path = asTExprAccessPath(nvf.scrutinee);
+    if (other && path) {
+      return withNarrowedPath(ctx, { path, narrowedTy: nvf.scrutinee.ty, variant: other });
+    }
+  }
   return ctx;
 }
 
 function collectOrNegNarrowings(cond: TExpr, ctx: Ctx): Ctx {
   let out = ctx;
-  for (const np of collectFalseNarrowings(cond)) out = withNarrowedPath(out, np);
+  for (const np of collectFalseNarrowings(cond, ctx)) out = withNarrowedPath(out, np);
   return out;
 }
 
@@ -1041,18 +1101,13 @@ function tryRecordIndexByEnum(obj: TExpr, idx: TExpr, ctx: Ctx): TExpr | null {
   }
   if (!values || !values.every(v => fieldByName.has(v))) return null;  // key isn't a subset of fields
 
-  if (datatype) {
-    return {
-      kind: "tagMatch", scrutinee: idx, typeName: datatype,
-      cases: values.map(v => ({ variant: v, body: field(v) })), fallthrough: null, ty: fieldTy(values[0]),
-    };
-  }
-  // Inline union: fold right into an equality chain, last member as the bare else.
+  // Fold right into an equality chain covering the key's members (both named
+  // string-union enums and inline string unions).
   let expr: TExpr = field(values[values.length - 1]);
   for (let i = values.length - 2; i >= 0; i--) {
     expr = {
       kind: "conditional", ty: fieldTy(values[i]), then: field(values[i]), else: expr,
-      cond: { kind: "binop", op: "===", left: idx, right: { kind: "str", value: values[i], ty: { kind: "string" } }, ty: { kind: "bool" } },
+      cond: { kind: "binop", op: "===", left: idx, right: { kind: "str", value: values[i], ty: datatype ? keyTy : { kind: "string" } }, ty: { kind: "bool" } },
     };
   }
   return expr;
@@ -1083,7 +1138,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       }
       entry?.onRead?.();
       const base: TExpr = entry?.value ?? { kind: "var", name: entry?.emittedName ?? e.name, ty: entry?.ty ?? { kind: "unknown" } };
-      return applyReadNarrowing(base, { rootVar: e.name, fields: [] }, e.tsNullish, ctx);
+      return applyReadNarrowing(base, { rootVar: e.name, fields: [] }, e.tsNullish, e.tsVariant, ctx);
     }
 
     case "num":
@@ -1262,7 +1317,33 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         }
         if (i === 0 && a.kind === "lambda" && callback)
           return resolveCallback(a, callback.actual, callback.baseArity, aCtx);
-        return i === 1 && initial ? initial : resolveExpr(a, aCtx);
+        let resolved = i === 1 && initial ? initial : resolveExpr(a, aCtx);
+        // Structural call projection: a narrowed discriminated union passed to
+        // a named record parameter whose fields all match that variant's fields.
+        if (paramTypes && i < paramTypes.length && resolved.ty.kind === "user" && paramTypes[i].kind === "user") {
+          const targetTy = paramTypes[i];
+          const targetDecl = declOfTy(ctx.typeDecls, targetTy);
+          const srcDecl = unionDeclOfTy(ctx.typeDecls, resolved.ty);
+          if (targetDecl?.kind === "record" && targetDecl.fields && srcDecl?.variants) {
+            const vName = getNarrowedVariant(a, resolved, ctx);
+            const variant = vName ? srcDecl.variants.find(v => v.name === vName) : undefined;
+            if (variant) {
+              const fields: { name: string; value: TExpr }[] = [];
+              let allMatch = true;
+              for (const tf of targetDecl.fields) {
+                const sf = variant.fields.find(f => f.name === tf.name);
+                const tTy = tf.type ?? parseTsType(tf.tsType);
+                const sTy = sf ? (sf.type ?? parseTsType(sf.tsType)) : null;
+                if (!sf || !sTy || !tyEqual(sTy, tTy)) { allMatch = false; break; }
+                fields.push({ name: tf.name, value: { kind: "field", obj: resolved, field: sf.name, ty: sTy, ofVariant: variant.name } });
+              }
+              if (allMatch) {
+                resolved = { kind: "record", spread: null, fields, ty: targetTy };
+              }
+            }
+          }
+        }
+        return resolved;
       }), fn, ctx);
       // Array method `.with(i, v)`: coerce the value arg to the element type
       // so `arr[i] = v` on `(T|null)[]` wraps `T` → `Some(T)` (and similarly
@@ -1356,13 +1437,12 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       // A variant narrowing on the object picks the field's type from that
       // variant (a shared field name can have a different type per variant).
       let ofVariant: string | undefined;
-      if (ctx.narrowedPaths.length > 0 && obj.ty.kind === "user") {
-        const objPath = asRawAccessPath(e.obj);
-        const np = objPath ? ctx.narrowedPaths.find(n => n.variant && accessPathsEqual(n.path, objPath)) : undefined;
-        if (np?.variant) {
-          const decl = findDecl(ctx, tyBaseName(obj.ty.name));
-          const f = decl?.variants?.find(v => v.name === np.variant)?.fields.find(f => f.name === e.field);
-          if (f?.type) { ty = f.type; ofVariant = np.variant; }
+      if (obj.ty.kind === "user") {
+        const narrowedV = getNarrowedVariant(e.obj, obj, ctx);
+        const decl = unionDeclOfTy(ctx.typeDecls, obj.ty);
+        if (narrowedV && decl?.variants) {
+          const f = decl.variants.find(v => v.name === narrowedV)?.fields.find(f => f.name === e.field);
+          if (f) { ty = f.type ?? parseTsType(f.tsType); ofVariant = narrowedV; }
         }
       }
 
@@ -1373,7 +1453,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       }
 
       const base: TExpr = { kind: "field", obj, field: e.field, ty, isDiscriminant, ofVariant };
-      return applyReadNarrowing(base, asRawAccessPath(e), e.tsNullish, ctx);
+      return applyReadNarrowing(base, asRawAccessPath(e), e.tsNullish, e.tsVariant, ctx);
     }
 
     case "nullish": {
@@ -1518,7 +1598,19 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         }
         return { name: f.name, value };
       });
-      return { kind: "record", spread, fields, ty: recordTy ?? ty };
+      let spreadCtor: string | undefined;
+      let spreadCtorOf: string | undefined;
+      if (e.spread && spread && spread.ty.kind === "user") {
+        const udecl = unionDeclOfTy(ctx.typeDecls, spread.ty);
+        if (udecl?.kind === "discriminated-union") {
+          const v = getNarrowedVariant(e.spread, spread, ctx);
+          if (v) { spreadCtor = v; spreadCtorOf = tyBaseName(spread.ty.name); }
+        }
+      }
+      return {
+        kind: "record", spread, fields, ty: recordTy ?? ty,
+        ...(spreadCtor ? { ctor: spreadCtor, ctorOf: spreadCtorOf } : {}),
+      };
     }
 
     case "recordMerge":
@@ -1527,7 +1619,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
     case "result": {
       if (!ctx.allowResult) throw new Error("\\result is only valid in ensures");
       const base: TExpr = { kind: "var", name: "\\result", ty: lookup(ctx.env, "\\result") ?? ctx.returnTy };
-      return applyReadNarrowing(base, { rootVar: "\\result", fields: [] }, undefined, ctx);
+      return applyReadNarrowing(base, { rootVar: "\\result", fields: [] }, undefined, undefined, ctx);
     }
 
     case "forall": {
@@ -1679,11 +1771,9 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     // Flow narrowing for specs / non-strict TS: early-return narrows rest of block via narrowedPaths.
     if (s.kind === "if" && s.then.length > 0 && isTerminatorKind(s.then[s.then.length - 1].kind) && s.else.length === 0) {
       if (typed.kind === "if") {
-        for (const np of collectFalseNarrowings(typed.cond)) {
+        for (const np of collectFalseNarrowings(typed.cond, currentCtx)) {
           narrowedPaths = [...narrowedPaths, np];
         }
-        const nv = negatedVariantCheck(typed.cond);
-        if (nv) narrowedPaths = [...narrowedPaths, nv];
         const addedAtoms = extractInAtomsNegated(typed.cond);
         if (addedAtoms.length > 0) {
           narrowedIndices = withInAtoms({ ...ctx, narrowedIndices }, addedAtoms).narrowedIndices;
@@ -1837,12 +1927,31 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     case "throw":
       return [{ kind: "throw" }, ctx.env];
 
-    case "switch":
+    case "switch": {
+      const expr = resolveExpr(s.expr, ctx);
+      const exprPath = asRawAccessPath(s.expr) ?? asTExprAccessPath(expr);
+      const udecl = expr.ty.kind === "user" ? unionDeclOfTy(ctx.typeDecls, expr.ty) : undefined;
+      const isDU = !!s.discriminant && udecl?.kind === "discriminated-union" && udecl.discriminant === s.discriminant;
+      const cases = s.cases.map(c => {
+        const cCtx = isDU && exprPath
+          ? withNarrowedPath(ctx, { path: exprPath, narrowedTy: expr.ty, variant: c.label })
+          : ctx;
+        return { label: c.label, body: resolveBlock(c.body, cCtx) };
+      });
+      let defCtx = ctx;
+      if (isDU && exprPath && udecl?.variants) {
+        const covered = new Set(s.cases.map(c => c.label));
+        const rem = udecl.variants.filter(v => !covered.has(v.name));
+        if (rem.length === 1) {
+          defCtx = withNarrowedPath(ctx, { path: exprPath, narrowedTy: expr.ty, variant: rem[0].name });
+        }
+      }
       return [{
-        kind: "switch", expr: resolveExpr(s.expr, ctx), discriminant: s.discriminant,
-        cases: s.cases.map(c => ({ label: c.label, body: resolveBlock(c.body, ctx) })),
-        defaultBody: resolveBlock(s.defaultBody, ctx),
+        kind: "switch", expr, discriminant: s.discriminant,
+        cases,
+        defaultBody: resolveBlock(s.defaultBody, defCtx),
       }, ctx.env];
+    }
 
     case "ghostLet": {
       const specCtx = { ...ctx, inSpec: true };

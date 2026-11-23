@@ -27,6 +27,8 @@ export type Expr =
   | { kind: "nullishCoerce"; expr: Expr;
       op: "optionGet" | "nullishGet" | "nullishExcludeUndefined" | "nullishExcludeNull"
         | "optUndefToNullish" | "optNullToNullish" }
+  | { kind: "tagTest"; expr: Expr; typeName: string; ctor: string }
+  | { kind: "unionProj"; expr: Expr; typeName: string; ctor: string; field: string; raw?: boolean }
   | { kind: "index"; arr: Expr; idx: Expr }                // arr[idx]!
   | { kind: "stringIndex"; str: Expr; idx: Expr }          // one-element string at idx (in bounds)
   | { kind: "tupleLiteral"; elems: Expr[] }                // (a, b) — heterogeneous tuple literal
@@ -283,6 +285,7 @@ export function anyExpr(e: Expr, pred: ExprPred): boolean {
     case "binop": return anyExpr(e.left, pred) || anyExpr(e.right, pred);
     case "unop": case "toNat": case "toInt": case "toReal":
     case "nullishTest": case "nullishCoerce":
+    case "tagTest": case "unionProj":
       return anyExpr(e.expr, pred);
     case "app": return e.args.some(a => anyExpr(a, pred));
     case "field": return anyExpr(e.obj, pred);

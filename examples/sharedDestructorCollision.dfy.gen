@@ -16,7 +16,7 @@ method countLabels(entries: seq<TreeEntry>) returns (res: int)
   while (i < |entries|)
     invariant (0 <= n)
   {
-    if entries[i].label_? {
+    if (entries[i]).label_? {
       n := (n + 1);
     }
     i := (i + 1);

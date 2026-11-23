@@ -22,7 +22,7 @@ method countCustom(entries: seq<Entry>) returns (res: int)
   while (i < |entries|)
     invariant (0 <= n)
   {
-    if entries[i].custom_message? {
+    if (entries[i]).custom_message? {
       n := (n + 1);
     }
     i := (i + 1);

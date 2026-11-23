@@ -7,17 +7,26 @@ inductive CallKind where
   | «spec-pure» (depth : Int) : CallKind
   | plain : CallKind
 deriving Repr, Inhabited
+attribute [grind cases] CallKind
+@[grind] def CallKind.tag : CallKind → Nat | .«spec-pure» .. => 0 | .plain => 1
+theorem CallKind.tag_lt (x : CallKind) : CallKind.tag x < 2 := by cases x <;> simp [CallKind.tag]
+grind_pattern CallKind.tag_lt => CallKind.tag x
+@[grind] def CallKind.«is_spec-pure» : CallKind → Bool | .«spec-pure» .. => true | _ => false
+@[grind =] theorem CallKind.«is_spec-pure_eq» (x : CallKind) : CallKind.«is_spec-pure» x = (CallKind.tag x == 0) := by cases x <;> rfl
+@[grind] def CallKind.«proj_spec-pure_depth» : CallKind → Option (Int) | .«spec-pure» _v => some _v | _ => none
+@[grind =] theorem CallKind.«isSome_proj_spec-pure_depth» (x : CallKind) : (CallKind.«proj_spec-pure_depth» x).isSome = CallKind.«is_spec-pure» x := by cases x <;> rfl
+@[grind] def CallKind.is_plain : CallKind → Bool | .plain => true | _ => false
+@[grind =] theorem CallKind.is_plain_eq (x : CallKind) : CallKind.is_plain x = (CallKind.tag x == 1) := by cases x <;> rfl
 
 namespace Pure
 
 def depthOf (k : CallKind) : Int :=
-  match k with
-  | .«spec-pure» _k_depth =>
-    if _k_depth ≥ 0 then
-      _k_depth
+  if _h0 : (CallKind.«is_spec-pure» k) then
+    if _h1 : ((CallKind.«proj_spec-pure_depth» k).get (by grind)) ≥ 0 then
+      ((CallKind.«proj_spec-pure_depth» k).get (by grind))
     else
       0
-  | .plain =>
+  else
     0
 
 def specPure (depth : Int) : CallKind :=

@@ -30,18 +30,18 @@ test("negated Array.isArray ternaries agree with source execution for both varia
     assert.equal(statement.kind, "return");
     if (statement.kind !== "return") continue;
     const value = statement.value;
-    assert.equal(value.kind, "tagMatch");
-    if (value.kind !== "tagMatch") continue;
-    assert.equal(value.cases[0].variant, "NonArrayBranch");
-    assert.deepEqual(value.cases[0].body, { kind: "num", value: 1, ty: { kind: "nat" } });
-    assert.deepEqual(value.fallthrough, { kind: "num", value: 2, ty: { kind: "nat" } });
+    assert.equal(value.kind, "conditional");
+    if (value.kind !== "conditional") continue;
+    assert.equal(value.cond.kind, "unop");
+    assert.deepEqual(value.then, { kind: "num", value: 1, ty: { kind: "nat" } });
+    assert.deepEqual(value.else, { kind: "num", value: 2, ty: { kind: "nat" } });
   }
 });
 
 test("Dafny preserves the branches of negated array tests on variables and paths", () => {
   const { typesFile, defFile } = transformModuleDafny(fixture());
   const output = emitDafnyFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
-  assert.equal([...output.matchAll(/case NonArrayBranch\([^)]*\) =>\s+1\s+case _ =>\s+2/g)].length, 2, output);
+  assert.equal([...output.matchAll(/if !\([^)]+\.ArrayBranch\?\) then\s+1\s+else\s+2/g)].length, 2, output);
 });
 
 test("Lean preserves the branches of negated array tests on variables and paths", () => {
@@ -49,5 +49,5 @@ test("Lean preserves the branches of negated array tests on variables and paths"
   assert.ok(typesFile);
   resetLeanModule();
   const output = emitLeanFile(typesFile);
-  assert.equal([...output.matchAll(/\| \.NonArrayBranch [^\n]+ =>\s+1\s+\| _ =>\s+2/g)].length, 2, output);
+  assert.equal([...output.matchAll(/if ¬\(\([^)]+\.is_ArrayBranch [^)]+\)\) then\s+1\s+else\s+2/g)].length, 2, output);
 });
