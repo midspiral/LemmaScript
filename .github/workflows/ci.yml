@@ -210,6 +210,7 @@ jobs:
             staging="$DEFAULT_BRANCH-$LS_BRANCH"
             if git ls-remote --exit-code --heads "$repo" "$staging" >/dev/null; then
               echo "Using staging branch $staging (default: $DEFAULT_BRANCH)"
+              echo "- \`${{ matrix.repo }}\`: staging branch \`$staging\` in place of \`$DEFAULT_BRANCH\`" >> "$GITHUB_STEP_SUMMARY"
               branch="$staging"
             fi
           fi
@@ -310,6 +311,7 @@ jobs:
             staging="$DEFAULT_BRANCH-$LS_BRANCH"
             if git ls-remote --exit-code --heads "$repo" "$staging" >/dev/null; then
               echo "Using staging branch $staging (default: $DEFAULT_BRANCH)"
+              echo "- \`${{ matrix.repo }}\`: staging branch \`$staging\` in place of \`$DEFAULT_BRANCH\`" >> "$GITHUB_STEP_SUMMARY"
               branch="$staging"
             fi
           fi
