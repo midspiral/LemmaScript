@@ -192,9 +192,8 @@ class Parser {
     }
     if (t?.type === "op" && ["===", "!==", "==", "!=", ">=", "<=", ">", "<"].includes(t.value)) {
       this.advance();
-      // Normalize == to ===, != to !== so downstream sees one spelling
-      const op = t.value === "==" ? "===" : t.value === "!=" ? "!==" : t.value;
-      return { kind: "binop", op, left, right: this.parseAdd() };
+      // Keep loose equality until types are known: == null also matches undefined.
+      return { kind: "binop", op: t.value, left, right: this.parseAdd() };
     }
     return left;
   }
@@ -261,9 +260,7 @@ class Parser {
     if (t.type === "ident") {
       if (t.value === "true") { this.advance(); return { kind: "bool", value: true }; }
       if (t.value === "false") { this.advance(); return { kind: "bool", value: false }; }
-      // Match the body extractor (extract.ts NullLiteral): `null` and
-      // `undefined` are interchangeable in LS, both map to None.
-      if (t.value === "null") { this.advance(); return { kind: "var", name: "undefined" }; }
+      if (t.value === "null") { this.advance(); return { kind: "var", name: "null" }; }
       // new Set<T>() / new Map<K,V>()
       if (t.value === "new") {
         this.advance();

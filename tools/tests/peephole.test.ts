@@ -233,7 +233,7 @@ for (const backend of ["dafny", "lean"] as const) {
     assert.ok(flag.kind === "if" && flag.then.kind === "constructor");
     assert.ok(lookup.kind === "if" && lookup.then.kind === "constructor");
     assert.equal(flag.then.args[0].kind, "if", "lowering produces a Boolean expression inside Some");
-    assert.equal(lookup.then.args[0].kind, "match", "lowering produces a map-get match inside Some");
+    assert.equal(lookup.then.args[0].kind, "let", "lowering binds the map-get before nullish coalescing inside Some");
 
     const optimized = peepholeModule(raw, backend);
     const expectedFlag: Expr = {

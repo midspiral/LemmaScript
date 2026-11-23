@@ -14,6 +14,9 @@ import type { BuiltinId } from "./builtins.js";
 // `big` marks an int/nat that originated from a TS `bigint` (literal `123n` or
 // declared `bigint`). It rides along arithmetic so division can pick the right
 // JS semantics: `number / number` is real, but `bigint / bigint` is integer.
+/** The nullish alternatives admitted by an optional/nullish type. */
+export type Nullish = "null" | "undefined" | "both";
+
 export type Ty =
   | { kind: "bool" }
   | { kind: "nat"; big?: boolean }
@@ -21,11 +24,12 @@ export type Ty =
   | { kind: "real" }
   | { kind: "string"; values?: string[] }   // values: members of an inline string-union (`"a" | "b"`), kept for record-index-by-enum
   | { kind: "void" }
+  | { kind: "nullish"; nullish: Nullish }   // standalone `null`, `undefined`, or `null | undefined`
   | { kind: "array"; elem: Ty }
   | { kind: "tuple"; elems: Ty[] }           // heterogeneous fixed-arity tuple (`[A, B]`); homogeneous tuples lower to `array`
   | { kind: "map"; key: Ty; value: Ty }
   | { kind: "set"; elem: Ty }
-  | { kind: "optional"; inner: Ty }
+  | { kind: "optional"; inner: Ty; nullish: Nullish }
   | { kind: "user"; name: string }
   | { kind: "fn"; params: Ty[]; result: Ty }
   | { kind: "unknown" }
@@ -50,7 +54,8 @@ export function tyEqual(a: Ty, b: Ty): boolean {
       const bm = b as typeof a;
       return tyEqual(a.key, bm.key) && tyEqual(a.value, bm.value);
     }
-    case "optional": return tyEqual(a.inner, (b as typeof a).inner);
+    case "optional": return a.nullish === (b as typeof a).nullish && tyEqual(a.inner, (b as typeof a).inner);
+    case "nullish":  return a.nullish === (b as typeof a).nullish;
     case "user":     return a.name === (b as typeof a).name;
     case "fn": {
       const bf = b as typeof a;
@@ -89,6 +94,7 @@ export type TExpr =
   | { kind: "bool"; value: boolean; ty: Ty }
   | { kind: "binop"; op: string; left: TExpr; right: TExpr; ty: Ty }
   | { kind: "unop"; op: string; expr: TExpr; ty: Ty }
+  | { kind: "coerce"; expr: TExpr; ty: Ty; checked?: boolean }
   | { kind: "call"; fn: TExpr; args: TExpr[]; ty: Ty; callKind: CallKind;
       builtinId?: BuiltinId;
       /** Resolved parameter types for a named callee. Kept so nominal
@@ -104,8 +110,6 @@ export type TExpr =
   | { kind: "conditional"; cond: TExpr; then: TExpr; else: TExpr; ty: Ty }
   | { kind: "optChain"; obj: TExpr; chain: TChainStep[]; ty: Ty }
   | { kind: "nullish"; left: TExpr; right: TExpr; ty: Ty }
-  | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
-      someBody: TExpr; noneBody: TExpr; ty: Ty }
   | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
       cases: { variant: string; body: TExpr }[];
       fallthrough: TExpr | null; ty: Ty }
@@ -142,8 +146,6 @@ export type TStmt =
   | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
   | { kind: "ghostAssign"; target: string; value: TExpr }
   | { kind: "assert"; expr: TExpr; assumed?: boolean }
-  | { kind: "someMatch"; scrutinee: TExpr; binder: string; binderTy: Ty;
-      someBody: TStmt[]; noneBody: TStmt[] }
   | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
       cases: { variant: string; body: TStmt[] }[];
       fallthrough: TStmt[] }

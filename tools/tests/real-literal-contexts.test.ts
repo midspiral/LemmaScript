@@ -94,9 +94,11 @@ test("real return and argument positions contextually type literal branches", ()
   assert.equal(halfOfOne.value.args[0].ty.kind, "real");
   const maybeZero = mod.functions.find(f => f.name === "maybeZero")!.body[0];
   assert.ok(maybeZero.kind === "return" && maybeZero.value.kind === "conditional");
-  assert.deepEqual(maybeZero.value.ty, { kind: "optional", inner: { kind: "real" } });
-  assert.equal(maybeZero.value.then.ty.kind, "real");
-  assert.equal(maybeZero.value.else.ty.kind, "void");
+  assert.deepEqual(maybeZero.value.ty, { kind: "optional", inner: { kind: "real" }, nullish: "undefined" });
+  const thenVal = maybeZero.value.then.kind === "coerce" ? maybeZero.value.then.expr : maybeZero.value.then;
+  const elseVal = maybeZero.value.else.kind === "coerce" ? maybeZero.value.else.expr : maybeZero.value.else;
+  assert.equal(thenVal.ty.kind, "real");
+  assert.equal(elseVal.ty.kind, "nullish");
 });
 
 test("Dafny casts contextual real literals, including folded negatives and optional payloads", () => {
@@ -110,7 +112,7 @@ test("Dafny casts contextual real literals, including folded negatives and optio
     "value := (-1 as real);",
     "Some((0 as real))",
     "Some((-1 as real))",
-    "withDefault(Some((-1 as real)))",
+    "withDefault(Option.Some((-1 as real)))",
     "[(0 as real), (-1 as real)]",
   ]) assert.ok(output.includes(expected), `missing ${expected}\n${output}`);
   assert.doesNotMatch(output, /Some\(Some\(/);

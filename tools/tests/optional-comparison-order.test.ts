@@ -21,13 +21,23 @@ function fixture() {
   return narrowModule(resolveModule(extractModule(source)));
 }
 
-// The matched value is bound on the left, so `x op opt` must become `v op' x`
-// with the operator mirrored; `opt op x` keeps it.
-const expected: [string, string][] = [
-  ["belowOrUnset", ">"], ["atMostOrUnset", ">="], ["aboveOrUnset", "<"], ["atLeastOrUnset", "<="], ["optionalOnLeft", ">"],
+// Coercion narrowing keeps the comparison in its original operand order:
+// `x op opt` lowers directly to `x op opt.value`, and `opt op x` to `opt.value op x`.
+const expectedDafny: [string, string][] = [
+  ["belowOrUnset", "(x < opt.value)"],
+  ["atMostOrUnset", "(x <= opt.value)"],
+  ["aboveOrUnset", "(x > opt.value)"],
+  ["atLeastOrUnset", "(x >= opt.value)"],
+  ["optionalOnLeft", "(opt.value > x)"],
 ];
 
-const LEAN_OP: Record<string, string> = { ">=": "≥", "<=": "≤" };
+const expectedLean: [string, string][] = [
+  ["belowOrUnset", "x < (opt.get (by grind))"],
+  ["atMostOrUnset", "x ≤ (opt.get (by grind))"],
+  ["aboveOrUnset", "x > (opt.get (by grind))"],
+  ["atLeastOrUnset", "x ≥ (opt.get (by grind))"],
+  ["optionalOnLeft", "(opt.get (by grind)) > x"],
+];
 
 function bodyOf(text: string, header: string): string {
   const start = text.indexOf(header);
@@ -45,20 +55,20 @@ test("comparisons with an optional on the right keep their runtime meaning", () 
   assert.equal(optionalOnLeft(1, 5), true);
 });
 
-test("Dafny mirrors the operator when the optional is on the right", () => {
+test("Dafny preserves operand order when narrowing an optional on the right", () => {
   const { typesFile, defFile } = transformModuleDafny(fixture());
   const text = emitDafnyFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
-  for (const [name, op] of expected) {
-    assert.ok(bodyOf(text, `function ${name}(`).includes(`(i_value ${op} x)`), name);
+  for (const [name, expr] of expectedDafny) {
+    assert.ok(bodyOf(text, `function ${name}(`).includes(expr), name);
   }
 });
 
-test("Lean mirrors the operator when the optional is on the right", () => {
+test("Lean preserves operand order when narrowing an optional on the right", () => {
   resetLeanModule();
   const { typesFile } = transformModuleLean(fixture());
   assert.ok(typesFile);
   const text = emitLeanFile(typesFile);
-  for (const [name, op] of expected) {
-    assert.ok(bodyOf(text, `def ${name} `).includes(`_value ${LEAN_OP[op] ?? op} x`), name);
+  for (const [name, expr] of expectedLean) {
+    assert.ok(bodyOf(text, `def ${name} `).includes(expr), name);
   }
 });

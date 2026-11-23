@@ -34,8 +34,11 @@ export type RawChainStep =
   | { kind: "call"; args: RawExpr[] }
   | { kind: "index"; idx: RawExpr };
 
+/** Narrowed nullishness observed by TypeScript's flow checker at a read site. */
+export type TsNullishHint = "none" | "null" | "undefined" | "both";
+
 export type RawExpr =
-  | { kind: "var"; name: string }
+  | { kind: "var"; name: string; tsNullish?: TsNullishHint }
   | { kind: "num"; value: number }
   | { kind: "bigint"; value: string }   // BigInt literal (123n) — canonical decimal, no `n`
   | { kind: "str"; value: string }
@@ -43,8 +46,8 @@ export type RawExpr =
   | { kind: "binop"; op: string; left: RawExpr; right: RawExpr }
   | { kind: "unop"; op: string; expr: RawExpr }
   | { kind: "call"; fn: RawExpr; args: RawExpr[] }
-  | { kind: "index"; obj: RawExpr; idx: RawExpr }
-  | { kind: "field"; obj: RawExpr; field: string }
+  | { kind: "index"; obj: RawExpr; idx: RawExpr; tsNullish?: TsNullishHint }
+  | { kind: "field"; obj: RawExpr; field: string; tsNullish?: TsNullishHint }
   | { kind: "record"; spread: RawExpr | null; fields: { name: string; value: RawExpr }[]; assertedTsType?: string }
   | { kind: "recordMerge"; base: RawExpr; override: RawExpr }   // { ...base, ...override } — field-wise merge; resolve expands to a record using the result type's fields
   | { kind: "arrayLiteral"; elems: RawExpr[] }
@@ -83,6 +86,8 @@ export interface RawLet {
   name: string;
   mutable: boolean;
   tsType: string | null;
+  /** TypeScript-inferred type when no explicit annotation is present. */
+  inferredTsType?: string;
   init: RawExpr;
   line: number;
 }

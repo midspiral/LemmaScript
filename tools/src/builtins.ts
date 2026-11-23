@@ -22,6 +22,7 @@
  */
 
 import type { Ty, TExpr } from "./typedir.js";
+import { optional } from "./nullish.js";
 
 export type RecvKind = "array" | "string" | "map" | "set";
 
@@ -49,7 +50,7 @@ const STRING = (): Ty => ({ kind: "string" });
 const self = (objTy: Ty): Ty => objTy;
 const elem = (objTy: Ty): Ty => objTy.kind === "array" ? objTy.elem : UNKNOWN;
 const optElem = (objTy: Ty): Ty =>
-  objTy.kind === "array" ? { kind: "optional", inner: objTy.elem } : UNKNOWN;
+  objTy.kind === "array" ? optional(objTy.elem, "undefined") : UNKNOWN;
 
 /** The table is the single source: each key is `<RecvKind>.<method>`, which
  *  *is* the `BuiltinId`. */
@@ -124,7 +125,7 @@ export const BUILTINS = {
   // ── map ───────────────────────────────────────────────────
   "map.get": { pure: true, argIsKey: true,
     ret: (objTy, _args, c) => objTy.kind !== "map" ? UNKNOWN
-      : c.inSpec ? objTy.value : { kind: "optional", inner: objTy.value } },
+      : c.inSpec ? objTy.value : optional(objTy.value, "undefined") },
   "map.has": { ret: BOOL, pure: true, argIsKey: true },
   "map.set": { ret: self, pure: false },
   "map.delete": { ret: self, pure: false },

@@ -46,11 +46,15 @@ function tyToDafny(ty: Ty): string {
     case "bool": return "bool";
     case "string": return "string";
     case "void": return "()";
+    case "nullish": { needPreamble("NullishType"); return "Nullish<int>"; }
     case "array": return `seq<${tyToDafny(ty.elem)}>`;
     case "tuple": return `(${ty.elems.map(tyToDafny).join(", ")})`;
     case "map": return `map<${tyToDafny(ty.key)}, ${tyToDafny(ty.value)}>`;
     case "set": return `set<${tyToDafny(ty.elem)}>`;
-    case "optional": { needPreamble("OptionType"); return `Option<${tyToDafny(ty.inner)}>`; }
+    case "optional": {
+      if (ty.nullish === "both") { needPreamble("NullishType"); return `Nullish<${tyToDafny(ty.inner)}>`; }
+      needPreamble("OptionType"); return `Option<${tyToDafny(ty.inner)}>`;
+    }
     case "user": return escapeName(ty.name);
     case "fn": return `(${ty.params.map(tyToDafny).join(", ")}) -> ${tyToDafny(ty.result)}`;
     // Out-of-subset (`any`/`unknown`); opaque so real ops on it fail loudly
@@ -307,10 +311,13 @@ function emitExpr(e: Expr): string {
         : `"${escapeDafnyScalarString(e.value)}"`;
 
     case "constructor": {
-      // Option constructors (Some/None) may appear in inferred positions
-      // (e.g. lambda result) without an explicit `optional<T>` in any
-      // signature, so request the preamble here.
       if (e.type === "Option") needPreamble("OptionType");
+      if (e.type === "LemmaScript.Nullish") {
+        needPreamble("NullishType");
+        const head = `Nullish.${e.name}`;
+        if (!e.args || e.args.length === 0) return head;
+        return `${head}(${e.args.map(emitExpr).join(", ")})`;
+      }
       const head = qualifyCtor(e.name, e.type);
       if (!e.args || e.args.length === 0) return head;
       return `${head}(${e.args.map(emitExpr).join(", ")})`;
@@ -612,9 +619,11 @@ function emitExpr(e: Expr): string {
     }
 
     case "binop": {
-      // Discriminant check: x == .Ctor → x.Ctor?
+      // Discriminant check: x == .Ctor → x.Ctor? (nullary constructors only; Option/Nullish
+      // constructors with args like Some(1) are value comparisons, not tag-only tests).
       const op = mapOp(e.op);
-      if ((op === "==" || op === "!=") && e.right.kind === "constructor") {
+      if ((op === "==" || op === "!=") && e.right.kind === "constructor" &&
+          e.right.args.length === 0 && e.right.type !== "Option" && e.right.type !== "LemmaScript.Nullish") {
         const ctorName = dafnyCtorName(e.right.name.replace(/^\./, ""));
         const pred = `${emitExpr(e.left)}.${ctorName}?`;
         return op === "!=" ? `(!${pred})` : pred;
@@ -733,6 +742,41 @@ function emitExpr(e: Expr): string {
 
     case "toReal":
       return `(${emitExpr(e.expr)} as real)`;
+
+    case "nullishTest": {
+      const inner = emitExpr(e.expr);
+      const recv = e.expr.kind === "var" || e.expr.kind === "field" ? inner : `(${inner})`;
+      if (e.test === "isSome") { needPreamble("OptionType"); return `${recv}.Some?`; }
+      needPreamble("NullishType");
+      if (e.test === "isValue") return `${recv}.Value?`;
+      if (e.test === "isNull") return `${recv}.Null?`;
+      return `${recv}.Undefined?`;
+    }
+
+    case "nullishCoerce": {
+      const inner = emitExpr(e.expr);
+      const recv = e.expr.kind === "var" || e.expr.kind === "field" ? inner : `(${inner})`;
+      switch (e.op) {
+        case "optionGet":
+          needPreamble("OptionType");
+          return `${recv}.value`;
+        case "nullishGet":
+          needPreamble("NullishType");
+          return `${recv}.value`;
+        case "nullishExcludeUndefined":
+          needPreamble("OptionType"); needPreamble("NullishType"); needPreamble("NullishExcludeUndefined");
+          return `NullishExcludeUndefined(${inner})`;
+        case "nullishExcludeNull":
+          needPreamble("OptionType"); needPreamble("NullishType"); needPreamble("NullishExcludeNull");
+          return `NullishExcludeNull(${inner})`;
+        case "optUndefToNullish":
+          needPreamble("OptionType"); needPreamble("NullishType"); needPreamble("OptionUndefinedToNullish");
+          return `OptionUndefinedToNullish(${inner})`;
+        case "optNullToNullish":
+          needPreamble("OptionType"); needPreamble("NullishType"); needPreamble("OptionNullToNullish");
+          return `OptionNullToNullish(${inner})`;
+      }
+    }
 
     case "stringIndex":
       // TS indexing returns a string; Dafny's native string subscript is a
@@ -1721,6 +1765,15 @@ const SET_TO_SEQ = `method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
 /** Preamble code keyed by name. Emitted in this order when needed. */
 const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["OptionType", "datatype Option<T> = None | Some(value: T)"],
+  ["NullishType", "datatype Nullish<T> = Undefined | Null | Value(value: T)"],
+  ["NullishExcludeUndefined",
+    "function NullishExcludeUndefined<T>(x: Nullish<T>): Option<T>\n  requires !x.Undefined?\n{\n  if x.Value? then Some(x.value) else None\n}"],
+  ["NullishExcludeNull",
+    "function NullishExcludeNull<T>(x: Nullish<T>): Option<T>\n  requires !x.Null?\n{\n  if x.Value? then Some(x.value) else None\n}"],
+  ["OptionUndefinedToNullish",
+    "function OptionUndefinedToNullish<T>(x: Option<T>): Nullish<T>\n{\n  if x.Some? then Value(x.value) else Undefined\n}"],
+  ["OptionNullToNullish",
+    "function OptionNullToNullish<T>(x: Option<T>): Nullish<T>\n{\n  if x.Some? then Value(x.value) else Null\n}"],
   // Opaque carrier for `unknown`-typed values. `(==)` for compare/map-key/match;
   // `(0)` (auto-init ⇒ nonempty) so `havoc` (`:= *`) is well-formed.
   ["UnknownType", "type Unknown(==, 0)"],
@@ -1859,7 +1912,7 @@ function buildRecordCtorMap(decls: Decl[]) {
 /** Resolve a Ty to a Dafny-safe type, falling back to string for undeclared user types. */
 function resolveTy(ty: Ty): Ty {
   if (ty.kind === "user" && !_declaredTypes.has(ty.name)) return { kind: "string" };
-  if (ty.kind === "optional") return { kind: "optional", inner: resolveTy(ty.inner) };
+  if (ty.kind === "optional") return { kind: "optional", inner: resolveTy(ty.inner), nullish: ty.nullish };
   if (ty.kind === "array") return { kind: "array", elem: resolveTy(ty.elem) };
   if (ty.kind === "tuple") return { kind: "tuple", elems: ty.elems.map(resolveTy) };
   if (ty.kind === "map") return { kind: "map", key: resolveTy(ty.key), value: resolveTy(ty.value) };

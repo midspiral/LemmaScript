@@ -103,12 +103,12 @@ export function absentOrZero(value?: Z): boolean {
   assert.deepEqual(mod.typeDecls.find(d => d.name === "Input")!.fields!.map(f => f.type), [
     { kind: "user", name: "Z" },
     { kind: "array", elem: { kind: "user", name: "Z" } },
-    { kind: "optional", inner: { kind: "user", name: "Z" } },
+    { kind: "optional", inner: { kind: "user", name: "Z" }, nullish: "undefined" },
   ]);
-  assert.deepEqual(mod.functions[1].params[0].ty, { kind: "optional", inner: { kind: "user", name: "Z" } });
+  assert.deepEqual(mod.functions[1].params[0].ty, { kind: "optional", inner: { kind: "user", name: "Z" }, nullish: "undefined" });
   const ret = mod.functions[1].body[0];
   assert.ok(ret.kind === "return" && ret.value.kind === "unop");
-  assert.deepEqual(ret.value.expr.ty, { kind: "optional", inner: { kind: "int" } });
+  assert.deepEqual(ret.value.expr.ty, { kind: "optional", inner: { kind: "int" }, nullish: "undefined" });
 });
 
 test("numeric alias overrides still select the modeled numeric type", () => {

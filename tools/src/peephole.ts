@@ -125,9 +125,118 @@ function isBool(e: Expr, v: boolean): boolean {
 //   `if n = 0 then true else ... allExpensesValid expenses (n - 1) ...`
 // where the recursive call needs the if-condition to bound `n > 0`.
 // So they're applied only for Dafny.
+/** Replace `nullishCoerce("optionGet", var(name))` with `replacement`.
+ *  Returns null if `name` is referenced anywhere outside an `optionGet` unwrap. */
+function replaceOptionGetVar(e: Expr, name: string, replacement: Expr): Expr | null {
+  if (e.kind === "nullishCoerce" && e.op === "optionGet" && e.expr.kind === "var" && e.expr.name === name) {
+    return replacement;
+  }
+  if (e.kind === "var") return e.name === name ? null : e;
+  switch (e.kind) {
+    case "num": case "bigint": case "bool": case "str":
+    case "emptyMap": case "emptySet": case "havoc": case "default": return e;
+    case "constructor": {
+      const args = e.args.map(a => replaceOptionGetVar(a, name, replacement));
+      return args.some(a => a === null) ? null : { ...e, args: args as Expr[] };
+    }
+    case "mapLiteral": {
+      const entries = e.entries.map(en => {
+        const k = replaceOptionGetVar(en.key, name, replacement);
+        const v = replaceOptionGetVar(en.value, name, replacement);
+        return k && v ? { key: k, value: v } : null;
+      });
+      return entries.some(en => en === null) ? null : { ...e, entries: entries as { key: Expr; value: Expr }[] };
+    }
+    case "binop": {
+      const l = replaceOptionGetVar(e.left, name, replacement);
+      const r = replaceOptionGetVar(e.right, name, replacement);
+      return l && r ? { ...e, left: l, right: r } : null;
+    }
+    case "unop": {
+      const inner = replaceOptionGetVar(e.expr, name, replacement);
+      return inner ? { ...e, expr: inner } : null;
+    }
+    case "field": {
+      const obj = replaceOptionGetVar(e.obj, name, replacement);
+      return obj ? { ...e, obj } : null;
+    }
+    case "index": {
+      const arr = replaceOptionGetVar(e.arr, name, replacement);
+      const idx = replaceOptionGetVar(e.idx, name, replacement);
+      return arr && idx ? { ...e, arr, idx } : null;
+    }
+    case "stringIndex": {
+      const str = replaceOptionGetVar(e.str, name, replacement);
+      const idx = replaceOptionGetVar(e.idx, name, replacement);
+      return str && idx ? { ...e, str, idx } : null;
+    }
+    case "app": {
+      const args = e.args.map(a => replaceOptionGetVar(a, name, replacement));
+      return args.some(a => a === null) ? null : { ...e, args: args as Expr[] };
+    }
+    case "methodCall": {
+      const obj = replaceOptionGetVar(e.obj, name, replacement);
+      const args = e.args.map(a => replaceOptionGetVar(a, name, replacement));
+      return obj && !args.some(a => a === null) ? { ...e, obj, args: args as Expr[] } : null;
+    }
+    case "if": {
+      const c = replaceOptionGetVar(e.cond, name, replacement);
+      const t = replaceOptionGetVar(e.then, name, replacement);
+      const el = replaceOptionGetVar(e.else, name, replacement);
+      return c && t && el ? { ...e, cond: c, then: t, else: el } : null;
+    }
+    case "nullishTest": {
+      const inner = replaceOptionGetVar(e.expr, name, replacement);
+      return inner ? { ...e, expr: inner } : null;
+    }
+    case "nullishCoerce": {
+      const inner = replaceOptionGetVar(e.expr, name, replacement);
+      return inner ? { ...e, expr: inner } : null;
+    }
+    case "toNat": case "toInt": case "toReal": {
+      const inner = replaceOptionGetVar(e.expr, name, replacement);
+      return inner ? { ...e, expr: inner } : null;
+    }
+    case "tupleProj": {
+      const obj = replaceOptionGetVar(e.obj, name, replacement);
+      return obj ? { ...e, obj } : null;
+    }
+    case "tupleLiteral": {
+      const elems = e.elems.map(a => replaceOptionGetVar(a, name, replacement));
+      return elems.some(a => a === null) ? null : { ...e, elems: elems as Expr[] };
+    }
+    default:
+      return usesName(e, name) ? null : e;
+  }
+}
+
+/** Rule 7 (coercion-narrowing map-get collapse):
+ *  let x = m.get(k) in (if x.isSome then tb else nb)
+ *  where x only appears in tb as optionGet(x) and not at all in nb
+ *  → if k in m then (let x = m[k] in tb[optionGet(x) := x]) else nb */
+function ruleLetIfOnMapGetExpr(e: Expr): Expr | null {
+  if (e.kind !== "let") return null;
+  const get = isMapGet(e.value);
+  if (!get) return null;
+  if (e.body.kind !== "if") return null;
+  const ite = e.body;
+  if (ite.cond.kind !== "nullishTest" || ite.cond.test !== "isSome" ||
+      ite.cond.expr.kind !== "var" || ite.cond.expr.name !== e.name) return null;
+  if (usesName(ite.else, e.name)) return null;
+  const replacedThen = replaceOptionGetVar(ite.then, e.name, { kind: "var", name: e.name });
+  if (!replacedThen) return null;
+  const idx: Expr = { kind: "index", arr: get.obj, idx: get.key };
+  const someBody: Expr = usesName(replacedThen, e.name)
+    ? { kind: "let", name: e.name, value: idx, body: replacedThen }
+    : replacedThen;
+  const has: Expr = { kind: "methodCall", obj: get.obj, objTy: get.objTy, method: "has", args: [get.key], monadic: false };
+  return { kind: "if", cond: has, then: someBody, else: ite.else };
+}
+
 const MAP_GET_RULES = [
   ruleMatchOnMapGetExpr,
   ruleLetMatchOnMapGetExpr,
+  ruleLetIfOnMapGetExpr,
 ];
 const BOOL_RULES = [
   ruleIfFalseElseTrue,
@@ -252,6 +361,8 @@ function rewriteChildrenExpr(e: Expr): Expr {
     case "toNat": return { ...e, expr: r(e.expr) };
     case "toInt": return { ...e, expr: r(e.expr) };
     case "toReal": return { ...e, expr: r(e.expr) };
+    case "nullishTest": return { ...e, expr: r(e.expr) };
+    case "nullishCoerce": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
     case "stringIndex": return { ...e, str: r(e.str), idx: r(e.idx) };
     case "tupleLiteral": return { ...e, elems: e.elems.map(r) };

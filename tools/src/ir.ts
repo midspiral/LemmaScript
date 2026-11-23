@@ -23,6 +23,10 @@ export type Expr =
   | { kind: "toNat"; expr: Expr }                               // expr.toNat
   | { kind: "toInt"; expr: Expr }                               // nat → int coercion
   | { kind: "toReal"; expr: Expr }                             // int/nat → real coercion
+  | { kind: "nullishTest"; expr: Expr; test: "isSome" | "isValue" | "isNull" | "isUndefined" }
+  | { kind: "nullishCoerce"; expr: Expr;
+      op: "optionGet" | "nullishGet" | "nullishExcludeUndefined" | "nullishExcludeNull"
+        | "optUndefToNullish" | "optNullToNullish" }
   | { kind: "index"; arr: Expr; idx: Expr }                // arr[idx]!
   | { kind: "stringIndex"; str: Expr; idx: Expr }          // one-element string at idx (in bounds)
   | { kind: "tupleLiteral"; elems: Expr[] }                // (a, b) — heterogeneous tuple literal
@@ -277,7 +281,9 @@ export function anyExpr(e: Expr, pred: ExprPred): boolean {
     case "emptyMap": case "emptySet": case "havoc": case "default": return false;
     case "constructor": return e.args.some(a => anyExpr(a, pred));
     case "binop": return anyExpr(e.left, pred) || anyExpr(e.right, pred);
-    case "unop": case "toNat": case "toInt": case "toReal": return anyExpr(e.expr, pred);
+    case "unop": case "toNat": case "toInt": case "toReal":
+    case "nullishTest": case "nullishCoerce":
+      return anyExpr(e.expr, pred);
     case "app": return e.args.some(a => anyExpr(a, pred));
     case "field": return anyExpr(e.obj, pred);
     case "index": return anyExpr(e.arr, pred) || anyExpr(e.idx, pred);

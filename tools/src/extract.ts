@@ -8,8 +8,8 @@
 import path from "path";
 import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ScriptTarget, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
-import { initTypeParser } from "./types.js";
-import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
+import { initTypeParser, parseTsType } from "./types.js";
+import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign, TsNullishHint } from "./rawir.js";
 import { normalizeBigIntLiteral } from "./rawir.js";
 import { setUserNames, freshName } from "./names.js";
 import { LexicalNames, rejectForwardLocalCaptures } from "./lexical-names.js";
@@ -51,6 +51,33 @@ const _externs = new Map<string, import("./rawir.js").RawExtern>();
  *  types would emit decls that no emitted declaration mentions. */
 const _externSigTypes: { type: Type; node: Node }[] = [];
 let _currentSourceFile: SourceFile | null = null;
+/** Whether strictNullChecks is enabled on the current source file's project. */
+let _strictNullChecks = false;
+
+/** Observe TypeScript's control-flow narrowed nullishness at a read site.
+ *  Only emits a hint when the symbol's declared type can actually be nullish
+ *  (so non-optional variables and enum accesses carry no extra metadata). */
+function tsNullishHint(node: Expression): TsNullishHint | undefined {
+  if (!_strictNullChecks) return undefined;
+  const t = node.getType();
+  if (t.isAny() || t.isUnknown() || t.isNever()) return undefined;
+  const sym = node.getSymbol();
+  const decl = sym?.getValueDeclaration() ?? sym?.getDeclarations()[0];
+  if (sym && decl && !sym.hasFlags(ts.SymbolFlags.Optional)) {
+    const dt = sym.getTypeAtLocation(decl);
+    if (!dt.isAny() && !dt.isUnknown() && !dt.isTypeParameter()) {
+      const dm = dt.isUnion() ? dt.getUnionTypes() : [dt];
+      if (!dm.some(m => m.isNull() || m.isUndefined())) return undefined;
+    }
+  }
+  const members = t.isUnion() ? t.getUnionTypes() : [t];
+  const hasNull = members.some(m => m.isNull());
+  const hasUndefined = members.some(m => m.isUndefined());
+  if (hasNull && hasUndefined) return "both";
+  if (hasNull) return "null";
+  if (hasUndefined) return "undefined";
+  return "none";
+}
 /** True only while extracting a function body. Module-level constants that
  *  reference cross-file callees (e.g., `BusEvent.define(...)` inside a
  *  module-level record) would otherwise pollute the output with externs
@@ -424,7 +451,9 @@ function extractExpr(node: Expression): RawExpr {
 
   // Identifier
   if (Node.isIdentifier(node)) {
-    return { kind: "var", name: sourceName(node) };
+    const name = sourceName(node);
+    const hint = name === "undefined" ? undefined : tsNullishHint(node);
+    return hint ? { kind: "var", name, tsNullish: hint } : { kind: "var", name };
   }
 
   // this
@@ -459,7 +488,8 @@ function extractExpr(node: Expression): RawExpr {
     if (obj.kind === "optChain") {
       return { ...obj, chain: [...obj.chain, { kind: "field", name: field }] };
     }
-    return { kind: "field", obj, field };
+    const hint = tsNullishHint(node);
+    return hint ? { kind: "field", obj, field, tsNullish: hint } : { kind: "field", obj, field };
   }
 
   // Element access: arr[i] or arr?.[i]
@@ -786,9 +816,9 @@ function extractExpr(node: Expression): RawExpr {
     }
   }
 
-  // null → undefined (both map to None in backends)
+  // Keep null distinct from undefined through the shared frontend.
   if (Node.isNullLiteral(node)) {
-    return { kind: "var", name: "undefined" };
+    return { kind: "var", name: "null" };
   }
 
   // `typeof X` — only meaningful in a `typeof X === "string"` discriminator over
@@ -1329,14 +1359,14 @@ function typeToString(type: Type): string {
     // A genuine multi-member union with no tagged-union shape LS can model →
     // a single opaque type. (See _synthOpaque.) Preserve an outer optional.
     const opaque = _synthOpaque(real);
-    return real.length === parts.length ? opaque : `${opaque} | undefined`;
+    return [opaque, ...parts.filter(p => p === "null" || p === "undefined")].join(" | ");
   }
   if (type.isTuple()) {
     return `[${type.getTupleElements().map(t => typeToString(t)).join(", ")}]`;
   }
   if (type.isArray()) {
     const elem = type.getArrayElementTypeOrThrow();
-    return `${typeToString(elem)}[]`;
+    return `Array<${typeToString(elem)}>`;
   }
   const symbol = type.getSymbol() ?? type.getAliasSymbol();
   if (symbol) {
@@ -1662,13 +1692,13 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
         const annotatedText = annotationNode
           ? annotationTypeText(annotationNode, declType) ?? annotationNode.getText() : undefined;
         const inferred = annotatedText ? null : _eraseGenerics(typeToString(declType));
-        const tsType: string | null = havocType
-          ?? (annotatedText ? _eraseGenerics(annotatedText) : (inferred === "any" ? null : inferred));
+        const tsType: string | null = havocType ?? (annotatedText ? _eraseGenerics(annotatedText) : null);
         result.push({
           kind: "let",
           name: sourceName(d.getNameNode()),
           mutable: s.getDeclarationKind() === "let",
           tsType,
+          ...(!tsType && inferred && inferred !== "any" ? { inferredTsType: inferred } : {}),
           init,
           line,
         });
@@ -2230,6 +2260,8 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     }
   }
   _currentSourceFile = sourceFile;
+  const compilerOpts = sourceFile.getProject().getCompilerOptions();
+  _strictNullChecks = compilerOpts.strictNullChecks ?? !!compilerOpts.strict;
 
   // Pre-scan for collapsed single-variant unions so typeToString can recover alias names.
   // TypeScript collapses `type X = | { kind: 'A'; ... }` to a plain object type, losing
@@ -2866,9 +2898,11 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     let innerType: Type | null = null;
     let wrapOptional = false;
     const sourceReturnText = fn.returnType ?? "";
-    const sourceHadNullish = / \| (null|undefined)$/.test(sourceReturnText)
-      || sourceReturnText.includes(" | null ") || sourceReturnText.includes(" | undefined ")
-      || sourceReturnText.includes(" | null|") || sourceReturnText.includes(" | undefined|");
+    const sourceReturnTy = sourceReturnText ? parseTsType(sourceReturnText) : null;
+    const sourceHadNullish = sourceReturnTy?.kind === "optional";
+    const nullishSuffix = sourceHadNullish
+      ? sourceReturnTy.nullish === "both" ? "null | undefined" : sourceReturnTy.nullish
+      : retType.getUnionTypes().filter(t => t.isNull() || t.isUndefined()).map(typeToString).join(" | ") || "undefined";
     const sym = retType.getSymbol();
     if ((sym?.getName() === "__type" || sym?.getName() === "__object") && retType.isObject() && !retType.isArray()) {
       innerType = retType;
@@ -2890,7 +2924,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       // Try typeToString first — it resolves collapsed single-variant unions
       const resolved = typeToString(innerType);
       if (resolved !== "__type" && !resolved.includes("__type") && knownTypes.has(resolved)) {
-        fn.returnType = wrapOptional ? `${resolved} | undefined` : resolved;
+        fn.returnType = wrapOptional ? `${resolved} | ${nullishSuffix}` : resolved;
         continue;
       }
       const synName = f.owner + fn.name.charAt(0).toUpperCase() + fn.name.slice(1) + "Result";
@@ -2899,7 +2933,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
         const info = extractRecord(synName, innerType, f.node, undefined, extra);
         if (info) { typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(synName); }
       }
-      fn.returnType = wrapOptional ? `${synName} | undefined` : synName;
+      fn.returnType = wrapOptional ? `${synName} | ${nullishSuffix}` : synName;
       // Also resolve imported types referenced in the return type's fields
       for (const prop of innerType.getProperties()) {
         resolveType(prop.getTypeAtLocation(f.node), f.node);

@@ -64,7 +64,8 @@ test("Lean narrows o under !!o and !!!o", () => {
   const output = [typesFile, defFile].filter(f => !!f).map(f => emitLeanFile(f!)).join("\n");
   for (const name of ["ifThen", "earlyReturn", "ternary"]) {
     const body = output.slice(output.indexOf(`def ${name}`));
-    assert.match(body, /^def \w+[^\n]*\n\s*match o with/, output);
+    assert.match(body, /^def \w+[^\n]*\n\s*if _h\d+ :/, output);
+    assert.match(body, /o\.get \(by grind\)/, output);
   }
-  assert.doesNotMatch(output, /\bo - x\b/, "o is optional; arithmetic must use its unwrapped binder");
+  assert.doesNotMatch(output, /\bo - x\b/, "o is optional; arithmetic must use its unwrapped coercion");
 });

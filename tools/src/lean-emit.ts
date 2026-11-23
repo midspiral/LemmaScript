@@ -6,7 +6,7 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { anyExpr, decimalNumberLiteral, usesNameInDecl, patternBinders } from "./ir.js";
+import { anyExpr, anyExprInStmts, decimalNumberLiteral, usesNameInDecl, patternBinders } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshName, freshNameWhere } from "./names.js";
 
@@ -35,6 +35,7 @@ function tyToLean(ty: Ty): string {
     case "bool": return "Bool";
     case "string": return "String";
     case "void": return "Unit";
+    case "nullish": { _needsNullish = true; return "LemmaScript.Nullish Int"; }
     case "array": {
       const elem = tyToLean(ty.elem);
       return elem.includes(" ") ? `Array (${elem})` : `Array ${elem}`;
@@ -59,6 +60,10 @@ function tyToLean(ty: Ty): string {
     }
     case "optional": {
       const inner = tyToLean(ty.inner);
+      if (ty.nullish === "both") {
+        _needsNullish = true;
+        return inner.includes(" ") ? `LemmaScript.Nullish (${inner})` : `LemmaScript.Nullish ${inner}`;
+      }
       return inner.includes(" ") ? `Option (${inner})` : `Option ${inner}`;
     }
     case "user": return ty.name;
@@ -215,8 +220,41 @@ function renderLeanPattern(p: MatchPattern): string {
 // `match` used as a Bool — neither has a `Decidable` instance Lean can synthesize
 // through the `match`. Under a Prop connective (∧/∨/¬) such an operand is a type
 // error, so its presence forces the whole body to Bool connectives.
+function isCheckedNullishCoerce(e: Expr): boolean {
+  return e.kind === "nullishCoerce" &&
+    (e.op === "optionGet" || e.op === "nullishGet" ||
+     e.op === "nullishExcludeUndefined" || e.op === "nullishExcludeNull");
+}
+
+function hasCheckedCoerce(e: Expr): boolean {
+  return anyExpr(e, isCheckedNullishCoerce);
+}
+
+function hasQuantifier(e: Expr): boolean {
+  return anyExpr(e, x => x.kind === "forall" || x.kind === "exists");
+}
+
+let _diteCounter = 0;
+function freshDiteHyp(): string { return `_h${_diteCounter++}`; }
+
+let _needsNullish = false;
+let _needsOption = false;
+
+function emitAsBool(e: Expr): string {
+  const prev = _boolCtx;
+  _boolCtx = true;
+  try {
+    const s = emitExpr(e);
+    return isPropValued(e) ? `(decide (${s}))` : s;
+  } finally {
+    _boolCtx = prev;
+  }
+}
+
 function isNonCoercibleBoolAtom(e: Expr): boolean {
   if (e.kind === "match") return true;
+  if (e.kind === "nullishTest") return false;
+  if (hasCheckedCoerce(e)) return true;
   if (e.kind === "binop" && (e.op === "=" || e.op === "≠") && e.right.kind === "constructor") {
     const rhs = e.right; // capture the narrowed node so it survives the closure below
     const ctor = rhs.type ? _unionCtors.get(rhs.type)?.find(c => c.name === rhs.name) : undefined;
@@ -316,14 +354,11 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 
     case "constructor": {
-      // With type: emit `Type.name` (unambiguous; needed in expression positions
-      // like `match ... | .none => Type.some x` where elaboration can't infer).
-      // Without type: emit `.name` (dotted form; works in pattern positions
-      // and where the expected type is clear from context).
+      if (e.type === "LemmaScript.Nullish") _needsNullish = true;
       const head = e.type ? `${e.type}.${leanCtorName(e.name)}` : `.${leanCtorName(e.name)}`;
       if (!e.args || e.args.length === 0) return head;
       const args = e.args.map(a =>
-        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall" || a.kind === "if") ? `(${emitExpr(a)})` : emitExpr(a)
+        (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall" || a.kind === "if" || a.kind === "nullishCoerce") ? `(${emitExpr(a)})` : emitExpr(a)
       );
       return `${head} ${args.join(" ")}`;
     }
@@ -396,7 +431,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // `x = Type.Ctor` is ill-typed. The Bool result coerces to Prop in spec
       // positions, mirroring how the backend already treats decidable atoms.
       // Nullary constructors (enums) keep the cheap `DecidableEq` comparison.
-      if ((e.op === "=" || e.op === "≠") && e.right.kind === "constructor") {
+      if ((e.op === "=" || e.op === "≠") && e.right.kind === "constructor" && e.right.args.length === 0) {
         const rhs = e.right; // capture the narrowed node so it survives into the closure below
         const ctor = rhs.type ? _unionCtors.get(rhs.type)?.find(c => c.name === rhs.name) : undefined;
         if (ctor && ctor.fields.length > 0) {
@@ -410,6 +445,24 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         const recv = emitExpr(e.right);
         const wrap = e.right.kind === "binop" || e.right.kind === "app" || e.right.kind === "methodCall";
         return `${wrap ? `(${recv})` : recv}.contains ${emitExpr(e.left)}`;
+      }
+      // Short-circuit ∧/∨ whose RHS contains a checked nullish coercion:
+      // emit dependent `if _h : lhs then ...` so `by grind` sees the guard!
+      if ((e.op === "∧" || e.op === "∨") && hasCheckedCoerce(e.right)) {
+        const hyp = freshDiteHyp();
+        if (_boolCtx) {
+          const l = emitAsBool(e.left);
+          const r = emitAsBool(e.right);
+          return e.op === "∧"
+            ? `(if ${hyp} : ${l} then ${r} else false)`
+            : `(if ${hyp} : ${l} then true else ${r})`;
+        } else {
+          const l = emitExpr(e.left);
+          const r = emitExpr(e.right);
+          return e.op === "∧"
+            ? `(if ${hyp} : ${l} then ${r} else False)`
+            : `(if ${hyp} : ${l} then True else ${r})`;
+        }
       }
       const op = e.op === "arrayConcat" ? "++"
         : _boolCtx && e.op === "∧" ? "&&"
@@ -428,10 +481,26 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "implies": {
-      // Premises bind at →'s level: a nested-implication premise must keep its
-      // parens (→ is right-associative, so `(a → b) → c` ≠ `a → b → c`), and
-      // ↔ binds looser than → in Lean. The conclusion is the right-assoc tail,
-      // where a nested implication is safe bare — only ↔ needs parens there.
+      const anyChecked = hasCheckedCoerce(e.conclusion) || e.premises.slice(1).some(hasCheckedCoerce);
+      if (anyChecked) {
+        const quant = hasQuantifier(e.conclusion) || e.premises.some(hasQuantifier);
+        if (!quant) {
+          // Quantifier-free: emit Bool-valued `dite` (`= true`) to keep Lean 4.34 grind fast & clean!
+          let acc = emitAsBool(e.conclusion);
+          for (let i = e.premises.length - 1; i >= 0; i--) {
+            const hyp = freshDiteHyp();
+            acc = `(if ${hyp} : ${emitAsBool(e.premises[i])} then ${acc} else true)`;
+          }
+          const s = `${acc} = true`;
+          return parentPrec !== undefined ? `(${s})` : s;
+        }
+        let acc = emitExpr(e.conclusion);
+        for (let i = e.premises.length - 1; i >= 0; i--) {
+          const hyp = freshDiteHyp();
+          acc = `(if ${hyp} : ${emitExpr(e.premises[i])} then ${acc} else True)`;
+        }
+        return parentPrec !== undefined ? `(${acc})` : acc;
+      }
       const wrapIff = (x: Expr) => x.kind === "binop" && x.op === "↔" ? `(${emitExpr(x)})` : undefined;
       const parts = [...e.premises.map(p => wrapOperand(p, prec("→"))), wrapIff(e.conclusion) ?? emitExpr(e.conclusion)];
       const s = parts.join(" → ");
@@ -439,6 +508,8 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "app": {
+      if (e.fn === "LemmaScript.optionValue") _needsOption = true;
+      if (e.fn.startsWith("LemmaScript.nullish")) _needsNullish = true;
       // A bare negative literal argument (`f -7 2`) parses as subtraction in Lean.
       const args = e.args.map(a => {
         const s = emitExpr(a);
@@ -505,9 +576,38 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "toInt": return `(Int.ofNat (${emitExpr(e.expr)}))`;
 
     case "toReal":
-      // A real value reached the Lean backend via coercion (e.g. number `/`).
-      // Same unsupported-real story as the `real` type case in tyToLean.
       throw new Error("real arithmetic is not supported by the Lean backend (needs noncomputable ℝ / Mathlib).");
+
+    case "nullishTest": {
+      const inner = emitExpr(e.expr);
+      const recv = e.expr.kind === "var" || e.expr.kind === "field" ? inner : `(${inner})`;
+      if (e.test !== "isSome") _needsNullish = true;
+      return `${recv}.${e.test}`;
+    }
+
+    case "nullishCoerce": {
+      const inner = emitExpr(e.expr);
+      const recv = e.expr.kind === "var" || e.expr.kind === "field" ? inner : `(${inner})`;
+      switch (e.op) {
+        case "optionGet":
+          return `(${recv}.get (by grind))`;
+        case "nullishGet":
+          _needsNullish = true;
+          return `(${recv}.get (by grind))`;
+        case "nullishExcludeUndefined":
+          _needsNullish = true;
+          return `(${recv}.excludeUndefined (by grind))`;
+        case "nullishExcludeNull":
+          _needsNullish = true;
+          return `(${recv}.excludeNull (by grind))`;
+        case "optUndefToNullish":
+          _needsNullish = true;
+          return `(LemmaScript.Nullish.ofOptionUndefined (${inner}))`;
+        case "optNullToNullish":
+          _needsNullish = true;
+          return `(LemmaScript.Nullish.ofOptionNull (${inner}))`;
+      }
+    }
 
     case "stringIndex":
       _needsJSString = true;
@@ -527,8 +627,15 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       return `{ ${fields.join(", ")} }`;
     }
 
-    case "if":
-      return `if ${emitExpr(e.cond)} then ${emitExpr(e.then)} else ${emitExpr(e.else)}`;
+    case "if": {
+      const needDite = hasCheckedCoerce(e.then) || hasCheckedCoerce(e.else);
+      const cond = emitExpr(e.cond);
+      if (needDite) {
+        const hyp = freshDiteHyp();
+        return `(if ${hyp} : ${cond} then ${emitExpr(e.then)} else ${emitExpr(e.else)})`;
+      }
+      return `if ${cond} then ${emitExpr(e.then)} else ${emitExpr(e.else)}`;
+    }
 
     case "match": {
       // Always parenthesize inline matches — Lean parses alternatives greedily,
@@ -542,7 +649,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "forall": return `∀ ${e.var} : ${tyToLean(e.type)}, ${emitExpr(e.body)}`;
     case "exists": return `∃ ${e.var} : ${tyToLean(e.type)}, ${emitExpr(e.body)}`;
 
-    case "let": return `let ${e.name}${e.type ? ` : ${tyToLean(e.type)}` : ""} := ${emitExpr(e.value)}\n${emitExpr(e.body)}`;
+    case "let": return `(let ${e.name}${e.type ? ` : ${tyToLean(e.type)}` : ""} := ${emitExpr(e.value)}\n${emitExpr(e.body)})`;
     default: throw new Error(`Unsupported Lean expression: ${(e as Expr).kind}`);
   }
 }
@@ -613,9 +720,11 @@ function emitStmt(s: Stmt, indent: number): string {
     case "continue": return `${pad}continue`;
 
     case "if": {
-      let out = `${pad}if ${emitExpr(s.cond)} then\n${emitStmts(s.then, indent + 1)}`;
+      const needDite = anyExprInStmts(s.then, isCheckedNullishCoerce) || anyExprInStmts(s.else, isCheckedNullishCoerce);
+      const condHead = needDite ? `${freshDiteHyp()} : (${emitExpr(s.cond)}) = true` : emitExpr(s.cond);
+      let out = `${pad}if ${condHead} then\n${emitStmts(s.then, indent + 1)}`;
       if (s.else.length > 0) {
-        if (s.else.length === 1 && s.else[0].kind === "if") {
+        if (!needDite && s.else.length === 1 && s.else[0].kind === "if") {
           const ei = s.else[0];
           out += `\n${pad}else if ${emitExpr(ei.cond)} then\n${emitStmts(ei.then, indent + 1)}`;
           if (ei.else.length > 0) out += `\n${pad}else\n${emitStmts(ei.else, indent + 1)}`;
@@ -873,8 +982,11 @@ function emitDecl(d: Decl): string {
 function emitPureExpr(e: Expr, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (e.kind) {
-    case "if":
-      return `${pad}if ${emitExpr(e.cond)} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
+    case "if": {
+      const needDite = hasCheckedCoerce(e.then) || hasCheckedCoerce(e.else);
+      const cond = needDite ? `${freshDiteHyp()} : ${emitExpr(e.cond)}` : emitExpr(e.cond);
+      return `${pad}if ${cond} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
+    }
     case "match": {
       const lines = [`${pad}match ${emitExpr(e.scrutinee)} with`];
       for (const arm of e.arms) {
@@ -902,16 +1014,22 @@ export function resetLeanModule(): void {
   _typeRefs.clear();
   _taintedTypes.clear();
   _needsJSString = false;
+  _needsNullish = false;
+  _needsOption = false;
   _needsUnknown = false;
   _unknownEmitted = false;
   _boolCtx = false;
+  _diteCounter = 0;
 }
 
 export function emitLeanFile(file: Module): string {
   _needsJSString = false;
+  _needsNullish = false;
+  _needsOption = false;
   _needsUnknown = false;
+  _diteCounter = 0;
   registerInductives(file.decls);
-  // Emit declarations first so _needsJSString / _needsUnknown are set
+  // Emit declarations first so _needsJSString / _needsUnknown / _needsNullish are set
   const declLines: string[] = [];
   for (const decl of file.decls) {
     declLines.push("");
@@ -931,6 +1049,10 @@ export function emitLeanFile(file: Module): string {
   for (const imp of file.imports) lines.push(`import ${imp}`);
   if (_needsJSString && !file.imports.includes("LemmaScript.JSString"))
     lines.push("import LemmaScript.JSString");
+  if (_needsNullish && !file.imports.includes("LemmaScript.Nullish") && !file.imports.includes("LemmaScript"))
+    lines.push("import LemmaScript.Nullish");
+  if (_needsOption && !file.imports.includes("LemmaScript.Option") && !file.imports.includes("LemmaScript"))
+    lines.push("import LemmaScript.Option");
   if (file.options.length > 0) lines.push("");
   for (const opt of file.options) lines.push(`set_option ${opt.key} ${opt.value}`);
   lines.push(...declLines);

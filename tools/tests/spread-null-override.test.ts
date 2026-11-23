@@ -36,5 +36,5 @@ test("Dafny falls back to the base field only for `?` keys", () => {
   const text = dafny();
   assert.ok(bodyOf(text, "mergeNull").includes("N(y.a, y.b)"));
   assert.ok(bodyOf(text, "mergeUndefined").includes("U(y.a, y.b)"));
-  assert.ok(bodyOf(text, "mergeOptionalKey").includes("case None => x.a"));
+  assert.ok(bodyOf(text, "mergeOptionalKey").includes("if y.a.Some? then y.a else x.a"));
 });

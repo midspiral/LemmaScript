@@ -63,7 +63,7 @@ test("string indexing resolves to strings through locals and optional chains", (
   if (local.kind === "let") assert.equal(local.init.ty.kind, "string");
   const optional = mod.functions.find(f => f.name === "optionalFirst")!.body[0];
   assert.equal(optional.kind, "return");
-  if (optional.kind === "return") assert.deepEqual(optional.value.ty, { kind: "optional", inner: { kind: "string" } });
+  if (optional.kind === "return") assert.deepEqual(optional.value.ty, { kind: "optional", inner: { kind: "string" }, nullish: "undefined" });
 });
 
 for (const utf16 of [false, true]) test(`string operations verify in ${utf16 ? "UTF-16" : "scalar"} mode`, () => {
