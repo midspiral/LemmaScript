@@ -44,6 +44,13 @@ function lookup(env: Env | null, name: string): Ty | undefined {
 function extend(env: Env | null, name: string, ty: Ty): Env {
   return { name, ty, parent: env };
 }
+/** A quantified variable that reuses the name of a binding in scope is emitted
+ *  under a fresh name, so no later pass confuses it with that binding. */
+function quantified(env: Env | null, name: string, ty: Ty): Env {
+  const frame = extend(env, name, ty);
+  if (binding(env, name)) frame.emittedName = freshName(name);
+  return frame;
+}
 /** Shadow a binding with a narrowed type, keeping its callback state.
  *  Dropping that state would let the body reference a renamed parameter by its
  *  source name, which can silently bind an outer variable. The spread is exact
@@ -1452,13 +1459,15 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
     case "forall": {
       const varTy: Ty = e.varType !== "int" ? parseTsType(e.varType)
         : inferQuantVarType(e.var, e.body, ctx) ?? { kind: "int" };
-      return { kind: "forall", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
+      const bound = quantified(ctx.env, e.var, varTy);
+      return { kind: "forall", var: bound.emittedName ?? e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, bound)), ty: { kind: "bool" } };
     }
 
     case "exists": {
       const varTy: Ty = e.varType !== "int" ? parseTsType(e.varType)
         : inferQuantVarType(e.var, e.body, ctx) ?? { kind: "int" };
-      return { kind: "exists", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
+      const bound = quantified(ctx.env, e.var, varTy);
+      return { kind: "exists", var: bound.emittedName ?? e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, bound)), ty: { kind: "bool" } };
     }
 
     case "arrayLiteral": {

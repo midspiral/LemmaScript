@@ -578,7 +578,7 @@ function extractExpr(node: Expression): RawExpr {
       const tsType = typeNode ? annotationTypeText(typeNode, p.getType()) ?? typeNode.getText() : undefined;
       const nameNode = p.getNameNode();
       if (Node.isIdentifier(nameNode)) return {
-        name: nameNode.getText(), tsType,
+        name: sourceName(nameNode), tsType,
         ...(p.isRestParameter() ? { rest: true as const } : {}),
         ...(p.getInitializer() ? { defaultValue: extractExpr(p.getInitializer()!),
           inferredTsType: p.getType().getCallSignatures().length
@@ -2310,6 +2310,9 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
           const isAnonObject = declTsType.startsWith("__");
           if (init && !isHugeString && !isAnonObject && !Node.isArrowFunction(init)) {
             try {
+              // Callbacks in the initializer get the same no-shadowing names
+              // as those in a function body.
+              _lexicalNames = new LexicalNames(init);
               constants.push({
                 name: decl.getName(),
                 tsType: declTsType,
@@ -2320,6 +2323,8 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
               throw new Error(
                 `Failed to extract const '${decl.getName()}' at ${sourceFile.getBaseName()}:${decl.getStartLineNumber()}: ${reason}`,
               );
+            } finally {
+              _lexicalNames = null;
             }
           }
         }
