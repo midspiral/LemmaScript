@@ -834,6 +834,8 @@ When the bound variable IS used after the match, the `let` is preserved and the 
 
 All expressions `e` above are translated using the spec expression rules (§3).
 
+**Assignment expressions:** Assignments and `++`/`--` updates are supported as standalone statements and C-style `for` updates, including parenthesized statements and targets. Using an assignment or update as a value (in an initializer, condition, argument, or another expression) is rejected with a source location; write it as a separate statement instead. Logical assignments (`&&=`, `||=`, `??=`) remain unsupported.
+
 **Lexical scope:** Bare blocks and branches retain their source bindings when lowered. Extraction gives conflicting locals distinct internal names before flattening blocks or extending branches with a continuation; references follow TypeScript symbols. Annotations follow the same scope, with ghost bindings confined to specifications. Fields, string literals, and quantified variables are preserved when renaming annotation references. See [DESIGN_LEXICAL.md](DESIGN_LEXICAL.md) for the naming scheme and worked examples.
 
 **`const` collections:** `const` declarations of Array, Map, or Set types become mutable bindings in both backends, since TS mutates these in place but the backends require reassignment.
