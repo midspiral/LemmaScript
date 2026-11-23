@@ -421,8 +421,8 @@ method posFromPlace(lane: seq<TaskId>, p: Place) returns (res: int)
       return |lane|;
     case Before(i_p_anchor) =>
       var i_t0 := indexOf(lane, i_p_anchor);
-      var idx := i_t0;
-      return (if (idx < 0) then -1 else idx);
+      var idx_2 := i_t0;
+      return (if (idx_2 < 0) then -1 else idx_2);
     case After(i_p_anchor) =>
       var i_t1 := indexOf(lane, i_p_anchor);
       var idx := i_t1;
@@ -437,8 +437,8 @@ method posFromListPlace(lists: seq<ListId>, p: ListPlace) returns (res: int)
       return |lists|;
     case ListBefore(i_p_anchor) =>
       var i_t2 := indexOf(lists, i_p_anchor);
-      var idx := i_t2;
-      return (if (idx < 0) then -1 else idx);
+      var idx_2 := i_t2;
+      return (if (idx_2 < 0) then -1 else idx_2);
     case ListAfter(i_p_anchor) =>
       var i_t3 := indexOf(lists, i_p_anchor);
       var idx := i_t3;

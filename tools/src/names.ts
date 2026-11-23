@@ -34,6 +34,11 @@ export function setUserNames(names: Set<string>): void {
   _userNames = names;
 }
 
+/** A renamed source/ghost binding must also be avoided by later passes. */
+export function reserveName(name: string): void {
+  _userNames.add(name);
+}
+
 export function isUserName(name: string): boolean {
   return _userNames.has(name);
 }

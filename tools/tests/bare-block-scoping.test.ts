@@ -137,7 +137,7 @@ export function closureBeforeConst(p: number, flag: boolean): number {
   }
   return p;
 }
-`), /closure reads `p` before its declaration/);
+`), /forward capture 'p'.*declared later/);
   assert.throws(() => generate(String.raw`
 //@ ensures p !== undefined ==> \result === p
 export function hoisted(p: number | undefined): number {
@@ -148,7 +148,7 @@ export function hoisted(p: number | undefined): number {
   }
   return 0;
 }
-`), /closure reads `p` before its declaration/);
+`), /forward capture 'p'.*declared later/);
   assert.throws(() => generate(String.raw`
 export function laterInOuterBlock(xs: number[]): number[] {
   let out: number[] = [];
@@ -158,7 +158,7 @@ export function laterInOuterBlock(xs: number[]): number[] {
   const k = 1;
   return out;
 }
-`), /closure reads `k` before its declaration/);
+`), /forward capture 'k'.*declared later/);
 });
 
 test("closures over earlier locals and later module constants are accepted", () => {

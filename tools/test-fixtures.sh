@@ -1,6 +1,20 @@
 #!/bin/bash
+# Unit tests, then the CLI/Dafny fixture checks.
+#
+#   tools/test-fixtures.sh                    # both (the default)
+#   tools/test-fixtures.sh --unit [args...]   # unit tests only; args go to the
+#                                             # Node test runner, e.g. --test-shard=1/2
+#   tools/test-fixtures.sh --fixtures         # fixture checks only
+#
+# CI runs the two halves, and the unit-test shards, as parallel jobs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+mode=all
+case "${1:-}" in
+  --unit) mode=unit; shift ;;
+  --fixtures) mode=fixtures; shift ;;
+esac
 
 # Fixture runs use temp dirs outside any git repo, so the run log would land in
 # the current directory. Keep it off; the run-log section turns it on locally.
@@ -10,7 +24,10 @@ export LSC_RUN_LOG=false
 npm run build
 
 # Run executable tests before the Dafny fixture checks.
-npx tsx --test tools/tests/*.test.ts
+if [ "$mode" != fixtures ]; then
+  npx tsx --test "$@" tools/tests/*.test.ts
+fi
+if [ "$mode" = unit ]; then exit 0; fi
 
 expect_failure() {
   local message="$1"

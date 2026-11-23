@@ -66,11 +66,11 @@ test("the binder of a narrowed name does not replace reads of a shadowing declar
     const end = output.indexOf("\n}\n", start);
     return output.slice(start, end);
   };
-  assert.match(body("shadowLet"), /var p := 1;\s+p\b/);
-  assert.match(body("shadowInNestedBlock"), /var p := 1;\s+\(?\(?before \* 10\)? \+ p\)?/);
+  assert.match(body("shadowLet"), /var (p(?:_\d+)?) := 1;\s+\1\b/);
+  assert.match(body("shadowInNestedBlock"), /var (p(?:_\d+)?) := 1;\s+\(?\(?before \* 10\)? \+ \1\)?/);
   assert.match(body("shadowForOf"), /total \+ p\b/);
   assert.match(body("shadowQuantifier"), /forall p: int :: .*xs\[p\] == xs\[p\]/);
-  assert.match(body("shadowUnion"), /var s := a\(1\);\s+return s\.v;/);
-  assert.match(body("shadowUnionInNestedBlock"), /before \* 10\)? \+ s\.v\b/);
-  assert.match(body("ghostLetDoesNotShadow"), /ghost var p: int := 0;\s+return i_p_val;/);
+  assert.match(body("shadowUnion"), /var (s(?:_\d+)?) := a\(1\);\s+return \1\.v;/);
+  assert.match(body("shadowUnionInNestedBlock"), /var (s(?:_\d+)?) := a\(1\);\s+\(?\(?before \* 10\)? \+ \1\.v\b/);
+  assert.match(body("ghostLetDoesNotShadow"), /ghost var p(?:_\d+)?: int := 0;\s+return i_p_val;/);
 });
