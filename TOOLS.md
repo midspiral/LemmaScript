@@ -121,6 +121,9 @@ The specparser (`specparser.ts`) parses `//@ ` annotation expressions into `RawE
 
 ## Scoping
 
+See [DESIGN_LEXICAL.md](DESIGN_LEXICAL.md) for the rationale, worked examples,
+and the division of responsibility between extraction's names and resolve's environments.
+
 Extraction's [LexicalNames](tools/src/lexical-names.ts) assigns names by TypeScript symbol identity before extracting a function or method. It renames conflicting locals when bare blocks are flattened, for-loop counters are hoisted, or branches absorb a continuation. For example, `{ const p = 5; } return p` inside a function with parameter `p` gives the inner binding a distinct name such as `p_2`; the return still reads `p`. The source AST stays unchanged, and bindings whose scopes remain separate keep their names.
 
 When extending extraction:
