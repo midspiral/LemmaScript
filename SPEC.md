@@ -664,6 +664,8 @@ arr.some((x) => x < 0)   // → Lean: arr.any (fun x => x < 0)
 
 Lambda bodies can be expressions (`(x) => x + 1`) or statement blocks (`(x) => { ... }`). A block body is flattened to a single expression when its control flow allows — `if`/`let`/`return` shapes and a `switch` (lowered to a `match`-expression); bodies that can't reduce (loops, bare side effects) stay as statements, which the Dafny backend rejects (its lambdas are expression-only). A record literal returned from a callback is typed by the callback's return annotation, so `(x): Out => ({ ... })` constructs `Out(...)`, not an anonymous tuple.
 
+A closure capturing a `let` or `const` declared later in an enclosing local scope is rejected during extraction. JavaScript initializes that binding before a later invocation, but the backends cannot construct the closure before its captured local exists. Callback parameter defaults retain their separate initialization rules below.
+
 Flat object destructuring in a lambda parameter is supported, including aliases (`({ id, hidden: isHidden }) => ...`). It remains one callback parameter and lowers to immutable field bindings inside the lambda. Array patterns, nested object patterns, defaults, and rest properties are rejected during extraction with an explicit unsupported-pattern error.
 
 **Callback arguments.** Inline array callbacks receive JavaScript's actual arguments: `(element, index, array)` for `map`, `filter`, `some`, `every`, and the `find` family; `(acc, element, index, array)` for `reduce` with an initial value; `(a, b)` for sort comparators. Unused trailing parameters cost nothing; only callbacks that read the index or array are lowered to iterate over positions (Dafny's `CallbackIndices`, [SPEC_DAFNY.md §4](SPEC_DAFNY.md#4-helper-preambles)). A rest parameter is symbolic: `rest.length` and `rest[k]` for constant `k` resolve against the argument list, including inside nested closures, but returning, passing, or mutating the rest array is rejected. A default runs when JavaScript omits the argument or supplies `undefined`; a supplied `null` is preserved. All parameters are in scope in default initializers, and a literal default closure may capture a later parameter. Optional callback slots use an `undefined` check before the initializer. Rest/default parameters outside these callback positions, and defaults whose argument type is unknown, are rejected.
@@ -832,6 +834,8 @@ When the bound variable IS used after the match, the `let` is preserved and the 
 | `switch` / discriminant if-chain | `match` | `match` |
 
 All expressions `e` above are translated using the spec expression rules (§3).
+
+**Lexical scope:** Bare blocks and branches retain their source bindings when lowered. Extraction gives conflicting locals distinct internal names before flattening blocks or extending branches with a continuation; references follow TypeScript symbols. Annotations follow the same scope, with ghost bindings confined to specifications. Fields, string literals, and quantified variables are preserved when renaming annotation references.
 
 **`const` collections:** `const` declarations of Array, Map, or Set types become mutable bindings in both backends, since TS mutates these in place but the backends require reassignment.
 

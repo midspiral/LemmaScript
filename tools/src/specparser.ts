@@ -29,15 +29,21 @@ const BIGINT_LITERAL =
 const NUMBER_LITERAL =
   /^(?:(?:0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*)|(?:0[bB][01](?:_?[01])*)|(?:0[oO][0-7](?:_?[0-7])*)|(?:(?:[0-9](?:_?[0-9])*)(?:\.(?:[0-9](?:_?[0-9])*)?)?|\.(?:[0-9](?:_?[0-9])*))(?:[eE][+-]?(?:[0-9](?:_?[0-9])*))?)/;
 
-function tokenize(input: string): Token[] {
+function tokenize(input: string, spans?: { start: number; end: number }[]): Token[] {
   const tokens: Token[] = [];
   let i = 0;
+  let start = 0;
+  const push = (token: Token) => {
+    tokens.push(token);
+    spans?.push({ start, end: i });
+  };
   while (i < input.length) {
     if (/\s/.test(input[i])) { i++; continue; }
+    start = i;
 
     if (input[i] === "\\" && input.slice(i + 1, i + 7) === "result") {
-      tokens.push({ type: "result", value: undefined });
       i += 7;
+      push({ type: "result", value: undefined });
       continue;
     }
 
@@ -60,7 +66,7 @@ function tokenize(input: string): Token[] {
         }
       }
       if (i < input.length) i++;
-      tokens.push({ type: "str", value: s });
+      push({ type: "str", value: s });
       continue;
     }
 
@@ -73,23 +79,23 @@ function tokenize(input: string): Token[] {
       i += text.length;
       // The `n` suffix is meaningful, not noise: a BigInt keeps its exact value
       // as a decimal string instead of being rounded into a double.
-      if (bigintMatch) tokens.push({ type: "bigint", value: normalizeBigIntLiteral(text) });
-      else tokens.push({ type: "num", value: Number(text.replace(/_/g, "")) });
+      if (bigintMatch) push({ type: "bigint", value: normalizeBigIntLiteral(text) });
+      else push({ type: "num", value: Number(text.replace(/_/g, "")) });
       continue;
     }
 
     if (/[a-zA-Z_]/.test(input[i])) {
       let id = "";
       while (i < input.length && /[a-zA-Z_0-9]/.test(input[i])) id += input[i++];
-      tokens.push({ type: "ident", value: id });
+      push({ type: "ident", value: id });
       continue;
     }
 
     let matched = false;
     for (const op of MULTI_OPS) {
       if (input.slice(i, i + op.length) === op) {
-        tokens.push({ type: "op", value: op });
         i += op.length;
+        push({ type: "op", value: op });
         matched = true;
         break;
       }
@@ -97,14 +103,14 @@ function tokenize(input: string): Token[] {
     if (matched) continue;
 
     const ch = input[i];
-    if ("+-*/%><!?".includes(ch)) {
-      tokens.push({ type: "op", value: ch });
-    } else if ("()[],:.{}".includes(ch)) {
-      tokens.push({ type: "punc", value: ch });
-    } else {
-      throw new Error(`Unexpected '${ch}' at ${i} in: ${input}`);
-    }
     i++;
+    if ("+-*/%><!?".includes(ch)) {
+      push({ type: "op", value: ch });
+    } else if ("()[],:.{}".includes(ch)) {
+      push({ type: "punc", value: ch });
+    } else {
+      throw new Error(`Unexpected '${ch}' at ${i - 1} in: ${input}`);
+    }
   }
   return tokens;
 }
@@ -113,7 +119,8 @@ function tokenize(input: string): Token[] {
 
 class Parser {
   pos = 0;
-  constructor(private tokens: Token[]) {}
+  private bound = new Set<string>();
+  constructor(private tokens: Token[], private onFreeVariable?: (name: string, index: number) => void) {}
 
   peek() { return this.tokens[this.pos]; }
   advance() { return this.tokens[this.pos++]; }
@@ -287,10 +294,14 @@ class Parser {
           varType = ty;
         }
         this.expect("punc", ",");
+        const outer = this.bound;
+        this.bound = new Set([...outer, v]);
         const body = this.parseIff();
+        this.bound = outer;
         this.expect("punc", ")");
         return { kind: q, var: v, varType, body };
       }
+      if (!this.bound.has(t.value)) this.onFreeVariable?.(t.value, this.pos);
       this.advance();
       return { kind: "var", name: t.value };
     }
@@ -332,4 +343,18 @@ class Parser {
 
 export function parseExpr(input: string): Expr {
   return new Parser(tokenize(input)).parse();
+}
+
+/** Rewrite only free variable tokens, preserving annotation spelling and
+ *  leaving fields, record keys, literals, types, and quantifier binders alone. */
+export function renameSpecVariables(input: string, rename: (name: string) => string): string {
+  const spans: { start: number; end: number }[] = [];
+  const tokens = tokenize(input, spans);
+  const edits: { start: number; end: number; name: string }[] = [];
+  new Parser(tokens, (name, index) => {
+    const replacement = rename(name);
+    if (replacement !== name) edits.push({ ...spans[index], name: replacement });
+  }).parse();
+  for (const edit of edits.reverse()) input = input.slice(0, edit.start) + edit.name + input.slice(edit.end);
+  return input;
 }

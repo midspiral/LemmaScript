@@ -298,7 +298,9 @@ function wrapQuantifier(sub: Expr): string {
 
 function emitExpr(e: Expr): string {
   switch (e.kind) {
-    case "var": return e.name === "undefined" ? "None" : escapeName(e.name);
+    case "var":
+      if (e.name === "undefined") { needPreamble("OptionType"); return "None"; }
+      return escapeName(e.name);
     case "num": return decimalNumberLiteral(e.value);
     // Already canonical decimal; Dafny's `int` is mathematical, so no `n` suffix.
     case "bigint": return e.value;
@@ -666,6 +668,9 @@ function emitExpr(e: Expr): string {
 
     case "app": {
       const args = e.args.map(emitExpr);
+      // Optional coercions also arrive as applications, including locals
+      // whose inferred types never pass through tyToDafny.
+      if (!e.ctorOf && (e.fn === "Some" || e.fn === "None")) needPreamble("OptionType");
       if (e.fn === "SetToSeq") { needPreamble("SetToSeq"); return `SetToSeq(${args.join(", ")})`; }
       if (e.fn === "BigInt" || e.fn === "Number") return args[0]; // identity: both map to int
       // Set literal: {a, b, c}
