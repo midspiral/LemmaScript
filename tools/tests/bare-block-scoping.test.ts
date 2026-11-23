@@ -15,7 +15,8 @@ import { peepholeModule } from "../src/peephole.ts";
 import { emitDafnyFile } from "../src/dafny-emit.ts";
 
 // A declaration inside a bare `{ }` block goes out of scope at the closing
-// brace (#361). Flattening the block without renaming verified false claims.
+// brace (#361), and a closure cannot read a same-block declaration that comes
+// after it (#360). Both used to verify false claims.
 
 function source(text?: string): SourceFile {
   const project = new Project({ compilerOptions: {
@@ -106,4 +107,54 @@ export function noCollision(p: number): number {
   assert.match(output, /var q := 1;/, output);
   assert.match(output, /s\.p \+ 1/, output);
   assert.doesNotMatch(output, /s\.p_/, output);
+});
+
+test("a closure that reads a later declaration in its block is rejected", () => {
+  assert.throws(() => generate(String.raw`
+//@ ensures \result === p
+export function closureBeforeConst(p: number, flag: boolean): number {
+  if (flag) {
+    const f = (): number => p;
+    const p = 5;
+    return f();
+  }
+  return p;
+}
+`), /closure reads `p` before its declaration/);
+  assert.throws(() => generate(String.raw`
+//@ ensures p !== undefined ==> \result === p
+export function hoisted(p: number | undefined): number {
+  if (p !== undefined) {
+    const f = (): number => p;
+    const p = 5;
+    return f();
+  }
+  return 0;
+}
+`), /closure reads `p` before its declaration/);
+  assert.throws(() => generate(String.raw`
+export function laterInOuterBlock(xs: number[]): number[] {
+  let out: number[] = [];
+  if (xs.length > 0) {
+    out = xs.map(x => x + k);
+  }
+  const k = 1;
+  return out;
+}
+`), /closure reads `k` before its declaration/);
+});
+
+test("closures over earlier locals and later module constants are accepted", () => {
+  const output = generate(String.raw`
+//@ ensures \result === p + K
+export function earlierLocal(p: number): number {
+  const q = p;
+  const f = (): number => q + K;
+  return f();
+}
+
+const K = 3;
+`);
+  const result = verify(output);
+  assert.equal(result.status, 0, output + result.output);
 });

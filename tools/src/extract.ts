@@ -6,7 +6,7 @@
  */
 
 import path from "path";
-import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ScriptTarget, VariableDeclaration, Block, ts } from "ts-morph";
+import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ScriptTarget, VariableDeclaration, ArrowFunction, Block, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
@@ -544,6 +544,7 @@ function extractExpr(node: Expression): RawExpr {
 
   // Arrow function: (x) => expr or (x) => { stmts }
   if (Node.isArrowFunction(node)) {
+    rejectForwardCapture(node);
     // A binding pattern is not an identifier in either backend. Keep the
     // callback arity unchanged by replacing a flat object pattern with one
     // synthetic parameter and binding its fields at the start of the body:
@@ -1540,6 +1541,24 @@ function renameBareBlockLocals(stmts: RawStmt[], block: Block): RawStmt[] {
     out = [...out.slice(0, i), { ...s, name: fresh }, ...renameRawStmts(out.slice(i + 1), s.name, fresh)];
   }
   return out;
+}
+
+// In JavaScript a closure reads a variable when it runs, so it can read a
+// `const` or `let` declared after it in an enclosing block. The emitted lambda
+// is declared before that variable, where the name means an outer variable or
+// nothing, so the proof would be about a different program. Reject it (#360).
+function rejectForwardCapture(arrow: ArrowFunction): void {
+  for (const id of arrow.getDescendantsOfKind(SyntaxKind.Identifier)) {
+    const parent = id.getParent();
+    const symbol = Node.isShorthandPropertyAssignment(parent) ? parent.getValueSymbol() : id.getSymbol();
+    for (const d of symbol?.getDeclarations() ?? []) {
+      if (!Node.isVariableDeclaration(d) && !Node.isBindingElement(d)) continue;
+      if (d.getSourceFile() !== arrow.getSourceFile() || d.getStart() < arrow.getEnd()) continue;
+      // Module-level constants are emitted as top-level declarations.
+      if (!d.getFirstAncestor(a => Node.isFunctionLikeDeclaration(a))) continue;
+      throw new Error(`line ${id.getStartLineNumber()}: closure reads \`${id.getText()}\` before its declaration at line ${d.getStartLineNumber()}; declare it before the closure`);
+    }
+  }
 }
 
 // ── Statement extraction ─────────────────────────────────────
