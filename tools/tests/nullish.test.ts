@@ -451,6 +451,10 @@ export function findNullish(xs: (number | null)[]): number {
   if (v === null) return 1;
   return 2;
 }
+export function findsNull(): boolean {
+  //@ ensures \result
+  return findNullish([null]) === 1 && findNullish([4]) === 0;
+}
 `);
   assert.equal(result.status, 0, result.output + result.text);
 });
