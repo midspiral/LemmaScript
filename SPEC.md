@@ -754,6 +754,8 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 Storage keeps its declared optional type across guards and assignments. Payload reads become checked operations: Dafny's `.value` destructor or Lean's `LemmaScript.optionValue`. Verification must establish presence at the read, including after reassignment; `expr!` requests the same check. Supported direct collection mutations update the original storage, including optional wrappers. Optional `pop`/`shift` and mutation results without a modeled write-back are rejected. Evolving locals need an explicit annotation when their storage type cannot be inferred.
 
+In annotations, use `expr!` to request a payload argument for a helper whose signature exists only in the backend proof file, such as `value !== undefined ==> Valid(value!)`. The presence obligation is still checked.
+
 `?.` and `??` retain single-evaluation snapshots, and logical/default branches evaluate conditionally. Repeated calls remain separate evaluations; bind a result explicitly to reuse it. The current representation still conflates `null` and `undefined`.
 
 **Discriminated-union narrowing.** `if (e.kind === "lit") use(e.val)`, `if ('field' in x) use(x.field)`, and `if (x.kind !== "v") return; rest` all lower to `match` constructs that destructure variant-specific fields. Switch on a discriminator works similarly. Detection lives in `narrow.ts` alongside optional-narrowing rules (rewrites to a `tagMatch` IR node); the lowering to backend `match` lives in `transform.ts`.

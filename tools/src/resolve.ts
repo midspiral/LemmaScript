@@ -873,6 +873,10 @@ function lookupFieldTy(objTy: Ty, field: string, ctx: Ctx): { ty: Ty; isDiscrimi
     const baseTyName = tyBaseName(objTy.name);
     const isDiscriminant = getDiscriminant(ctx, baseTyName) === field;
     const decl = findDecl(ctx, baseTyName);
+    if (isDiscriminant) {
+      const booleanTag = decl?.variants?.every(v => v.name === "true" || v.name === "false");
+      return { ty: { kind: booleanTag ? "bool" : "string" }, isDiscriminant: true };
+    }
     if (decl?.kind === "record") {
       const f = decl.fields?.find(f => f.name === field);
       if (f) return { ty: f.type!, isDiscriminant };
@@ -1306,9 +1310,10 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       const chain: import("./typedir.js").TChainStep[] = [];
       for (const step of e.chain) {
         if (step.kind === "field") {
-          const fieldTy = lookupFieldTy(stepInTy, step.name, ctx).ty;
-          chain.push({ kind: "field", name: step.name, ty: fieldTy });
-          stepInTy = fieldTy;
+          const field = lookupFieldTy(stepInTy, step.name, ctx);
+          chain.push({ kind: "field", name: step.name, ty: field.ty,
+            ...(field.isDiscriminant ? { isDiscriminant: true } : {}) });
+          stepInTy = field.ty;
         } else if (step.kind === "index") {
           const idx = resolveExpr(step.idx, ctx);
           const idxTy: Ty = stepInTy.kind === "array" ? stepInTy.elem

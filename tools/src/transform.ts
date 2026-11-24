@@ -474,14 +474,16 @@ function lowerMinMaxSequence(e: TExpr, real: boolean, binds: Stmt[] | null): Exp
  *  preconditions. Locals preserve source order and exactly one evaluation. */
 function lowerComparisonOperands(left: TExpr, right: TExpr, binds: Stmt[] | null,
   body: (left: Expr, right: Expr) => Expr): Expr {
-  const locals: { name: string; value: Expr; type: Ty }[] = [];
+  const locals: { name: string; value: Expr; type?: Ty }[] = [];
   const values = [left, right].map(e => {
     if (["num", "bigint", "str", "bool"].includes(e.kind) || (e.kind === "var" && e.name === "undefined"))
       return lowerExpr(e, binds);
     const value = lowerExpr(e, binds);
     const name = freshName(`_compare${_liftCounter++}`);
     if (binds) binds.push({ kind: "let", name, type: e.ty, mutable: false, value });
-    else locals.push({ name, value, type: e.ty });
+    // Backend-only spec helpers have no TS signature. Let the backend infer
+    // their result instead of constraining it to the opaque Unknown type.
+    else locals.push({ name, value, ...(e.ty.kind === "unknown" ? {} : { type: e.ty }) });
     return varE(name);
   });
   let result = body(values[0], values[1]);
@@ -618,7 +620,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null, writesReceiver = false): Expr
           binds.push({ kind: "let", name, type: e.left.ty, mutable: false, value });
           return lowerExpr(branch, binds);
         }
-        return { kind: "let", name, type: e.left.ty, value, body: lowerExpr(branch, null) };
+        return { kind: "let", name, ...(e.left.ty.kind === "unknown" ? {} : { type: e.left.ty }),
+          value, body: lowerExpr(branch, null) };
       }
       // Discriminant check: x.discriminant === "foo" → x = .foo (before generic string literal comparison)
       if ((e.op === "===" || e.op === "!==") && e.left.kind === "field" && e.left.isDiscriminant && e.right.kind === "str") {

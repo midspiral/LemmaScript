@@ -216,6 +216,7 @@ function renderLeanPattern(p: MatchPattern): string {
 // through the `match`. Under a Prop connective (∧/∨/¬) such an operand is a type
 // error, so its presence forces the whole body to Bool connectives.
 function isNonCoercibleBoolAtom(e: Expr): boolean {
+  if (e.kind === "let") return isNonCoercibleBoolAtom(e.body);
   if (e.kind === "match") return true;
   if (e.kind === "binop" && (e.op === "=" || e.op === "≠") && e.right.kind === "constructor") {
     const rhs = e.right; // capture the narrowed node so it survives the closure below
@@ -257,8 +258,10 @@ function emitAsBool(e: Expr): string {
 }
 
 function emitCondition(e: Expr): string {
-  // Pin matches to Bool before Lean's expected Prop type reaches their arms.
-  return isNonCoercibleBoolAtom(e) || needsBoolConnectives(e)
+  // Optional matches can have comparison-valued arms. Pin their condition to
+  // Bool before Lean's expected Prop type reaches those arms. Constructor tests
+  // already emit literal Boolean arms and retain their usual elaboration.
+  return anyExpr(e, x => x.kind === "match")
     ? `(${emitAsBool(e)} : Bool)` : emitExpr(e);
 }
 

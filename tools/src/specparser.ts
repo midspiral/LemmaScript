@@ -238,6 +238,8 @@ class Parser {
         const idx = this.parseIff();
         this.expect("punc", "]");
         expr = { kind: "index", obj: expr, idx };
+      } else if (this.match("op", "!")) {
+        expr = { kind: "nonNull", expr };
       } else if (this.match("punc", "(")) {
         const args: Expr[] = [];
         if (!this.match("punc", ")")) {

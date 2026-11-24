@@ -65,6 +65,28 @@ const absentReads = [
   "export function readAbsent(p: number | undefined): number { return p!; }",
   'export function readMissingKey(values: Map<string, number>): number { return values.get("missing")!; }',
 ];
+const specHelpers = `
+export function helperArgument(value: number | undefined): boolean {
+  //@ ensures \\result === (value !== undefined && narrowingPositive(value!))
+  return value !== undefined && value > 0;
+}
+export function helperConjunction(value: number): boolean {
+  //@ ensures \\result === (narrowingPositive(value) && narrowingPositive(value + 1) && narrowingPositive(value + 2))
+  return value > 0;
+}
+export function helperComparison(value: number | undefined): boolean {
+  //@ ensures \\result === (value === narrowingZero())
+  return value === 0;
+}
+`;
+const dafnyHelpers = `
+ghost predicate narrowingPositive(value: int) { value > 0 }
+ghost function narrowingZero(): int { 0 }
+`;
+const leanHelpers = `
+def narrowingPositive (value : Int) : Bool := decide (value > 0)
+def narrowingZero : Int := 0
+`;
 
 function typed(text: string, strictNullChecks = true) {
   const project = new Project({ compilerOptions: {
@@ -81,11 +103,11 @@ function generate(text: string, strictNullChecks = true): string {
   return emitDafnyFile(peepholeModule({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] }, "dafny"));
 }
 
-function verify(text: string, strictNullChecks = true) {
+function verify(text: string, strictNullChecks = true, helpers = "") {
   const dir = mkdtempSync(join(tmpdir(), "lsc-optional-assignment-"));
   try {
     const path = join(dir, "test.dfy");
-    writeFileSync(path, generate(text, strictNullChecks));
+    writeFileSync(path, helpers + generate(text, strictNullChecks));
     const result = spawnSync("dafny", ["verify", "--verification-time-limit=10", path],
       { encoding: "utf8", timeout: 60_000 });
     assert.ifError(result.error);
@@ -121,6 +143,9 @@ test("optional assignment narrowing agrees with JavaScript, including later abse
   assert.equal(runtime.optionalForOf(), 7);
   assert.equal(runtime.clearIterable(), 2);
   assert.equal(runtime.falsyValues(), 9);
+  assert.equal(runtime.optionalTag(undefined), false);
+  assert.equal(runtime.optionalTag({ type: "compaction" }), false);
+  assert.equal(runtime.optionalTag({ type: "message", value: 7 }), true);
   assert.deepEqual(runtime.guardedCallback(3), [4, 5]);
   assert.deepEqual(runtime.guardedCallback(undefined), []);
   assert.equal(runtime.guardedCell(undefined), 7);
@@ -213,6 +238,15 @@ test("an evolving inferred local requires a storage annotation", () => {
   }`), /stable storage type.*explicit type annotation/);
 });
 
+test("backend specification helpers infer saved values and accept checked payload arguments", () => {
+  const result = verify(specHelpers, true, dafnyHelpers);
+  assert.equal(result.status, 0, result.output);
+  const falseClaim = verify(specHelpers.replace("return value > 0;", "return value >= 0;"), true, dafnyHelpers);
+  assert.notEqual(falseClaim.status, 0, falseClaim.output);
+  assert.match(falseClaim.output, /postcondition could not be proved/);
+  assert.doesNotMatch(falseClaim.output, /resolution\/type errors|timed out/);
+});
+
 test("Lean proves optional assignment narrowing and rejects an absent payload", {
   skip: !existsSync(new URL("../../.lake/build/lib/lean/LemmaScript/Option.olean", import.meta.url)),
 }, () => {
@@ -222,6 +256,8 @@ test("Lean proves optional assignment narrowing and rejects an absent payload", 
       [fixture, true],
       [lookupFixture.slice(0, lookupFixture.indexOf("interface Cell")), true],
       [skippedCalls, true],
+      [specHelpers, true],
+      [specHelpers.replace("return value > 0;", "return value >= 0;"), false],
       [requiredComparison, false],
       [fixture.replace("flag ==> \\result === 7", "flag ==> \\result === 5"), false],
       [`export function cleared(value: number | undefined): number {
@@ -234,8 +270,22 @@ test("Lean proves optional assignment narrowing and rejects an absent payload", 
       const { typesFile, defFile } = transformModuleLean(mod);
       resetLeanModule();
       const output = emitLeanFile({ ...defFile, imports: ["LemmaScript"],
-        decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
-      const proofs = mod.functions.map(f => f.name === "optionalCountdown" ? `
+        decls: [...(typesFile?.decls ?? []), ...defFile.decls] })
+        .replace("import LemmaScript\n", "import LemmaScript\n" + leanHelpers);
+      // Normalize specification lets before Velvet compares the helper contracts.
+      const proofs = mod.functions.map(f => f.name.startsWith("helper") ? `
+prove_correct ${f.name} by
+  simp only []
+  velvet_vcgen [${f.name}] with finish [Pure.${f.name}, narrowingPositive, narrowingZero]
+` : f.name === "optionalTag" ? `
+prove_correct optionalTag by
+  velvet_vcgen [optionalTag] with
+    (expose_names
+     tactic =>
+       cases entry with
+       | none => simp [Pure.optionalTag]
+       | some value => cases value <;> simp [Pure.optionalTag, TaggedEntry_type])
+` : f.name === "optionalCountdown" ? `
 prove_correct optionalCountdown by
   velvet_vcgen [optionalCountdown] with
     (expose_names

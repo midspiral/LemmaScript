@@ -48,7 +48,8 @@ type OptChain = Extract<TExpr, { kind: "optChain" }>;
 /** Apply an optional chain's steps (field / index / call) to a base expr. */
 export function applyChain(body: TExpr, chain: OptChain["chain"]): TExpr {
   for (const step of chain) {
-    if (step.kind === "field") body = { kind: "field", obj: body, field: step.name, ty: step.ty };
+    if (step.kind === "field") body = { kind: "field", obj: body, field: step.name, ty: step.ty,
+      ...(step.isDiscriminant ? { isDiscriminant: true } : {}) };
     else if (step.kind === "index") body = { kind: "index", obj: body, idx: step.idx, ty: step.ty };
     else body = { kind: "call", fn: body, args: step.args, ty: step.ty, callKind: step.callKind,
       ...(step.builtinId ? { builtinId: step.builtinId } : {}) };

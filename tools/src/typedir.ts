@@ -75,7 +75,7 @@ export type CallKind = "pure" | "method" | "spec-pure" | "unknown"
  *  matched the registry at resolve time. Downstream passes read
  *  classification off the stamp instead of re-recognizing by spelling. */
 export type TChainStep =
-  | { kind: "field"; name: string; ty: Ty }
+  | { kind: "field"; name: string; ty: Ty; isDiscriminant?: boolean }
   | { kind: "call"; args: TExpr[]; ty: Ty; callKind: CallKind; builtinId?: BuiltinId }
   | { kind: "index"; idx: TExpr; ty: Ty };
 

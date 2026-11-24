@@ -271,7 +271,7 @@ optional storage reconstruct the enclosing value; unsupported mutation results
 and optional `pop`/`shift` produce diagnostics. Both backends check non-null
 assertions, including assertions on map lookups.
 
-Local validation passes the 645 unit tests, fixture checks, compiler and
+Local validation passes the 646 unit tests, fixture checks, compiler and
 example typechecks, all 91 Dafny examples, and the full Lean build. The focused
 regressions include false postconditions, reads after clearing storage, absent
 map lookups, optional comparisons whose other operand must execute, skipped
@@ -286,12 +286,15 @@ mirrors. Topological sort uses the existing invariant lemmas with the proved
 map-lookup bridge; its contracts are unchanged. The migration no longer needs
 the old tactic macro and reduces its heartbeat limit from 16 million to 2 million.
 
-Representative case-study migrations were checked locally in temporary clones:
-xyflow's three Dafny files verify after moving two existing proof additions in
-`reconnectEdge`; colorwheel's Lean build passes with generated changes only.
-Colorwheel retains a pre-existing `sorry` in its separate `adjustColorCommutes`
-property. Full case-study CI and dedicated staging branches remain to be prepared
-against a fixed compiler commit; these local checks do not replace that matrix.
+Dedicated staging branches are prepared for 20 affected case-study pins, with
+proof additions preserved. The ordinary Dafny verification checks pass locally;
+the slow balanced-match and workflow proofs exceeded their 500s/600s limits.
+Their generation and additions-only checks pass, which is also their existing
+CI coverage; full proof validation remains outstanding. Pi and colorwheel's Lean
+builds pass. Colorwheel retains its pre-existing `sorry` in `adjustColorCommutes`.
+Case-study validation also exposed optional-chain discriminator metadata and
+backend-only specification helper typing bugs, now covered by regressions. The
+full CI matrix will consume the `<pinned>-redesign-narrowing` staging branches.
 
 Each claimed fix needs a positive program with runtime results and a correct
 contract that verifies, plus a false contract or invalid read that is rejected

@@ -223,3 +223,10 @@ export function falsyValues(): number {
   const flag = no && true;
   return n === 0 && text === "hi" && flag === false ? 9 : 0;
 }
+
+type TaggedEntry = { type: "message"; value: number } | { type: "compaction" };
+
+export function optionalTag(entry: TaggedEntry | undefined): boolean {
+  //@ ensures \result === (entry !== undefined && entry.type === "message")
+  return entry?.type === "message";
+}
