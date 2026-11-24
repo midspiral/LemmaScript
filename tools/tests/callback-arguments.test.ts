@@ -27,7 +27,9 @@ function raw(source?: string) {
   return extractModule(file);
 }
 
-function generate(source?: string, backend: "dafny" | "lean" = "dafny", library: "stdlib" | "local" = "stdlib") {
+// Local helpers by default: loading Dafny's standard library costs seconds per
+// run, and only the test that names both libraries is about that choice.
+function generate(source?: string, backend: "dafny" | "lean" = "dafny", library: "stdlib" | "local" = "local") {
   const module = narrowModule(resolveModule(raw(source)));
   const { typesFile, defFile } = (backend === "dafny" ? transformModuleDafny : transformModuleLean)(module);
   const output = peepholeModule({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] }, backend);
@@ -40,7 +42,9 @@ function verify(text: string) {
   try {
     const path = join(dir, "callbacks.dfy");
     writeFileSync(path, text);
-    const result = spawnSync("dafny", ["verify", "--standard-libraries", "--verification-time-limit=15", path],
+    // As `lsc check` does: load the standard library only for text that uses it.
+    const stdlib = text.includes("Std.") ? ["--standard-libraries"] : [];
+    const result = spawnSync("dafny", ["verify", ...stdlib, "--verification-time-limit=15", path],
       { encoding: "utf8", timeout: 120_000 });
     assert.ifError(result.error);
     return { status: result.status, output: result.stdout + result.stderr };
