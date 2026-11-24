@@ -130,6 +130,7 @@ interface Ctx {
   inLambda: boolean;
   narrowedPaths: NarrowedPath[];  // pure access path narrowing for conditional then-branches
   narrowedIndices: NarrowedIndex[];  // `k in m` atoms known-true in this scope
+  forofCounts: Map<string, number>;  // per-function for-of loops seen, by head name
 }
 
 function withEnv(ctx: Ctx, env: Env | null): Ctx {
@@ -1798,16 +1799,19 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         // General tuple destructuring: all unknown
         for (const _ of s.names) nameTypes.push({ kind: "unknown" });
       }
-      // Must match the freshened counter transform mints for this loop, so a
-      // spec referencing the loop index resolves to the same name.
-      const idxName = freshName(`_${s.names[0]}_idx`);
+      // The loop counter is minted here, once, and recorded on the loop so
+      // transform emits the same name a spec here refers to. The first loop
+      // over a head name in a function gets `_x_idx`, later ones `_x_idx2`, ….
+      const count = ctx.forofCounts.get(s.names[0]) ?? 0;
+      ctx.forofCounts.set(s.names[0], count + 1);
+      const idxName = freshName(`_${s.names[0]}_idx${count === 0 ? "" : count + 1}`);
       env = extend(env, idxName, { kind: "nat" });
       for (let j = 0; j < s.names.length; j++) {
         env = extend(env, s.names[j], nameTypes[j] ?? { kind: "unknown" });
       }
       const bodyCtx = withEnv(ctx, env);
       return [{
-        kind: "forof", names: s.names, nameTypes, iterable,
+        kind: "forof", names: s.names, nameTypes, iterable, idx: idxName,
         invariants: resolveSpecs(s.invariants, { ...bodyCtx, inSpec: true }),
         doneWith: s.doneWith ? resolveSpec(s.doneWith, { ...bodyCtx, inSpec: true }) : null,
         body: resolveBlock(s.body, bodyCtx),
@@ -2028,7 +2032,7 @@ function resolveFunction(
   if (opts?.thisBinding) env = extend(env, opts.thisBinding.name, opts.thisBinding.ty);
   for (const p of params) env = extend(env, p.name, p.ty);
 
-  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
+  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [], forofCounts: new Map() };
   const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
   const ensuresCtx: Ctx = { ...baseCtx, env: extend(env, "\\result", returnTy), allowResult: true, inSpec: true };
 
@@ -2132,7 +2136,7 @@ export function resolveModule(raw: RawModule): TModule {
     for (let i = 0; i < ext.params.length; i++) {
       env = extend(env, ext.params[i].name, sig.params[i]);
     }
-    const baseCtx: Ctx = { env, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: sig.returnTy, pureFns, fnParams, fnReturns, externs, inSpec: true, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
+    const baseCtx: Ctx = { env, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: sig.returnTy, pureFns, fnParams, fnReturns, externs, inSpec: true, inLambda: false, narrowedPaths: [], narrowedIndices: [], forofCounts: new Map() };
     const ensuresCtx: Ctx = { ...baseCtx, env: extend(env, "\\result", sig.returnTy), allowResult: true };
     const resolveClauses = (kind: "requires" | "ensures", ctx: Ctx) => ext[kind].map(s => {
       try {
@@ -2153,7 +2157,7 @@ export function resolveModule(raw: RawModule): TModule {
       impure: ext.impure,
     };
   });
-  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
+  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [], forofCounts: new Map() };
   const constants = (raw.constants ?? []).map(c => {
     const declaredTy = expandAlias(parseTsType(c.tsType), raw.typeDecls);
     // Propagate the declared type into the value's resolution context so that

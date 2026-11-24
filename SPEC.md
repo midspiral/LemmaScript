@@ -842,7 +842,7 @@ All expressions `e` above are translated using the spec expression rules (§3).
 
 **Uninitialized `let`:** `let x: T;` (no initializer) emits a type-appropriate default — `[]` for `T[]`, `map[]`/`{}` for `Map`/`Set`, `None` for `T | undefined` (and `null | T`), `0`/`false`/`""` for primitives. Other types fall through to Dafny's `default`, which won't compile — initialize at the declaration or annotate with `T | undefined`.
 
-**For-of loops** are desugared to indexed loops: `for idx in [:bound]` (Lean) or `while idx < bound` (Dafny) with an auto-generated index variable `_varName_idx`. A bound invariant `_varName_idx ≤ bound` is automatically prepended to the user's invariants. When multiple for-of loops use the same variable name, the index is disambiguated with a suffix: `_id_idx`, `_id_idx2`, etc.
+**For-of loops** are desugared to indexed loops: `for idx in [:bound]` (Lean) or `while idx < bound` (Dafny) with an auto-generated index variable `_varName_idx`. A bound invariant `_varName_idx ≤ bound` is automatically prepended to the user's invariants. When multiple for-of loops in one function use the same variable name, the index is disambiguated with a suffix in source order: `_id_idx`, `_id_idx2`, etc. Each loop's annotations refer to its own index name.
 
 ### 4.2 While Loops
 
