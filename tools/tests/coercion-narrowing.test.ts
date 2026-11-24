@@ -283,6 +283,38 @@ export function switchDUStateful(sh: Shape): number {
   return out;
 }
 
+// Phase 2: Exhaustive enum switch with unreachable trailing return (no redundant wildcard in Lean)
+type Color = "red" | "green" | "blue";
+//@ ensures c === "red" ==> \\result === true
+//@ ensures c !== "red" ==> \\result === false
+export function switchExhaustiveTrailing(c: Color): boolean {
+  switch (c) {
+    case "red":
+      return true;
+    case "green":
+    case "blue":
+      return false;
+  }
+  return false;
+}
+
+// Phase 2: DU switch with trailing grouped no-op break cases (no empty then-block in Lean)
+type Tri = { kind: "a"; x: number } | { kind: "b" } | { kind: "c" };
+//@ ensures t.kind === "a" ==> \\result === t.x
+//@ ensures t.kind !== "a" ==> \\result === 0
+export function switchDUNoopCases(t: Tri): number {
+  let out = 0;
+  switch (t.kind) {
+    case "a":
+      out = t.x;
+      break;
+    case "b":
+    case "c":
+      break;
+  }
+  return out;
+}
+
 // Phase 2: Array.isArray + typeof + push on narrowed synth array-union
 //@ ensures Array.isArray(v) ==> \\result === v.length + 1
 //@ ensures !Array.isArray(v) ==> \\result === v.length
@@ -306,6 +338,12 @@ test("coercion narrowing verifies all 14 narrowing/nullish issues + Phase 2 DU/A
   assert.match(leanTypes, /Shape\.proj_circle_r/);
   assert.match(leanDef, /LemmaScript\.optionValue/);
   assert.match(leanDef, /LemmaScript\.nullishValue/);
+  // Exhaustive enum switch with trailing unreachable return must not emit a redundant `| _ =>` arm.
+  const exhaustMatch = leanTypes.match(/def switchExhaustiveTrailing[\s\S]*?(?=\n\ndef |\nend Pure)/);
+  assert.ok(exhaustMatch && !exhaustMatch[0].includes("| _ =>"), `redundant wildcard in switchExhaustiveTrailing:\n${exhaustMatch?.[0]}`);
+  // DU switch with grouped no-op break cases must not emit empty `then` blocks.
+  const noopMatch = leanDef.match(/method switchDUNoopCases[\s\S]*?(?=\nmethod |$)/);
+  assert.ok(noopMatch && !/then\n\s*(?:else|$)/.test(noopMatch[0]), `empty then-block in switchDUNoopCases:\n${noopMatch?.[0]}`);
   const res = verifyDafny(dafny);
   assert.equal(res.status, 0, res.output);
 });

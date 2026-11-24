@@ -754,14 +754,18 @@ function emitStmt(s: Stmt, indent: number): string {
     case "if": {
       const needDite = anyExprInStmts(s.then, isCheckedNullishCoerce) || anyExprInStmts(s.else, isCheckedNullishCoerce);
       const condHead = needDite ? `${freshDiteHyp()} : (${emitExpr(s.cond)}) = true` : emitExpr(s.cond);
-      let out = `${pad}if ${condHead} then\n${emitStmts(s.then, indent + 1)}`;
+      const emitBlock = (stmts: Stmt[], ind: number) =>
+        stmts.length > 0 ? emitStmts(stmts, ind) : `${"  ".repeat(ind)}pure ()`;
+      let out = `${pad}if ${condHead} then\n${emitBlock(s.then, indent + 1)}`;
       if (s.else.length > 0) {
-        if (!needDite && s.else.length === 1 && s.else[0].kind === "if") {
+        if (!needDite && s.else.length === 1 && s.else[0].kind === "if" &&
+            !anyExprInStmts(s.else[0].then, isCheckedNullishCoerce) &&
+            !anyExprInStmts(s.else[0].else, isCheckedNullishCoerce)) {
           const ei = s.else[0];
-          out += `\n${pad}else if ${emitExpr(ei.cond)} then\n${emitStmts(ei.then, indent + 1)}`;
-          if (ei.else.length > 0) out += `\n${pad}else\n${emitStmts(ei.else, indent + 1)}`;
+          out += `\n${pad}else if ${emitExpr(ei.cond)} then\n${emitBlock(ei.then, indent + 1)}`;
+          if (ei.else.length > 0) out += `\n${pad}else\n${emitBlock(ei.else, indent + 1)}`;
         } else {
-          out += `\n${pad}else\n${emitStmts(s.else, indent + 1)}`;
+          out += `\n${pad}else\n${emitBlock(s.else, indent + 1)}`;
         }
       }
       return out;

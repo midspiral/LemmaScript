@@ -2064,6 +2064,7 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
         elseBranch = body;
         continue;
       }
+      if (body.length === 0 && elseBranch.length === 0) continue;
       const cond: Expr = { kind: "tagTest", expr: scrExpr, typeName: baseName, ctor: s.cases[k].label };
       elseBranch = [{ kind: "if", cond, then: body, else: elseBranch }];
     }
@@ -2106,6 +2107,14 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
   return null;
 }
 
+function switchCoversAll(decl: TypeDeclInfo | undefined, cases: { label: string }[]): boolean {
+  if (!decl) return false;
+  const covered = new Set(cases.map(c => c.label));
+  if (decl.kind === "string-union" && decl.values) return decl.values.every(v => covered.has(v));
+  if (decl.kind === "discriminated-union" && decl.variants) return decl.variants.every(v => covered.has(v.name));
+  return false;
+}
+
 function transformPureSwitch(s: TStmt & { kind: "switch" }, rest: TStmt[], typeDecls: TypeDeclInfo[]): Expr | null {
   const ef = enumFieldSwitch(s, typeDecls);
   if (ef) {
@@ -2117,7 +2126,8 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, rest: TStmt[], typeD
       ? buildLiteralMatchArms(cases, (body) => transformPureBody(body, typeDecls))
       : buildMatchArms(cases, ctorDecl!.name, typeDecls, (body) => transformPureBody(body, typeDecls));
     if (!arms) return null;
-    if (s.defaultBody.length > 0 || rest.length > 0) {
+    const allCovered = !literalCases && switchCoversAll(ctorDecl, s.cases);
+    if (!allCovered && (s.defaultBody.length > 0 || rest.length > 0)) {
       const body = transformPureBody([...s.defaultBody, ...rest], typeDecls);
       if (!body) return null;
       arms.push({ pattern: pWild(), body });
@@ -2134,7 +2144,7 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, rest: TStmt[], typeD
     }
     const scrExpr = transformExpr(s.expr);
     const baseName = s.expr.ty.kind === "user" ? tyBaseName(s.expr.ty.name) : ctorDecl.name;
-    const hasFallthrough = s.defaultBody.length > 0 || rest.length > 0;
+    const hasFallthrough = (s.defaultBody.length > 0 || rest.length > 0) && !switchCoversAll(ctorDecl, s.cases);
     let elseExpr: Expr | null;
     let lastIdx: number;
     if (hasFallthrough) {
@@ -2142,7 +2152,7 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, rest: TStmt[], typeD
       lastIdx = s.cases.length - 1;
     } else {
       if (s.cases.length === 0) return null;
-      elseExpr = transformPureBody(s.cases[s.cases.length - 1].body, typeDecls);
+      elseExpr = transformPureBody([...s.cases[s.cases.length - 1].body, ...rest], typeDecls);
       lastIdx = s.cases.length - 2;
     }
     if (!elseExpr) return null;
@@ -2157,7 +2167,7 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, rest: TStmt[], typeD
   const cases = s.cases.map(c => ({ name: c.label, body: [...c.body, ...rest] }));
   const arms = buildMatchArms(cases, ctorDecl.name, typeDecls, (body) => transformPureBody(body, typeDecls));
   if (!arms) return null;
-  if (s.defaultBody.length > 0 || rest.length > 0) {
+  if (!switchCoversAll(ctorDecl, s.cases) && (s.defaultBody.length > 0 || rest.length > 0)) {
     const body = transformPureBody([...s.defaultBody, ...rest], typeDecls);
     if (!body) return null;
     arms.push({ pattern: pWild(), body });
