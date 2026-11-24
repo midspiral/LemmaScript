@@ -86,11 +86,11 @@ function additionsOnly(genPath: string, dfyPath: string): boolean {
     for (const d of deletions.slice(0, 5)) console.error("  " + d);
     return false;
   }
-  // Added lines must not bypass the verifier or change its options.
+  // Added lines must not bypass the verifier, weaken generated contracts, or change verifier options.
   const violations = proofAdditionViolations(
     readFileSync(genPath, "utf-8"), readFileSync(dfyPath, "utf-8"), path.basename(dfyPath));
   if (violations.length > 0) {
-    console.error(`ERROR: ${path.basename(dfyPath)} has proof additions that bypass verification:`);
+    console.error(`ERROR: ${path.basename(dfyPath)} has disallowed proof additions:`);
     for (const v of violations) console.error("  " + v);
     return false;
   }

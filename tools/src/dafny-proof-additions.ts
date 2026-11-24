@@ -1,16 +1,25 @@
 /**
  * Check the lines a `.dfy` proof adds to its `.dfy.gen` companion for
- * constructs that bypass verification.
+ * constructs that bypass verification or weaken generated contracts.
  *
- * Added lines may not contain `assume` statements or `{:axiom}` / `@Axiom`
- * attributes. Text inside comments (including nested block comments),
- * strings (including verbatim strings), and character literals is ignored.
+ * Added lines may not contain `assume`, `expect`, `decreases *`, `{:axiom}`,
+ * `@Axiom`, `{:verify false}`, `{:only}`, `@VerifyOnly`, or `{:extern}`.
+ * Text inside comments (including nested block comments), strings (including
+ * verbatim strings), and character literals is ignored.
+ *
+ * Inside a generated declaration header (before its body `{` or the next
+ * declaration for bodyless declarations), added lines may introduce complete
+ * `ensures`, `modifies`, `reads`, or `decreases` clauses (other than
+ * `decreases *`), but may not add `requires` clauses or extend/split a
+ * generated signature or header clause. Auxiliary declarations added in the
+ * proof may declare their own `requires` and other clauses freely.
+ *
  * Separately, added lines may not introduce an `// lsc options:` header,
  * because verifier flags are read from that header in the proof, and may not
  * contain line breaks other than `\n` (Dafny ends a `//` comment at `\r`).
  * A generated line kept in the proof must lex to the same tokens it has in
  * the generated file, so added comments or strings cannot disable it, and an
- * added line may not repeat a generated `assume` / axiom line.
+ * added line may not repeat a generated verification-bypass line.
  */
 
 interface Token {
@@ -125,13 +134,278 @@ function tokensByLine(tokens: Token[], lineCount: number): string[] {
   return lines.map(l => l.join("\u0000"));
 }
 
-/** Whether a token sequence contains an `assume`, `{:axiom}` or `@Axiom`. */
-function trustsFact(tokens: Token[], k: number): string | undefined {
+/** Whether a token sequence bypasses verification or assumes an unproved fact. */
+function trustsFact(tokens: Token[], k: number): { reason: string; end: number } | undefined {
   const t = tokens[k].text, following = tokens[k + 1]?.text;
-  if (t === "assume") return "assume statements are not allowed in proof additions; prove the fact instead";
-  if (t === "{:" && following === "axiom") return "{:axiom} attributes are not allowed in proof additions; give the declaration a proof or body";
-  if (t === "@" && following === "Axiom") return "@Axiom attributes are not allowed in proof additions; give the declaration a proof or body";
+  if (t === "assume") return { reason: "assume statements are not allowed in proof additions; prove the fact instead", end: k };
+  if (t === "expect") return { reason: "expect statements are not allowed in proof additions; prove the fact instead", end: k };
+  if (t === "decreases" && following === "*")
+    return { reason: "`decreases *` is not allowed in proof additions; provide a termination metric instead", end: k + 1 };
+  if (t === "{:" && following === "axiom")
+    return { reason: "{:axiom} attributes are not allowed in proof additions; give the declaration a proof or body", end: k + 1 };
+  if (t === "@" && following === "Axiom")
+    return { reason: "@Axiom attributes are not allowed in proof additions; give the declaration a proof or body", end: k + 1 };
+  if (t === "{:" && following === "verify" && !(tokens[k + 2]?.text === "true" && tokens[k + 3]?.text === "}")) {
+    const close = findMatchingBrace(tokens, k);
+    return {
+      reason: "{:verify ...} attributes that disable verification are not allowed in proof additions",
+      end: close >= 0 ? close : k + 1,
+    };
+  }
+  if (t === "{:" && following === "only")
+    return { reason: "{:only} attributes are not allowed in proof additions; they skip verification of other declarations", end: k + 1 };
+  if (t === "@" && following === "VerifyOnly")
+    return { reason: "@VerifyOnly attributes are not allowed in proof additions; they skip verification of other declarations", end: k + 1 };
+  if (t === "{:" && following === "extern")
+    return { reason: "{:extern} attributes are not allowed in proof additions; declare externs in TypeScript with //@ extern", end: k + 1 };
   return undefined;
+}
+
+const CALLABLE_KEYWORDS = new Set(["method", "lemma", "function", "predicate", "constructor"]);
+const DECL_MODIFIERS = new Set(["ghost", "twostate", "least", "greatest", "static", "opaque", "protected", "abstract"]);
+const CONTAINER_KEYWORDS = new Set(["class", "trait", "module"]);
+const NON_CALLABLE_DECLS = new Set([
+  "datatype", "codatatype", "type", "newtype", "class", "trait", "module",
+  "const", "import", "include", "export",
+]);
+const SPEC_CLAUSE_KEYWORDS = new Set(["requires", "ensures", "reads", "modifies", "decreases"]);
+const ALLOWED_ADDED_HEADER_CLAUSES = new Set(["ensures", "reads", "modifies", "decreases"]);
+
+/** Whether `tokens[k]` is a modifier prefixing a declaration (not an identifier like `least` in an expression). */
+function isDeclModifierAt(tokens: Token[], k: number): boolean {
+  let i = k;
+  while (i < tokens.length && DECL_MODIFIERS.has(tokens[i].text)) i++;
+  if (i === k || i >= tokens.length) return false;
+  const next = tokens[i].text;
+  return CALLABLE_KEYWORDS.has(next) || NON_CALLABLE_DECLS.has(next) || next === "var";
+}
+
+/** Tokens after a closing `}` that show `{ ... }` was a set literal inside a header, not a body. */
+const HEADER_CONTINUATION_AFTER_BRACE = new Set([
+  "requires", "ensures", "reads", "modifies", "decreases", "{",
+  "==", "!=", "<", "<=", ">", ">=", "+", "-", "*", "/", "%",
+  "&&", "||", "==>", "<==", "<==>", "in", "!", ".", "[", "(", ")", "]", ",", "?", ":", "::", "|", ";",
+  "then", "else", "as", "is",
+]);
+
+/** Tokens before `{` inside a spec clause that unambiguously introduce a set/multiset literal. */
+const EXPR_BEFORE_BRACE = new Set([
+  "requires", "ensures", "reads", "modifies", "decreases",
+  "==", "!=", "<=", ">=", "<", "+", "-", "*", "/", "%",
+  "&&", "||", "==>", "<==", "<==>", "!", "in", "::", "|", ":=",
+  "then", "else", "iset", "multiset", "set",
+]);
+
+/** Return the index of the `}` matching `tokens[openIdx]` (`{` or `{:`), or -1. */
+function findMatchingBrace(tokens: Token[], openIdx: number): number {
+  let depth = 0;
+  for (let i = openIdx; i < tokens.length; i++) {
+    const text = tokens[i].text;
+    if (text === "{" || text === "{:") depth++;
+    else if (text === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** Whether `{` at `openIdx` inside a declaration header is a set/multiset literal rather than the body `{`. */
+function isHeaderExprBrace(tokens: Token[], openIdx: number, inSpecClause: boolean): boolean {
+  const closeIdx = findMatchingBrace(tokens, openIdx);
+  const afterClose = closeIdx >= 0 ? tokens[closeIdx + 1]?.text : undefined;
+  if (afterClose !== undefined && HEADER_CONTINUATION_AFTER_BRACE.has(afterClose)) return true;
+  const prev = openIdx > 0 ? tokens[openIdx - 1]?.text : undefined;
+  if (inSpecClause && prev !== undefined && EXPR_BEFORE_BRACE.has(prev)) return true;
+  return false;
+}
+
+type BraceKind = "container" | "body" | "attr" | "expr";
+
+/**
+ * Check generated callable declaration headers for added `requires` clauses,
+ * added continuations that alter a generated signature or clause, and added
+ * clauses that split a multi-line generated clause.
+ */
+function checkGeneratedHeaders(
+  tokens: Token[],
+  added: boolean[],
+  report: (line: number, reason: string) => void,
+): void {
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  const braceStack: BraceKind[] = [];
+
+  let pendingContainer = false;
+  let inGenHeader = false;
+  let inAddedHeader = false;
+  let headerSawCallable = false;
+  let headerHasName = false;
+  let inSpecClause = false;
+  let inAddedClause = false;
+  let declContainerDepth = 0;
+  const reportedExtendLines = new Set<number>();
+
+  const resetHeader = () => {
+    inGenHeader = false;
+    inAddedHeader = false;
+    headerSawCallable = false;
+    headerHasName = false;
+    inSpecClause = false;
+    inAddedClause = false;
+  };
+
+  for (let k = 0; k < tokens.length; k++) {
+    const t = tokens[k];
+    const text = t.text;
+    const isAdded = added[t.line];
+    const prev = k > 0 ? tokens[k - 1].text : undefined;
+
+    if (text === "{:") {
+      braceStack.push("attr");
+      continue;
+    }
+
+    if (text === "{") {
+      const inNonContainer = braceStack.some(b => b !== "container");
+      if (parenDepth > 0 || bracketDepth > 0 || inNonContainer) {
+        braceStack.push("expr");
+      } else if (pendingContainer) {
+        pendingContainer = false;
+        resetHeader();
+        braceStack.push("container");
+      } else if ((inGenHeader || inAddedHeader) && isHeaderExprBrace(tokens, k, inSpecClause)) {
+        if (inGenHeader && isAdded && !inAddedClause && !reportedExtendLines.has(t.line)) {
+          reportedExtendLines.add(t.line);
+          report(t.line, "added lines in a generated declaration header must start a new ensures, modifies, reads, or decreases clause and may not extend a generated signature or clause");
+        }
+        braceStack.push("expr");
+      } else {
+        resetHeader();
+        braceStack.push("body");
+      }
+      continue;
+    }
+
+    if (text === "}") {
+      braceStack.pop();
+      continue;
+    }
+
+    const inNonContainer = braceStack.some(b => b !== "container");
+    const atDeclLevel = parenDepth === 0 && bracketDepth === 0 && !inNonContainer;
+
+    if (text === "(") {
+      if (inGenHeader && isAdded && !inAddedClause && !reportedExtendLines.has(t.line)) {
+        reportedExtendLines.add(t.line);
+        report(t.line, "added lines in a generated declaration header must start a new ensures, modifies, reads, or decreases clause and may not extend a generated signature or clause");
+      }
+      parenDepth++;
+      continue;
+    }
+    if (text === ")") {
+      if (parenDepth > 0) parenDepth--;
+      if (inGenHeader && isAdded && !inAddedClause && !reportedExtendLines.has(t.line)) {
+        reportedExtendLines.add(t.line);
+        report(t.line, "added lines in a generated declaration header must start a new ensures, modifies, reads, or decreases clause and may not extend a generated signature or clause");
+      }
+      continue;
+    }
+    if (text === "[") {
+      if (inGenHeader && isAdded && !inAddedClause && !reportedExtendLines.has(t.line)) {
+        reportedExtendLines.add(t.line);
+        report(t.line, "added lines in a generated declaration header must start a new ensures, modifies, reads, or decreases clause and may not extend a generated signature or clause");
+      }
+      bracketDepth++;
+      continue;
+    }
+    if (text === "]") {
+      if (bracketDepth > 0) bracketDepth--;
+      if (inGenHeader && isAdded && !inAddedClause && !reportedExtendLines.has(t.line)) {
+        reportedExtendLines.add(t.line);
+        report(t.line, "added lines in a generated declaration header must start a new ensures, modifies, reads, or decreases clause and may not extend a generated signature or clause");
+      }
+      continue;
+    }
+
+    if (atDeclLevel && prev !== ".") {
+      // `by method {` follows a function body and is not a new method declaration.
+      if (text === "method" && prev === "by") continue;
+
+      if (NON_CALLABLE_DECLS.has(text)) {
+        resetHeader();
+        pendingContainer = CONTAINER_KEYWORDS.has(text);
+        continue;
+      }
+
+      if (text === "var" && !headerSawCallable) {
+        resetHeader();
+        pendingContainer = false;
+        continue;
+      }
+
+      if (CALLABLE_KEYWORDS.has(text) || isDeclModifierAt(tokens, k)) {
+        pendingContainer = false;
+        if ((!inGenHeader && !inAddedHeader) || headerHasName) {
+          inGenHeader = !isAdded;
+          inAddedHeader = isAdded;
+          headerSawCallable = CALLABLE_KEYWORDS.has(text);
+          headerHasName = false;
+          inSpecClause = false;
+          inAddedClause = false;
+          declContainerDepth = braceStack.length;
+        } else {
+          if (CALLABLE_KEYWORDS.has(text)) headerSawCallable = true;
+          if (!isAdded) {
+            inGenHeader = true;
+            inAddedHeader = false;
+          }
+        }
+        continue;
+      }
+
+      if ((inGenHeader || inAddedHeader) && headerSawCallable && !headerHasName) {
+        headerHasName = true;
+        if (!inGenHeader) continue;
+      }
+    }
+
+    if (!inGenHeader) continue;
+
+    const atHeaderClauseLevel = parenDepth === 0 && bracketDepth === 0 && braceStack.length === declContainerDepth;
+
+    if (!isAdded) {
+      if (atHeaderClauseLevel) {
+        if (SPEC_CLAUSE_KEYWORDS.has(text)) {
+          inSpecClause = true;
+          inAddedClause = false;
+        } else if (inAddedClause) {
+          report(t.line, "an added clause splits a generated header clause");
+          inAddedClause = false;
+        }
+      }
+      continue;
+    }
+
+    // Token is on an added line inside a generated declaration header.
+    if (atHeaderClauseLevel) {
+      if (text === "requires") {
+        report(t.line, "added requires clauses are not allowed in generated declaration headers; strengthen preconditions in TypeScript instead");
+        inSpecClause = true;
+        // Suppress follow-on continuation diagnostics for the body of this rejected clause.
+        inAddedClause = true;
+      } else if (ALLOWED_ADDED_HEADER_CLAUSES.has(text)) {
+        inSpecClause = true;
+        inAddedClause = true;
+      } else if (!inAddedClause && !reportedExtendLines.has(t.line)) {
+        reportedExtendLines.add(t.line);
+        report(t.line, "added lines in a generated declaration header must start a new ensures, modifies, reads, or decreases clause and may not extend a generated signature or clause");
+      }
+    } else if (!inAddedClause && !reportedExtendLines.has(t.line)) {
+      reportedExtendLines.add(t.line);
+      report(t.line, "added lines in a generated declaration header must start a new ensures, modifies, reads, or decreases clause and may not extend a generated signature or clause");
+    }
+  }
 }
 
 /** Matches the header `dafnyVerifyArgs` reads verifier options from. */
@@ -157,10 +431,15 @@ export function proofAdditionViolations(generated: string, proof: string, proofN
 
   const tokens = lexDafny(proof);
   for (let k = 0; k < tokens.length; k++) {
-    if (!added[tokens[k].line]) continue;
-    const reason = trustsFact(tokens, k);
-    if (reason) report(tokens[k].line, reason);
+    const match = trustsFact(tokens, k);
+    if (!match) continue;
+    let addedLine = -1;
+    for (let j = k; j <= match.end && j < tokens.length; j++) {
+      if (added[tokens[j].line]) { addedLine = tokens[j].line; break; }
+    }
+    if (addedLine >= 0) report(addedLine, match.reason);
   }
+  checkGeneratedHeaders(tokens, added, report);
 
   const genTokens = lexDafny(generated);
   const trustedGenLines = new Set<string>();
@@ -182,7 +461,7 @@ export function proofAdditionViolations(generated: string, proof: string, proofN
     if (LSC_OPTIONS_HEADER.test(text))
       report(line, "an added `// lsc options:` line would change verifier options; options come from the generated file");
     if (trustedGenLines.has(text))
-      report(line, "added lines may not repeat a generated assume or axiom line; keep the generated line in place");
+      report(line, "added lines may not repeat a generated assume, axiom, or verification-bypass line; keep the generated line in place");
   });
   return violations;
 }
