@@ -192,7 +192,7 @@ Each TS source produces two Dafny files:
 
 - **`foo.dfy.gen`** — always regeneratable from TS. The merge base.
 - **`foo.dfy`** — source of truth. Starts as a copy of `.dfy.gen`, then accumulates user/LLM proof additions. The diff between `.dfy.gen` and `.dfy` must be additions-only.
-- **`foo.dfy.base`** — transient three-way-merge anchor. A conflict or additions-only failure retains the old anchor; verification failure after a clean additions-only merge advances it to the new gen. Successful `regen` removes it, including with `--no-verify`. Do not discard it simply because a command failed.
+- **`foo.dfy.base`** — transient three-way-merge anchor. `gen`, `gen-check`, and `check` seed it with the previous `.dfy.gen` when overwriting a changed generation beside an existing `.dfy` and no base exists yet. A conflict or additions-only failure retains the old anchor; verification failure after a clean additions-only merge advances it to the new gen. A passing additions-only `check`/`gen-check` or successful `regen` (including with `--no-verify`) removes it. Do not discard it simply because a command failed.
 
 With `proof-dir`, `lsc.ts` mirrors the source's config-relative directory under
 the configured root and places `.dfy.gen`, `.dfy`, `.dfy.base`, and
