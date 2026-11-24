@@ -1032,7 +1032,14 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.fn.kind !== "var")
         throw new Error(`Unsupported call expression: ${e.fn.kind}`);
       const prefix = e.callKind === "spec-pure" && _opts.backend === "lean" ? "Pure." : "";
-      return { kind: "app", fn: prefix + e.fn.name, args: e.args.map(a => lowerExpr(a, binds)) };
+      const callArgs = e.args.map(a => lowerExpr(a, binds));
+      // Zero-parameter closures are emitted as `fun () => ...` in Lean (`Unit → T`),
+      // so calling one must supply `()`. Top-level 0-arg defs/methods do not carry
+      // a `fn` variable type and stay bare names.
+      if (_opts.backend === "lean" && callArgs.length === 0 && e.fn.ty.kind === "fn" && e.fn.ty.params.length === 0) {
+        callArgs.push({ kind: "var", name: "()" });
+      }
+      return { kind: "app", fn: prefix + e.fn.name, args: callArgs };
     }
 
     case "record": {
