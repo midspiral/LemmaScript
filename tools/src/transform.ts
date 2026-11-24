@@ -2284,13 +2284,24 @@ function matchesAccessPath(e: TExpr, path: AccessPath): boolean {
 /** Replace every read of `path` with `var(binder, binderTy)`. Extraction
  *  leaves no binding that shadows another (see LexicalNames), so the name
  *  identifies the variable, also inside a lambda that captures it. */
-function replacePathInTExpr(expr: TExpr, path: AccessPath, binder: string, binderTy: Ty): TExpr {
+function replacePathInTExpr(expr: TExpr, path: AccessPath, binder: string, binderTy: Ty, narrowedReadsOnly = false): TExpr {
   return mapTExpr(expr, e => {
-    if (matchesAccessPath(e, path)) return { kind: "var", name: binder, ty: binderTy };
+    if (matchesAccessPath(e, path) && (!narrowedReadsOnly || e.ty.kind !== "optional")) {
+      return { kind: "var", name: binder, ty: binderTy };
+    }
+    if (e.kind === "someMatch" && matchesAccessPath(e.scrutinee, path)) {
+      return {
+        ...e,
+        scrutinee: replacePathInTExpr(e.scrutinee, path, binder, binderTy, narrowedReadsOnly),
+        noneBody: replacePathInTExpr(e.noneBody, path, binder, binderTy, narrowedReadsOnly),
+      };
+    }
     if (e.kind === "lambda") return { ...e,
       params: e.params.map(p => p.defaultValue
-        ? { ...p, defaultValue: replacePathInTExpr(p.defaultValue, path, binder, binderTy) } : p),
-      body: replacePathInTStmts(e.body, path, binder, binderTy) };
+        ? { ...p, defaultValue: replacePathInTExpr(p.defaultValue, path, binder, binderTy, narrowedReadsOnly) } : p),
+      body: narrowedReadsOnly
+        ? replaceNarrowedPathInTStmts(e.body, path, binder, binderTy)
+        : replacePathInTStmts(e.body, path, binder, binderTy) };
     return null;
   });
 }
@@ -2299,13 +2310,67 @@ function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, b
   return stmts.map(s => mapTStmt(s, e => replacePathInTExpr(e, path, binder, binderTy)));
 }
 
-/** Like `replacePathInTStmts`, but keeps reads that resolve left optional:
- *  those follow an assignment to the path, so the binder would be stale. */
+/** Does any statement in `stmts` (at any depth) assign `root` or a path
+ *  rooted at it? Mirrors resolve's `assignsRoot` over lowered `TStmt`s. */
+function tStmtAssignsRoot(s: TStmt, root: string): boolean {
+  switch (s.kind) {
+    case "assign": return s.target.split(/[.[]/, 1)[0] === root;
+    case "if": return s.then.some(t => tStmtAssignsRoot(t, root)) || s.else.some(t => tStmtAssignsRoot(t, root));
+    case "while": case "forof": return s.body.some(t => tStmtAssignsRoot(t, root));
+    case "switch": return s.cases.some(c => c.body.some(t => tStmtAssignsRoot(t, root)))
+      || s.defaultBody.some(t => tStmtAssignsRoot(t, root));
+    case "someMatch": return s.someBody.some(t => tStmtAssignsRoot(t, root))
+      || s.noneBody.some(t => tStmtAssignsRoot(t, root));
+    case "tagMatch": return s.cases.some(c => c.body.some(t => tStmtAssignsRoot(t, root)))
+      || s.fallthrough.some(t => tStmtAssignsRoot(t, root));
+    default: return false;
+  }
+}
+
+/** Like `replacePathInTStmts`, but stops replacing after any assignment to
+ *  `path.rootVar` (and keeps reads that resolve left optional), mirroring
+ *  resolve's `loopNarrowings` lifetime so later re-narrowings keep their
+ *  own binders. */
 function replaceNarrowedPathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, binderTy: Ty): TStmt[] {
-  return stmts.map(s => mapTStmt(s, e =>
-    matchesAccessPath(e, path) && e.ty.kind !== "optional"
-      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
-  ));
+  const re = (e: TExpr) => replacePathInTExpr(e, path, binder, binderTy, true);
+  const rs = (body: TStmt[]) => replaceNarrowedPathInTStmts(body, path, binder, binderTy);
+  const out: TStmt[] = [];
+  for (let i = 0; i < stmts.length; i++) {
+    const s = stmts[i];
+    const assigns = tStmtAssignsRoot(s, path.rootVar);
+    if ((s.kind === "while" || s.kind === "forof") && assigns) {
+      out.push(...stmts.slice(i));
+      break;
+    }
+    switch (s.kind) {
+      case "let": out.push({ ...s, init: re(s.init) }); break;
+      case "assign": out.push({ ...s, value: re(s.value) }); break;
+      case "return": out.push({ ...s, value: re(s.value) }); break;
+      case "break": case "continue": case "throw": out.push(s); break;
+      case "expr": out.push({ ...s, expr: re(s.expr) }); break;
+      case "if": out.push({ ...s, cond: re(s.cond), then: rs(s.then), else: rs(s.else) }); break;
+      case "while": out.push({ ...s, cond: re(s.cond), invariants: s.invariants.map(re),
+        decreases: s.decreases ? re(s.decreases) : null,
+        doneWith: s.doneWith ? re(s.doneWith) : null, body: rs(s.body) }); break;
+      case "switch": out.push({ ...s, expr: re(s.expr),
+        cases: s.cases.map(c => ({ ...c, body: rs(c.body) })), defaultBody: rs(s.defaultBody) }); break;
+      case "forof": out.push({ ...s, iterable: re(s.iterable), invariants: s.invariants.map(re),
+        doneWith: s.doneWith ? re(s.doneWith) : null, body: rs(s.body) }); break;
+      case "ghostLet": out.push({ ...s, init: re(s.init) }); break;
+      case "ghostAssign": out.push({ ...s, value: re(s.value) }); break;
+      case "assert": out.push({ ...s, expr: re(s.expr) }); break;
+      case "someMatch": out.push({ ...s, scrutinee: re(s.scrutinee),
+        someBody: matchesAccessPath(s.scrutinee, path) ? s.someBody : rs(s.someBody),
+        noneBody: rs(s.noneBody) }); break;
+      case "tagMatch": out.push({ ...s, scrutinee: re(s.scrutinee),
+        cases: s.cases.map(c => ({ ...c, body: rs(c.body) })), fallthrough: rs(s.fallthrough) }); break;
+    }
+    if (assigns) {
+      out.push(...stmts.slice(i + 1));
+      break;
+    }
+  }
+  return out;
 }
 
 /** Dafny `while` guard from narrow's `ruleWhilePresent`:
@@ -2323,7 +2388,7 @@ function presenceGuardDafny(e: TExpr): Expr | null {
   const value: Expr = { kind: "field", obj: scrutinee, field: "value", datatypeField: true };
   return {
     kind: "binop", op: "&&",
-    left: { kind: "binop", op: "==", left: scrutinee, right: { kind: "constructor", name: "some", args: [] } },
+    left: { kind: "binop", op: "==", left: scrutinee, right: { kind: "constructor", name: "some", type: "Option", args: [] } },
     right: replaceVar(inner, e.binder, value),
   };
 }

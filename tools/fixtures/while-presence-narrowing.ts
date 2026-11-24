@@ -68,3 +68,58 @@ export function truthy(a: number[], i?: number): number {
   }
   return s;
 }
+
+// Shadowing a guard-narrowed variable inside the loop body keeps the inner
+// binding distinct from the outer narrowed value.
+export function shadow(i?: number): number {
+  //@ requires i !== undefined && i === 1
+  //@ ensures \result === 2
+  while (i !== undefined) {
+    //@ done_with true
+    const i = 2;
+    return i;
+  }
+  return 0;
+}
+
+// A lambda inside the loop body sees the narrowed binding, while a shadowing
+// callback parameter stays distinct.
+export function lambdaInWhile(a: number[], i?: number): number {
+  //@ requires a.length === 1 && a[0] === 10
+  //@ requires i !== undefined && i === 3
+  //@ ensures \result === 18
+  while (i !== undefined) {
+    //@ done_with true
+    const shifted = a.map((x: number): number => x + i);
+    const shadowed = [5].map((i: number): number => i);
+    return shifted[0] + shadowed[0];
+  }
+  return 0;
+}
+
+// Reassigning the guard variable and then narrowing it again reads the new
+// value, not the guard's binder.
+export function reassignThenNarrow(i?: number): number {
+  //@ requires i !== undefined && i === 1
+  //@ ensures \result === 2
+  while (i !== undefined) {
+    //@ done_with true
+    i = 2;
+    if (i !== undefined) {
+      return i;
+    }
+  }
+  return 0;
+}
+
+export type State = "some" | "none";
+
+// String-union tags named "some" and "none" keep their own Dafny
+// discriminators (`s.some?`, `s.none?`), distinct from `Option.Some?`.
+export function isSome(s: State): boolean {
+  return s === "some";
+}
+
+export function isNotNone(s: State): boolean {
+  return s !== "none";
+}

@@ -607,7 +607,11 @@ function emitExpr(e: Expr): string {
       // Discriminant check: x == .Ctor → x.Ctor?
       const op = mapOp(e.op);
       if ((op === "==" || op === "!=") && e.right.kind === "constructor") {
-        const ctorName = qualifyCtor(e.right.name);
+        if (e.right.type === "Option") needPreamble("OptionType");
+        const rawName = e.right.name.replace(/^\./, "");
+        const ctorName = e.right.type === "Option" && Object.hasOwn(CTOR_MAP, rawName)
+          ? CTOR_MAP[rawName]
+          : dafnyCtorName(rawName);
         const pred = `${emitExpr(e.left)}.${ctorName}?`;
         return op === "!=" ? `(!${pred})` : pred;
       }
