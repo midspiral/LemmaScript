@@ -216,14 +216,22 @@ function matchBinder(fieldName: string, prefix?: string): string {
 
 interface MatchField { name: string; tsType: string; type?: Ty; binder: string }
 
-// Allocate once per arm and carry the names with the fields. A name derived
-// only from the scrutinee/field is not unique: `u` and `m.u` can have the same
-// hint, as can distinct paths whose components contain underscores.
-const _matchBinders = new Set<string>();
+// Generated binders do not exist during source lexical renaming. Avoid names
+// in enclosing match arms, but let sibling arms reuse their field names.
+let _matchBinders = new Set<string>();
+function withMatchBinders<T>(binders: string[], action: () => T): T {
+  const outer = _matchBinders;
+  _matchBinders = new Set([...outer, ...binders]);
+  try { return action(); } finally { _matchBinders = outer; }
+}
+
+// Allocate once per arm and carry the names with the fields. Distinct paths
+// such as `u` and `m.u` can have the same hint inside nested matches.
 function bindMatchFields(fields: { name: string; tsType: string; type?: Ty }[], prefix?: string): MatchField[] {
+  const taken = new Set(_matchBinders);
   return fields.map(f => {
-    const binder = freshNameWhere(matchBinder(f.name, prefix), n => isUserName(n) || _matchBinders.has(n));
-    _matchBinders.add(binder);
+    const binder = freshNameWhere(matchBinder(f.name, prefix), n => isUserName(n) || taken.has(n));
+    taken.add(binder);
     return { ...f, binder };
   });
 }
@@ -1237,12 +1245,12 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null, writesReceiver = false): Expr
 function lowerMatch(scrutinee: TExpr, cases: { pattern: MatchPattern; body: TExpr }[], ty: Ty,
   binds: Stmt[] | null): Expr {
   const value = lowerExpr(scrutinee, binds);
-  const arms = cases.map(c => {
+  const arms = cases.map(c => withMatchBinders(patternBinders(c.pattern), () => {
     const branchBinds: Stmt[] | null = binds ? [] : null;
     let body = lowerExpr(c.body, branchBinds);
     if (ty.kind === "optional") body = wrapOptionalBranch(body, c.body);
     return { pattern: c.pattern, body, binds: branchBinds ?? [] };
-  });
+  }));
   if (binds && arms.some(a => a.binds.length)) {
     const name = freshName(`_branch${_branchCounter++}`);
     binds.push({ kind: "let", name, type: ty, mutable: true,
@@ -1289,7 +1297,7 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): Expr | null {
   const fields = bindMatchFields(variant.fields, obj.name);
   const pattern = buildMatchPattern(variantName, fields);
 
-  let rhs = transformExpr(e.right);
+  let rhs = withMatchBinders(patternBinders(pattern), () => transformExpr(e.right));
   rhs = replaceFieldAccess(rhs, obj.name, fields);
 
   return { kind: "match", scrutinee: varE(obj.name), arms: [{ pattern, body: rhs }, { pattern: pWild(), body: { kind: "bool", value: true } }] };
@@ -1951,7 +1959,7 @@ function buildMatchArms<T>(
     if (!declared) throw new Error(`case ${JSON.stringify(c.name)} is not a variant of ${typeName}`);
     const fields = bindMatchFields(variant?.fields ?? [], varName);
     const pattern = buildMatchPattern(c.name, fields);
-    const body = transformBody(c.body, varName, fields, c.name);
+    const body = withMatchBinders(patternBinders(pattern), () => transformBody(c.body, varName, fields, c.name));
     if (body === null) return null;
     arms.push({ pattern, body });
   }
@@ -2029,7 +2037,7 @@ function emitMatchStmt(
       // access variant-specific fields (Lean requires this; Dafny tolerates `_`).
       const fields = bindMatchFields(remaining.fields, prefix);
       const pattern = buildMatchPattern(remaining.name, fields);
-      const body = transformArmBody(fallthrough, fields);
+      const body = withMatchBinders(patternBinders(pattern), () => transformArmBody(fallthrough, fields));
       arms.push({ pattern, body });
     } else {
       arms.push({ pattern: pWild(), body: transformStmts(fallthrough, typeDecls) });
@@ -2366,14 +2374,15 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[], scrutinee?:
     if (remaining) {
       // Exactly one variant left — destructure for variant-specific field access.
       const fields = bindMatchFields(remaining.fields, chain.varName);
+      const pattern = buildMatchPattern(remaining.name, fields);
       const projected = project(chain.fallthrough, fields);
-      let body = transformPureBody(projected, typeDecls);
+      let body = withMatchBinders(patternBinders(pattern), () => transformPureBody(projected, typeDecls));
       if (!body) return null;
       if (!path && fields.length > 0) body = replaceFieldAccess(body, chain.varName, fields, remaining.name, tyBaseName(chain.typeName));
       if (!path && isSynthArrayUnion && fields.length === 1) {
         body = replaceVarInExpr(body, chain.varName, fields[0].binder);
       }
-      arms.push({ pattern: buildMatchPattern(remaining.name, fields), body });
+      arms.push({ pattern, body });
     } else {
       const body = transformPureBody(chain.fallthrough, typeDecls);
       if (!body) return null;
@@ -2489,7 +2498,6 @@ export function transformModuleDafny(mod: TModule): { typesFile: Module | null; 
 }
 
 export function transformModule(mod: TModule, specImport?: string, moduleBaseOverride?: string): { typesFile: Module | null; defFile: Module } {
-  _matchBinders.clear();
   _forofCounters.clear();
   _liftCounter = 0;
   _callbackCounter = 0;
@@ -2512,7 +2520,6 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   const defByMethods: FnDefByMethod[] = [];
   for (const fn of mod.functions) {
     if (!fn.isPure) continue;
-    _matchBinders.clear();
     const body = transformPureBody(fn.body, mod.typeDecls);
     if (body) {
       // For pure-function lemmas, replace \result with the function call.
@@ -2603,7 +2610,6 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   // def-by-method functions also skip their method wrappers
   const pureDefNames = new Set([...pureDefs.map(d => d.name), ...defByMethods.map(d => d.name)]);
   const methods: FnMethod[] = mod.functions.map(fn => {
-    _matchBinders.clear();
     const ensures: Expr[] = [];
     for (const e of fn.ensures) {
       const m = ensuresToMatch(e, mod.typeDecls);
@@ -2656,7 +2662,6 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   // Class declarations
   const classDecls: Decl[] = (mod.classes ?? []).map(cls => {
     const classMethods: FnMethod[] = cls.methods.map(fn => {
-      _matchBinders.clear();
       const ensures: Expr[] = fn.ensures.map(transformExpr);
       _forofCounters.clear();
       const body = promoteAssignedLets(transformStmts(fn.body, mod.typeDecls));

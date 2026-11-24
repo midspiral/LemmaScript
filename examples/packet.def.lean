@@ -8,7 +8,7 @@ set_option velvet.semantics.termination "total"
 
 method nextSeq (state : Int) (pkt : Packet) returns (res : Int)
   ensures ensures_1: ((match pkt with | .syn _pkt_seq => res = _pkt_seq | _ => true) : Prop)
-  ensures ensures_2: ((match pkt with | .data _pkt_seq' _pkt_len => res = state + _pkt_len | _ => true) : Prop)
+  ensures ensures_2: ((match pkt with | .data _pkt_seq _pkt_len => res = state + _pkt_len | _ => true) : Prop)
   ensures ensures_3: ((match pkt with | .fin => res = state | _ => true) : Prop)
   do
     return Pure.nextSeq state pkt

@@ -9,22 +9,68 @@ import { nestedTernary, nestedStatement } from "../fixtures/narrowing-binder-cap
 import { extractModule } from "../src/extract.ts";
 import { resolveModule } from "../src/resolve.ts";
 import { narrowModule } from "../src/narrow.ts";
-import { transformModuleDafny } from "../src/transform.ts";
+import { transformModuleDafny, transformModuleLean } from "../src/transform.ts";
 import { peepholeModule } from "../src/peephole.ts";
 import { emitDafnyFile } from "../src/dafny-emit.ts";
+import { emitLeanFile, resetLeanModule } from "../src/lean-emit.ts";
 
 const sourceText = readFileSync(new URL("../fixtures/narrowing-binder-capture.ts", import.meta.url), "utf8");
 
-function generate(text: string): string {
+function generate(text: string, backend: "dafny" | "lean" = "dafny"): string {
   const project = new Project({ compilerOptions: {
     strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true,
   } });
   const source = project.createSourceFile("binder-capture.ts", text);
   assert.deepEqual(project.getPreEmitDiagnostics().map(d => d.getMessageText()), [],
     "the regression must be valid TypeScript");
-  const { typesFile, defFile } = transformModuleDafny(narrowModule(resolveModule(extractModule(source))));
-  return emitDafnyFile(peepholeModule({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] }, "dafny"));
+  const typed = narrowModule(resolveModule(extractModule(source)));
+  const { typesFile, defFile } = backend === "dafny" ? transformModuleDafny(typed) : transformModuleLean(typed);
+  const mod = peepholeModule({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] }, backend);
+  if (backend === "dafny") return emitDafnyFile(mod);
+  resetLeanModule();
+  return emitLeanFile(mod);
 }
+
+const siblingSource = `
+type Action = { kind: "first"; idx: number } | { kind: "second"; idx: number } | { kind: "third"; idx: number };
+export function siblingSwitch(a: Action): number {
+  //@ ensures a.kind === "first" ==> \\result === a.idx
+  //@ ensures a.kind === "second" ==> \\result === a.idx + 1
+  //@ ensures a.kind === "third" ==> \\result === a.idx + 2
+  switch (a.kind) {
+    case "first": return a.idx;
+    case "second": return a.idx + 1;
+    case "third": return a.idx + 2;
+  }
+}
+export function siblingStatements(a: Action): number {
+  //@ ensures \\result === siblingSwitch(a)
+  let result = 0;
+  switch (a.kind) {
+    case "first": result = a.idx; break;
+    case "second": result = a.idx + 1; break;
+    case "third": result = a.idx + 2; break;
+  }
+  return result;
+}
+`;
+
+test("sibling match arms and independent contracts reuse their original binders", () => {
+  const dafny = generate(siblingSource);
+  for (const variant of ["first", "second", "third"]) {
+    assert.ok(dafny.includes(`case ${variant}(i_a_idx) =>`), dafny);
+  }
+  assert.doesNotMatch(dafny, /i_a_idx'/);
+  const lean = generate(siblingSource, "lean");
+  for (const variant of ["first", "second", "third"]) {
+    assert.ok(lean.includes(`| .${variant} _a_idx =>`), lean);
+  }
+  // The original nested collision still needs distinct names on both backends.
+  assert.match(generate(sourceText), /i_u_arr'/);
+  assert.match(generate(sourceText, "lean"), /_u_arr'/);
+  const result = verify(dafny);
+  assert.equal(result.status, 0, result.output);
+});
 
 function verify(text: string) {
   const dir = mkdtempSync(join(tmpdir(), "lsc-binder-capture-"));

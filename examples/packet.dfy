@@ -7,9 +7,9 @@ function nextSeq(state: int, pkt: Packet): int
   match pkt {
     case syn(i_pkt_seq) =>
       i_pkt_seq
-    case ack(i_pkt_seq') =>
+    case ack(i_pkt_seq) =>
       state
-    case data(i_pkt_seq'', i_pkt_len) =>
+    case data(i_pkt_seq, i_pkt_len) =>
       (state + i_pkt_len)
     case fin =>
       state

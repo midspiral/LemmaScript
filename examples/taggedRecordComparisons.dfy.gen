@@ -31,7 +31,7 @@ function shouldSendEmail(delivery: Delivery): bool
   match delivery {
     case sent(i_delivery_channel, i_delivery_recipient) =>
       false
-    case queued(i_delivery_channel', i_delivery_recipient') =>
+    case queued(i_delivery_channel, i_delivery_recipient) =>
       (usesEmailChannel(delivery) && hasDifferentRecipient(delivery, Recipient("")))
   }
 }

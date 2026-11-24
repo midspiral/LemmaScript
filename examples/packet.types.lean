@@ -16,9 +16,9 @@ def nextSeq (state : Int) (pkt : Packet) : Int :=
   match pkt with
   | .syn _pkt_seq =>
     _pkt_seq
-  | .ack _pkt_seq' =>
+  | .ack _pkt_seq =>
     state
-  | .data _pkt_seq'' _pkt_len =>
+  | .data _pkt_seq _pkt_len =>
     state + _pkt_len
   | .fin =>
     state

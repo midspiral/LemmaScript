@@ -719,8 +719,8 @@ method dispatchProjected(outcome: ProjectedOutcome) returns (res: int)
   ensures (match outcome { case rpc_error(i_outcome_code, i_outcome_message, i_outcome_data) => (res == i_outcome_code) case _ => true })
 {
   match outcome {
-    case rpc_error(i_outcome_code', i_outcome_message', i_outcome_data') =>
-      var i_t27 := projectedCode(RpcErrorView(i_outcome_code', i_outcome_message', i_outcome_data'));
+    case rpc_error(i_outcome_code, i_outcome_message, i_outcome_data) =>
+      var i_t27 := projectedCode(RpcErrorView(i_outcome_code, i_outcome_message, i_outcome_data));
       return i_t27;
     case done =>
       return 0;

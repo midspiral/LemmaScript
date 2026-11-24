@@ -263,15 +263,16 @@ close or merge PRs automatically.
 
 ## Validation and migration
 
-Steps 1–2 now use fresh union binders and a typed `coerce` for checked optional
-reads. Optional scope substitution and statement-level `someMatch` have been
+Steps 1–2 now avoid capture by enclosing union binders and use a typed `coerce`
+for checked optional reads. Independent match arms reuse their original names.
+Optional scope substitution and statement-level `someMatch` have been
 removed. Expression snapshots remain for `?.`, `??`, and spread merging;
 union lowering retains its existing representation. Direct mutations through
 optional storage reconstruct the enclosing value; unsupported mutation results
 and optional `pop`/`shift` produce diagnostics. Both backends check non-null
 assertions, including assertions on map lookups.
 
-Local validation passes the 646 unit tests, fixture checks, compiler and
+Local validation passes the 647 unit tests, fixture checks, compiler and
 example typechecks, all 91 Dafny examples, and the full Lean build. The focused
 regressions include false postconditions, reads after clearing storage, absent
 map lookups, optional comparisons whose other operand must execute, skipped
@@ -286,8 +287,10 @@ mirrors. Topological sort uses the existing invariant lemmas with the proved
 map-lookup bridge; its contracts are unchanged. The migration no longer needs
 the old tactic macro and reduces its heartbeat limit from 16 million to 2 million.
 
-Dedicated staging branches are prepared for 20 affected case-study pins, with
-proof additions preserved. The ordinary Dafny verification checks pass locally;
+Dedicated staging branches are needed for 15 affected case-study pins, with
+proof additions preserved. Five migrations disappear when sibling match arms
+reuse their names: talktimer, colorwheel, quota, and both guardians pins.
+The ordinary Dafny verification checks pass locally;
 the slow balanced-match and workflow proofs exceeded their 500s/600s limits.
 Their generation and additions-only checks pass, which is also their existing
 CI coverage; full proof validation remains outstanding. Pi and colorwheel's Lean

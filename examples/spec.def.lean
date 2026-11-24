@@ -412,10 +412,10 @@ method dispatchProjected (outcome : ProjectedOutcome) returns (res : Int)
   ensures ensures_1: ((match outcome with | .«rpc-error» _outcome_code _outcome_message _outcome_data => res = _outcome_code | _ => true) : Prop)
   do
     if (match outcome with | .«rpc-error» .. => true | _ => false) then
-      let _outcome_code' := (match outcome with | .«rpc-error» _v _ _ => _v | _ => (default : Int))
-      let _outcome_message' := (match outcome with | .«rpc-error» _ _v _ => _v | _ => (default : String))
-      let _outcome_data' := (match outcome with | .«rpc-error» _ _ _v => _v | _ => (default : Option String))
-      let _t39 ← projectedCode { code := _outcome_code', message := _outcome_message', data := _outcome_data' }
+      let _outcome_code := (match outcome with | .«rpc-error» _v _ _ => _v | _ => (default : Int))
+      let _outcome_message := (match outcome with | .«rpc-error» _ _v _ => _v | _ => (default : String))
+      let _outcome_data := (match outcome with | .«rpc-error» _ _ _v => _v | _ => (default : Option String))
+      let _t39 ← projectedCode { code := _outcome_code, message := _outcome_message, data := _outcome_data }
       return _t39
     else
       return 0
