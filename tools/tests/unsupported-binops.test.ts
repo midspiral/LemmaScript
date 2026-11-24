@@ -33,7 +33,7 @@ function generate(text: string, backend: "dafny" | "lean" = "dafny") {
   return backend === "dafny" ? emitDafnyFile(output) : emitLeanFile(output);
 }
 
-test("unsupported binary and compound operators fail extraction with operator name and source location (#30)", () => {
+test("unsupported binary and compound operators fail extraction with operator name and source location", () => {
   const cases: { name: string; op: string; code: string; line: number }[] = [
     {
       name: "exponentiation **",
@@ -86,7 +86,7 @@ test("unsupported binary and compound operators fail extraction with operator na
   }
 });
 
-test("lsc gen rejects **, **=, and >>> on both Dafny and Lean backends without writing artifacts (#30)", () => {
+test("lsc gen rejects **, **=, and >>> on both Dafny and Lean backends without writing artifacts", () => {
   const cli = fileURLToPath(new URL("../src/lsc.ts", import.meta.url));
   const loader = createRequire(import.meta.url).resolve("tsx");
   const samples = [
