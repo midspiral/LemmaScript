@@ -30,7 +30,7 @@ import type { TExpr, TStmt, TModule } from "./typedir.js";
  *  havoc'd variable is fine; only the *source* expression is replaced. */
 function isBadNode(e: TExpr): boolean {
   switch (e.kind) {
-    case "var": case "num": case "bigint": case "str": case "bool": case "havoc":
+    case "var": case "num": case "bigint": case "str": case "bool": case "havoc": case "assignment":
       return false;
     // A field/index is unmodellable when its *object* is opaque (`req.body`,
     // `process.env.X`). It is NOT unmodellable just because its own type is
@@ -74,6 +74,7 @@ function forEachChildExpr(e: TExpr, f: (c: TExpr) => void): void {
   switch (e.kind) {
     case "binop": f(e.left); f(e.right); return;
     case "unop": f(e.expr); return;
+    case "assignment": f(e.target); f(e.value); f(e.storedValue); return;
     case "call": f(e.fn); e.args.forEach(f); return;
     case "index": f(e.obj); f(e.idx); return;
     case "field": f(e.obj); return;
@@ -242,6 +243,7 @@ function rewriteExpr(e: TExpr, hoisted: TStmt[]): TExpr {
     case "var": case "num": case "bigint": case "str": case "bool": case "havoc": return e;
     case "binop": return { ...e, left: rewriteExpr(e.left, hoisted), right: rewriteExpr(e.right, hoisted) };
     case "unop": return { ...e, expr: rewriteExpr(e.expr, hoisted) };
+    case "assignment": return { ...e, value: rewriteExpr(e.value, hoisted) };
     case "call": return { ...e, fn: rewriteExpr(e.fn, hoisted), args: e.args.map(a => rewriteExpr(a, hoisted)) };
     case "index": return { ...e, obj: rewriteExpr(e.obj, hoisted), idx: rewriteExpr(e.idx, hoisted) };
     case "field": return { ...e, obj: rewriteExpr(e.obj, hoisted) };

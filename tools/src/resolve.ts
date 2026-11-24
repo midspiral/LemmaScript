@@ -1016,8 +1016,37 @@ function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
   return { ...expr, ty: numericValueType(expr.ty, ctx.typeDecls) };
 }
 
+let assignmentCounter = 0;
+
+function resolveAssignment(targetExpr: RawExpr, op: string, valueExpr: RawExpr, ctx: Ctx): Extract<TExpr, { kind: "assignment" }> {
+  const target = resolveExpr(targetExpr, ctx);
+  const payloadTy = target.ty.kind === "optional" ? target.ty.inner : target.ty;
+  const valueCtx = { ...ctx, returnTy: target.ty };
+  let value = coerceStr(resolveExpr(valueExpr, valueCtx), target.ty, ctx.typeDecls);
+  if (value.kind === "arrayLiteral" && target.ty.kind === "array") value = { ...value, ty: target.ty };
+  let ty = value.ty;
+  if (op !== "=") {
+    const operation: RawExpr = op === "??="
+      ? { kind: "nullish", left: targetExpr, right: valueExpr }
+      : { kind: "binop", op: op.slice(0, -1), left: targetExpr, right: valueExpr };
+    ty = resolveExpr(operation, valueCtx).ty;
+  } else if (target.ty.kind === "real" && value.kind === "num") {
+    value = { ...value, ty: target.ty };
+    ty = target.ty;
+  }
+  // A nonnegative literal assigned to an integer variable remains an integer
+  // value. Otherwise branch temporaries would spuriously narrow it to Nat.
+  if (payloadTy.kind === "int" && ty.kind === "nat") ty = payloadTy;
+  const resultName = freshName(`_assigned${assignmentCounter++}`);
+  const result: TExpr = { kind: "var", name: resultName, ty };
+  return { kind: "assignment", op, target, value, ty, resultName,
+    storedValue: coerceToTargetTy(result, target.ty, ctx.typeDecls) };
+}
+
 function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
   switch (e.kind) {
+    case "assignment":
+      return { ...resolveAssignment(e.target, e.op, e.value, ctx), postfix: e.postfix };
     case "var": {
       if (e.name === "undefined") return { kind: "var", name: "undefined", ty: { kind: "void" } };
       const entry = binding(ctx.env, e.name);
@@ -1859,12 +1888,20 @@ function containsHavoc(v: unknown): boolean {
   return Object.values(v).some(containsHavoc);
 }
 
+function containsAssignment(v: unknown): boolean {
+  if (Array.isArray(v)) return v.some(containsAssignment);
+  if (v === null || typeof v !== "object") return false;
+  if ((v as { kind?: string }).kind === "assignment") return true;
+  return Object.values(v).some(containsAssignment);
+}
+
 /** Syntactic purity: no while, no for-of, no mutable let, no havoc. */
 function isSyntacticallyPure(stmts: RawStmt[]): boolean {
   for (const s of stmts) {
     // Havoc lowers to Dafny's `*`, which is only valid in a method.
-    if (containsHavoc(s)) return false;
+    if (containsHavoc(s) || containsAssignment(s)) return false;
     switch (s.kind) {
+      case "assign": return false;
       case "while": case "forof": return false;
       case "let": if (s.mutable) return false; break;
       case "if": if (!isSyntacticallyPure(s.then) || !isSyntacticallyPure(s.else)) return false; break;
@@ -1886,6 +1923,7 @@ function collectCallsExpr(e: RawExpr, fns: Set<string>, out: Set<string>): void 
       return;
     case "binop": collectCallsExpr(e.left, fns, out); collectCallsExpr(e.right, fns, out); return;
     case "unop": collectCallsExpr(e.expr, fns, out); return;
+    case "assignment": collectCallsExpr(e.target, fns, out); collectCallsExpr(e.value, fns, out); return;
     case "field": collectCallsExpr(e.obj, fns, out); return;
     case "index": collectCallsExpr(e.obj, fns, out); collectCallsExpr(e.idx, fns, out); return;
     case "record":
@@ -2097,6 +2135,7 @@ function precomputeFieldTypesInner(typeDecls: TypeDeclInfo[]) {
 }
 
 export function resolveModule(raw: RawModule): TModule {
+  assignmentCounter = 0;
   callbackCounter = 0;
   mergeBinder = 0;
   _warnedRefEq.clear();

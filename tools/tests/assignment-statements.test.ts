@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -108,45 +108,43 @@ test("parentheses preserve scoped targets, array updates, loop updates, and havo
   assert.equal(result.status, 0, result.output);
 });
 
-test("assignments and updates in value positions fail with a source location", () => {
-  const bodies = [
-    "const y = (x = 7);", "return x = 7;", "if ((x = 7) > 0) return x;",
-    "while ((x = 7) > 0) return x;", "Math.abs(x = 7);", "const a = [x = 7];",
-    "const a = { value: x = 7 };", "const y = x > 0 ? (x = 7) : 0;",
-    "const y = x > 0 && (x = 7);", "x = (x = 7);", "const f = () => x = 7;",
-    ...["=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "&=", "|=", "^=", "&&=", "||=", "??="]
-      .map(op => `const y = (x ${op} 7);`),
-    ...["++x", "x++", "--x", "x--"].map(expr => `const y = ${expr};`),
-    ...["&&=", "||=", "??="].map(op => `x ${op} 7;`),
-  ];
-  for (const body of bodies) {
-    assert.throws(() => extract(`export function f(x: number): number { ${body} return x; }`),
-      /Unsupported (assignment|update) expression at \/assignments\.ts:1:\d+:.*Use a separate assignment statement/, body);
-  }
-  assert.throws(() => extract(`export function f(x: number): number {
-  const y = (x = 7);
-  return x;
-}`), /Unsupported assignment expression at \/assignments\.ts:2:14: x = 7/);
-});
-
-test("both CLIs reject value assignments before writing verification artifacts", () => {
+test("both CLIs preserve writes when assignments are used as values", () => {
   const cli = fileURLToPath(new URL("../src/lsc.ts", import.meta.url));
   const loader = createRequire(import.meta.url).resolve("tsx");
   for (const backend of ["dafny", "lean"]) {
     const dir = mkdtempSync(join(tmpdir(), "lsc-assignment-cli-"));
     try {
       writeFileSync(join(dir, "assignments.ts"), `export function f(p: number): number {
-  //@ ensures p === 0 ==> \\result === 0
+  //@ ensures \\result === 14
   let x = p;
   const y = (x = 7);
-  return x;
+  return x + y;
 }`);
       const result = spawnSync(process.execPath, ["--import", loader, cli, "gen", `--backend=${backend}`, "assignments.ts"],
         { cwd: dir, encoding: "utf8", timeout: 30_000 });
       assert.ifError(result.error);
-      assert.notEqual(result.status, 0, result.stdout + result.stderr);
-      assert.match(result.stdout + result.stderr, /Unsupported assignment expression at .*assignments\.ts:4:14: x = 7/);
-      assert.deepEqual(readdirSync(dir), ["assignments.ts"]);
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const artifact = join(dir, backend === "dafny" ? "assignments.dfy.gen" : "assignments.def.lean");
+      assert.match(readFileSync(artifact, "utf8"), /x := (?:i)?_assigned\d+/);
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
+test("both CLIs still reject unsequenced lambda writes before writing artifacts", () => {
+  const cli = fileURLToPath(new URL("../src/lsc.ts", import.meta.url));
+  const loader = createRequire(import.meta.url).resolve("tsx");
+  for (const backend of ["dafny", "lean"]) {
+    for (const body of ["const f = () => x = 7; return f();", "return [x].map(value => ++value)[0];"]) {
+      const dir = mkdtempSync(join(tmpdir(), "lsc-assignment-cli-"));
+      try {
+        writeFileSync(join(dir, "assignments.ts"), `export function f(x: number): number { ${body} }`);
+        const result = spawnSync(process.execPath, ["--import", loader, cli, "gen", `--backend=${backend}`, "assignments.ts"],
+          { cwd: dir, encoding: "utf8", timeout: 30_000 });
+        assert.ifError(result.error);
+        assert.notEqual(result.status, 0, result.stdout + result.stderr);
+        assert.match(result.stdout + result.stderr, /assignments in lambdas and specifications are unsupported/);
+        assert.deepEqual(readdirSync(dir), ["assignments.ts"]);
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    }
   }
 });

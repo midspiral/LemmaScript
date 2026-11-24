@@ -12,6 +12,7 @@ import { anyExpr, anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patter
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName } from "./names.js";
+import { sequenceModule } from "./sequence.js";
 import { builtinSpec } from "./builtins.js";
 import { lowerIndexedCallback } from "./callback-lowering.js";
 import { isFalsyCapableTy } from "./condition-facts.js";
@@ -86,7 +87,7 @@ function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
 const varE = (name: string): Expr => ({ kind: "var", name });
 
 /** Map over all sub-expressions in a TExpr (typed IR). */
-function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
+export function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
   const hit = f(e);
   if (hit) return hit;
   const r = (x: TExpr) => mapTExpr(x, f);
@@ -94,6 +95,7 @@ function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
     case "var": case "num": case "bigint": case "str": case "bool": case "havoc": return e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
     case "unop": return { ...e, expr: r(e.expr) };
+    case "assignment": return { ...e, target: r(e.target), value: r(e.value), storedValue: r(e.storedValue) };
     case "call": return { ...e, fn: r(e.fn), args: e.args.map(r) };
     case "index": return { ...e, obj: r(e.obj), idx: r(e.idx) };
     case "field": return { ...e, obj: r(e.obj) };
@@ -469,6 +471,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
   }
 
   switch (e.kind) {
+    case "assignment":
+      throw new Error("assignment expression reached lowering — sequence.ts should have hoisted it (assignments in lambdas and specifications are unsupported)");
     case "var": return { kind: "var", name: e.name };
     case "num": {
       const literal: Expr = { kind: "num", value: e.value };
@@ -1745,6 +1749,25 @@ let _callbackCounter = 0;
 // Branch results must not renumber the existing lifted-call temporaries.
 let _branchCounter = 0;
 
+/** Write through an element or field path by rebuilding the value-typed
+ *  collection back to its root variable. */
+function writeAssignment(target: TExpr, value: Expr): Stmt {
+  if (target.kind === "var") return { kind: "assign", target: target.name, value };
+  if (target.kind === "field") {
+    if (target.obj.kind === "var" && target.obj.name === "this")
+      return { kind: "assign", target: `this.${target.field}`, value };
+    return writeAssignment(target.obj, { kind: "record", spread: transformExpr(target.obj),
+      fields: [{ name: target.field, value }] });
+  }
+  if (target.kind === "index") {
+    const index = transformExpr(target.idx);
+    return writeAssignment(target.obj, { kind: "methodCall", obj: transformExpr(target.obj), objTy: target.obj.ty,
+      method: target.obj.ty.kind === "map" ? "set" : "with",
+      args: [target.obj.ty.kind === "array" && !isNat(target.idx.ty) ? { kind: "toNat", expr: index } : index, value], monadic: false });
+  }
+  throw new Error(`Unsupported assignment target: ${target.kind}`);
+}
+
 function liftMethodCalls(e: TExpr): { binds: Stmt[]; expr: Expr } {
   const binds: Stmt[] = [];
   return { binds, expr: lowerExpr(e, binds) };
@@ -1757,7 +1780,8 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     case "let": {
       // Whole-init havoc: emit directly, no lifting
       if (s.init.kind === "havoc") {
-        return [{ kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: { kind: "havoc", type: s.init.ty } }];
+        return [{ kind: "let", name: s.name, type: s.ty, mutable: s.mutable,
+          value: { kind: s.init.placeholder && _opts.backend !== "dafny" ? "default" : "havoc", type: s.init.ty } }];
       }
       // arr.shift()! → let x = arr[0]; arr = arr[1..]
       const init = s.init.kind === "call" ? s.init : undefined;
@@ -1860,6 +1884,8 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     case "break": return [{ kind: "break" }];
     case "continue": return [{ kind: "continue" }];
     case "expr": {
+      // A sequenced write to an element or field path (sequence.ts).
+      if (s.expr.kind === "assignment") return [writeAssignment(s.expr.target, transformExpr(s.expr.value))];
       // Mutating collection call: m.set(k, v) → m := m.set(k, v) (same for set
       // .add/.delete and array .push). The receiver may be a bare var, or a
       // field path rooted at a var (b.items.push(v) → b := b.(items := b.items + [v])).
@@ -2257,7 +2283,7 @@ function projectStructuralCallArgsInTStmts(
 /** A pure access path — chain of field accesses rooted at a var. */
 interface AccessPath { rootVar: string; fields: string[] }
 
-function asTAccessPath(e: TExpr): AccessPath | null {
+export function asTAccessPath(e: TExpr): AccessPath | null {
   if (e.kind === "var") return { rootVar: e.name, fields: [] };
   if (e.kind === "field") {
     const inner = asTAccessPath(e.obj);
@@ -2481,6 +2507,11 @@ function findReassignedNames(stmts: TStmt[], names: Set<string>): Set<string> {
   const found = new Set<string>();
   function scan(stmts: TStmt[]) {
     for (const s of stmts) {
+      if (s.kind === "expr" && s.expr.kind === "assignment") {
+        let target = s.expr.target;
+        while (target.kind === "field" || target.kind === "index") target = target.obj;
+        if (target.kind === "var" && names.has(target.name)) found.add(target.name);
+      }
       if (s.kind === "assign" && names.has(s.target)) found.add(s.target);
       if (s.kind === "ghostAssign" && names.has(s.target)) found.add(s.target);
       // Mutating collection calls: s.add(x), m.set(k,v), s.delete(x), arr.push(x)
@@ -2493,6 +2524,8 @@ function findReassignedNames(stmts: TStmt[], names: Set<string>): Set<string> {
       if (s.kind === "while") scan(s.body);
       if (s.kind === "forof") scan(s.body);
       if (s.kind === "switch") { for (const c of s.cases) scan(c.body); scan(s.defaultBody); }
+      if (s.kind === "someMatch") { scan(s.someBody); scan(s.noneBody); }
+      if (s.kind === "tagMatch") { for (const c of s.cases) scan(c.body); scan(s.fallthrough); }
     }
   }
   scan(stmts);
@@ -2557,6 +2590,7 @@ export function transformModuleDafny(mod: TModule): { typesFile: Module | null; 
 }
 
 export function transformModule(mod: TModule, specImport?: string, moduleBaseOverride?: string): { typesFile: Module | null; defFile: Module } {
+  mod = sequenceModule(mod);
   _forofCounters.clear();
   _liftCounter = 0;
   _callbackCounter = 0;

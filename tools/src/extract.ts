@@ -357,13 +357,6 @@ function unwrapParens(expr: Expression): Expression {
   return expr;
 }
 
-function unsupportedAssignmentExpr(node: Expression): never {
-  const source = node.getSourceFile();
-  const { line, column } = source.getLineAndColumnAtPos(node.getStart());
-  const kind = Node.isBinaryExpression(node) ? "assignment" : "update";
-  throw new Error(`Unsupported ${kind} expression at ${source.getFilePath()}:${line}:${column}: ${node.getText().slice(0, 80)}. Use a separate assignment statement.`);
-}
-
 function extractExpr(node: Expression): RawExpr {
   // Havoc key matching: replace matching calls or new expressions with havoc expression
   if (_havocKey && (Node.isCallExpression(node) || Node.isNewExpression(node))) {
@@ -522,11 +515,11 @@ function extractExpr(node: Expression): RawExpr {
 
   // Binary expression: a + b, a === b, etc.
   if (Node.isBinaryExpression(node)) {
+    const op = node.getOperatorToken().getText();
     const token = node.getOperatorToken().getKind();
     if (token >= SyntaxKind.FirstAssignment && token <= SyntaxKind.LastAssignment) {
-      unsupportedAssignmentExpr(node);
+      return { kind: "assignment", op, target: extractExpr(node.getLeft()), value: extractExpr(node.getRight()) };
     }
-    const op = node.getOperatorToken().getText();
     // Nullish coalescing: a ?? b — single-eval, narrow rewrites to someMatch
     if (op === "??") {
       return { kind: "nullish", left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
@@ -534,10 +527,11 @@ function extractExpr(node: Expression): RawExpr {
     return { kind: "binop", op, left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
   }
 
-  // Updates are supported only where desugarStmtExpr can preserve the write.
+  // Updates yield the new value in prefix form, the old value in postfix form.
   if ((Node.isPrefixUnaryExpression(node) || Node.isPostfixUnaryExpression(node)) &&
       (node.getOperatorToken() === SyntaxKind.PlusPlusToken || node.getOperatorToken() === SyntaxKind.MinusMinusToken)) {
-    unsupportedAssignmentExpr(node);
+    return { kind: "assignment", op: node.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+=" : "-=",
+      target: extractExpr(node.getOperand()), value: { kind: "num", value: 1 }, postfix: Node.isPostfixUnaryExpression(node) };
   }
 
   // Prefix unary: !x, -x
@@ -1371,6 +1365,21 @@ function desugarStmtExpr(expr: Expression, line: number): RawStmt | null {
   if (Node.isBinaryExpression(expr)) {
     const opText = expr.getOperatorToken().getText();
     const left = unwrapParens(expr.getLeft());
+    // Computed targets and logical assignments need reference evaluation and
+    // short-circuiting, handled by the assignment-expression lowering.
+    const token = expr.getOperatorToken().getKind();
+    const simpleElementWrite = opText === "=" && Node.isElementAccessExpression(left) &&
+      !expr.getDescendants().some(n =>
+        Node.isBinaryExpression(n) && n.getOperatorToken().getKind() >= SyntaxKind.FirstAssignment &&
+          n.getOperatorToken().getKind() <= SyntaxKind.LastAssignment ||
+        (Node.isPrefixUnaryExpression(n) || Node.isPostfixUnaryExpression(n)) &&
+          [SyntaxKind.PlusPlusToken, SyntaxKind.MinusMinusToken].includes(n.getOperatorToken()));
+    const simpleTarget = Node.isIdentifier(left) || simpleElementWrite ||
+      (Node.isPropertyAccessExpression(left) && Node.isThisExpression(unwrapParens(left.getExpression())));
+    if (token >= SyntaxKind.FirstAssignment && token <= SyntaxKind.LastAssignment &&
+        (!simpleTarget || ["&&=", "||=", "??="].includes(opText))) {
+      return { kind: "expr", expr: extractExpr(expr), line };
+    }
     if (opText === "=" && Node.isElementAccessExpression(left)) {
       const receiver = unwrapParens(left.getExpression());
       const obj = extractExpr(receiver);
@@ -1395,7 +1404,9 @@ function desugarStmtExpr(expr: Expression, line: number): RawStmt | null {
   }
   if ((Node.isPostfixUnaryExpression(expr) || Node.isPrefixUnaryExpression(expr)) &&
       (expr.getOperatorToken() === SyntaxKind.PlusPlusToken || expr.getOperatorToken() === SyntaxKind.MinusMinusToken)) {
-    const target = sourceName(unwrapParens(expr.getOperand()));
+    const operand = unwrapParens(expr.getOperand());
+    if (!Node.isIdentifier(operand)) return { kind: "expr", expr: extractExpr(expr), line };
+    const target = sourceName(operand);
     const op = expr.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+" : "-";
     return {
       kind: "assign", target,
