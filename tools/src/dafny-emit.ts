@@ -218,6 +218,12 @@ const OP_MAP: Record<string, string> = {
   "arrayConcat": "+",
 };
 
+const SUPPORTED_DAFNY_BINOPS = new Set([
+  "==", "!=", ">=", "<=", ">", "<",
+  "&&", "||", "<==>",
+  "+", "-", "*", "/", "%", "in",
+]);
+
 /** Escape controls and line separators while preserving printable Unicode. */
 function escapeDafnyScalarString(value: string): string {
   return value.replace(/["\\\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, char => {
@@ -641,6 +647,9 @@ function emitExpr(e: Expr): string {
       if (e.op === "|") {
         needPreamble("BitOr");
         return `BitOr(${emitExpr(e.left)}, ${emitExpr(e.right)})`;
+      }
+      if (!SUPPORTED_DAFNY_BINOPS.has(op)) {
+        throw new Error(`Unsupported Dafny binary operator: ${e.op}`);
       }
       // int→real coercion is now injected upstream in transform (toReal nodes),
       // which has full type information — including real-typed variables, not
