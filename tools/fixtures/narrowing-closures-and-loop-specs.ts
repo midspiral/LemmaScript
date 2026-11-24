@@ -47,3 +47,46 @@ export function whileDecreasesNarrowed(o: number | undefined): number {
   }
   return 0;
 }
+
+export type Shape = { kind: "a"; n: number } | { kind: "b"; s: string };
+
+export function closureReadsSynthUnionPure(u: number[] | number, xs: number[]): number[] {
+  if (Array.isArray(u)) {
+    return xs.map((x) => x + u.length);
+  }
+  return [];
+}
+
+export function closureReadsSynthUnionMethod(u: number[] | number, xs: number[]): number[] {
+  if (Array.isArray(u)) {
+    let k = 0;
+    while (k < 1) {
+      //@ invariant 0 <= k && k <= 1
+      //@ decreases 1 - k
+      k = k + 1;
+    }
+    return xs.map((x) => x + u.length);
+  }
+  return [];
+}
+
+export function closureReadsUnionFieldPure(sh: Shape, xs: number[]): number[] {
+  if (sh.kind === "a") {
+    return xs.map((x) => x + sh.n);
+  }
+  return [];
+}
+
+export function closureReadsUnionFieldMethod(sh: Shape, xs: number[]): number[] {
+  if (sh.kind === "a") {
+    let k = 0;
+    while (k < 1) {
+      //@ invariant 0 <= k && k <= 1
+      //@ decreases 1 - k
+      k = k + 1;
+    }
+    return xs.map((x) => x + sh.n);
+  }
+  return [];
+}
+

@@ -8,7 +8,7 @@
 import type { TExpr, TStmt, TModule, Ty } from "./typedir.js";
 import { isBigInt, tyEqual } from "./typedir.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
-import { anyExpr, anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternBinds, patternCtor } from "./ir.js";
+import { anyExpr, anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
 import { parseTsType } from "./types.js";
 import { freshName, freshNameWhere, isUserName } from "./names.js";
@@ -75,8 +75,12 @@ function mapStmt(s: Stmt, f: (e: Expr) => Expr | null): Stmt {
       const scr = r(s.scrutinee);
       return { ...s, scrutinee: scr, arms: s.arms.map(a => ({ ...a, body: a.body.map(t => mapStmt(t, f)) })) };
     }
-    case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r), body: s.body.map(t => mapStmt(t, f)) };
-    case "forin": return { ...s, bound: r(s.bound), invariants: s.invariants.map(r), body: s.body.map(t => mapStmt(t, f)) };
+    case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r),
+      decreasing: s.decreasing ? r(s.decreasing) : null,
+      doneWith: s.doneWith ? r(s.doneWith) : null,
+      body: s.body.map(t => mapStmt(t, f)) };
+    case "forin": return { ...s, bound: r(s.bound), invariants: s.invariants.map(r),
+      body: s.body.map(t => mapStmt(t, f)) };
     case "ghostLet": return { ...s, value: r(s.value) };
     case "ghostAssign": return { ...s, value: r(s.value) };
     case "assert": return { ...s, expr: r(s.expr) };
@@ -109,7 +113,7 @@ function mapLambdaBody(x: Expr & { kind: "lambda" }, name: string, f: (e: Expr) 
  *  rest of the block), `match` arm patterns, `forall`/`exists`, and `for-in`
  *  indices. Capture-avoiding: a nested scope that reintroduces `from` keeps its
  *  own binding untouched. Lambda bodies are walked by `mapLambdaBody`. */
-export function renameFreeVar(e: Expr, from: string, to: string): Expr {
+function renameFreeVar(e: Expr, from: string, to: string): Expr {
   const f = (x: Expr): Expr | null => {
     if (x.kind === "var") return x.name === from ? { ...x, name: to } : x;
     // let-expression: `value` is in the outer scope (rename), `body` sees the
@@ -118,7 +122,7 @@ export function renameFreeVar(e: Expr, from: string, to: string): Expr {
     if ((x.kind === "forall" || x.kind === "exists") && x.var === from) return x;
     if (x.kind === "match") {
       return { ...x, scrutinee: mapExpr(x.scrutinee, f), arms: x.arms.map(a =>
-        patternBinds(a.pattern, from) ? a : { ...a, body: mapExpr(a.body, f) }) };
+        patternBinders(a.pattern).includes(from) ? a : { ...a, body: mapExpr(a.body, f) }) };
     }
     if (x.kind === "lambda") return mapLambdaBody(x, from, f);
     return null;
@@ -126,22 +130,14 @@ export function renameFreeVar(e: Expr, from: string, to: string): Expr {
   return mapExpr(e, f);
 }
 
-
-
-/** Map over the sub-expressions of a TExpr (typed IR) in which `root` still
- *  names the binding visible at `e`. `f` is called on each node; a non-null
- *  result replaces the node and stops descent. Every caller substitutes for a
- *  narrowed variable named `root` (or a path rooted at it), so descent stops
- *  wherever `root` is rebound: a `forall`/`exists` variable, a `someMatch`
- *  binder, a lambda parameter, and, through `mapTStmts`, a block-level
- *  declaration or a `for…of` name. Otherwise an inner declaration that shadows
- *  the narrowed name would have its reads replaced by the outer binder (#351).
- *  Lambda bodies and loop `decreases`/`done_with` clauses are walked like any
- *  other sub-expression, so they read the binder too (#353). */
-function mapTExpr(e: TExpr, root: string, f: (e: TExpr) => TExpr | null): TExpr {
+/** Map over all sub-expressions in a TExpr (typed IR), including lambda
+ *  defaults and bodies. Extraction leaves no binding that shadows another
+ *  (see LexicalNames), so callers substituting for a narrowed name can rely
+ *  on names identifying their variables across nested scopes (#353). */
+function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
   const hit = f(e);
   if (hit) return hit;
-  const r = (x: TExpr) => mapTExpr(x, root, f);
+  const r = (x: TExpr) => mapTExpr(x, f);
   switch (e.kind) {
     case "var": case "num": case "bigint": case "str": case "bool": case "havoc": return e;
     case "binop": return { ...e, left: r(e.left), right: r(e.right) };
@@ -157,70 +153,41 @@ function mapTExpr(e: TExpr, root: string, f: (e: TExpr) => TExpr | null): TExpr 
         : s.kind === "index" ? { ...s, idx: r(s.idx) }
         : s) };
     case "nullish": return { ...e, left: r(e.left), right: r(e.right) };
-    case "someMatch": return { ...e, scrutinee: r(e.scrutinee),
-      someBody: e.binder === root ? e.someBody : r(e.someBody), noneBody: r(e.noneBody) };
+    case "someMatch": return { ...e, scrutinee: r(e.scrutinee), someBody: r(e.someBody), noneBody: r(e.noneBody) };
     case "tagMatch": return { ...e, scrutinee: r(e.scrutinee),
       cases: e.cases.map(c => ({ ...c, body: r(c.body) })),
       fallthrough: e.fallthrough ? r(e.fallthrough) : null };
-    case "forall": return e.var === root ? e : { ...e, body: r(e.body) };
-    case "exists": return e.var === root ? e : { ...e, body: r(e.body) };
-    case "lambda":
-      // Parameters share one scope, so a parameter named `root` also hides
-      // it from the other parameters' defaults.
-      if (e.params.some(p => p.name === root)) return e;
-      return { ...e,
-        params: e.params.map(p => p.defaultValue ? { ...p, defaultValue: r(p.defaultValue) } : p),
-        body: mapTStmts(e.body, root, f) };
+    case "forall": return { ...e, body: r(e.body) };
+    case "exists": return { ...e, body: r(e.body) };
+    case "lambda": return { ...e,
+      params: e.params.map(p => p.defaultValue ? { ...p, defaultValue: r(p.defaultValue) } : p),
+      body: e.body.map(s => mapTStmt(s, f)) };
   }
 }
 
-/** Map over the expressions of a statement block, with the scoping of
- *  `mapTExpr`. A `let` of `root` shadows it for the rest of the block; its own
- *  initializer still sees the outer binding. Nested blocks get their own
- *  scope, so the shadow ends with the block that declares it. A `//@ ghost let`
- *  does not stop the substitution: it does not exist in the JavaScript, so
- *  later runtime code still reads the narrowed outer name. */
-function mapTStmts(stmts: TStmt[], root: string, f: (e: TExpr) => TExpr | null): TStmt[] {
-  const out: TStmt[] = [];
-  for (let i = 0; i < stmts.length; i++) {
-    const s = stmts[i];
-    out.push(mapTStmt(s, root, f));
-    if (s.kind === "let" && s.name === root) {
-      out.push(...stmts.slice(i + 1));
-      break;
-    }
-  }
-  return out;
-}
-
-function mapTStmt(s: TStmt, root: string, f: (e: TExpr) => TExpr | null): TStmt {
-  const r = (e: TExpr) => mapTExpr(e, root, f);
-  const block = (b: TStmt[]) => mapTStmts(b, root, f);
+/** Map over all expressions in a TStmt tree (typed IR). */
+function mapTStmt(s: TStmt, f: (e: TExpr) => TExpr | null): TStmt {
+  const r = (e: TExpr) => mapTExpr(e, f);
   switch (s.kind) {
     case "let": return { ...s, init: r(s.init) };
     case "assign": return { ...s, value: r(s.value) };
     case "return": return { ...s, value: r(s.value) };
     case "break": case "continue": case "throw": return s;
     case "expr": return { ...s, expr: r(s.expr) };
-    case "if": return { ...s, cond: r(s.cond), then: block(s.then), else: block(s.else) };
+    case "if": return { ...s, cond: r(s.cond), then: s.then.map(t => mapTStmt(t, f)), else: s.else.map(t => mapTStmt(t, f)) };
     case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(r),
-      decreases: s.decreases ? r(s.decreases) : null, doneWith: s.doneWith ? r(s.doneWith) : null,
-      body: block(s.body) };
-    case "switch": return { ...s, expr: r(s.expr), cases: s.cases.map(c => ({ ...c, body: block(c.body) })), defaultBody: block(s.defaultBody) };
-    case "forof":
-      // The loop names are in scope for the specs and the body; resolve
-      // types the specs in the loop scope too.
-      if (s.names.includes(root)) return { ...s, iterable: r(s.iterable) };
-      return { ...s, iterable: r(s.iterable), invariants: s.invariants.map(r),
-        doneWith: s.doneWith ? r(s.doneWith) : null, body: block(s.body) };
+      decreases: s.decreases ? r(s.decreases) : null,
+      doneWith: s.doneWith ? r(s.doneWith) : null, body: s.body.map(t => mapTStmt(t, f)) };
+    case "switch": return { ...s, expr: r(s.expr), cases: s.cases.map(c => ({ ...c, body: c.body.map(t => mapTStmt(t, f)) })), defaultBody: s.defaultBody.map(t => mapTStmt(t, f)) };
+    case "forof": return { ...s, iterable: r(s.iterable), invariants: s.invariants.map(r),
+      doneWith: s.doneWith ? r(s.doneWith) : null, body: s.body.map(t => mapTStmt(t, f)) };
     case "ghostLet": return { ...s, init: r(s.init) };
     case "ghostAssign": return { ...s, value: r(s.value) };
     case "assert": return { ...s, expr: r(s.expr) };
-    case "someMatch": return { ...s, scrutinee: r(s.scrutinee),
-      someBody: s.binder === root ? s.someBody : block(s.someBody), noneBody: block(s.noneBody) };
+    case "someMatch": return { ...s, scrutinee: r(s.scrutinee), someBody: s.someBody.map(t => mapTStmt(t, f)), noneBody: s.noneBody.map(t => mapTStmt(t, f)) };
     case "tagMatch": return { ...s, scrutinee: r(s.scrutinee),
-      cases: s.cases.map(c => ({ ...c, body: block(c.body) })),
-      fallthrough: block(s.fallthrough) };
+      cases: s.cases.map(c => ({ ...c, body: c.body.map(t => mapTStmt(t, f)) })),
+      fallthrough: s.fallthrough.map(t => mapTStmt(t, f)) };
   }
 }
 
@@ -1429,7 +1396,7 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): Expr | null {
 function substIntoMatch(x: Expr & { kind: "match" }, oldName: string, introduced: string[],
                         sub: (e: Expr) => Expr): Expr {
   return { ...x, scrutinee: sub(x.scrutinee), arms: x.arms.map(a => {
-    if (patternBinds(a.pattern, oldName)) return a;
+    if (patternBinders(a.pattern).includes(oldName)) return a;
     const readsOld = anyExpr(a.body, y => y.kind === "var" && y.name === oldName);
     if (!readsOld || a.pattern.kind !== "ctor") return { ...a, body: sub(a.body) };
     const binders = [...a.pattern.binders];
@@ -1501,15 +1468,31 @@ function exprPathEqual(a: Expr, b: Expr): boolean {
   return false;
 }
 
+/** Extract the root variable name of an access-path Expr (e.g. `m.u` → `m`). */
+function exprPathRoot(e: Expr): string | null {
+  let cur = e;
+  while (cur.kind === "field") cur = cur.obj;
+  return cur.kind === "var" ? cur.name : null;
+}
+
 /** Substitute every occurrence of `target` (an access-path Expr) with `repl`
  *  inside `e`. Mirror of `replaceVarInExpr` but keyed on a sub-path rather
  *  than a bare name — needed when the narrowing scrutinee is `m.content`
  *  (field access) rather than a bare `content` (var). */
 function replaceExprInExpr(e: Expr, target: Expr, repl: Expr): Expr {
-  return mapExpr(e, x => {
+  const root = exprPathRoot(target);
+  const introduced = repl.kind === "var" ? [repl.name] : [];
+  const fn = (x: Expr): Expr | null => {
     if (exprPathEqual(x, target)) return repl;
+    if (root) {
+      if (x.kind === "match") return substIntoMatch(x, root, introduced, y => replaceExprInExpr(y, target, repl));
+      if (x.kind === "lambda") return mapLambdaBody(x, root, fn);
+      if (x.kind === "let" && x.name === root) return { ...x, value: replaceExprInExpr(x.value, target, repl) };
+      if ((x.kind === "forall" || x.kind === "exists") && x.var === root) return x;
+    }
     return null;
-  });
+  };
+  return mapExpr(e, fn);
 }
 
 /** Extract a short reader-friendly hint for a TExpr access-path: the last
@@ -2217,12 +2200,12 @@ function emitMatchStmt(
  *  Used by emitMatchStmt for synth array-unions where the variant has a single
  *  payload field and the user code refers to the scrutinee by its bare name. */
 function replaceVarInTStmts(stmts: TStmt[], oldName: string, newName: string, newTy: Ty): TStmt[] {
-  return mapTStmts(stmts, oldName, e => {
+  return stmts.map(s => mapTStmt(s, e => {
     if (e.kind === "var" && e.name === oldName) {
       return { kind: "var", name: newName, ty: newTy } as TExpr;
     }
     return null;
-  });
+  }));
 }
 
 /** If the chain has matched all variants but one, return that remaining variant. */
@@ -2268,6 +2251,7 @@ function switchCtorDecl(typeDecls: TypeDeclInfo[], ty: Ty | undefined): TypeDecl
  *  per-constructor destructor names for collision-renamed fields. */
 function stampScrutineeUpdates(body: Stmt[], varName: string, ctorName: string, ctorOf: string): Stmt[] {
   const stamp = (x: Expr): Expr | null => {
+    if (x.kind === "lambda") return mapLambdaBody(x, varName, stamp);
     if (x.kind === "record" && !x.ctor && x.spread &&
         x.spread.kind === "var" && x.spread.name === varName) {
       return { ...x, ctor: ctorName, ctorOf,
@@ -2310,7 +2294,7 @@ function replaceFieldsInTStmts(
   replacements: { fieldName: string; newName: string; fallbackTy: Ty }[]
 ): TStmt[] {
   if (replacements.length === 0) return stmts;
-  return mapTStmts(stmts, objName, e => {
+  return stmts.map(s => mapTStmt(s, e => {
     if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === objName) {
       const r = replacements.find(r => r.fieldName === e.field);
       if (r) {
@@ -2319,7 +2303,7 @@ function replaceFieldsInTStmts(
       }
     }
     return null;
-  });
+  }));
 }
 
 /** Replace all variant fields of obj → match binder vars in typed IR.
@@ -2351,7 +2335,7 @@ function projectStructuralCallArgsInTStmts(
     resolvedTy: f.type ?? parseTsType(f.tsType),
   }));
 
-  return mapTStmts(stmts, varName, e => {
+  return stmts.map(s => mapTStmt(s, e => {
     if (e.kind !== "call" || !e.paramTys) return null;
     const paramTys = e.paramTys;
     let changed = false;
@@ -2385,7 +2369,7 @@ function projectStructuralCallArgsInTStmts(
       };
     });
     return changed ? { ...e, args } : null;
-  });
+  }));
 }
 
 /** A pure access path — chain of field accesses rooted at a var. */
@@ -2411,19 +2395,17 @@ function matchesAccessPath(e: TExpr, path: AccessPath): boolean {
   return collected.every((f, i) => f === path.fields[i]);
 }
 
-/** Replace every TExpr matching `path` with `var(binder, binderTy)`. */
+/** Replace every read of `path` with `var(binder, binderTy)`. Extraction
+ *  leaves no binding that shadows another (see LexicalNames), so the name
+ *  identifies the variable, also inside a lambda that captures it. */
 function replacePathInTExpr(expr: TExpr, path: AccessPath, binder: string, binderTy: Ty): TExpr {
-  return mapTExpr(expr, path.rootVar, e =>
-    matchesAccessPath(e, path)
-      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
-  );
+  return mapTExpr(expr, e =>
+    matchesAccessPath(e, path) ? { kind: "var", name: binder, ty: binderTy } : null);
 }
 
 function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, binderTy: Ty): TStmt[] {
-  return mapTStmts(stmts, path.rootVar, e =>
-    matchesAccessPath(e, path)
-      ? { kind: "var", name: binder, ty: binderTy } as TExpr : null
-  );
+  return stmts.map(s => mapTStmt(s, e =>
+    matchesAccessPath(e, path) ? { kind: "var", name: binder, ty: binderTy } : null));
 }
 
 

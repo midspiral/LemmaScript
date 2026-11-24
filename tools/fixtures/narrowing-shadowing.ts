@@ -1,89 +1,142 @@
-// Narrowing replaces a narrowed name with its match binder. An inner
-// declaration of the same name must stop that replacement (#351).
-
-export type Shape = { kind: "a"; v: number } | { kind: "b"; w: number };
-
-//@ ensures p !== undefined ==> \result === 1
-export function shadowLet(p: number | undefined): number {
-  if (p !== undefined) {
-    const p = 1;
-    return p;
-  }
-  return 0;
-}
-
-//@ ensures p !== undefined && flag ==> \result === p * 10 + 1
-//@ ensures p !== undefined && !flag ==> \result === p
-export function shadowInNestedBlock(p: number | undefined, flag: boolean): number {
-  if (p !== undefined) {
-    const before = p;
-    if (flag) {
-      const p = 1;
-      return before * 10 + p;
-    }
-    return p;
-  }
-  return 0;
-}
-
-// The loop variable is a number and the narrowed `p` is a string, so Dafny
-// rejects the loop body if it reads the binder of the outer `p`.
-export function shadowForOf(p: string | undefined, xs: number[]): number {
+export function whileShadow(p: number | undefined): number {
+  //@ type i nat
+  //@ requires p !== undefined && p === 3
+  //@ ensures \result === 5
   if (p !== undefined) {
     let total = 0;
-    for (const p of xs) {
-      total = total + p;
+    let i = 0;
+    while (i < 1) {
+      //@ invariant 0 <= i && i <= 1
+      //@ invariant total === i * 5
+      //@ decreases 1 - i
+      const p = 5;
+      total += p;
+      i++;
     }
-    return total + p.length;
+    return total;
   }
   return 0;
 }
 
-// The quantifier variable is an int and the narrowed `p` is a string, so
-// Dafny rejects the assertion if its body reads the binder of the outer `p`.
-//@ ensures p !== undefined ==> \result === p.length
-export function shadowQuantifier(p: string | undefined, xs: number[]): number {
+export function forOfShadow(p: number | undefined): number {
+  //@ requires p !== undefined && p === 3
+  //@ ensures \result === 5
   if (p !== undefined) {
-    //@ assert forall(p: int, 0 <= p && p < xs.length ==> xs[p] === xs[p])
-    return p.length;
-  }
-  return 0;
-}
-
-// The `if` without `else` makes this a method, which narrows `s` through a
-// different path than the pure functions above.
-//@ ensures s.kind === "a" && flag ==> \result === 1
-export function shadowUnion(s: Shape, flag: boolean): number {
-  if (s.kind === "a") {
-    if (flag) {
-      const s: Shape = { kind: "a", v: 1 };
-      return s.v;
+    let total = 0;
+    for (const p of [5]) {
+      //@ invariant total === _p_idx * 5
+      total += p;
     }
+    return total;
   }
   return 0;
 }
 
-//@ ensures s.kind === "a" && flag ==> \result === s.v * 10 + 1
-//@ ensures s.kind === "a" && !flag ==> \result === s.v
-export function shadowUnionInNestedBlock(s: Shape, flag: boolean): number {
-  if (s.kind === "a") {
-    const before = s.v;
-    if (flag) {
-      const s: Shape = { kind: "a", v: 1 };
-      return before * 10 + s.v;
+type OptionalValue = { value: number | undefined };
+type ConcreteValue = { value: number };
+
+function concreteValue(value: number): ConcreteValue {
+  return { value };
+}
+
+export function fieldShadow(box: OptionalValue): number {
+  //@ type i nat
+  //@ requires box.value !== undefined && box.value === 3
+  //@ ensures \result === 8
+  if (box.value !== undefined) {
+    let total = 0;
+    let i = 0;
+    while (i < 1) {
+      //@ invariant 0 <= i && i <= 1
+      //@ invariant total === i * 5
+      //@ decreases 1 - i
+      const box = concreteValue(5);
+      total += box.value;
+      i++;
     }
-    return s.v;
+    return total + box.value;
   }
   return 0;
 }
 
-// A ghost let exists only in the proof, so the returned `p` is still the
-// narrowed parameter.
-//@ ensures p !== undefined ==> \result === p
-export function ghostLetDoesNotShadow(p: number | undefined): number {
+export function lambdaScopes(p: number | undefined): number {
+  //@ requires p !== undefined && p === 3
+  //@ ensures \result === 13
   if (p !== undefined) {
-    //@ ghost let p: number = 0
+    const read = (_: number): number => p;
+    const readLocal = (_: number): number => { const p = 5; return p; };
+    return [5].map((p: number): number => p)[0] + read(0) + readLocal(0);
+  }
+  return 0;
+}
+
+export function lambdaTernary(p: number | undefined): number {
+  //@ requires p !== undefined && p === 3
+  //@ ensures \result === 8
+  return p !== undefined
+    ? [5].map((p: number): number => p)[0] + [0].map((): number => p)[0]
+    : 0;
+}
+
+export function quantifierScope(p: number | undefined): number {
+  //@ requires p !== undefined && p === 3
+  //@ ensures \result === 3
+  if (p !== undefined) {
+    const xs = [5];
+    //@ assert xs[0] === 5
+    //@ assert exists(p: int, 0 <= p && p < xs.length && xs[p] === 5)
+    //@ assert forall(q: int, 0 <= q && q < xs.length ==> xs[q] === p + 2)
     return p;
   }
   return 0;
+}
+
+type Shape = { kind: "a"; n: number } | { kind: "b"; s: string };
+type Plain = { n: number };
+
+function plain(n: number): Plain {
+  return { n };
+}
+
+export function variantShadow(st: Shape): number {
+  //@ type i nat
+  //@ requires st.kind === "a" && st.n === 3
+  //@ ensures \result === 8
+  if (st.kind === "a") {
+    let total = 0;
+    let i = 0;
+    while (i < 1) {
+      //@ invariant 0 <= i && i <= 1
+      //@ invariant total === i * 5
+      //@ decreases 1 - i
+      const st = plain(5);
+      total += st.n;
+      i++;
+    }
+    return total + st.n;
+  }
+  return 0;
+}
+
+export function switchShadow(st: Shape): number {
+  //@ type i nat
+  //@ requires st.kind === "a" && st.n === 3
+  //@ ensures \result === 8
+  switch (st.kind) {
+    case "a": {
+      let total = 0;
+      let i = 0;
+      while (i < 1) {
+        //@ invariant 0 <= i && i <= 1
+        //@ invariant total === i * 5
+        //@ decreases 1 - i
+        const st = plain(5);
+        total += st.n;
+        i++;
+      }
+      return total + st.n;
+    }
+    case "b":
+      return 0;
+  }
 }

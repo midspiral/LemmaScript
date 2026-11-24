@@ -60,6 +60,10 @@ test("JavaScript closures and loops read the narrowed value", () => {
   assert.equal(runtime.predicateReadsNarrowed(0, [1, 2]), true);
   assert.deepEqual(runtime.lambdaParamShadows("s", [1, 2]), [2, 3]);
   assert.equal(runtime.whileDecreasesNarrowed(3), 3);
+  assert.deepEqual(runtime.closureReadsSynthUnionPure([7, 8, 9], [1, 2]), [4, 5]);
+  assert.deepEqual(runtime.closureReadsSynthUnionMethod([7, 8, 9], [1, 2]), [4, 5]);
+  assert.deepEqual(runtime.closureReadsUnionFieldPure({ kind: "a", n: 10 }, [1, 2]), [11, 12]);
+  assert.deepEqual(runtime.closureReadsUnionFieldMethod({ kind: "a", n: 10 }, [1, 2]), [11, 12]);
 });
 
 test("Dafny accepts narrowed reads in closures and loop decreases", () => {
@@ -73,8 +77,12 @@ test("the binder replaces narrowed reads in closures and decreases, but not a sh
   assert.match(body(output, "closureReadsNarrowed("), /\(x \+ i_o_val\)/);
   assert.match(body(output, "blockClosureReadsNarrowed("), /var y := \(x \+ i_o_val\)/);
   assert.match(body(output, "predicateReadsNarrowed("), /\(x > i_o_val\)/);
-  assert.match(body(output, "lambdaParamShadows("), /var p := xs\[i_map\]; \(p \+ 1\)/);
+  assert.match(body(output, "lambdaParamShadows("), /var p_2 := xs\[i_map\]; \(p_2 \+ 1\)/);
   assert.match(body(output, "whileDecreasesNarrowed("), /decreases \(i_o_val - i\)/);
+  assert.match(body(output, "closureReadsSynthUnionPure("), /\(x \+ \|i_u_arr\|\)/);
+  assert.match(body(output, "closureReadsSynthUnionMethod("), /\(x \+ \|i_u_arr\|\)/);
+  assert.match(body(output, "closureReadsUnionFieldPure("), /\(x \+ i_sh_n\)/);
+  assert.match(body(output, "closureReadsUnionFieldMethod("), /\(x \+ i_sh_n\)/);
 });
 
 test("Lean done_with uses the binder of a narrowed name", () => {
