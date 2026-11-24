@@ -6,7 +6,6 @@ import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
 import { decimalNumberLiteral, exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshNameWhere, userNames } from "./names.js";
-import { renameFreeVar } from "./transform.js";
 import { DEFAULT_OPTIONS, resolveOptions, type LscOptions } from "./config.js";
 
 /** Appended to a function's name for the lemma that carries its `//@ ensures`. */
@@ -21,19 +20,13 @@ function freshBinder(base: string, ...wrapped: Expr[]): string {
   return freshNameWhere(base, name => wrapped.some(w => usesName(w, name)));
 }
 
-/** Binder + body for lowering a single-return lambda to a comprehension whose
- *  receiver is emitted inside the binder's scope. TS scoping keeps the receiver
- *  outside the lambda, so a lambda param sharing a name with anything free in
- *  the receiver would capture it — e.g. `mk(n).some(n => …)` naively emitting
- *  `exists n :: n in mk(n) && …`. Alpha-rename the param out of the way (and
- *  its free uses in the body); the zero-param default must also dodge free
- *  names in the body. */
-function comprehensionBinder(lam: Extract<Expr, { kind: "lambda" }>, value: Expr, receiver: Expr): { binder: string; body: Expr } {
-  const rawName = lam.params[0]?.name;
-  if (rawName === undefined) return { binder: escapeName(freshBinder("x", receiver, value)), body: value };
-  if (!usesName(receiver, rawName)) return { binder: escapeName(rawName), body: value };
-  const fresh = freshBinder(rawName, receiver, value);
-  return { binder: escapeName(fresh), body: renameFreeVar(value, rawName, fresh) };
+/** Binder for lowering a single-return lambda to a comprehension whose
+ *  receiver is emitted inside the binder's scope. A source parameter is used
+ *  as is: extraction renames one that shares a name with anything its receiver
+ *  reads (see LexicalNames), so `mk(n).some(n => …)` arrives as `n_2 => …`.
+ *  The zero-param default is minted here and must dodge free names itself. */
+function comprehensionBinder(lam: Extract<Expr, { kind: "lambda" }>, value: Expr, receiver: Expr): string {
+  return escapeName(lam.params[0]?.name ?? freshBinder("x", receiver, value));
 }
 
 // ── Ty → Dafny type string ─────────────────────────────────
@@ -294,7 +287,9 @@ function wrapQuantifier(sub: Expr): string {
 
 function emitExpr(e: Expr): string {
   switch (e.kind) {
-    case "var": return e.name === "undefined" ? "None" : escapeName(e.name);
+    case "var":
+      if (e.name === "undefined") { needPreamble("OptionType"); return "None"; }
+      return escapeName(e.name);
     case "num": return decimalNumberLiteral(e.value);
     // Already canonical decimal; Dafny's `int` is mathematical, so no `n` suffix.
     case "bigint": return e.value;
@@ -462,9 +457,8 @@ function emitExpr(e: Expr): string {
           const lam = e.args[0];
           let p: string, body: string;
           if (lam.kind === "lambda" && lam.body.length === 1 && lam.body[0].kind === "return") {
-            const cb = comprehensionBinder(lam, lam.body[0].value, e.obj);
-            p = cb.binder;
-            body = emitExpr(cb.body);
+            p = comprehensionBinder(lam, lam.body[0].value, e.obj);
+            body = emitExpr(lam.body[0].value);
           } else {
             p = escapeName(freshBinder("x", e.obj, e.args[0]));
             body = `${args[0]}(${p})`;
@@ -584,8 +578,8 @@ function emitExpr(e: Expr): string {
           const lam = e.args[0];
           const ret = lam.body[0];
           if (ret.kind !== "return") throw new Error("unreachable");
-          const { binder: p, body: v } = comprehensionBinder(lam, ret.value, e.obj);
-          const body = emitExpr(v);
+          const p = comprehensionBinder(lam, ret.value, e.obj);
+          const body = emitExpr(ret.value);
           return `(set ${p} | ${p} in ${obj} && ${body})`;
         }
       }
@@ -661,6 +655,9 @@ function emitExpr(e: Expr): string {
 
     case "app": {
       const args = e.args.map(emitExpr);
+      // Optional coercions also arrive as applications, including locals
+      // whose inferred types never pass through tyToDafny.
+      if (!e.ctorOf && (e.fn === "Some" || e.fn === "None")) needPreamble("OptionType");
       if (e.fn === "SetToSeq") { needPreamble("SetToSeq"); return `SetToSeq(${args.join(", ")})`; }
       if (e.fn === "BigInt" || e.fn === "Number") return args[0]; // identity: both map to int
       // Set literal: {a, b, c}
@@ -671,6 +668,7 @@ function emitExpr(e: Expr): string {
       if (e.fn === "JSStringLt") needPreamble("JSStringLt");
       if (e.fn === "CeilReal") needPreamble("CeilReal");
       if (e.fn === "FloorReal") needPreamble("FloorReal");
+      if (e.fn === "TruncReal") needPreamble("TruncReal");
       if (e.fn === "StringFromCharCode") needPreamble("StringFromCharCode");
       if (e.fn === "NatToString") needPreamble("NatToString");
       if (e.fn === "IntToString") { needPreamble("NatToString"); needPreamble("IntToString"); }
@@ -683,6 +681,9 @@ function emitExpr(e: Expr): string {
       if (e.fn === "MathMaxReal") needPreamble("MathMaxReal");
       if (e.fn === "MaxOfSeq") { needPreamble("MathMax"); needPreamble("MaxOfSeq"); }
       if (e.fn === "MinOfSeq") { needPreamble("MathMin"); needPreamble("MinOfSeq"); }
+      if (e.fn === "MaxOfSeqReal") { needPreamble("MathMaxReal"); needPreamble("MaxOfSeqReal"); }
+      if (e.fn === "MinOfSeqReal") { needPreamble("MathMinReal"); needPreamble("MinOfSeqReal"); }
+      if (e.fn === "SeqIntToReal") needPreamble("SeqIntToReal");
       if (e.fn === "Perm") needPreamble("Perm");
       if (e.fn === "SetFromSeq") needPreamble("SetFromSeq");
       // A constructor application must spell the name the same way the
@@ -1175,6 +1176,13 @@ const IS_SAFE_INTEGER_REAL = `predicate IsSafeIntegerReal(x: real)
   x.Floor as real == x && -9007199254740991 <= x.Floor <= 9007199254740991
 }`;
 
+const TRUNC_REAL = `function TruncReal(x: real): (t: int)
+  ensures x >= 0.0 ==> t as real <= x < t as real + 1.0
+  ensures x < 0.0 ==> t as real - 1.0 < x <= t as real
+{
+  if x >= 0.0 then x.Floor else -((-x).Floor)
+}`;
+
 const CALLBACK_INDICES = `function CallbackIndices(n: nat): (r: seq<int>)
   ensures |r| == n
   ensures forall i :: 0 <= i < n ==> r[i] == i
@@ -1606,6 +1614,59 @@ lemma MinOfSeqConcat(a: seq<int>, b: seq<int>)
   }
 }`;
 
+const MAX_OF_SEQ_REAL = `function MaxOfSeqReal(s: seq<real>): real
+  requires |s| > 0
+  ensures forall i: nat :: i < |s| ==> s[i] <= MaxOfSeqReal(s)
+  ensures exists i: nat :: i < |s| && s[i] == MaxOfSeqReal(s)
+  decreases |s|
+{
+  if |s| == 1 then s[0]
+  else MathMaxReal(s[0], MaxOfSeqReal(s[1..]))
+}
+
+lemma MaxOfSeqRealConcat(a: seq<real>, b: seq<real>)
+  requires |a| + |b| > 0
+  ensures forall i: nat :: i < |a| ==> a[i] <= MaxOfSeqReal(a + b)
+  ensures forall i: nat :: i < |b| ==> b[i] <= MaxOfSeqReal(a + b)
+{
+  forall i: nat | i < |a| ensures a[i] <= MaxOfSeqReal(a + b) {
+    assert (a + b)[i] == a[i];
+  }
+  forall i: nat | i < |b| ensures b[i] <= MaxOfSeqReal(a + b) {
+    assert (a + b)[|a| + i] == b[i];
+  }
+}`;
+
+const MIN_OF_SEQ_REAL = `function MinOfSeqReal(s: seq<real>): real
+  requires |s| > 0
+  ensures forall i: nat :: i < |s| ==> MinOfSeqReal(s) <= s[i]
+  ensures exists i: nat :: i < |s| && s[i] == MinOfSeqReal(s)
+  decreases |s|
+{
+  if |s| == 1 then s[0]
+  else MathMinReal(s[0], MinOfSeqReal(s[1..]))
+}
+
+lemma MinOfSeqRealConcat(a: seq<real>, b: seq<real>)
+  requires |a| + |b| > 0
+  ensures forall i: nat :: i < |a| ==> MinOfSeqReal(a + b) <= a[i]
+  ensures forall i: nat :: i < |b| ==> MinOfSeqReal(a + b) <= b[i]
+{
+  forall i: nat | i < |a| ensures MinOfSeqReal(a + b) <= a[i] {
+    assert (a + b)[i] == a[i];
+  }
+  forall i: nat | i < |b| ensures MinOfSeqReal(a + b) <= b[i] {
+    assert (a + b)[|a| + i] == b[i];
+  }
+}`;
+
+const SEQ_INT_TO_REAL = `function SeqIntToReal(s: seq<int>): seq<real>
+  ensures |SeqIntToReal(s)| == |s|
+  ensures forall i: nat :: i < |s| ==> SeqIntToReal(s)[i] == (s[i] as real)
+{
+  seq(|s|, i requires 0 <= i < |s| => s[i] as real)
+}`;
+
 const NAT_TO_STRING = `function NatToString(n: nat): string
   decreases n
 {
@@ -1666,6 +1727,7 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["CeilReal", CEIL_REAL],
   ["FloorReal", FLOOR_REAL],
   ["IsSafeIntegerReal", IS_SAFE_INTEGER_REAL],
+  ["TruncReal", TRUNC_REAL],
   ["SeqIndexOf", SEQ_INDEX_OF],
   ["SeqFindIndex", SEQ_FIND_INDEX],
   ["SeqFindLastIndex", SEQ_FIND_LAST_INDEX],
@@ -1703,6 +1765,9 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["MathMaxReal", MATH_MAX_REAL],
   ["MaxOfSeq", MAX_OF_SEQ],
   ["MinOfSeq", MIN_OF_SEQ],
+  ["MaxOfSeqReal", MAX_OF_SEQ_REAL],
+  ["MinOfSeqReal", MIN_OF_SEQ_REAL],
+  ["SeqIntToReal", SEQ_INT_TO_REAL],
   ["Perm", PERM],
   ["SetFromSeq", SET_FROM_SEQ],
 ];

@@ -125,7 +125,7 @@ function capturedIndex(index: int): bool
   requires (index == 1)
 {
   var i_callbackSource7: seq<nat> := [7];
-  (exists i_callbackIndex7 :: i_callbackIndex7 in CallbackIndices(|i_callbackSource7|) && (var index: int := i_callbackIndex7; (index == 1)))
+  (exists i_callbackIndex7 :: i_callbackIndex7 in CallbackIndices(|i_callbackSource7|) && (var index_2: int := i_callbackIndex7; (index_2 == 1)))
 }
 
 lemma capturedIndex_ensures(index: int)
@@ -204,7 +204,7 @@ function reduceRestCount(): int
 
 function nestedShadow(): seq<int>
 {
-  (var s_map := [[7]]; seq(|s_map|, i_map requires 0 <= i_map < |s_map| => var i_callbackArg16_0 := s_map[i_map]; (var s_map := [1]; seq(|s_map|, i_map requires 0 <= i_map < |s_map| => var args := s_map[i_map]; (args + 1)))[0]))
+  (var s_map := [[7]]; seq(|s_map|, i_map requires 0 <= i_map < |s_map| => var i_callbackArg16_0 := s_map[i_map]; (var s_map := [1]; seq(|s_map|, i_map requires 0 <= i_map < |s_map| => var args_2 := s_map[i_map]; (args_2 + 1)))[0]))
 }
 
 lemma nestedShadow_ensures()

@@ -109,7 +109,7 @@ When a call resolves to a function declared in a *different* `.ts` file, extract
 
 ## Spec Expression Parser
 
-The specparser (`specparser.ts`) parses `//@ ` annotation expressions into `RawExpr` nodes. Called by the resolve pass, not by extract or transform.
+The specparser (`specparser.ts`) parses `//@ ` annotation expressions into `RawExpr` nodes during resolve. Extraction also calls `renameSpecVariables` in this module to rename free annotation references while preserving strings, field names, record keys, quantified variables, and formatting.
 
 ## Adding a New Feature
 
@@ -120,6 +120,20 @@ The specparser (`specparser.ts`) parses `//@ ` annotation expressions into `RawE
 5. **Emit**: add backend-specific rendering in each emitter if the new IR node needs special syntax.
 
 ## Scoping
+
+See [DESIGN_LEXICAL.md](DESIGN_LEXICAL.md) for the rationale, worked examples,
+and the division of responsibility between extraction's names and resolve's environments.
+
+Extraction's [LexicalNames](tools/src/lexical-names.ts) assigns names by TypeScript symbol identity before extracting a function or method. It renames conflicting locals when bare blocks are flattened, for-loop counters are hoisted, or branches absorb a continuation. It also renames any local, loop variable, or callback parameter that shadows an enclosing binding of the function (or a declaration of the same file), so no binding shadows another after extraction and later passes can identify a variable by name. A quantified variable in an annotation that reuses a name in scope is freshened in resolve for the same reason. For example, `{ const p = 5; } return p` inside a function with parameter `p` gives the inner binding a distinct name such as `p_2`; the return still reads `p`. The source AST stays unchanged, and sibling bindings whose scopes remain separate keep their names.
+
+When extending extraction:
+
+- Use `sourceName(node)` for local binding names and runtime references, including assignment-target roots and shorthand-property values. Keep field names and record keys unchanged.
+- Route scope-sensitive annotations through `LexicalNames.spec` / `specName` with their original AST location and comment position when available. `withScope` and `ghost` track specification-only bindings; `typeNames` carries local type overrides to renamed bindings. Keep annotation renaming in this shared path.
+- Keep decisions about lost or extended scopes in `scopeOf` / `loweredScope`. Update those rules when adding a construct whose lowering changes a binding's scope.
+- Use `freshName` for compiler-generated names. `LexicalNames` registers source and ghost renames with `reserveName` so later passes avoid them; preserve this reservation when adding a renaming path.
+
+`rejectForwardLocalCaptures` checks arrow bodies before extraction: a closure over a local `let`/`const` declared later cannot be constructed in the current backend model. Callback parameter defaults use their separate initialization rules in resolve.
 
 The resolve pass uses linked environments (Scheme-style). Each binding is a frame with one name, one type, and a pointer to the parent:
 
@@ -310,6 +324,7 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 |------|-------|------|
 | `rawir.ts` | Types | Raw IR type definitions |
 | `extract.ts` | Extract | ts-morph → Raw IR |
+| `lexical-names.ts` | Extract | Source and ghost binding names, annotation renaming, forward-capture checks |
 | `specparser.ts` | (parser) | Parses `//@ ` annotations → RawExpr |
 | `resolve.ts` | Resolve | Raw IR → Typed IR (types and type-narrowing) |
 | `typedir.ts` | Types | Typed IR type definitions (incl. `someMatch`/`tagMatch`) |
