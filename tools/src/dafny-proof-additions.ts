@@ -191,8 +191,8 @@ const HEADER_CONTINUATION_AFTER_BRACE = new Set([
 /** Tokens before `{` inside a spec clause that unambiguously introduce a set/multiset literal. */
 const EXPR_BEFORE_BRACE = new Set([
   "requires", "ensures", "reads", "modifies", "decreases",
-  "==", "!=", "<=", ">=", "<", "+", "-", "*", "/", "%",
-  "&&", "||", "==>", "<==", "<==>", "!", "in", "::", "|", ":=",
+  "==", "!=", "<=", ">=", "<", "+", "-", "/", "%",
+  "&&", "||", "==>", "<==", "<==>", "!", "in", "::", ":=",
   "then", "else", "iset", "multiset", "set",
 ]);
 

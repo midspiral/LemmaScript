@@ -281,6 +281,33 @@ test("allows ensures, modifies, reads, and decreases clauses added to generated 
   accepts(gen, insertAfter(gen, "function f_fun_spec", "{\n  x + 1\n}\n"));
   const seqFn = "function mk(): seq<int>\n{\n  []\n}\n";
   accepts(seqFn, insertAfter(seqFn, "function mk(): seq<int>", "  ensures |mk()| == 0\n"));
+  const cardMethod = [
+    "method reachable(cards: seq<int>) returns (res: set<int>)",
+    "  requires |cards| >= 1",
+    "{",
+    "  res := {};",
+    "}",
+    "",
+  ].join("\n");
+  accepts(
+    cardMethod,
+    insertAfter(
+      insertAfter(cardMethod, "requires |cards| >= 1", "  decreases |cards|\n"),
+      "res := {};",
+      "  assert |cards| >= 1;\n",
+    ),
+  );
+  const byMethodFn = [
+    "function contains(xs: seq<int>, x: int): bool",
+    "{",
+    "  false",
+    "}",
+    "by method {",
+    "  return false;",
+    "}",
+    "",
+  ].join("\n");
+  accepts(byMethodFn, insertAfter(byMethodFn, "function contains(xs: seq<int>, x: int): bool", "  decreases |xs|\n"));
 });
 
 
