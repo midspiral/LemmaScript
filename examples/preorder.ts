@@ -12,11 +12,10 @@
  * - `traverseBasic(root)` is the imperative version that returns the
  *   same sequence as `preorderTraversal(root)`.
  *
- * The supporting proof scaffolding — `nodeSet`, `validNode`,
- * `UnionNodes`, `StackToPreorder`, `AllDisjoint` and the associated
- * lemmas — lives in preorder.dfy above the generated method.
- * The TS-side `requires` is just the kind check; the validity
- * precondition is added in the hand-written .dfy.
+ * The supporting proof scaffolding (`StackToPreorder` and its
+ * lemmas) lives in preorder.dfy above the generated method and proves
+ * both functional equivalence and termination under `root.kind === "Node"`
+ * without any extra precondition.
  */
 
 type Tree =
