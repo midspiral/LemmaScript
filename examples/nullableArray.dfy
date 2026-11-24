@@ -23,11 +23,8 @@ method dropOrphans(messages: seq<Message>) returns (res: seq<Message>)
     invariant (|filteredContents| == |messages|)
   {
     var cur := filteredContents[i];
-    match cur {
-      case Some(i_cur_val) =>
-        filteredContents := filteredContents[i := Some(Std.Collections.Seq.Filter(keep, i_cur_val))];
-      case None =>
-
+    if (cur).Some? {
+      filteredContents := filteredContents[i := Some(Std.Collections.Seq.Filter(keep, cur.value))];
     }
     i := (i + 1);
   }
@@ -38,13 +35,10 @@ method dropOrphans(messages: seq<Message>) returns (res: seq<Message>)
     invariant (|result| <= j)
   {
     var f := filteredContents[j];
-    match f {
-      case Some(i_f_val) =>
-        if (|i_f_val| > 0) {
-          result := (result + [Message(messages[j].role, ArrayBranch(i_f_val))]);
-        }
-      case None =>
-        result := (result + [messages[j]]);
+    if !((f).Some?) {
+      result := (result + [messages[j]]);
+    } else if (|f.value| > 0) {
+      result := (result + [Message(messages[j].role, ArrayBranch(f.value))]);
     }
     j := (j + 1);
   }

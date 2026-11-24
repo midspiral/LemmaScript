@@ -73,7 +73,7 @@ function mustHavoc(e: TExpr): boolean {
 function forEachChildExpr(e: TExpr, f: (c: TExpr) => void): void {
   switch (e.kind) {
     case "binop": f(e.left); f(e.right); return;
-    case "unop": f(e.expr); return;
+    case "unop": case "coerce": f(e.expr); return;
     case "call": f(e.fn); e.args.forEach(f); return;
     case "index": f(e.obj); f(e.idx); return;
     case "field": f(e.obj); return;
@@ -100,7 +100,6 @@ function forEachChildExprInStmt(s: TStmt, f: (c: TExpr) => void): void {
     case "while": f(s.cond); s.body.forEach(st => forEachChildExprInStmt(st, f)); return;
     case "forof": f(s.iterable); s.body.forEach(st => forEachChildExprInStmt(st, f)); return;
     case "switch": f(s.expr); s.cases.forEach(c => c.body.forEach(st => forEachChildExprInStmt(st, f))); s.defaultBody.forEach(st => forEachChildExprInStmt(st, f)); return;
-    case "someMatch": f(s.scrutinee); s.someBody.forEach(st => forEachChildExprInStmt(st, f)); s.noneBody.forEach(st => forEachChildExprInStmt(st, f)); return;
     case "tagMatch": f(s.scrutinee); s.cases.forEach(c => c.body.forEach(st => forEachChildExprInStmt(st, f))); s.fallthrough.forEach(st => forEachChildExprInStmt(st, f)); return;
   }
 }
@@ -189,7 +188,6 @@ function localNames(stmts: TStmt[], seed: Set<string>): Set<string> {
       if (s.kind === "if") { inStmts(s.then); inStmts(s.else); }
       else if (s.kind === "while" || s.kind === "forof") inStmts(s.body);
       else if (s.kind === "switch") { s.cases.forEach(c => inStmts(c.body)); inStmts(s.defaultBody); }
-      else if (s.kind === "someMatch") { inStmts(s.someBody); inStmts(s.noneBody); }
       else if (s.kind === "tagMatch") { s.cases.forEach(c => inStmts(c.body)); inStmts(s.fallthrough); }
     }
   };
@@ -241,7 +239,7 @@ function rewriteExpr(e: TExpr, hoisted: TStmt[]): TExpr {
   switch (e.kind) {
     case "var": case "num": case "bigint": case "str": case "bool": case "havoc": return e;
     case "binop": return { ...e, left: rewriteExpr(e.left, hoisted), right: rewriteExpr(e.right, hoisted) };
-    case "unop": return { ...e, expr: rewriteExpr(e.expr, hoisted) };
+    case "unop": case "coerce": return { ...e, expr: rewriteExpr(e.expr, hoisted) };
     case "call": return { ...e, fn: rewriteExpr(e.fn, hoisted), args: e.args.map(a => rewriteExpr(a, hoisted)) };
     case "index": return { ...e, obj: rewriteExpr(e.obj, hoisted), idx: rewriteExpr(e.idx, hoisted) };
     case "field": return { ...e, obj: rewriteExpr(e.obj, hoisted) };
@@ -314,7 +312,6 @@ function rewriteStmt(s: TStmt): TStmt[] {
     case "switch": { const expr = rw(s.expr); return [...h, { ...s, expr,
       cases: s.cases.map(c => ({ ...c, body: rewriteStmts(c.body) })),
       defaultBody: rewriteStmts(s.defaultBody) }]; }
-    case "someMatch": { const scrutinee = rw(s.scrutinee); return [...h, { ...s, scrutinee, someBody: rewriteStmts(s.someBody), noneBody: rewriteStmts(s.noneBody) }]; }
     case "tagMatch": { const scrutinee = rw(s.scrutinee); return [...h, { ...s, scrutinee,
       cases: s.cases.map(c => ({ ...c, body: rewriteStmts(c.body) })),
       fallthrough: rewriteStmts(s.fallthrough) }]; }

@@ -134,13 +134,13 @@ end Pure
 
 This enables proofs by standard Lean induction over sequences of calls. The Velvet method is also generated, but as a thin wrapper: `return Pure.foo params`. This avoids termination issues (the pure `def` handles termination natively) while keeping the method callable from other Velvet methods via `←`.
 
-Functions containing checked min/max spreads, and their callers, remain methods without a pure mirror so their nonempty-input obligations are preserved. Use their method contracts for composition.
+Functions containing checked optional reads or min/max spreads, and their callers, remain methods without a pure mirror so their presence or nonempty-input obligations are preserved. Use their method contracts for composition.
 
 **Spec references:** In `//@ ensures`, `//@ requires`, and `//@ invariant` annotations, calls to pure functions are resolved as `Pure.fnName`. The resolve phase classifies these as `spec-pure` call kind, and the transform emits the qualified name. Calls to external Lean-defined spec helpers (e.g., `sumTo` in a hand-written `.spec.lean`) pass through unqualified.
 
 Deterministic extern declarations become opaque Lean functions. Impure externs are Dafny-only and are rejected by the Lean backend, whether selected explicitly with `//@ impure` or inherited from `extern-default: impure`; add `//@ pure` to an individual extern used by a Lean file.
 
-**Proof note:** Since the method body is `return Pure.foo ...`, supply its pure mirror to the discharger: `velvet_vcgen [foo] with finish [Pure.foo]`.
+**Proof note:** For a method body of `return Pure.foo ...`, supply its pure mirror to the discharger: `velvet_vcgen [foo] with finish [Pure.foo]`. For checked reads, use the generated method directly with `velvet_vcgen [foo] with finish`. Annotation reads use `Option.get` with a presence proof under the corresponding guard.
 
 ---
 

@@ -13,16 +13,6 @@ namespace Pure
 def hasTagFrom (tags : Array String) (tag : String) («from» : Int) : Bool :=
   (tags.extract «from».toNat tags.size).contains tag
 
-def visibility (post : Post) : String :=
-  match post.tags with
-  | .some _post_tags_val =>
-    if _post_tags_val.contains "draft" then
-      "draft"
-    else
-      "live"
-  | .none =>
-    "live"
-
 def hasTag (post : Post) (tag : String) : Bool :=
   match (match post.tags with | .some _oc0_val => Option.some (_oc0_val.contains tag) | .none => Option.none) with
   | .some _oc1_val =>

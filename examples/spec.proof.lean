@@ -102,19 +102,19 @@ prove_correct clampedItem by
 prove_correct clampedMidpoint by
   velvet_vcgen [clampedMidpoint] with finish
 
--- Deep-path narrowing: body and ensures both use nested Some/None matches
+-- Checked reads use the current optional storage, including nested fields.
 prove_correct deepAccess by
-  velvet_vcgen [deepAccess] with finish [Pure.deepAccess]
+  velvet_vcgen [deepAccess] with finish
 
 -- Negative truthiness `!x` and bare optional truthiness `if (x)`
 prove_correct negVar by
-  velvet_vcgen [negVar] with finish [Pure.negVar]
+  velvet_vcgen [negVar] with finish
 
 prove_correct negField by
-  velvet_vcgen [negField] with finish [Pure.negField]
+  velvet_vcgen [negField] with finish
 
 prove_correct truthyVar by
-  velvet_vcgen [truthyVar] with finish [Pure.truthyVar]
+  velvet_vcgen [truthyVar] with finish
 
 -- Nullish coalescing
 prove_correct nullishVar by
@@ -145,7 +145,7 @@ prove_correct whileInvariantInMap by
 
 -- Chained && of optional checks in ternary
 prove_correct nestedAndTernary by
-  velvet_vcgen [nestedAndTernary] with finish [Pure.nestedAndTernary]
+  velvet_vcgen [nestedAndTernary] with finish
 
 -- Discriminated-union narrowing
 prove_correct area by
@@ -156,7 +156,7 @@ prove_correct describeIfCircle by
 
 -- Ternary in spec with optional narrowing (parallels truthyVar)
 prove_correct ternarySpecOpt by
-  velvet_vcgen [ternarySpecOpt] with finish [Pure.ternarySpecOpt]
+  velvet_vcgen [ternarySpecOpt] with finish
 
 -- Optional chaining
 prove_correct ocField by

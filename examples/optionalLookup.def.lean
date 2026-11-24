@@ -7,8 +7,11 @@ import «optionalLookup.types»
 set_option velvet.semantics.termination "total"
 
 method optionalLookup (enabled : Bool) (values : Std.HashMap String Int) (key : String) returns (res : Option Int)
-  ensures ensures_1: (¬(enabled) → (match res with | .some _ => false | .none => true) : Prop)
-  ensures ensures_2: (enabled → ¬(values.contains key) → (match res with | .some _value => _value == 0 | .none => false) : Prop)
-  ensures ensures_3: (enabled → values.contains key → (match res with | .some _value => _value == values.get! key | .none => false) : Prop)
+  ensures ensures_1: (¬(enabled) → ¬(Option.isSome res) : Prop)
+  ensures ensures_2: (enabled → ¬(values.contains key) → let _compare3 : Option Int := res
+(match _compare3 with | .some _value => _value == 0 | .none => false) : Prop)
+  ensures ensures_3: (enabled → values.contains key → let _compare4 : Option Int := res
+let _compare5 : Int := values.get! key
+(match _compare4 with | .some _value => _value == _compare5 | .none => false) : Prop)
   do
     return Pure.optionalLookup enabled values key

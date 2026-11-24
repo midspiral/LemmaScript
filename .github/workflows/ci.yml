@@ -137,6 +137,15 @@ jobs:
       - name: Build
         run: lake build
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - run: npm ci
+
+      - name: Checked optional reads and negative proofs
+        run: node --import tsx --test --test-name-pattern='Lean proves' tools/tests/optional-assignment-narrowing.test.ts
+
   # Dafny verification of the examples, sharded across runners. `generated-dafny`
   # enforces drift + additions-only (regen --no-verify); this job runs the actual
   # `dafny verify` in parallel. Files are split by index (i % N == shard), so no

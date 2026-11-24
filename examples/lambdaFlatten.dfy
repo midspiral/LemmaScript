@@ -6,7 +6,7 @@ datatype Part = Part(type_: string, providerExecuted: Option<bool>, toolCallId: 
 
 function keepParts(parts: seq<Part>, valid: set<string>): seq<Part>
 {
-  Std.Collections.Seq.Filter((p: Part) => ((p.type_ != "tool-call") || (var tc := p; ((match tc.providerExecuted { case Some(i_value) => (i_value == true) case None => false }) || (tc.toolCallId in valid)))), parts)
+  Std.Collections.Seq.Filter((p: Part) => ((p.type_ != "tool-call") || (var tc := p; (var i_compare0 := tc.providerExecuted; ((match i_compare0 { case Some(i_value) => (i_value == true) case None => false }) || (tc.toolCallId in valid))))), parts)
 }
 
 lemma keepParts_ensures(parts: seq<Part>, valid: set<string>)

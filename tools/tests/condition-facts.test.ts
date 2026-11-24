@@ -45,27 +45,22 @@ test("dependent optional checks unwrap the root before its fields in code and sp
     assert.deepEqual(inputs.map(value => fn(value)), [-1, -1, -1, 0, -7]);
   }
   for (const fn of fixture().functions) {
-    const first = fn.body[0];
-    const body = first.kind === "return" ? first.value : first;
-    for (const match of [body, fn.ensures[3]]) {
-      assert.equal(match.kind, "someMatch");
-      if (match.kind !== "someMatch") continue;
-      assert.equal(match.scrutinee.kind, "var", "the outer match must bind box before any field access");
-      if (match.scrutinee.kind === "var") assert.equal(match.scrutinee.name, "box");
-    }
+    assert.doesNotMatch(JSON.stringify(fn.body), /"kind":"someMatch"/);
+    assert.match(JSON.stringify(fn.body), /"kind":"coerce"/);
+    assert.match(JSON.stringify(fn.ensures), /"kind":"coerce"/);
   }
 });
 
-test("both backends keep dependent field reads inside the root's match", () => {
+test("both backends read current storage through checked optional projections", () => {
   const mod = fixture();
   const dafny = transformModuleDafny(mod);
   const dafnyText = emitDafnyFile({ ...dafny.defFile, decls: [...(dafny.typesFile?.decls ?? []), ...dafny.defFile.decls] });
   const lean = transformModuleLean(mod);
   assert.ok(lean.typesFile);
   resetLeanModule();
-  const leanText = emitLeanFile(lean.typesFile);
-  for (const output of [dafnyText, leanText]) {
-    assert.match(output, /match box/);
-    assert.doesNotMatch(output, /\bbox\.inner\b/, "box is optional; field reads must use its unwrapped binder");
-  }
+  const leanText = emitLeanFile({ ...lean.defFile, imports: ["LemmaScript"], decls: [...lean.typesFile.decls, ...lean.defFile.decls] });
+  assert.match(dafnyText, /box\.value\.inner/);
+  assert.match(leanText, /LemmaScript\.optionValue box/);
+  for (const output of [dafnyText, leanText])
+    assert.doesNotMatch(output, /\bbox\.inner\b/, "the root optional must be checked before reading its field");
 });

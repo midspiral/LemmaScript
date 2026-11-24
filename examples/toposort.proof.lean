@@ -233,42 +233,41 @@ theorem adj_invariant_preserved
     exact hold k hk' v (Array.contains_iff.mpr hv')
 
 section TopoProof
-set_option hygiene false in
-macro "topo_solve" : tactic => `(tactic| first
-  | (grind (splits := 30) [-allDistinct])
-  | (omega)
-  -- Specifically discharge the adjacency-preservation VC
-  | (apply adj_invariant_preserved <;> assumption)
-  -- Preservation by helper lemmas
-  | (apply contains_invariant_preserved_int <;> assumption)
-  | (apply hashset_contains_invariant_preserved <;> assumption)
-  | (apply adjacency_emptyArrays_preserved <;> assumption)
-  | (apply enqueued_witness_preserved <;> assumption)
-  | (apply enqueued_witness_bound_widen <;> assumption)
-  | (have h := enqueued_witness_preserved nodeIds enqueued _id_idx3 invariant_21
-     grind [-allDistinct])
-  -- Distinctness assertion: nodeIds[i] not yet enqueued
-  | (apply not_enqueued_of_distinct <;> (first | assumption | grind [-allDistinct]))
-  -- Size bound: enqueued.insert v ≤ nodeIdSet.size when v is "new"
-  | (apply Nat.le_trans
-     · apply hashset_subset_insert_size <;> assumption
-     · assumption)
-  -- Joint insert preservation for invariant_41
-  | (apply joint_insert_preserves_inDegree_le_zero <;> (first | assumption | omega))
-  | (apply inDegree_insert_preserves_decrement <;> assumption)
-  -- Establishment of inner-loop neighbor invariant
-  | (apply neighbors_in_nodeIdSet <;> assumption)
-  | (simp only [Array.size_push, Std.HashSet.size_insert];
-     (try (generalize Std.HashSet.size _ = _es at *));
-     split <;> omega)
-  | (omega))
-
-set_option maxHeartbeats 16000000 in
+attribute [-grind] allDistinct
+set_option maxHeartbeats 2000000 in
 prove_correct topologicalSort by
-  velvet_vcgen [topologicalSort] with
-    (expose_names
-     tactic =>
-       repeat' apply And.intro
-       all_goals topo_solve)
-
+  velvet_vcgen [topologicalSort] with (expose_names; try finish)
+  case invariant_45 =>
+    have present := LemmaScript.hashmap_get?_eq_some h
+    intro v
+    dsimp only
+    split
+    · next hv =>
+      have hv' : a.contains v = true := by simpa only [h, Option.get_some] using hv
+      rw [← present.2] at hv'
+      exact invariant_34 _ present.1 v hv'
+    · rfl
+  all_goals repeat' apply And.intro
+  all_goals first
+    | assumption
+    | omega
+    | (apply joint_insert_preserves_inDegree_le_zero <;> (first | assumption | omega))
+    | (apply Nat.le_trans
+       · apply hashset_subset_insert_size <;> (first | assumption | simpa using h_4)
+       · assumption)
+    | (have present := LemmaScript.hashmap_get?_eq_some h_3
+       rw [← present.2]
+       exact inDegree_insert_preserves_decrement _ _ _ invariant_41)
+    | (have present := LemmaScript.hashmap_get?_eq_some h_4
+       rw [← present.2]
+       exact adj_invariant_preserved _ _ _ _ invariant_13 present.1 invariant_14)
+    | (have next_eq : next = _id_idx3 + 1 := by grind
+       rw [next_eq]
+       exact enqueued_witness_preserved _ _ _ invariant_21)
+    | (have bound : _id_idx3 < nodeIds.size := by grind
+       simpa using not_enqueued_of_distinct nodeIds enqueued _id_idx3 bound require_1 invariant_21)
+    | (have end_eq : nodeIds.size = _id_idx3 + 1 := by grind
+       rw [end_eq]
+       exact enqueued_witness_preserved _ _ _ invariant_21)
+    | (grind (splits := 10))
 end TopoProof

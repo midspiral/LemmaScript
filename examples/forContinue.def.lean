@@ -77,11 +77,8 @@ method lastPresent (xs : Array (Option Int)) returns (res : Option Int)
     do
       let _x_idx : Nat := _x_idx
       let x := xs[_x_idx]!
-      if h_x : (x).isSome = true then
-        let _x_val := (x).get h_x
-        cur := some _x_val
-      else
-        pure ()
+      if Option.isSome x then
+        cur := x
     return cur
 
 method lastBeforeGap (xs : Array (Option Int)) returns (res : Option Int)
@@ -94,11 +91,9 @@ method lastBeforeGap (xs : Array (Option Int)) returns (res : Option Int)
     do
       let _x_idx : Nat := _x_idx
       let x := xs[_x_idx]!
-      if h_x : (x).isSome = true then
-        let _x_val := (x).get h_x
-        cur := some _x_val
-      else
+      if !(Option.isSome x) then
         break
+      cur := x
     return cur
 
 method countKeep (items : Array Item) returns (res : Int)

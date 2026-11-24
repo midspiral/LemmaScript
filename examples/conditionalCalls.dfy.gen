@@ -118,13 +118,13 @@ method choiceArgument(enabled: bool) returns (res: int)
 }
 
 method optionalChoice(enabled: bool) returns (res: Option<int>)
-  ensures (enabled ==> (match res { case Some(i_value) => (i_value == 1) case None => false }))
-  ensures (!(enabled) ==> (match res { case Some(i_) => false case None => true }))
+  ensures (enabled ==> (var i_compare11: Option<int> := res; (match i_compare11 { case Some(i_value) => (i_value == 1) case None => false })))
+  ensures (!(enabled) ==> !((res).Some?))
 {
   var i_branch8: Option<int> := *;
   if enabled {
-    var i_t11 := checkedIncrement(enabled, 0);
-    i_branch8 := Option.Some(i_t11);
+    var i_t12 := checkedIncrement(enabled, 0);
+    i_branch8 := Option.Some(i_t12);
   } else {
     i_branch8 := Option.None;
   }

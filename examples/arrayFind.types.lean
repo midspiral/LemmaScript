@@ -19,10 +19,6 @@ def lookup (entries : Array Entry) (key : String) : Int :=
     0
 
 def hasEntry (entries : Array Entry) (key : String) : Bool :=
-  match entries.find? (fun x => x.key = key) with
-  | .some _ =>
-    true
-  | .none =>
-    false
+  Option.isSome (entries.find? (fun x => x.key = key))
 
 end Pure

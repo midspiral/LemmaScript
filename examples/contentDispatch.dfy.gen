@@ -15,7 +15,7 @@ function partsOrEmpty(content: ArrayOf_Part_Or_string): seq<Part>
 }
 
 lemma partsOrEmpty_ensures(content: ArrayOf_Part_Or_string)
-  ensures (match content { case ArrayBranch(i_content_arr) => (|partsOrEmpty(content)| == |i_content_arr|) case _ => true })
-  ensures (match content { case NonArrayBranch(i_content_val) => (|partsOrEmpty(content)| == 0) case _ => true })
+  ensures (match content { case ArrayBranch(i_content_arr') => (|partsOrEmpty(content)| == |i_content_arr'|) case _ => true })
+  ensures (match content { case NonArrayBranch(i_content_val') => (|partsOrEmpty(content)| == 0) case _ => true })
 {
 }

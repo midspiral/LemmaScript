@@ -23,10 +23,10 @@ function withDefaults(base: Config, over: Config): Config
 }
 
 lemma withDefaults_ensures(base: Config, over: Config)
-  ensures ((match over.retries { case Some(i_) => false case None => true }) ==> (withDefaults(base, over).retries == base.retries))
-  ensures (match over.retries { case Some(i_over_retries_val) => (match withDefaults(base, over).retries { case Some(i_value) => (i_value == i_over_retries_val) case None => false }) case None => true })
-  ensures ((match over.timeout { case Some(i_) => false case None => true }) ==> (withDefaults(base, over).timeout == base.timeout))
-  ensures (match over.timeout { case Some(i_over_timeout_val) => (match withDefaults(base, over).timeout { case Some(i_value) => (i_value == i_over_timeout_val) case None => false }) case None => true })
+  ensures (!((over.retries).Some?) ==> (withDefaults(base, over).retries == base.retries))
+  ensures ((over.retries).Some? ==> (withDefaults(base, over).retries == over.retries))
+  ensures (!((over.timeout).Some?) ==> (withDefaults(base, over).timeout == base.timeout))
+  ensures ((over.timeout).Some? ==> (withDefaults(base, over).timeout == over.timeout))
 {
 }
 
@@ -41,8 +41,8 @@ function applyOverride(base: Budgets, over: Option<Budgets>): Budgets
 }
 
 lemma applyOverride_ensures(base: Budgets, over: Option<Budgets>)
-  ensures ((match over { case Some(i_) => false case None => true }) ==> (applyOverride(base, over) == base))
-  ensures (match over { case Some(i_over_val) => (applyOverride(base, over) == i_over_val) case None => true })
+  ensures (!((over).Some?) ==> (applyOverride(base, over) == base))
+  ensures ((over).Some? ==> (var i_compare0: Budgets := applyOverride(base, over); (var i_compare1: Option<Budgets> := over; (match i_compare1 { case Some(i_value) => (i_value == i_compare0) case None => false }))))
 {
 }
 

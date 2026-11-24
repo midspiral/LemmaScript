@@ -307,7 +307,8 @@ function rewriteChildrenStmt(s: Stmt): Stmt {
       return { ...s, scrutinee: scr, arms: s.arms.map(a => ({ ...a, body: rs(a.body) })) };
     }
     case "while": return { ...s, cond: re(s.cond), invariants: s.invariants.map(re), body: rs(s.body) };
-    case "forin": return { ...s, bound: re(s.bound), invariants: s.invariants.map(re), body: rs(s.body) };
+    case "forin": return { ...s, bound: re(s.bound), invariants: s.invariants.map(re),
+      doneWith: s.doneWith ? re(s.doneWith) : null, body: rs(s.body) };
     case "ghostLet": return { ...s, value: re(s.value) };
     case "ghostAssign": return { ...s, value: re(s.value) };
     case "assert": return { ...s, expr: re(s.expr) };

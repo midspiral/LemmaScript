@@ -752,9 +752,9 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 - Optional chaining: `obj?.field`, `obj?.foo()`, `obj?.[i]`, chained `obj?.a?.b?.c` and `obj?.a.b.c`
 - Nullish coalescing: `x ?? default`; array index `arr[i] ?? default` (undefined ⟺ out of bounds under `noUncheckedIndexedAccess`) → `(0 <= i && i < arr.length) ? arr[i] : default`
 
-The narrow pass (`narrow.ts`) detects these on the typed IR and rewrites them into a single `someMatch` IR node with a fresh binder. Transform lowers `someMatch` into Dafny `match` Some/None (or `if .Some? { ... .value ... }` after the peephole pass).
+Storage keeps its declared optional type across guards and assignments. Payload reads become checked operations: Dafny's `.value` destructor or Lean's `LemmaScript.optionValue`. Verification must establish presence at the read, including after reassignment; `expr!` requests the same check. Supported direct collection mutations update the original storage, including optional wrappers. Optional `pop`/`shift` and mutation results without a modeled write-back are rejected. Evolving locals need an explicit annotation when their storage type cannot be inferred.
 
-Following TS, the equality/truthiness/`&&`/`||`/`==>` patterns fire only for pure access paths (`x`, `obj.field`, `a.b.c.d`); method-call results must be bound first (`const v = m.get(k); if (v !== undefined) ...`). The `obj?.<chain>` and `x ?? d` forms are exceptions: extract emits dedicated single-evaluation IR nodes (`optChain`, `nullish`), so any expression on the left is allowed.
+`?.` and `??` retain single-evaluation snapshots, and logical/default branches evaluate conditionally. Repeated calls remain separate evaluations; bind a result explicitly to reuse it. The current representation still conflates `null` and `undefined`.
 
 **Discriminated-union narrowing.** `if (e.kind === "lit") use(e.val)`, `if ('field' in x) use(x.field)`, and `if (x.kind !== "v") return; rest` all lower to `match` constructs that destructure variant-specific fields. Switch on a discriminator works similarly. Detection lives in `narrow.ts` alongside optional-narrowing rules (rewrites to a `tagMatch` IR node); the lowering to backend `match` lives in `transform.ts`.
 

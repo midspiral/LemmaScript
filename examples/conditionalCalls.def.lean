@@ -105,13 +105,14 @@ method choiceArgument (enabled : Bool) returns (res : Int)
     return _t9
 
 method optionalChoice (enabled : Bool) returns (res : Option Int)
-  ensures ensures_1: (enabled → (match res with | .some _value => _value == 1 | .none => false) : Prop)
-  ensures ensures_2: (¬(enabled) → (match res with | .some _ => false | .none => true) : Prop)
+  ensures ensures_1: (enabled → let _compare11 : Option Int := res
+(match _compare11 with | .some _value => _value == 1 | .none => false) : Prop)
+  ensures ensures_2: (¬(enabled) → ¬(Option.isSome res) : Prop)
   do
     let mut _branch8 : Option Int := (default : Option Int)
     if enabled then
-      let _t11 ← checkedIncrement enabled 0
-      _branch8 := Option.some _t11
+      let _t12 ← checkedIncrement enabled 0
+      _branch8 := Option.some _t12
     else
       _branch8 := Option.none
     return _branch8

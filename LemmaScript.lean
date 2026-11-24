@@ -8,3 +8,4 @@ import LemmaScript.ArrayM
 import LemmaScript.HashSet
 import LemmaScript.Range
 import LemmaScript.MinMax
+import LemmaScript.Option

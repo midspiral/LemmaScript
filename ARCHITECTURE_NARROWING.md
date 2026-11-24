@@ -1,212 +1,120 @@
 # Architecture: Narrowing
 
-How LemmaScript translates TypeScript's flow-sensitive `T | undefined`
-narrowing into Dafny and Lean (which require single-typed bindings).
+Ordinary optionals keep one storage type throughout their scope. A read that
+needs the payload becomes a checked operation on the current value. Guards,
+assignments, and loops retain their ordinary control flow. Union narrowing
+continues to use variant matches.
 
-For the implementation surface (file roles, rule tables, pipeline diagrams),
-see [TOOLS.md](TOOLS.md). This doc focuses on the design choices.
+See [TOOLS.md](TOOLS.md) for the pipeline and
+[REDESIGN_NARROWING.md](REDESIGN_NARROWING.md) for the staged redesign and its
+remaining representation and union work.
 
----
+## Storage and reads
 
-## The Problem
-
-TypeScript narrows types **by control flow**. After `if (x !== undefined)`,
-inside the then-branch, `x` has type `T` instead of `T | undefined`. The
-same identifier carries different types in different scopes.
-
-Dafny and Lean narrow types **by binding introduction**. To use `x` as a
-narrower type, you introduce a new binding via `match` or `let`, and uses
-of the new type reference the new name.
-
-Every narrowing pattern translation comes down to: **find each narrowing
-site, introduce a binding, redirect uses within the narrowed scope to the
-binding**. Doing this incrementally — partly in resolve, partly in
-transform, sharing intermediate state through TExpr fields — was the
-source of years of accumulated tangle (synthetic vars, raw-IR substitution,
-duplicated logic in pure-vs-impure paths, scattered field-replacement
-helpers).
-
-The current design splits the problem along a clean boundary.
-
----
-
-## The Split
-
-**Resolve owns type narrowing.** When the type checker walks `if (e !== undefined) use(e)`, the body's `use(e)` needs to typecheck with `e` of the
-unwrapped type. Following TS semantics, resolve only narrows simple shapes:
-
-- **`env`** for simple variables. `if (x !== undefined)` extends the
-  type environment with `x: T` for the then-branch.
-- **`narrowedPaths`** for any pure access path (`obj.field`, `a.b.c.d`,
-  any depth). Each entry pairs a path (root var + field chain) with the
-  unwrapped type. The field resolver computes the path of each access and
-  looks it up. `&&` chains accumulate narrowings so each premise is in
-  scope for later ones, matching TS narrowing through `&&`. The same
-  applies through `==>` in spec contexts (premise narrows conclusion).
-
-Complex expressions (call results, index ops) are **not** narrowed —
-matching TS, which requires the user to bind first:
-`const v = m.get(k); if (v !== undefined) use(v)`. This avoids the
-soundness hazard of retyping based on structural equality of impure calls.
-
-Resolve does **no structural rewriting** for narrowing: no substitution, no
-synthetic vars, no `match` generation. Its one rewriting step is
-[callback binding](TOOLS.md#callback-binding-and-lowering), which uses the
-lexical environment to bind callback parameters.
-
-**Narrow owns structural narrowing.** A separate pass between resolve and
-transform takes typed IR and rewrites optional-narrowing patterns into a
-single IR primitive: `someMatch`. Each TS pattern (`if !== undefined`,
-ternary, `&&`, `||`, early return, truthiness, let-with-impure-guard,
-optional chain `?.`) is detected by a focused rule and rewritten
-compositionally. The rules are positional drivers: *what* each condition
-establishes lives in `condition-facts.ts`, shared with resolve so a check is
-taught once. See [TOOLS.md#narrow-rules](TOOLS.md#narrow-rules) for the full
-list.
-
-**Transform owns lowering.** It receives typed IR with `someMatch` nodes
-and lowers them to backend-IR `match Some/None`, performing a light
-substitution for var/simple-field scrutinees (see the table below). It
-has no optional-detection logic of its own.
-
----
-
-## The `someMatch` Primitive
-
-The single IR node that all narrowing rewrites produce:
+For `let x: number | undefined`, the environment always records `Option<int>`.
+Assigning `5` writes `Some(5)`; assigning `undefined` writes `None`. A return or
+arithmetic operation requiring a number requests a `coerce` expression:
 
 ```ts
-| { kind: "someMatch";
-    scrutinee: TExpr;     // var, field chain, or arbitrary expression
-    binder: string;       // fresh name for the unwrapped value
-    binderTy: Ty;         // inner (non-optional) type
-    someBody: TExpr;      // (or TStmt[] for the statement-level form)
-    noneBody: TExpr;      // (or TStmt[])
-    ty: Ty }
+{ kind: "coerce", expr: storageRead, ty: payloadType }
 ```
 
-Both expression and statement variants exist. They lower uniformly:
-`match scrutinee { Some(binder) => someBody, None => noneBody }`.
+This operation reads storage when it executes. For example:
 
-For pure access path scrutinees (var or any depth of `obj.f.g.h`), the
-body keeps its original references — transform substitutes the entire
-path with the binder at lowering time via `replacePathInTExpr` /
-`replacePathInTStmts`. The substitution walks the typed IR looking for
-TExprs whose access-path shape matches the scrutinee exactly.
-
-For complex scrutinees (only produced by the `optChain` rewrite — see
-below), narrow constructs the someBody to reference the binder directly,
-so transform skips substitution and lowers naively.
-
----
-
-## Why a Separate Pass
-
-Narrow is a separate pass mostly because the rewrites compose better in
-isolation than they did when scattered across resolve and transform:
-
-- **Each pattern is one rule** instead of a code path in resolve plus one
-  in transform. Adding a TS narrowing pattern is one rule in narrow.
-- **Narrow doesn't touch unrelated work.** Method dispatch, HOF lowering,
-  loop transformation, monadic ANF — all stay in transform. Narrow only
-  rewrites optional-narrowing shapes.
-- **The `someMatch` primitive** is the contract between layers. Resolve
-  produces conditionals (no someMatch); transform consumes someMatch
-  (lowers to match Some/None). Narrow sits in between, doing the conversion.
-
-Note: each new TS pattern still touches all three layers (resolve to type
-narrowed accesses, narrow to rewrite the shape, transform to substitute the
-binder). Narrow is the *structural* layer of a three-layer system, not a
-hermetic component.
-
----
-
-## Narrow vs Peephole
-
-Two passes that operate on different IRs and solve different problems:
-
-- **Narrow** runs on typed IR before transform. It eliminates flow-sensitive
-  narrowing — rewrites `if (x !== undefined) use(x)` to `someMatch x { ... }`.
-- **Peephole** runs on backend IR after transform. It eliminates
-  wrap-then-unwrap ceremony around partial-access expressions —
-  rewrites `match m.get(k) { Some(v) => v == 0, None => false }` to
-  `k in m && m[k] == 0`.
-
-Narrow is structural; peephole is local. Narrow is necessary for correctness
-(without it, the IR has no narrowing); peephole is a cleanup (without
-it, the verifier sees through the ceremony but the output is verbose).
-
-They compose: narrow converts narrowing to `someMatch` → transform lowers
-`someMatch` to `match` → peephole simplifies the `match` if its scrutinee
-is a `Map.get` call.
-
----
-
-## Optional Chaining (`?.`) and Nullish Coalescing (`??`)
-
-TS's `obj?.field` reads the field once. Extract emits an `optChain { obj, chain }`
-IR node where `chain` is a list of steps — each step is a `field`, `call`,
-or `index`. So `obj?.foo()`, `obj?.[k]`, `obj?.a.b.c`, and `obj?.a?.b?.c` all
-share the same IR (chained `?.` produces nested optChains). Narrow's
-`ruleOptChain` rewrites by applying the chain to a fresh binder:
-
-```
-someMatch obj { Some(_oc{N}_val) => apply(chain, _oc{N}_val), None => undefined }
+```ts
+if (x !== undefined) {
+  x = 5;
+  return x;
+}
 ```
 
-`x ?? y` (nullish coalescing) gets its own `nullish` IR node that narrow
-rewrites to `someMatch x { Some(_v) => _v, None => y }`.
+becomes the following Dafny body:
 
-For both, the someBody references the binder directly (not the original
-`obj`/`left`), so transform skips substitution. These are the only cases
-where `someMatch` carries a complex scrutinee (call result, etc.).
+```dafny
+if x.Some? {
+  x := Some(5);
+  return x.value;
+}
+```
 
-The pattern `if (e !== undefined) use(e)` with a complex `e` is *not*
-narrowed — per TS semantics, the user must bind: `const v = e; if (v !== undefined) use(v)`. Only `?.` and `??` get special treatment, and only
-because extract emits single-evaluation IR nodes for them.
+Dafny checks that the destructor is defined. Lean methods bind the result of
+`LemmaScript.optionValue x`, whose proved Velvet specification requires
+`x.isSome = true` and establishes `x = some result`. A guard before a write
+does not justify a read after the write: verification uses the current state.
+A non-null assertion requests the same checked read; it supplies no assumption.
 
----
+Resolve selects these reads from the consuming operation's type: arithmetic,
+field/index access, collection receivers, arguments, assignments, and returns.
+This also works in annotations, which have no TypeScript flow checker. Lookup
+initializers retain the model's optional result even when TypeScript reports a
+non-optional type. Evolving locals whose storage type cannot be established
+require an explicit annotation.
 
-## Discriminated-Union Narrowing
+## Responsibilities
 
-Detected in `narrow.ts` (alongside optional narrowing) via
-`ruleDiscriminantChain` and `ruleDiscriminantNegEarlyReturn`. Each emits
-a `tagMatch` IR node — the multi-case analog of `someMatch` — that
-transform lowers via `emitMatchStmt` / `transformPureMatch`.
+- **Extract** preserves source binding identity with `LexicalNames`. It retains
+  explicit optional chains and coalescing, including their evaluation boundaries.
+- **Resolve** preserves storage types, inserts checked payload reads, and
+  converts values written into typed slots. Its `narrowedPaths` tracks union
+  variants; it no longer changes optional storage types after a guard.
+- **Narrow** handles union matches, array-index bounds, and the snapshots needed
+  by `?.` and `??`. It does not rewrite optional `if`, early-return, or loop
+  scopes into payload binders.
+- **Transform** lowers checked reads and preserves conditional evaluation.
+  Supported direct collection mutations reconstruct optional and record wrappers
+  back to the source variable. Unsupported optional mutation forms produce a
+  diagnostic instead of silently updating a temporary.
+- **Emit** expresses the backend's checks. Lean annotations use `Option.get`
+  with a real presence proof; dependent conditionals make guard facts available
+  during elaboration. A Lean pure mirror containing checked reads, or depending
+  on one, is omitted so calls run through the verified method instead.
+- **Peephole** simplifies local backend expressions while preserving evaluation
+  and proof obligations.
 
-Recognized patterns:
+The lexical naming rules still apply to callbacks and annotations. Fresh union
+pattern binders are allocated once per arm and passed to both pattern emission
+and substitution; two paths with the same name hint cannot capture each other.
 
-- `if (x.kind === "v") ... else if (x.kind === "w") ...` — chain of equality
-  checks on a discriminator field.
-- `if ('key' in x) ...` — narrows to the unique variant containing `key`.
-  Looks up the variant from the type's declarations (carried in the `CondCtx`
-  threaded through the pass).
-- `if (x.kind !== "v") terminate; rest` — negative early-return form;
-  rest becomes the variant's body, terminator becomes the fallthrough.
-- `switch (x.kind) { case "v": ... }` — exhaustive variant matching
-  (still handled in transform's `emitSwitchStmt` since it's a syntactic
-  switch, not an if-chain).
+## Evaluation and snapshots
 
-When the chain covers all variants but one, the fallthrough `_` arm is
-replaced with the remaining variant's destructured pattern (Lean requires
-this for variant-specific field access in the fallthrough).
+`&&`, `||`, `?:`, `?.`, and `??` keep lifted calls inside the selected branch.
+Value-producing logical expressions preserve JavaScript falsey payloads such as
+`0`, `false`, and `""`; presence alone is sufficient only for always-truthy
+payload types. Discarded logical expressions become guarded statements so their
+mutations still write back to storage.
 
----
+An optional comparison evaluates both operands before inspecting presence. An
+absent left operand cannot erase a right-hand call or its precondition.
 
-## What Narrow Does NOT Cover
+The expression-only `someMatch` node remains for a single evaluation:
 
-- **Cross-function narrowing.** TS narrows across function calls if the
-  callee is a type predicate (`function isString(x): x is string`).
-  LemmaScript doesn't currently support type predicates.
-- **`typeof x === "string"`** for `string | number` unions. Our subset
-  uses tagged unions, so this is rare.
-- **`instanceof`** — irrelevant in our subset (no class hierarchies).
-- **Compound discriminants** (`x.kind === "a" || x.kind === "b" ==> use(x.shared)`).
-  TS narrows to the variants that share the field; we don't.
-- **Complex-expression narrowing.** `if (m.get(k) !== undefined) use(m.get(k))` is rejected (TS-faithful). Users must bind first.
-- **Re-widening on mutation.** TS conservatively widens a narrowed access
-  after any function call that could mutate. We don't widen — once narrowed,
-  stays narrowed within the scope.
-- **Map.get ceremony elimination.** That's the peephole's job, not narrow's.
-  Once narrowing lowers to `match m.get(k) { ... }`, peephole collapses
-  the shape into `if k in m { ... m[k] ... }`.
+```text
+x ?? y       → someMatch x { Some(v) => v, None => y }
+x?.field     → someMatch x { Some(v) => v.field, None => undefined }
+```
+
+Its bodies name the snapshot explicitly. Transform never substitutes that
+snapshot into later source reads. Object-spread merging also uses explicit
+snapshots. There is no statement-level optional `someMatch`.
+
+A complex expression repeated in source is evaluated repeatedly. Checking one
+call result does not establish presence for a later independent call; binding
+the result explicitly is the way to reuse the same evaluation.
+
+## Union narrowing and boundaries
+
+Discriminated unions and synthesized array unions still use `tagMatch` and
+pattern-binder substitution. Conjunctions containing `Array.isArray` retain
+source order, including an optional guard before the union receiver is read.
+This does not replace union narrowing with checked variant projections or
+resolve the separate union-reassignment and callback limitations.
+
+The current datatype still conflates `null` and `undefined`. Aliasing, shared
+mutable state, and callbacks capturing changing variables retain the existing
+model's limitations. Checked optional reads are not a heap model or an effect
+analysis. Assignment expressions used as values remain unsupported.
+
+Regression tests pair runtime results and successful backend proofs with false
+postconditions, absent payload reads, and calls whose preconditions must fail.
+Loop invariants, decreasing clauses, and explicit `done_with` annotations are
+checked against the current optional state on both relevant backend paths.

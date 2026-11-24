@@ -17,13 +17,13 @@ method countAssistantParts(msgs: seq<Msg>) returns (res: int)
     decreases (|msgs| - i)
   {
     var m := msgs[i];
-    match m.content {
-      case ArrayBranch(i_m_content_arr) =>
-        if (m.role == "assistant") {
+    if (m.role == "assistant") {
+      match m.content {
+        case ArrayBranch(i_m_content_arr) =>
           n := (n + |i_m_content_arr|);
-        }
-      case NonArrayBranch(i_m_content_val) =>
+        case NonArrayBranch(i_m_content_val) =>
 
+      }
     }
     i := (i + 1);
   }

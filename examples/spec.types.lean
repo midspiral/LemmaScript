@@ -164,17 +164,6 @@ def findSubstr (s : String) (sub : String) : Int :=
 def getSlice (s : String) (start : Nat) («end» : Nat) : String :=
   JSString.slice s start «end»
 
-def deepAccess (t : Tree) : Int :=
-  match t.middle with
-  | .some _t_middle_val =>
-    match _t_middle_val.leaf with
-    | .some _t_middle_leaf_val =>
-      _t_middle_leaf_val.value
-    | .none =>
-      0
-  | .none =>
-    0
-
 def ocField (o : Option Outer) : Option Inner :=
   match o with
   | .some _oc0_val =>
@@ -238,38 +227,6 @@ def ifNotInMapEarlyReturn (m : Std.HashMap String Int) (k : String) (fallback : 
   else
     m.get! k
 
-def negVar (o : Option Inner) (fallback : Int) : Int :=
-  match o with
-  | .some _o_val =>
-    _o_val.val
-  | .none =>
-    fallback
-
-def negField (o : Outer) (fallback : Int) : Int :=
-  match o.inner with
-  | .some _o_inner_val =>
-    _o_inner_val.val
-  | .none =>
-    fallback
-
-def truthyVar (o : Option Inner) (fallback : Int) : Int :=
-  match o with
-  | .some _o_val =>
-    _o_val.val
-  | .none =>
-    fallback
-
-def nestedAndTernary (o : Option Outer) (fallback : Int) : Int :=
-  match o with
-  | .some _o_val =>
-    match _o_val.inner with
-    | .some _o_inner_val =>
-      _o_inner_val.val
-    | .none =>
-      fallback
-  | .none =>
-    fallback
-
 def area (s : Shape) : Int :=
   match s with
   | .circle _s_radius =>
@@ -282,13 +239,6 @@ def describeIfCircle (s : Shape) (fallback : Int) : Int :=
   | .circle _s_radius =>
     _s_radius * _s_radius
   | .square _s_side =>
-    fallback
-
-def ternarySpecOpt (o : Option Inner) (fallback : Int) : Int :=
-  match o with
-  | .some _o_val =>
-    _o_val.val
-  | .none =>
     fallback
 
 def projectedCodePure (error : RpcErrorView) : Int :=

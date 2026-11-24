@@ -88,28 +88,34 @@ method carryScan (digits : Array Int) returns (res : Int)
     return i
 
 method optNumCond (o : Option Int) returns (res : Int)
-  ensures ensures_1: ((match o with | .some _ => false | .none => true) → res = 0 : Prop)
-  ensures ensures_2: ((match o with | .some _value => _value == 0 | .none => false) → res = 0 : Prop)
-  ensures ensures_3: ((match o with | .some _o_val => _o_val ≠ 0 → res = 1 | .none => true) : Prop)
+  ensures ensures_1: (¬(Option.isSome o) → res = 0 : Prop)
+  ensures ensures_2: ((let _compare6 : Option Int := o
+(match _compare6 with | .some _value => _value == 0 | .none => false)) → res = 0 : Prop)
+  ensures ensures_3: (Option.isSome o → (let _compare7 : Option Int := o
+(match _compare7 with | .some _value => _value != 0 | .none => true)) → res = 1 : Prop)
   do
     return Pure.optNumCond o
 
 method optNumNot (o : Option Int) returns (res : Int)
-  ensures ensures_1: ((match o with | .some _ => false | .none => true) → res = 1 : Prop)
-  ensures ensures_2: ((match o with | .some _value => _value == 0 | .none => false) → res = 1 : Prop)
-  ensures ensures_3: ((match o with | .some _o_val => _o_val ≠ 0 → res = 0 | .none => true) : Prop)
+  ensures ensures_1: (¬(Option.isSome o) → res = 1 : Prop)
+  ensures ensures_2: ((let _compare8 : Option Int := o
+(match _compare8 with | .some _value => _value == 0 | .none => false)) → res = 1 : Prop)
+  ensures ensures_3: (Option.isSome o → (let _compare9 : Option Int := o
+(match _compare9 with | .some _value => _value != 0 | .none => true)) → res = 0 : Prop)
   do
     return Pure.optNumNot o
 
 method optStrCond (o : Option String) returns (res : Int)
-  ensures ensures_1: ((match o with | .some _ => false | .none => true) → res = 0 : Prop)
-  ensures ensures_2: ((match o with | .some _value => _value == "" | .none => false) → res = 0 : Prop)
-  ensures ensures_3: ((match o with | .some _o_val => _o_val ≠ "" → res = 1 | .none => true) : Prop)
+  ensures ensures_1: (¬(Option.isSome o) → res = 0 : Prop)
+  ensures ensures_2: ((let _compare10 : Option String := o
+(match _compare10 with | .some _value => _value == "" | .none => false)) → res = 0 : Prop)
+  ensures ensures_3: (Option.isSome o → (let _compare11 : Option String := o
+(match _compare11 with | .some _value => _value != "" | .none => true)) → res = 1 : Prop)
   do
     return Pure.optStrCond o
 
 method optPresent (o : Option Int) returns (res : Int)
-  ensures ensures_1: ((match o with | .some _o_val => res = 1 | .none => true) : Prop)
-  ensures ensures_2: ((match o with | .some _ => false | .none => true) → res = 0 : Prop)
+  ensures ensures_1: (Option.isSome o → res = 1 : Prop)
+  ensures ensures_2: (¬(Option.isSome o) → res = 0 : Prop)
   do
     return Pure.optPresent o

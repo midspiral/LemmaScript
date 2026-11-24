@@ -20,15 +20,10 @@ lemma hasTagFrom_ensures(tags: seq<string>, tag: string, from: int)
 
 function visibility(post: Post): string
 {
-  match post.tags {
-    case Some(i_post_tags_val) =>
-      if ("draft" in i_post_tags_val) then
-        "draft"
-      else
-        "live"
-    case None =>
-      "live"
-  }
+  if ((post.tags).Some? && ("draft" in post.tags.value)) then
+    "draft"
+  else
+    "live"
 }
 
 lemma visibility_ensures(post: Post)
@@ -47,6 +42,6 @@ function hasTag(post: Post, tag: string): bool
 }
 
 lemma hasTag_ensures(post: Post, tag: string)
-  ensures ((match post.tags { case Some(i_) => false case None => true }) ==> (hasTag(post, tag) == false))
+  ensures (!((post.tags).Some?) ==> (hasTag(post, tag) == false))
 {
 }

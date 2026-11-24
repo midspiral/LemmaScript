@@ -11,8 +11,8 @@ function optionalLookup(enabled: bool, values: map<string, int>, key: string): O
 }
 
 lemma optionalLookup_ensures(enabled: bool, values: map<string, int>, key: string)
-  ensures (!(enabled) ==> (match optionalLookup(enabled, values, key) { case Some(i_) => false case None => true }))
-  ensures (enabled ==> !((key in values)) ==> (match optionalLookup(enabled, values, key) { case Some(i_value) => (i_value == 0) case None => false }))
-  ensures (enabled ==> (key in values) ==> (match optionalLookup(enabled, values, key) { case Some(i_value) => (i_value == values[key]) case None => false }))
+  ensures (!(enabled) ==> !((optionalLookup(enabled, values, key)).Some?))
+  ensures (enabled ==> !((key in values)) ==> (var i_compare0: Option<int> := optionalLookup(enabled, values, key); (match i_compare0 { case Some(i_value) => (i_value == 0) case None => false })))
+  ensures (enabled ==> (key in values) ==> (var i_compare1: Option<int> := optionalLookup(enabled, values, key); (var i_compare2: int := values[key]; (match i_compare1 { case Some(i_value) => (i_value == i_compare2) case None => false }))))
 {
 }

@@ -41,7 +41,7 @@ test("both backends preserve the enum in every optional record field", () => {
   }
   assert.match(dafny, /current: Phase/);
   assert.match(dafny, /timeline: seq<Phase>/);
-  assert.match(dafny, /isExecuting\(i_s_previous_val\)/);
+  assert.match(dafny, /isExecuting\(s\.previous\.value\)/);
   assert.doesNotMatch(dafny, /== "(?:pending|executing|complete)"/);
   const snapshot = extract(fixture).typeDecls.find(d => d.name === "Snapshot")!;
   assert.ok(snapshot.fields!.find(f => f.name === "hint")!.optionalKey);

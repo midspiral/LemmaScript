@@ -236,6 +236,6 @@ test("narrowing reaches a loop's termination measure", () => {
 
 test("Lean loop annotations use the narrowed value", () => {
   const lean = generate(loopAnnotations, "lean");
-  assert.match(lean, /decreasing _p_val\.size - i/);
-  assert.match(lean, /done_with \(i = _p_val\.size : Prop\)/);
+  assert.match(lean, /decreasing \(\(p\)\.get \(by grind\)\)\.size - i/);
+  assert.match(lean, /done_with \(i = \(\(p\)\.get \(by grind\)\)\.size : Prop\)/);
 });

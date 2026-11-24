@@ -97,7 +97,7 @@ export type Stmt =
   | { kind: "match"; scrutinee: Expr; arms: StmtMatchArm[] }
   | { kind: "while"; cond: Expr; invariants: Expr[]; decreasing: Expr | null;
       doneWith: Expr | null; body: Stmt[] }
-  | { kind: "forin"; idx: string; bound: Expr; invariants: Expr[]; body: Stmt[] }
+  | { kind: "forin"; idx: string; bound: Expr; invariants: Expr[]; doneWith?: Expr | null; body: Stmt[] }
   | { kind: "ghostLet"; name: string; type: Ty; value: Expr }
   | { kind: "ghostAssign"; target: string; value: Expr }
   | { kind: "assert"; expr: Expr; assumed?: boolean }
@@ -309,7 +309,8 @@ export function anyExprInStmt(s: Stmt, pred: ExprPred): boolean {
     case "while": return anyExpr(s.cond, pred) || s.invariants.some(i => anyExpr(i, pred))
       || (s.decreasing ? anyExpr(s.decreasing, pred) : false) || (s.doneWith ? anyExpr(s.doneWith, pred) : false)
       || anyExprInStmts(s.body, pred);
-    case "forin": return anyExpr(s.bound, pred) || s.invariants.some(i => anyExpr(i, pred)) || anyExprInStmts(s.body, pred);
+    case "forin": return anyExpr(s.bound, pred) || s.invariants.some(i => anyExpr(i, pred))
+      || (s.doneWith ? anyExpr(s.doneWith, pred) : false) || anyExprInStmts(s.body, pred);
   }
 }
 

@@ -72,40 +72,27 @@ def andOrNested (a : Int) (b : String) (c : Array Int) : Int :=
     0
 
 def optNumCond (o : Option Int) : Int :=
-  match o with
-  | .some _o_val =>
-    if _o_val ≠ 0 then
-      1
-    else
-      0
-  | .none =>
+  if (!(((match o with | .some _value => !(_value ≠ 0) | .none => true) : Bool)) : Bool) then
+    1
+  else
     0
 
 def optNumNot (o : Option Int) : Int :=
-  match o with
-  | .some _o_val =>
-    if _o_val ≠ 0 then
-      0
-    else
-      1
-  | .none =>
+  if ((match o with | .some _value => !(_value ≠ 0) | .none => true) : Bool) then
     1
+  else
+    0
 
 def optStrCond (o : Option String) : Int :=
-  match o with
-  | .some _o_val =>
-    if _o_val.length > 0 then
-      1
-    else
-      0
-  | .none =>
+  if (!(((match o with | .some _value => !(_value.length > 0) | .none => true) : Bool)) : Bool) then
+    1
+  else
     0
 
 def optPresent (o : Option Int) : Int :=
-  match o with
-  | .some _o_val =>
+  if Option.isSome o then
     1
-  | .none =>
+  else
     0
 
 end Pure

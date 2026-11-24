@@ -1,11 +1,12 @@
 # REDESIGN_NARROWING — Checked reads of current storage
 
-**Status:** proposal, November 23, 2026. Baseline: `main` at
+**Status:** steps 1–2 implemented on `redesign-narrowing`, November 23, 2026.
+Baseline: `main` at
 [`966272f`](https://github.com/midspiral/LemmaScript/commit/966272f70ea708ba8d84e95bafa610c3e2b8a1d3).
 The prototype reviewed here is [PR #378](https://github.com/midspiral/LemmaScript/pull/378)
-at `922bc4a`. This document proposes a staged replacement; the current
-implementation remains documented in [ARCHITECTURE_NARROWING.md](ARCHITECTURE_NARROWING.md)
-and [TOOLS.md](TOOLS.md).
+at `922bc4a`. This document records the staged replacement and remaining work;
+the implemented read model is documented in
+[ARCHITECTURE_NARROWING.md](ARCHITECTURE_NARROWING.md) and [TOOLS.md](TOOLS.md).
 
 ## Decision
 
@@ -25,7 +26,7 @@ a stack of overlapping narrowing implementations to merge wholesale.
 
 ## Why change the read model
 
-The current pipeline rewrites guards into `someMatch` / `tagMatch` and
+The baseline pipeline rewrites guards into `someMatch` / `tagMatch` and
 substitutes pattern binders for later reads of the narrowed path. Those
 binders hold values from the earlier match. Reassignment can leave later
 reads observing that earlier value; mutation can update the binder without
@@ -157,7 +158,7 @@ existing loss of that annotation during lowering to `forin`.
 Port the focused collision fix and regression from
 [#358](https://github.com/midspiral/LemmaScript/pull/358). An outer narrowing of
 `u` and an inner narrowing of `m.u` can both introduce `i_u_arr`, turning
-`m.u.length - u.length` into a value minus itself. Current `main` can prove the
+`m.u.length - u.length` into a value minus itself. The baseline can prove the
 false result `0` even though `u = [1]` and `m.u = []` give `-1`.
 
 Keep this fix independent of the redesign. #377 already covers source
@@ -261,6 +262,36 @@ close or merge PRs automatically.
 | [#363](https://github.com/midspiral/LemmaScript/pull/363) | Keep assignment-expression sequencing separate. #372's explicit rejection remains the baseline boundary. |
 
 ## Validation and migration
+
+Steps 1–2 now use fresh union binders and a typed `coerce` for checked optional
+reads. Optional scope substitution and statement-level `someMatch` have been
+removed. Expression snapshots remain for `?.`, `??`, and spread merging;
+union lowering retains its existing representation. Direct mutations through
+optional storage reconstruct the enclosing value; unsupported mutation results
+and optional `pop`/`shift` produce diagnostics. Both backends check non-null
+assertions, including assertions on map lookups.
+
+Local validation passes the 645 unit tests, fixture checks, compiler and
+example typechecks, all 91 Dafny examples, and the full Lean build. The focused
+regressions include false postconditions, reads after clearing storage, absent
+map lookups, optional comparisons whose other operand must execute, skipped
+calls in short-circuit expressions, and iteration after clearing the iterable's
+source variable. These checks cover both successful proofs and expected proof
+failures; they do not establish general translation soundness.
+
+Generated examples were regenerated through the compiler. Dafny proof additions
+were preserved; topological sort needed two merge conflicts reconciled. On Lean,
+six proofs in `spec.proof.lean` now use method contracts instead of removed pure
+mirrors. Topological sort uses the existing invariant lemmas with the proved
+map-lookup bridge; its contracts are unchanged. The migration no longer needs
+the old tactic macro and reduces its heartbeat limit from 16 million to 2 million.
+
+Representative case-study migrations were checked locally in temporary clones:
+xyflow's three Dafny files verify after moving two existing proof additions in
+`reconnectEdge`; colorwheel's Lean build passes with generated changes only.
+Colorwheel retains a pre-existing `sorry` in its separate `adjustColorCommutes`
+property. Full case-study CI and dedicated staging branches remain to be prepared
+against a fixed compiler commit; these local checks do not replace that matrix.
 
 Each claimed fix needs a positive program with runtime results and a correct
 contract that verifies, plus a false contract or invalid read that is rejected

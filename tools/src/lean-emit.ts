@@ -6,7 +6,7 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { anyExpr, decimalNumberLiteral, usesNameInDecl, patternBinders } from "./ir.js";
+import { anyExpr, anyExprInStmts, decimalNumberLiteral, usesNameInDecl, patternBinders } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshName, freshNameWhere } from "./names.js";
 
@@ -241,6 +241,27 @@ function needsBoolConnectives(e: Expr): boolean {
   return anyExpr(e, connectiveHasNonCoercibleOperand);
 }
 
+function hasOptionalRead(e: Expr): boolean {
+  return anyExpr(e, x => x.kind === "app" && x.fn === "Option.get");
+}
+
+function emitAsBool(e: Expr): string {
+  const prev = _boolCtx;
+  _boolCtx = true;
+  try {
+    const text = emitExpr(e);
+    return isPropValued(e) ? `(decide (${text}))` : text;
+  } finally {
+    _boolCtx = prev;
+  }
+}
+
+function emitCondition(e: Expr): string {
+  // Pin matches to Bool before Lean's expected Prop type reaches their arms.
+  return isNonCoercibleBoolAtom(e) || needsBoolConnectives(e)
+    ? `(${emitAsBool(e)} : Bool)` : emitExpr(e);
+}
+
 function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: string, args: string[]): string {
   // Array methods
   if (tyKind === "array") {
@@ -384,12 +405,25 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "unop":
-      if (e.op === "¬") return _boolCtx ? `!(${emitExpr(e.expr)})` : `¬(${emitExpr(e.expr)})`;
+      if (e.op === "¬") {
+        const operand = needsBoolConnectives(e) ? `(${emitAsBool(e.expr)} : Bool)` : emitExpr(e.expr);
+        return _boolCtx ? `!(${operand})` : `¬(${operand})`;
+      }
       if (e.op !== "-") throw new Error(`Unsupported Lean unary operator: ${e.op}`);
       return (e.expr.kind === "num" || e.expr.kind === "bigint")
         ? `-${e.expr.value}` : `(-${emitExpr(e.expr)})`;
 
     case "binop": {
+      // A pure checked read needs the actual short-circuit guard in scope
+      // while Lean elaborates its presence proof.
+      if ((e.op === "∧" || e.op === "∨") && hasOptionalRead(e.right)) {
+        const hyp = freshNameWhere("_present", n => anyExpr(e, x => x.kind === "var" && x.name === n));
+        const left = _boolCtx ? emitAsBool(e.left) : emitExpr(e.left);
+        const right = _boolCtx ? emitAsBool(e.right) : emitExpr(e.right);
+        const yes = _boolCtx ? "true" : "True", no = _boolCtx ? "false" : "False";
+        return e.op === "∧" ? `(if ${hyp} : ${left} then ${right} else ${no})`
+          : `(if ${hyp} : ${left} then ${yes} else ${right})`;
+      }
       // Discriminator test against a constructor that carries fields:
       // `x = .Ctor` → `(match x with | .Ctor .. => true | _ => false)`. A
       // multi-field constructor is a function, not a value, so a bare
@@ -428,6 +462,16 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "implies": {
+      if (hasOptionalRead(e)) {
+        const computational = !anyExpr(e, x => x.kind === "forall" || x.kind === "exists");
+        const render = computational ? emitAsBool : emitExpr;
+        let body = render(e.conclusion);
+        for (let i = e.premises.length - 1; i >= 0; i--) {
+          const hyp = freshNameWhere(`_present${i}`, n => anyExpr(e, x => x.kind === "var" && x.name === n));
+          body = `(if ${hyp} : ${render(e.premises[i])} then ${body} else ${computational ? "true" : "True"})`;
+        }
+        return computational ? `(${body} = true)` : body;
+      }
       // Premises bind at →'s level: a nested-implication premise must keep its
       // parens (→ is right-associative, so `(a → b) → c` ≠ `a → b → c`), and
       // ↔ binds looser than → in Lean. The conclusion is the right-assoc tail,
@@ -439,6 +483,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "app": {
+      if (e.fn === "Option.get") return `(${emitExpr(e.args[0])}).get (by grind)`;
       // A bare negative literal argument (`f -7 2`) parses as subtraction in Lean.
       const args = e.args.map(a => {
         const s = emitExpr(a);
@@ -527,8 +572,11 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       return `{ ${fields.join(", ")} }`;
     }
 
-    case "if":
-      return `if ${emitExpr(e.cond)} then ${emitExpr(e.then)} else ${emitExpr(e.else)}`;
+    case "if": {
+      const hyp = hasOptionalRead(e.then) || hasOptionalRead(e.else)
+        ? `${freshNameWhere("_present", n => anyExpr(e, x => x.kind === "var" && x.name === n))} : ` : "";
+      return `if ${hyp}${emitCondition(e.cond)} then ${emitExpr(e.then)} else ${emitExpr(e.else)}`;
+    }
 
     case "match": {
       // Always parenthesize inline matches — Lean parses alternatives greedily,
@@ -552,11 +600,13 @@ function emitExpr(e: Expr, parentPrec?: number): string {
  *  so these top-level ops land in Prop. `in` stays Bool (emits `.contains`), and
  *  bare method calls / vars / field accesses remain at their declared type. */
 function isPropValued(e: Expr): boolean {
+  if (isNonCoercibleBoolAtom(e)) return false;
   switch (e.kind) {
     case "binop":
+      if (_boolCtx && (e.op === "∧" || e.op === "∨")) return false;
       return ["=", "≠", "≥", "≤", ">", "<", "∧", "∨"].includes(e.op);
     case "unop":
-      return e.op === "¬";
+      return !_boolCtx && e.op === "¬";
     case "implies":
     case "forall":
     case "exists":
@@ -613,11 +663,13 @@ function emitStmt(s: Stmt, indent: number): string {
     case "continue": return `${pad}continue`;
 
     case "if": {
-      let out = `${pad}if ${emitExpr(s.cond)} then\n${emitStmts(s.then, indent + 1)}`;
+      const checked = anyExprInStmts([...s.then, ...s.else], hasOptionalRead);
+      const hyp = checked ? `${freshName("_present")} : ` : "";
+      let out = `${pad}if ${hyp}${emitCondition(s.cond)} then\n${emitStmts(s.then, indent + 1)}`;
       if (s.else.length > 0) {
-        if (s.else.length === 1 && s.else[0].kind === "if") {
+        if (!checked && s.else.length === 1 && s.else[0].kind === "if") {
           const ei = s.else[0];
-          out += `\n${pad}else if ${emitExpr(ei.cond)} then\n${emitStmts(ei.then, indent + 1)}`;
+          out += `\n${pad}else if ${emitCondition(ei.cond)} then\n${emitStmts(ei.then, indent + 1)}`;
           if (ei.else.length > 0) out += `\n${pad}else\n${emitStmts(ei.else, indent + 1)}`;
         } else {
           out += `\n${pad}else\n${emitStmts(s.else, indent + 1)}`;
@@ -668,7 +720,7 @@ function emitStmt(s: Stmt, indent: number): string {
 
     case "while": {
       // Guard is computational (Bool); invariants / done_with are Prop.
-      const lines = [`${pad}while ${emitExpr(s.cond)}`];
+      const lines = [`${pad}while ${emitCondition(s.cond)}`];
       const prevBoolCtx = _boolCtx;
       _boolCtx = false;
       for (const inv of s.invariants) lines.push(`${pad}  invariant invariant_${++_invariantIndex}: (${emitExpr(inv)} : Prop)`);
@@ -692,8 +744,9 @@ function emitStmt(s: Stmt, indent: number): string {
       const invariants = s.invariants.map(inv => `(${emitExpr(inv)} : Prop)`);
       for (const inv of invariants)
         lines.push(`${pad}  invariant invariant_${++_invariantIndex}: ${inv}`);
-      if (invariants.length > 0)
-        lines.push(`${pad}  done_with (let ${idx} : Nat := ${stop}; ${invariants.join(" ∧ ")})`);
+      const exitFacts = [...invariants, ...(s.doneWith ? [`(${emitExpr(s.doneWith)} : Prop)`] : [])];
+      if (exitFacts.length > 0)
+        lines.push(`${pad}  done_with (let ${idx} : Nat := ${stop}; ${exitFacts.join(" ∧ ")})`);
       _boolCtx = prevBoolCtx;
       lines.push(`${pad}do`);
       lines.push(`${pad}  let ${idx} : Nat := ${idx}`);
@@ -874,7 +927,7 @@ function emitPureExpr(e: Expr, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (e.kind) {
     case "if":
-      return `${pad}if ${emitExpr(e.cond)} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
+      return `${pad}if ${emitCondition(e.cond)} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
     case "match": {
       const lines = [`${pad}match ${emitExpr(e.scrutinee)} with`];
       for (const arm of e.arms) {

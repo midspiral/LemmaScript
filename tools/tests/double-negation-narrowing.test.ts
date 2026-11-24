@@ -63,8 +63,8 @@ test("Lean narrows o under !!o and !!!o", () => {
   const { typesFile, defFile } = transformModuleLean(typed());
   const output = [typesFile, defFile].filter(f => !!f).map(f => emitLeanFile(f!)).join("\n");
   for (const name of ["ifThen", "earlyReturn", "ternary"]) {
-    const body = output.slice(output.indexOf(`def ${name}`));
-    assert.match(body, /^def \w+[^\n]*\n\s*match o with/, output);
+    assert.match(output, new RegExp(`method ${name} `), output);
+    assert.match(output, /LemmaScript\.optionValue o/, output);
   }
   assert.doesNotMatch(output, /\bo - x\b/, "o is optional; arithmetic must use its unwrapped binder");
 });

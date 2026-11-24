@@ -301,22 +301,15 @@ function getSlice(s: string, start: nat, end: nat): string
 
 function deepAccess(t: Tree): int
 {
-  match t.middle {
-    case Some(i_t_middle_val) =>
-      match i_t_middle_val.leaf {
-        case Some(i_t_middle_leaf_val) =>
-          i_t_middle_leaf_val.value
-        case None =>
-          0
-      }
-    case None =>
-      0
-  }
+  if ((t.middle).Some? && (t.middle.value.leaf).Some?) then
+    t.middle.value.leaf.value.value
+  else
+    0
 }
 
 lemma deepAccess_ensures(t: Tree)
-  ensures (match t.middle { case Some(i_t_middle_val) => (match i_t_middle_val.leaf { case Some(i_t_middle_leaf_val) => (deepAccess(t) == i_t_middle_leaf_val.value) case None => true }) case None => true })
-  ensures ((match t.middle { case Some(i_) => false case None => true }) ==> (deepAccess(t) == 0))
+  ensures ((t.middle).Some? ==> (t.middle.value.leaf).Some? ==> (deepAccess(t) == t.middle.value.leaf.value.value))
+  ensures (!((t.middle).Some?) ==> (deepAccess(t) == 0))
 {
 }
 
@@ -331,8 +324,8 @@ function ocField(o: Option<Outer>): Option<Inner>
 }
 
 lemma ocField_ensures(o: Option<Outer>)
-  ensures ((match o { case Some(i_) => false case None => true }) ==> (match ocField(o) { case Some(i_) => false case None => true }))
-  ensures (match o { case Some(i_o_val) => (ocField(o) == i_o_val.inner) case None => true })
+  ensures (!((o).Some?) ==> !((ocField(o)).Some?))
+  ensures ((o).Some? ==> (ocField(o) == o.value.inner))
 {
 }
 
@@ -347,9 +340,9 @@ function ocChain(o: Option<Outer>): Option<int>
 }
 
 lemma ocChain_ensures(o: Option<Outer>)
-  ensures ((match o { case Some(i_) => false case None => true }) ==> (match ocChain(o) { case Some(i_) => false case None => true }))
-  ensures (match o { case Some(i_o_val) => ((match i_o_val.inner { case Some(i_) => false case None => true }) ==> (match ocChain(o) { case Some(i_) => false case None => true })) case None => true })
-  ensures (match o { case Some(i_o_val) => (match i_o_val.inner { case Some(i_o_inner_val) => (match ocChain(o) { case Some(i_value) => (i_value == i_o_inner_val.val) case None => false }) case None => true }) case None => true })
+  ensures (!((o).Some?) ==> !((ocChain(o)).Some?))
+  ensures ((o).Some? ==> !((o.value.inner).Some?) ==> !((ocChain(o)).Some?))
+  ensures ((o).Some? ==> (o.value.inner).Some? ==> (var i_compare0: Option<int> := ocChain(o); (var i_compare1: int := o.value.inner.value.val; (match i_compare0 { case Some(i_value) => (i_value == i_compare1) case None => false }))))
 {
 }
 
@@ -364,8 +357,8 @@ function ocMethodCall(s: Option<set<string>>, k: string): Option<bool>
 }
 
 lemma ocMethodCall_ensures(s: Option<set<string>>, k: string)
-  ensures ((match s { case Some(i_) => false case None => true }) ==> (match ocMethodCall(s, k) { case Some(i_) => false case None => true }))
-  ensures (match s { case Some(i_s_val) => (match ocMethodCall(s, k) { case Some(i_value) => (i_value == (k in i_s_val)) case None => false }) case None => true })
+  ensures (!((s).Some?) ==> !((ocMethodCall(s, k)).Some?))
+  ensures ((s).Some? ==> (var i_compare2: Option<bool> := ocMethodCall(s, k); (var i_compare3: bool := (k in s.value); (match i_compare2 { case Some(i_value) => (i_value == i_compare3) case None => false }))))
 {
 }
 
@@ -380,8 +373,8 @@ function ocIndex(m: Option<map<string, string>>, k: string): Option<string>
 }
 
 lemma ocIndex_ensures(m: Option<map<string, string>>, k: string)
-  ensures ((match m { case Some(i_) => false case None => true }) ==> (match ocIndex(m, k) { case Some(i_) => false case None => true }))
-  ensures (match m { case Some(i_m_val) => (ocIndex(m, k) == (if k in i_m_val then Some(i_m_val[k]) else None)) case None => true })
+  ensures (!((m).Some?) ==> !((ocIndex(m, k)).Some?))
+  ensures ((m).Some? ==> (ocIndex(m, k) == (if k in m.value then Some(m.value[k]) else None)))
 {
 }
 
@@ -396,8 +389,8 @@ function nullishVar(o: Option<Inner>, fallback: int): int
 }
 
 lemma nullishVar_ensures(o: Option<Inner>, fallback: int)
-  ensures ((match o { case Some(i_) => false case None => true }) ==> (nullishVar(o, fallback) == fallback))
-  ensures (match o { case Some(i_o_val) => (nullishVar(o, fallback) == i_o_val.val) case None => true })
+  ensures (!((o).Some?) ==> (nullishVar(o, fallback) == fallback))
+  ensures ((o).Some? ==> (nullishVar(o, fallback) == o.value.val))
 {
 }
 
@@ -426,7 +419,7 @@ function inCheckRecordGet(m: map<string, int>, k: string, fallback: int): int
 
 lemma inCheckRecordGet_ensures(m: map<string, int>, k: string, fallback: int)
   ensures (!((k in m)) ==> (inCheckRecordGet(m, k, fallback) == fallback))
-  ensures ((k in m) ==> ((k in m) && (var i_value := m[k]; (i_value == inCheckRecordGet(m, k, fallback)))))
+  ensures ((k in m) ==> (var i_compare4: int := inCheckRecordGet(m, k, fallback); ((k in m) && (var i_value := m[k]; (i_value == i_compare4)))))
 {
 }
 
@@ -451,7 +444,7 @@ function ifInMapBlock(m: map<string, int>, k: string, fallback: int): int
 }
 
 lemma ifInMapBlock_ensures(m: map<string, int>, k: string, fallback: int)
-  ensures ((k in m) ==> ((k in m) && (var i_value := m[k]; (i_value == ifInMapBlock(m, k, fallback)))))
+  ensures ((k in m) ==> (var i_compare6: int := ifInMapBlock(m, k, fallback); ((k in m) && (var i_value := m[k]; (i_value == i_compare6)))))
   ensures (!((k in m)) ==> (ifInMapBlock(m, k, fallback) == fallback))
 {
 }
@@ -466,77 +459,64 @@ function ifNotInMapEarlyReturn(m: map<string, int>, k: string, fallback: int): i
 
 lemma ifNotInMapEarlyReturn_ensures(m: map<string, int>, k: string, fallback: int)
   ensures (!((k in m)) ==> (ifNotInMapEarlyReturn(m, k, fallback) == fallback))
-  ensures ((k in m) ==> ((k in m) && (var i_value := m[k]; (i_value == ifNotInMapEarlyReturn(m, k, fallback)))))
+  ensures ((k in m) ==> (var i_compare8: int := ifNotInMapEarlyReturn(m, k, fallback); ((k in m) && (var i_value := m[k]; (i_value == i_compare8)))))
 {
 }
 
 function negVar(o: Option<Inner>, fallback: int): int
 {
-  match o {
-    case Some(i_o_val) =>
-      i_o_val.val
-    case None =>
-      fallback
-  }
+  if (match o { case Some(i_value) => false case None => true }) then
+    fallback
+  else
+    o.value.val
 }
 
 lemma negVar_ensures(o: Option<Inner>, fallback: int)
-  ensures ((match o { case Some(i_) => false case None => true }) ==> (negVar(o, fallback) == fallback))
-  ensures (match o { case Some(i_o_val) => (negVar(o, fallback) == i_o_val.val) case None => true })
+  ensures (!((o).Some?) ==> (negVar(o, fallback) == fallback))
+  ensures ((o).Some? ==> (negVar(o, fallback) == o.value.val))
 {
 }
 
 function negField(o: Outer, fallback: int): int
 {
-  match o.inner {
-    case Some(i_o_inner_val) =>
-      i_o_inner_val.val
-    case None =>
-      fallback
-  }
+  if (match o.inner { case Some(i_value) => false case None => true }) then
+    fallback
+  else
+    o.inner.value.val
 }
 
 lemma negField_ensures(o: Outer, fallback: int)
-  ensures ((match o.inner { case Some(i_) => false case None => true }) ==> (negField(o, fallback) == fallback))
-  ensures (match o.inner { case Some(i_o_inner_val) => (negField(o, fallback) == i_o_inner_val.val) case None => true })
+  ensures (!((o.inner).Some?) ==> (negField(o, fallback) == fallback))
+  ensures ((o.inner).Some? ==> (negField(o, fallback) == o.inner.value.val))
 {
 }
 
 function truthyVar(o: Option<Inner>, fallback: int): int
 {
-  match o {
-    case Some(i_o_val) =>
-      i_o_val.val
-    case None =>
-      fallback
-  }
+  if !((match o { case Some(i_value) => false case None => true })) then
+    o.value.val
+  else
+    fallback
 }
 
 lemma truthyVar_ensures(o: Option<Inner>, fallback: int)
-  ensures (match o { case Some(i_o_val) => (truthyVar(o, fallback) == i_o_val.val) case None => true })
-  ensures ((match o { case Some(i_) => false case None => true }) ==> (truthyVar(o, fallback) == fallback))
+  ensures ((o).Some? ==> (truthyVar(o, fallback) == o.value.val))
+  ensures (!((o).Some?) ==> (truthyVar(o, fallback) == fallback))
 {
 }
 
 function nestedAndTernary(o: Option<Outer>, fallback: int): int
 {
-  match o {
-    case Some(i_o_val) =>
-      match i_o_val.inner {
-        case Some(i_o_inner_val) =>
-          i_o_inner_val.val
-        case None =>
-          fallback
-      }
-    case None =>
-      fallback
-  }
+  if ((o).Some? && (o.value.inner).Some?) then
+    o.value.inner.value.val
+  else
+    fallback
 }
 
 lemma nestedAndTernary_ensures(o: Option<Outer>, fallback: int)
-  ensures ((match o { case Some(i_) => false case None => true }) ==> (nestedAndTernary(o, fallback) == fallback))
-  ensures (match o { case Some(i_o_val) => ((match i_o_val.inner { case Some(i_) => false case None => true }) ==> (nestedAndTernary(o, fallback) == fallback)) case None => true })
-  ensures (match o { case Some(i_o_val) => (match i_o_val.inner { case Some(i_o_inner_val) => (nestedAndTernary(o, fallback) == i_o_inner_val.val) case None => true }) case None => true })
+  ensures (!((o).Some?) ==> (nestedAndTernary(o, fallback) == fallback))
+  ensures ((o).Some? ==> !((o.value.inner).Some?) ==> (nestedAndTernary(o, fallback) == fallback))
+  ensures ((o).Some? ==> (o.value.inner).Some? ==> (nestedAndTernary(o, fallback) == o.value.inner.value.val))
 {
 }
 
@@ -574,16 +554,14 @@ lemma describeIfCircle_ensures(s: Shape, fallback: int)
 
 function ternarySpecOpt(o: Option<Inner>, fallback: int): int
 {
-  match o {
-    case Some(i_o_val) =>
-      i_o_val.val
-    case None =>
-      fallback
-  }
+  if (o).Some? then
+    o.value.val
+  else
+    fallback
 }
 
 lemma ternarySpecOpt_ensures(o: Option<Inner>, fallback: int)
-  ensures (ternarySpecOpt(o, fallback) == (match o { case Some(i_o_val) => i_o_val.val case None => fallback }))
+  ensures (ternarySpecOpt(o, fallback) == (if (o).Some? then o.value.val else fallback))
 {
 }
 
@@ -656,9 +634,9 @@ method search(arr: seq<int>, target: int) returns (res: int)
 method sumSearchResults(arr: seq<int>, a: int, b: int) returns (res: int)
 {
   var sum := 0;
-  var i_t0 := search(arr, a);
-  var i_t1 := search(arr, b);
-  sum := (i_t0 + i_t1);
+  var i_t10 := search(arr, a);
+  var i_t11 := search(arr, b);
+  sum := (i_t10 + i_t11);
   return sum;
 }
 
@@ -686,8 +664,8 @@ method clampedItem(x: int) returns (res: PriorityItem)
   ensures res.level.high?
 {
   var tmp := x;
-  var i_t2 := clampTernary(tmp, 0, 100);
-  return PriorityItem(Priority.high, i_t2);
+  var i_t12 := clampTernary(tmp, 0, 100);
+  return PriorityItem(Priority.high, i_t12);
 }
 
 method clampedMidpoint(a: int, b: int) returns (res: int)
@@ -695,14 +673,14 @@ method clampedMidpoint(a: int, b: int) returns (res: int)
   ensures (res >= a)
   ensures (res <= b)
 {
-  var i_t3 := midpoint(a, b);
-  var mid := i_t3;
-  var i_t4 := clampTernary(mid, a, b);
-  return i_t4;
+  var i_t13 := midpoint(a, b);
+  var mid := i_t13;
+  var i_t14 := clampTernary(mid, a, b);
+  return i_t14;
 }
 
 method assertInMap(m: map<string, int>, k: string, fallback: int) returns (res: int)
-  ensures ((k in m) ==> ((k in m) && (var i_value := m[k]; (i_value == res))))
+  ensures ((k in m) ==> (var i_compare25: int := res; ((k in m) && (var i_value := m[k]; (i_value == i_compare25)))))
   ensures (!((k in m)) ==> (res == fallback))
 {
   if !((k in m)) {
@@ -741,9 +719,9 @@ method dispatchProjected(outcome: ProjectedOutcome) returns (res: int)
   ensures (match outcome { case rpc_error(i_outcome_code, i_outcome_message, i_outcome_data) => (res == i_outcome_code) case _ => true })
 {
   match outcome {
-    case rpc_error(i_outcome_code, i_outcome_message, i_outcome_data) =>
-      var i_t5 := projectedCode(RpcErrorView(i_outcome_code, i_outcome_message, i_outcome_data));
-      return i_t5;
+    case rpc_error(i_outcome_code', i_outcome_message', i_outcome_data') =>
+      var i_t27 := projectedCode(RpcErrorView(i_outcome_code', i_outcome_message', i_outcome_data'));
+      return i_t27;
     case done =>
       return 0;
   }

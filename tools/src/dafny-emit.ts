@@ -655,6 +655,7 @@ function emitExpr(e: Expr): string {
 
     case "app": {
       const args = e.args.map(emitExpr);
+      if (e.fn === "Option.isSome") { needPreamble("OptionType"); return `(${args[0]}).Some?`; }
       // Optional coercions also arrive as applications, including locals
       // whose inferred types never pass through tyToDafny.
       if (!e.ctorOf && (e.fn === "Some" || e.fn === "None")) needPreamble("OptionType");

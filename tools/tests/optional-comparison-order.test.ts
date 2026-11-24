@@ -49,7 +49,10 @@ test("Dafny mirrors the operator when the optional is on the right", () => {
   const { typesFile, defFile } = transformModuleDafny(fixture());
   const text = emitDafnyFile({ ...defFile, decls: [...(typesFile?.decls ?? []), ...defFile.decls] });
   for (const [name, op] of expected) {
-    assert.ok(bodyOf(text, `function ${name}(`).includes(`(i_value ${op} x)`), name);
+    const body = bodyOf(text, `function ${name}(`);
+    const savedX = body.match(/var (i_compare\d+)(?:: int)? := x;/)?.[1];
+    assert.ok(savedX, body);
+    assert.ok(body.includes(`(i_value ${op} ${savedX})`), name);
   }
 });
 
@@ -59,6 +62,9 @@ test("Lean mirrors the operator when the optional is on the right", () => {
   assert.ok(typesFile);
   const text = emitLeanFile(typesFile);
   for (const [name, op] of expected) {
-    assert.ok(bodyOf(text, `def ${name} `).includes(`_value ${LEAN_OP[op] ?? op} x`), name);
+    const body = bodyOf(text, `def ${name} `);
+    const savedX = body.match(/let (_compare\d+) : Int := x/)?.[1];
+    assert.ok(savedX, body);
+    assert.ok(body.includes(`_value ${LEAN_OP[op] ?? op} ${savedX}`), name);
   }
 });

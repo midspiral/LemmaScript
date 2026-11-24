@@ -156,77 +156,60 @@ lemma andOrNested_ensures(a: int, b: string, c: seq<int>)
 
 function optNumCond(o: Option<int>): int
 {
-  match o {
-    case Some(i_o_val) =>
-      if (i_o_val != 0) then
-        1
-      else
-        0
-    case None =>
-      0
-  }
+  if !((match o { case Some(i_value) => !((i_value != 0)) case None => true })) then
+    1
+  else
+    0
 }
 
 lemma optNumCond_ensures(o: Option<int>)
-  ensures ((match o { case Some(i_) => false case None => true }) ==> (optNumCond(o) == 0))
-  ensures ((match o { case Some(i_value) => (i_value == 0) case None => false }) ==> (optNumCond(o) == 0))
-  ensures (match o { case Some(i_o_val) => ((i_o_val != 0) ==> (optNumCond(o) == 1)) case None => true })
+  ensures (!((o).Some?) ==> (optNumCond(o) == 0))
+  ensures ((var i_compare0: Option<int> := o; (match i_compare0 { case Some(i_value) => (i_value == 0) case None => false })) ==> (optNumCond(o) == 0))
+  ensures ((o).Some? ==> (var i_compare1: Option<int> := o; (match i_compare1 { case Some(i_value) => (i_value != 0) case None => true })) ==> (optNumCond(o) == 1))
 {
 }
 
 function optNumNot(o: Option<int>): int
 {
-  match o {
-    case Some(i_o_val) =>
-      if (i_o_val != 0) then
-        0
-      else
-        1
-    case None =>
-      1
-  }
+  if (match o { case Some(i_value) => !((i_value != 0)) case None => true }) then
+    1
+  else
+    0
 }
 
 lemma optNumNot_ensures(o: Option<int>)
-  ensures ((match o { case Some(i_) => false case None => true }) ==> (optNumNot(o) == 1))
-  ensures ((match o { case Some(i_value) => (i_value == 0) case None => false }) ==> (optNumNot(o) == 1))
-  ensures (match o { case Some(i_o_val) => ((i_o_val != 0) ==> (optNumNot(o) == 0)) case None => true })
+  ensures (!((o).Some?) ==> (optNumNot(o) == 1))
+  ensures ((var i_compare2: Option<int> := o; (match i_compare2 { case Some(i_value) => (i_value == 0) case None => false })) ==> (optNumNot(o) == 1))
+  ensures ((o).Some? ==> (var i_compare3: Option<int> := o; (match i_compare3 { case Some(i_value) => (i_value != 0) case None => true })) ==> (optNumNot(o) == 0))
 {
 }
 
 function optStrCond(o: Option<string>): int
 {
-  match o {
-    case Some(i_o_val) =>
-      if (|i_o_val| > 0) then
-        1
-      else
-        0
-    case None =>
-      0
-  }
+  if !((match o { case Some(i_value) => !((|i_value| > 0)) case None => true })) then
+    1
+  else
+    0
 }
 
 lemma optStrCond_ensures(o: Option<string>)
-  ensures ((match o { case Some(i_) => false case None => true }) ==> (optStrCond(o) == 0))
-  ensures ((match o { case Some(i_value) => (i_value == "") case None => false }) ==> (optStrCond(o) == 0))
-  ensures (match o { case Some(i_o_val) => ((i_o_val != "") ==> (optStrCond(o) == 1)) case None => true })
+  ensures (!((o).Some?) ==> (optStrCond(o) == 0))
+  ensures ((var i_compare4: Option<string> := o; (match i_compare4 { case Some(i_value) => (i_value == "") case None => false })) ==> (optStrCond(o) == 0))
+  ensures ((o).Some? ==> (var i_compare5: Option<string> := o; (match i_compare5 { case Some(i_value) => (i_value != "") case None => true })) ==> (optStrCond(o) == 1))
 {
 }
 
 function optPresent(o: Option<int>): int
 {
-  match o {
-    case Some(i_o_val) =>
-      1
-    case None =>
-      0
-  }
+  if (o).Some? then
+    1
+  else
+    0
 }
 
 lemma optPresent_ensures(o: Option<int>)
-  ensures (match o { case Some(i_o_val) => (optPresent(o) == 1) case None => true })
-  ensures ((match o { case Some(i_) => false case None => true }) ==> (optPresent(o) == 0))
+  ensures ((o).Some? ==> (optPresent(o) == 1))
+  ensures (!((o).Some?) ==> (optPresent(o) == 0))
 {
 }
 

@@ -16,9 +16,13 @@ method hasTagFrom (tags : Array String) (tag : String) («from» : Int) returns 
 method visibility (post : Post) returns (res : String)
   ensures ensures_1: (res = "draft" ∨ res = "live" : Prop)
   do
-    return Pure.visibility post
+    let mut _branch0 : Bool := Option.isSome post.tags
+    if _branch0 then
+      let _t0 ← LemmaScript.optionValue post.tags
+      _branch0 := _t0.contains "draft"
+    return if _branch0 then "draft" else "live"
 
 method hasTag (post : Post) (tag : String) returns (res : Bool)
-  ensures ensures_1: ((match post.tags with | .some _ => false | .none => true) → res = false : Prop)
+  ensures ensures_1: (¬(Option.isSome post.tags) → res = false : Prop)
   do
     return Pure.hasTag post tag

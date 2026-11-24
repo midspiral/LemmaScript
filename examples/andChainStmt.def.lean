@@ -18,34 +18,29 @@ method use (v : Int) returns (res : Int)
 
 method single (b : Option Box) returns (res : Unit)
   do
-    if h_b : (b).isSome = true then
-      let _b_val := (b).get h_b
-      let _t0 ← total _b_val.items
+    if Option.isSome b then
+      let _t1 ← LemmaScript.optionValue b
+      let _t0 ← total _t1.items
       _ := _t0
-    else
-      pure ()
 
 method chained (b : Option Box) returns (res : Unit)
   do
-    if h_b : (b).isSome = true then
-      let _b_val := (b).get h_b
-      if h__b_val_inner : (_b_val.inner).isSome = true then
-        let _b_inner_val := (_b_val.inner).get h__b_val_inner
-        let _t1 ← use _b_inner_val.val
-        _ := _t1
-      else
-        pure ()
-    else
-      pure ()
+    let mut _branch0 : Bool := Option.isSome b
+    if _branch0 then
+      let _t2 ← LemmaScript.optionValue b
+      _branch0 := Option.isSome _t2.inner
+    if _branch0 then
+      let _t4 ← LemmaScript.optionValue b
+      let _t5 ← LemmaScript.optionValue _t4.inner
+      let _t3 ← use _t5.val
+      _ := _t3
 
 method fieldPath (b : Box) returns (res : Unit)
   do
-    if h_b_inner : (b.inner).isSome = true then
-      let _b_inner_val := (b.inner).get h_b_inner
-      let _t2 ← use _b_inner_val.val
-      _ := _t2
-    else
-      pure ()
+    if Option.isSome b.inner then
+      let _t7 ← LemmaScript.optionValue b.inner
+      let _t6 ← use _t7.val
+      _ := _t6
 
 method plain (p : Bool) (q : Bool) returns (res : Bool)
   ensures ensures_1: (res = (p ∧ q) : Prop)

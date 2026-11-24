@@ -91,11 +91,8 @@ method lastPresent(xs: seq<Option<int>>) returns (res: Option<int>)
     invariant (i_x_idx <= |xs|)
   {
     var x := xs[i_x_idx];
-    match x {
-      case Some(i_x_val) =>
-        cur := Some(i_x_val);
-      case None =>
-
+    if (x).Some? {
+      cur := x;
     }
     i_x_idx := i_x_idx + 1;
   }
@@ -110,12 +107,10 @@ method lastBeforeGap(xs: seq<Option<int>>) returns (res: Option<int>)
     invariant (i_x_idx <= |xs|)
   {
     var x := xs[i_x_idx];
-    match x {
-      case Some(i_x_val) =>
-        cur := Some(i_x_val);
-      case None =>
-        break;
+    if !((x).Some?) {
+      break;
     }
+    cur := x;
     i_x_idx := i_x_idx + 1;
   }
   return cur;
