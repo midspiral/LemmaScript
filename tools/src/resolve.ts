@@ -542,8 +542,23 @@ function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new 
     }
     return ty;
   }
-  if (ty.kind === "optional") return { ...ty, inner: expandAlias(ty.inner, typeDecls, seen) };
-  if (ty.kind === "nullish") return { kind: "nullish", inner: expandAlias(ty.inner, typeDecls, seen) };
+  if (ty.kind === "optional") {
+    const expanded = expandAlias(ty.inner, typeDecls, seen);
+    if (expanded.kind === "nullish") return expanded;
+    if (expanded.kind === "optional") {
+      const mergedNull = optAbsent(ty) === "null" || optAbsent(expanded) === "null";
+      const mergedUndef = optAbsent(ty) === "undefined" || optAbsent(expanded) === "undefined";
+      if (mergedNull && mergedUndef) return { kind: "nullish", inner: expanded.inner };
+      return { ...ty, inner: expanded.inner };
+    }
+    return { ...ty, inner: expanded };
+  }
+  if (ty.kind === "nullish") {
+    const expanded = expandAlias(ty.inner, typeDecls, seen);
+    if (expanded.kind === "nullish") return expanded;
+    if (expanded.kind === "optional") return { kind: "nullish", inner: expanded.inner };
+    return { kind: "nullish", inner: expanded };
+  }
   if (ty.kind === "array") return { kind: "array", elem: expandAlias(ty.elem, typeDecls, seen) };
   if (ty.kind === "tuple") return { kind: "tuple", elems: ty.elems.map(e => expandAlias(e, typeDecls, seen)) };
   if (ty.kind === "set") return { kind: "set", elem: expandAlias(ty.elem, typeDecls, seen) };
@@ -918,18 +933,23 @@ function argumentPack(e: RawExpr, ctx: Ctx): Env["argumentPack"] {
   return pack;
 }
 
-/** A defined-check filter predicate: `(x) => x !== undefined` (expression or
- *  single-return body). Detected on the raw IR before narrowing rewrites it. */
-function isDefinedCheckRawLambda(raw: RawExpr): boolean {
-  if (raw.kind !== "lambda" || raw.params.length !== 1) return false;
+/** A defined-check filter predicate: `(x) => x !== undefined`, `(x) => x !== null`,
+ *  or loose `(x) => x != null` / `(x) => x != undefined`. Returns which sentinel
+ *  the filter removes so `filterSome` only fires when it matches the array
+ *  element's absent sentinel (`#304`). */
+function definedCheckRawLambdaSentinel(raw: RawExpr): "undefined" | "null" | "both" | null {
+  if (raw.kind !== "lambda" || raw.params.length !== 1) return null;
   const p = raw.params[0].name;
   const body = Array.isArray(raw.body)
     ? (raw.body.length === 1 && raw.body[0].kind === "return" ? raw.body[0].value : null)
     : raw.body;
-  if (!body || body.kind !== "binop" || body.op !== "!==") return false;
+  if (!body || body.kind !== "binop" || (body.op !== "!==" && body.op !== "!=")) return null;
   const isParam = (x: RawExpr) => x.kind === "var" && x.name === p;
-  const isUndef = (x: RawExpr) => x.kind === "var" && x.name === "undefined";
-  return (isParam(body.left) && isUndef(body.right)) || (isParam(body.right) && isUndef(body.left));
+  const sentinelOf = (x: RawExpr): "undefined" | "null" | null =>
+    x.kind === "var" && (x.name === "undefined" || x.name === "null") ? x.name : null;
+  const s = isParam(body.left) ? sentinelOf(body.right) : isParam(body.right) ? sentinelOf(body.left) : null;
+  if (!s) return null;
+  return body.op === "!=" ? "both" : s;
 }
 
 /** Coerce call arguments to their declared parameter slots and pad missing optional args. */
@@ -1060,8 +1080,8 @@ let mergeBinder = 0;
 function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
   const tbase = resolveExpr(base, ctx);
   const tover = resolveExpr(override, ctx);
-  const overInner = tover.ty.kind === "optional" ? tover.ty.inner : tover.ty;
-  // Result record type: prefer the override's (an optional override still merges
+  const overInner = (tover.ty.kind === "optional" || tover.ty.kind === "nullish") ? tover.ty.inner : tover.ty;
+  // Result record type: prefer the override's (an optional/nullish override still merges
   // into its inner type), else the base's.
   const rTy = overInner.kind === "user" ? overInner
             : tbase.ty.kind === "user" ? tbase.ty : null;
@@ -1070,7 +1090,7 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
     throw new Error(`object spread merge { ...a, ...b } needs a known record type for both operands ` +
       `(base: ${tyToCanonical(tbase.ty)}, override: ${tyToCanonical(tover.ty)})`);
   }
-  if (tbase.ty.kind === "optional") {
+  if (tbase.ty.kind === "optional" || tbase.ty.kind === "nullish") {
     throw new Error(`object spread merge with an optional base operand is not supported (base: ${tyToCanonical(tbase.ty)})`);
   }
   const userTy = rTy;
@@ -1082,9 +1102,18 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
       const ft = f.type!;
       const ovf: TExpr = { kind: "field", obj: ov, field: f.name, ty: ft };
       // A required key is always copied, even when its value is null/undefined.
-      if (ft.kind !== "optional" || !f.optionalKey) return { name: f.name, value: ovf };
-      // `f?:` key: override field wins iff present, else base's field
+      if (!f.optionalKey || (ft.kind !== "optional" && ft.kind !== "nullish")) return { name: f.name, value: ovf };
       const bvf: TExpr = { kind: "field", obj: bv, field: f.name, ty: ft };
+      if (ft.kind === "nullish") {
+        // `f?: T | null`: override wins unless `ov.f === undefined` (null still overrides!).
+        const isUndef: TExpr = {
+          kind: "binop", op: "===",
+          left: ovf, right: { kind: "var", name: "undefined", ty: { kind: "void" } },
+          ty: { kind: "bool" },
+        };
+        return { name: f.name, value: { kind: "conditional", cond: isUndef, then: bvf, else: ovf, ty: ft } };
+      }
+      // `f?:` optional key: override field wins iff present, else base's field
       const binder = freshName(`_m${mergeBinder++}`);
       // someBody is the unwrapped present value; transform re-wraps each arm in
       // the backend's Some constructor (Dafny `Some`, Lean `Option.some`).
@@ -1094,6 +1123,16 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
       } };
     }),
   });
+  if (tover.ty.kind === "nullish" || (tover.ty.kind === "optional" && tover.ty.fromNullish)) {
+    // Nullish override: undefined/null spreads nothing → base unchanged; Value(v) merges.
+    const isPresent: TExpr = {
+      kind: "binop", op: "!=",
+      left: tover, right: { kind: "var", name: "null", ty: { kind: "null" } },
+      ty: { kind: "bool" },
+    };
+    const unwrappedOver: TExpr = { kind: "checkedUnwrap", expr: tover, ty: userTy };
+    return { kind: "conditional", cond: isPresent, then: merged(tbase, unwrappedOver), else: tbase, ty: userTy };
+  }
   if (tover.ty.kind === "optional") {
     // override may be absent (undefined spreads nothing) → base unchanged
     const binder = freshName(`_mo${mergeBinder++}`);
@@ -1253,13 +1292,16 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       if (["===", "!==", "==", "!=", ">=", "<=", ">", "<", "in", "<==>"].includes(e.op)) ty = { kind: "bool" };
       else if (e.op === "&&") ty = right.ty;
       else if (e.op === "||" && (left.ty.kind === "optional" || left.ty.kind === "nullish")) {
-        // || undefined / || null keeps nullability; otherwise yields inner type.
+        // || undefined / || null / || nullable preserves the RHS nullability;
+        // otherwise yields inner type.
         if (e.right.kind === "var" && e.right.name === "undefined") {
           ty = left.ty.kind === "optional" && optAbsent(left.ty) === "undefined"
             ? left.ty
             : { kind: "optional", inner: left.ty.inner };
         } else if (e.right.kind === "var" && e.right.name === "null") {
           ty = { kind: "optional", inner: left.ty.inner, absent: "null" };
+        } else if (right.ty.kind === "optional" || right.ty.kind === "nullish") {
+          ty = right.ty;
         } else {
           ty = left.ty.inner;
         }
@@ -1359,7 +1401,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       let args = coerceCallArgs(rawArgs.map((a, i) => {
         let aCtx = argCtx;
         if (paramTypes && i < paramTypes.length &&
-            (paramTypes[i].kind === "user" || paramTypes[i].kind === "array" || paramTypes[i].kind === "optional")) {
+            (paramTypes[i].kind === "user" || paramTypes[i].kind === "array" || paramTypes[i].kind === "optional" || paramTypes[i].kind === "nullish")) {
           aCtx = { ...aCtx, returnTy: paramTypes[i] };
         }
         if (i === 0 && a.kind === "lambda" && callback)
@@ -1390,9 +1432,11 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       // seq<T>. Rewrite to a synthetic `filterSome` call lowered to the proven
       // SeqFilterSome preamble (a plain `Map(.value, Filter(.Some?))` wouldn't
       // verify — `.value` is partial).
-      if (e.fn.kind === "field" && e.fn.field === "filter" && e.args.length === 1
-          && isDefinedCheckRawLambda(e.args[0])
-          && fn.kind === "field" && fn.obj.ty.kind === "array" && fn.obj.ty.elem.kind === "optional") {
+      const filterSentinel = e.fn.kind === "field" && e.fn.field === "filter" && e.args.length === 1
+        ? definedCheckRawLambdaSentinel(e.args[0]) : null;
+      if (filterSentinel !== null
+          && fn.kind === "field" && fn.obj.ty.kind === "array" && fn.obj.ty.elem.kind === "optional"
+          && (filterSentinel === "both" || filterSentinel === optAbsent(fn.obj.ty.elem))) {
         return { kind: "call", fn: { ...fn, field: "filterSome" }, args: [], ty: { kind: "array", elem: fn.obj.ty.elem.inner }, callKind: "method" };
       }
       const builtinId = fn.kind === "field" ? recognizeBuiltin(fn.obj.ty, fn.field) : null;
@@ -1460,8 +1504,12 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       if (ctx.narrowedPaths.length > 0) {
         const myPath = asRawAccessPath(e);
         if (myPath) {
-          const np = ctx.narrowedPaths.find(n => accessPathsEqual(n.path, myPath));
-          if (np) ty = np.narrowedTy;
+          for (let i = ctx.narrowedPaths.length - 1; i >= 0; i--) {
+            if (accessPathsEqual(ctx.narrowedPaths[i]!.path, myPath)) {
+              ty = ctx.narrowedPaths[i]!.narrowedTy;
+              break;
+            }
+          }
         }
       }
 
@@ -1470,7 +1518,13 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       let ofVariant: string | undefined;
       if (ty.kind === "unknown" && ctx.narrowedPaths.length > 0 && obj.ty.kind === "user") {
         const objPath = asRawAccessPath(e.obj);
-        const np = objPath ? ctx.narrowedPaths.find(n => n.variant && accessPathsEqual(n.path, objPath)) : undefined;
+        let np: NarrowedPath | undefined;
+        if (objPath) {
+          for (let i = ctx.narrowedPaths.length - 1; i >= 0; i--) {
+            const cand = ctx.narrowedPaths[i]!;
+            if (cand.variant && accessPathsEqual(cand.path, objPath)) { np = cand; break; }
+          }
+        }
         if (np?.variant) {
           const decl = findDecl(ctx, tyBaseName(obj.ty.name));
           const f = decl?.variants?.find(v => v.name === np.variant)?.fields.find(f => f.name === e.field);
@@ -1697,7 +1751,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       // get their type via ctx.returnTy). Only narrow when the context type is an
       // array (unwrapping one optional level — `TStmt[] | null` return positions);
       // otherwise leave ctx untouched.
-      const rtUnwrapped = ctx.returnTy.kind === "optional" ? ctx.returnTy.inner : ctx.returnTy;
+      const rtUnwrapped = (ctx.returnTy.kind === "optional" || ctx.returnTy.kind === "nullish") ? ctx.returnTy.inner : ctx.returnTy;
       const expectedElem = rtUnwrapped.kind === "array" ? rtUnwrapped.elem : null;
       const elemCtx = expectedElem ? { ...ctx, returnTy: expectedElem } : ctx;
       const elems = e.elems.map(el => {

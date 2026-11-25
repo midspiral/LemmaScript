@@ -397,6 +397,17 @@ function wrapOptionalBranch(expr: Expr, raw: TExpr): Expr {
   // like the scrutinee of an outer match. Dafny treats `Option.Some` and bare
   // `Some` equivalently — the qualification is harmless there.
   if (raw.kind === "var" && (raw.name === "undefined" || raw.name === "null")) return { kind: "constructor", name: "none", type: "Option", args: [] };
+  if (raw.ty.kind === "nullish" || (raw.ty.kind === "optional" && raw.ty.fromNullish)) {
+    const bound = matchBinder("value");
+    return {
+      kind: "match", scrutinee: expr,
+      arms: [
+        { pattern: pCtor("nullishValue", bound), body: { kind: "constructor", name: "some", type: "Option", args: [{ kind: "var", name: bound }] } },
+        { pattern: pCtor("nullishNull"), body: { kind: "constructor", name: "none", type: "Option", args: [] } },
+        { pattern: pCtor("nullishUndefined"), body: { kind: "constructor", name: "none", type: "Option", args: [] } },
+      ],
+    };
+  }
   if (raw.ty.kind === "optional") return expr;  // already Option<T>, don't double-wrap
   return { kind: "constructor", name: "some", type: "Option", args: [expr] };
 }
@@ -410,8 +421,11 @@ function wrapNullishBranch(expr: Expr, raw: TExpr): Expr {
   if (raw.kind === "var" && raw.name === "null") {
     return { kind: "constructor", name: "nullishNull", type: "Nullish", args: [] };
   }
-  if (raw.ty.kind === "nullish") return expr;
-  if (raw.ty.kind === "optional" && !raw.ty.fromNullish) {
+  if (raw.ty.kind === "nullish" || (raw.ty.kind === "optional" && raw.ty.fromNullish)) return expr;
+  if (expr.kind === "if" && raw.kind === "conditional" && raw.ty.kind !== "optional") {
+    return { ...expr, then: wrapNullishBranch(expr.then, raw.then), else: wrapNullishBranch(expr.else, raw.else) };
+  }
+  if (raw.ty.kind === "optional") {
     const bound = matchBinder("value");
     const noneCtor = optAbsent(raw.ty) === "null" ? "nullishNull" : "nullishUndefined";
     return {
@@ -678,6 +692,99 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           : { kind: "str", value: e.right.value };
         return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right };
       }
+      // Two-sided nullable equality/inequality rules (#304):
+      //   1. Opposite-sentinel Option<T> (`T | null` vs `T | undefined`) under ===/!==:
+      //      None vs None is false for === (null !== undefined).
+      //   2. Nullish<T> vs Nullish<T> under loose ==/!=:
+      //      Null vs Undefined is true for == (null == undefined).
+      //   3. Nullish<T> vs Option<T> under ===/!==/==/!=:
+      //      Nested match comparing Value/Some, plus sentinel match on Null/Undefined vs None.
+      if (["===", "!==", "==", "!="].includes(e.op)) {
+        const isLoose = e.op === "==" || e.op === "!=";
+        const isEq = e.op === "===" || e.op === "==";
+        const cmpOp = isEq ? "=" : "≠";
+        if (!isLoose && e.left.ty.kind === "optional" && e.right.ty.kind === "optional" &&
+            optAbsent(e.left.ty) !== optAbsent(e.right.ty)) {
+          const lExpr = lowerExpr(e.left, binds);
+          const rExpr = lowerExpr(e.right, binds);
+          const lv = matchBinder("lv");
+          const rv = matchBinder("rv");
+          return {
+            kind: "match", scrutinee: lExpr,
+            arms: [
+              { pattern: pCtor("some", lv), body: {
+                kind: "match", scrutinee: rExpr,
+                arms: [
+                  { pattern: pCtor("some", rv), body: { kind: "binop", op: cmpOp, left: { kind: "var", name: lv }, right: { kind: "var", name: rv } } },
+                  { pattern: pCtor("none"), body: { kind: "bool", value: !isEq } },
+                ],
+              } },
+              { pattern: pCtor("none"), body: { kind: "bool", value: !isEq } },
+            ],
+          };
+        }
+        if (isLoose && e.left.ty.kind === "nullish" && e.right.ty.kind === "nullish") {
+          const lExpr = lowerExpr(e.left, binds);
+          const rExpr = lowerExpr(e.right, binds);
+          const lv = matchBinder("lv");
+          const rv = matchBinder("rv");
+          const absentArm: Expr = {
+            kind: "match", scrutinee: rExpr,
+            arms: [
+              { pattern: pCtor("nullishValue", "_"), body: { kind: "bool", value: !isEq } },
+              { pattern: pCtor("nullishNull"), body: { kind: "bool", value: isEq } },
+              { pattern: pCtor("nullishUndefined"), body: { kind: "bool", value: isEq } },
+            ],
+          };
+          return {
+            kind: "match", scrutinee: lExpr,
+            arms: [
+              { pattern: pCtor("nullishValue", lv), body: {
+                kind: "match", scrutinee: rExpr,
+                arms: [
+                  { pattern: pCtor("nullishValue", rv), body: { kind: "binop", op: cmpOp, left: { kind: "var", name: lv }, right: { kind: "var", name: rv } } },
+                  { pattern: pCtor("nullishNull"), body: { kind: "bool", value: !isEq } },
+                  { pattern: pCtor("nullishUndefined"), body: { kind: "bool", value: !isEq } },
+                ],
+              } },
+              { pattern: pCtor("nullishNull"), body: absentArm },
+              { pattern: pCtor("nullishUndefined"), body: absentArm },
+            ],
+          };
+        }
+        if ((e.left.ty.kind === "nullish" && e.right.ty.kind === "optional") ||
+            (e.left.ty.kind === "optional" && e.right.ty.kind === "nullish")) {
+          const [nulSide, optSide] = e.left.ty.kind === "nullish" ? [e.left, e.right] : [e.right, e.left];
+          const nulExpr = lowerExpr(nulSide, binds);
+          const optExpr = lowerExpr(optSide, binds);
+          const optAbs = optAbsent(optSide.ty as Extract<Ty, { kind: "optional" }>);
+          const nv = matchBinder("nv");
+          const ov = matchBinder("ov");
+          const nullMatchesNone = isLoose || optAbs === "null";
+          const undefMatchesNone = isLoose || optAbs === "undefined";
+          const makeAbsentArm = (matchesNone: boolean): Expr => ({
+            kind: "match", scrutinee: optExpr,
+            arms: [
+              { pattern: pCtor("some", "_"), body: { kind: "bool", value: !isEq } },
+              { pattern: pCtor("none"), body: { kind: "bool", value: isEq ? matchesNone : !matchesNone } },
+            ],
+          });
+          return {
+            kind: "match", scrutinee: nulExpr,
+            arms: [
+              { pattern: pCtor("nullishValue", nv), body: {
+                kind: "match", scrutinee: optExpr,
+                arms: [
+                  { pattern: pCtor("some", ov), body: { kind: "binop", op: cmpOp, left: { kind: "var", name: nv }, right: { kind: "var", name: ov } } },
+                  { pattern: pCtor("none"), body: { kind: "bool", value: !isEq } },
+                ],
+              } },
+              { pattern: pCtor("nullishNull"), body: makeAbsentArm(nullMatchesNone) },
+              { pattern: pCtor("nullishUndefined"), body: makeAbsentArm(undefMatchesNone) },
+            ],
+          };
+        }
+      }
       // Nullish<T> comparison against null / undefined / non-nullish value (#304).
       if (["===", "!==", "==", "!=", ">=", "<=", ">", "<"].includes(e.op) &&
           (e.left.ty.kind === "nullish") !== (e.right.ty.kind === "nullish")) {
@@ -761,7 +868,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         // skip the `let` binding completely (zero temporary churn).
         const op = e.left.ty.kind === "optional" ? e.op : MIRROR_OP[e.op] ?? e.op;
         const cmpOp = BOOL_OP_MAP[op] ?? op;
-        const noneVal = e.op === "!==" ? true : false;
+        const noneVal = (e.op === "!==" || e.op === "!=") ? true : false;
         const bound = matchBinder("value");
         if (!_inSpec && valExpr.kind !== "var" && hasPreconditionExpr(valSide)) {
           const tmp = freshName(`_cmp${_cmpCounter++}`);
@@ -786,12 +893,27 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           ],
         };
       }
-      // || undefined on optional → identity (no-op: x || undefined = x) when the
+      // Definite non-nullable value compared against `null` or `undefined`
+      // (e.g. `x === null` inside a `someMatch` body where `x` was already unwrapped
+      // to `int`): constant-fold to `false` (for ===/==) or `true` (for !==/!=)
+      // while preserving any side-effecting lifts in the non-sentinel operand.
+      if (["===", "!==", "==", "!="].includes(e.op)) {
+        const isSentinel = (x: TExpr) => x.kind === "var" && (x.name === "null" || x.name === "undefined");
+        if (isSentinel(e.left) !== isSentinel(e.right)) {
+          const other = isSentinel(e.left) ? e.right : e.left;
+          const k = other.ty.kind;
+          if (k !== "optional" && k !== "nullish" && k !== "unknown" && k !== "void" && k !== "null") {
+            lowerExpr(other, binds);
+            return { kind: "bool", value: e.op === "!==" || e.op === "!=" };
+          }
+        }
+      }
+      // || undefined / || null on optional → identity (no-op: x || undefined = x) when the
       // inner type is always truthy. When it can be falsy, JS still drops the
       // wrapped value: `Some(0) || undefined === undefined`, so the Some arm
       // re-tests and falls back to None.
       if (e.op === "||" && e.left.ty.kind === "optional" &&
-          e.right.kind === "var" && e.right.name === "undefined") {
+          e.right.kind === "var" && (e.right.name === "undefined" || e.right.name === "null")) {
         const optExpr = lowerExpr(e.left, binds);
         const bound = matchBinder("value");
         const truthy = valueTruthyCond({ kind: "var", name: bound }, e.left.ty.inner);
@@ -813,9 +935,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const defaultExpr = lowerExpr(e.right, binds);
         const bound = matchBinder("value");
         const truthy = valueTruthyCond({ kind: "var", name: bound }, e.left.ty.inner);
-        const valPresent: Expr = e.ty.kind === "optional"
-          ? { kind: "constructor", name: "some", type: "Option", args: [{ kind: "var", name: bound }] }
-          : { kind: "var", name: bound };
+        const valPresent: Expr = e.ty.kind === "nullish"
+          ? { kind: "constructor", name: "nullishValue", type: "Nullish", args: [{ kind: "var", name: bound }] }
+          : e.ty.kind === "optional"
+            ? { kind: "constructor", name: "some", type: "Option", args: [{ kind: "var", name: bound }] }
+            : { kind: "var", name: bound };
         const someBody: Expr = truthy
           ? { kind: "if", cond: truthy, then: valPresent, else: defaultExpr }
           : valPresent;
@@ -878,8 +1002,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           (e.left.ty.kind === "user" && e.right.ty.kind === "string"))) {
         const left = lowerExpr(e.left, binds);
         const right = lowerExpr(e.right, binds);
-        // `s || undefined` produces `Option<string>` — wrap the truthy branch in Some.
-        const rightIsUndef = e.right.kind === "var" && e.right.name === "undefined";
+        // `s || undefined` / `s || null` produces `Option<string>` — wrap the truthy branch in Some.
+        const rightIsUndef = e.right.kind === "var" && (e.right.name === "undefined" || e.right.name === "null");
         return {
           kind: "if",
           // strings carry the `length` marker — it renders to `|x|` in Dafny and
@@ -889,12 +1013,12 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           else: right,
         };
       }
-      // `bool || undefined` → `if bool then Some(bool) else None`. Used in
+      // `bool || undefined` / `bool || null` → `if bool then Some(bool) else None`. Used in
       // optional-field initialization where the source assigns a truthy/false
       // bool to a `T?` field. Without this, emit produces `bool || None`,
       // which Dafny rejects (bool || Option<?> is ill-typed).
       if (e.op === "||" && e.left.ty.kind === "bool" &&
-          e.right.kind === "var" && e.right.name === "undefined") {
+          e.right.kind === "var" && (e.right.name === "undefined" || e.right.name === "null")) {
         const left = lowerExpr(e.left, binds);
         return {
           kind: "if",
@@ -1297,7 +1421,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
               // `Result.true_` is valid in Lean; `Result<Model,Err>.true_` is not.
               const args = variant.fields.map(vf => {
                 const ef = nonDiscFields.find(f => f.name === vf.name);
-                return ef ? lowerExpr(ef.value, binds) : { kind: "var" as const, name: "None" };
+                if (ef) return lowerExpr(ef.value, binds);
+                if (vf.type?.kind === "nullish") {
+                  return { kind: "constructor" as const, name: "nullishUndefined", type: "Nullish", args: [] };
+                }
+                return { kind: "var" as const, name: "None" };
               });
               return { kind: "app", fn: variantName, args, ctorOf: baseName };
             }
@@ -1527,6 +1655,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.ty.kind === "optional") {
         someBody = wrapOptionalBranch(someBody, e.someBody);
         noneBody = wrapOptionalBranch(noneBody, e.noneBody);
+      } else if (e.ty.kind === "nullish") {
+        someBody = wrapNullishBranch(someBody, e.someBody);
+        noneBody = wrapNullishBranch(noneBody, e.noneBody);
       }
       return {
         kind: "match", scrutinee,
@@ -1551,6 +1682,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       const varName = e.scrutinee.kind === "var" ? e.scrutinee.name : undefined;
       const pathHint = varName ?? scrutineeHint(e.scrutinee);
       const wrapOpt = e.ty.kind === "optional";
+      const wrapNullish = e.ty.kind === "nullish";
       const arms: MatchArm[] = e.cases.map(c => {
         const variant = decl?.variants?.find(v => v.name === c.variant);
         const fields = variant?.fields ?? [];
@@ -1567,11 +1699,13 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           body = replaceExprInExpr(body, scrutinee, { kind: "var", name: binderName });
         }
         if (wrapOpt) body = wrapOptionalBranch(body, c.body);
+        else if (wrapNullish) body = wrapNullishBranch(body, c.body);
         return { pattern: buildMatchPattern(c.variant, fields, pathHint), body };
       });
       if (e.fallthrough) {
         let body = lowerExpr(e.fallthrough, binds);
         if (wrapOpt) body = wrapOptionalBranch(body, e.fallthrough);
+        else if (wrapNullish) body = wrapNullishBranch(body, e.fallthrough);
         arms.push({ pattern: pWild(), body });
       }
       return { kind: "match", scrutinee: varName !== undefined ? varE(varName) : scrutinee, arms };
@@ -1621,7 +1755,11 @@ function ensuresToMatch(e: TExpr, typeDecls: TypeDeclInfo[]): Expr | null {
 
 function replaceFieldAccess(e: Expr, varName: string, fields: { name: string; tsType: string }[], ctorName?: string, ctorOf?: string): Expr {
   return mapExpr(e, x => {
-    if (x.kind === "field" && x.obj.kind === "var" && x.obj.name === varName) {
+    const objMatches = x.kind === "field" && (
+      (x.obj.kind === "var" && x.obj.name === varName) ||
+      (x.obj.kind === "checkedUnwrap" && x.obj.expr.kind === "var" && x.obj.expr.name === varName)
+    );
+    if (objMatches && x.kind === "field") {
       const f = fields.find(f => f.name === x.field);
       if (f) return { kind: "var", name: matchBinder(f.name, varName) };
     }
@@ -1697,18 +1835,17 @@ function negateExpr(e: Expr): Expr {
  *  - `optValue` is `(if |arr|>0 then Some(arr[|arr|-1]) else None)` (the popped element)
  *  - `guardedTrunc` is `(if |arr|>0 then arr[..|arr|-1] else arr)` (the array minus its last element)
  *  Callers wrap these in let/assign statements appropriate to their context. */
-function buildPopLowering(arrName: string, arrTy: Ty): { optValue: Expr; guardedTrunc: Expr } {
-  const arrVar: Expr = { kind: "var", name: arrName };
-  const arrLen: Expr = { kind: "field", obj: arrVar, field: "size" };
+function buildPopLoweringExpr(arrExpr: Expr, arrTy: Ty): { optValue: Expr; guardedTrunc: Expr } {
+  const arrLen: Expr = { kind: "field", obj: arrExpr, field: "size" };
   const lastIdx: Expr = { kind: "binop", op: "-", left: arrLen, right: { kind: "num", value: 1 } };
-  const lastElem: Expr = { kind: "index", arr: arrVar, idx: lastIdx };
+  const lastElem: Expr = { kind: "index", arr: arrExpr, idx: lastIdx };
   const isNonEmpty: Expr = { kind: "binop", op: ">", left: arrLen, right: { kind: "num", value: 0 } };
   const optValue: Expr = { kind: "if", cond: isNonEmpty,
     then: { kind: "app", fn: "Some", args: [lastElem] },
     else: { kind: "var", name: "undefined" } };
-  const truncated: Expr = { kind: "methodCall", obj: arrVar, objTy: arrTy, method: "slice",
+  const truncated: Expr = { kind: "methodCall", obj: arrExpr, objTy: arrTy, method: "slice",
     args: [{ kind: "num", value: 0 }, lastIdx], monadic: false };
-  const guardedTrunc: Expr = { kind: "if", cond: isNonEmpty, then: truncated, else: arrVar };
+  const guardedTrunc: Expr = { kind: "if", cond: isNonEmpty, then: truncated, else: arrExpr };
   return { optValue, guardedTrunc };
 }
 /**
@@ -2064,7 +2201,7 @@ function lookupFieldTy(rootTy: Ty | undefined, fields: string[], typeDecls: Type
   let cur: Ty | undefined = rootTy;
   for (const field of fields) {
     if (!cur) return null;
-    if (cur.kind === "optional") cur = cur.inner;
+    if (cur.kind === "optional" || cur.kind === "nullish") cur = cur.inner;
     if (cur.kind !== "user") return null;
     const decl = declOfTy(typeDecls, cur);
     if (!decl || decl.kind !== "record" || !decl.fields) return null;
@@ -2135,27 +2272,38 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       if (s.init.kind === "havoc") {
         return [{ kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: { kind: "havoc", type: s.init.ty } }];
       }
-      // arr.shift()! → let x = arr[0]; arr = arr[1..]
+      // arr.shift()! → let x = arr[0]; arr = arr[1..] (handles narrowed Option/Nullish via checkedUnwrap)
       const init = s.init.kind === "call" ? s.init : undefined;
       if (init && init.fn.kind === "field" && init.fn.field === "shift" && init.fn.obj.ty.kind === "array") {
-        const arrName = init.fn.obj.kind === "var" ? init.fn.obj.name : undefined;
+        const obj = init.fn.obj;
+        const arrName = obj.kind === "var" ? obj.name
+          : obj.kind === "checkedUnwrap" && obj.expr.kind === "var" ? obj.expr.name : undefined;
         if (arrName) {
-          const arrVar: Expr = { kind: "var", name: arrName };
+          const arrExpr: Expr = obj.kind === "checkedUnwrap"
+            ? { kind: "checkedUnwrap", expr: { kind: "var", name: arrName } }
+            : { kind: "var", name: arrName };
           const letHead: Stmt = { kind: "let", name: s.name, type: s.ty, mutable: s.mutable,
-            value: { kind: "index", arr: arrVar, idx: { kind: "num", value: 0 } } };
-          const sliceTail: Stmt = { kind: "assign", target: arrName,
-            value: { kind: "methodCall", obj: arrVar, objTy: init.fn.obj.ty, method: "slice", args: [{ kind: "num", value: 1 }], monadic: false } };
+            value: { kind: "index", arr: arrExpr, idx: { kind: "num", value: 0 } } };
+          const sliced: Expr = { kind: "methodCall", obj: arrExpr, objTy: init.fn.obj.ty, method: "slice", args: [{ kind: "num", value: 1 }], monadic: false };
+          const tailVal: Expr = obj.kind === "checkedUnwrap" ? wrapCheckedUnwrapValue(sliced, obj.expr.ty) : sliced;
+          const sliceTail: Stmt = { kind: "assign", target: arrName, value: tailVal };
           return [letHead, sliceTail, ...emitWriteBacksForTarget(arrName, _writeBackFrames)];
         }
       }
       // let x = arr.pop() → let x: T? = (Option-expr); arr := (truncated-or-self)
       if (init && init.fn.kind === "field" && init.fn.field === "pop" && init.fn.obj.ty.kind === "array") {
-        const arrName = init.fn.obj.kind === "var" ? init.fn.obj.name : undefined;
+        const obj = init.fn.obj;
+        const arrName = obj.kind === "var" ? obj.name
+          : obj.kind === "checkedUnwrap" && obj.expr.kind === "var" ? obj.expr.name : undefined;
         if (arrName) {
-          const { optValue, guardedTrunc } = buildPopLowering(arrName, init.fn.obj.ty);
+          const arrExpr: Expr = obj.kind === "checkedUnwrap"
+            ? { kind: "checkedUnwrap", expr: { kind: "var", name: arrName } }
+            : { kind: "var", name: arrName };
+          const { optValue, guardedTrunc } = buildPopLoweringExpr(arrExpr, init.fn.obj.ty);
+          const truncVal: Expr = obj.kind === "checkedUnwrap" ? wrapCheckedUnwrapValue(guardedTrunc, obj.expr.ty) : guardedTrunc;
           return [
             { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: optValue },
-            { kind: "assign", target: arrName, value: guardedTrunc },
+            { kind: "assign", target: arrName, value: truncVal },
             ...emitWriteBacksForTarget(arrName, _writeBackFrames),
           ];
         }
@@ -2214,25 +2362,32 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     case "assign": {
       // x = arr.pop() → x := (Option-expr); arr := (truncated-or-self) + Place write-back
       if (s.value.kind === "call" && s.value.fn.kind === "field" &&
-          s.value.fn.field === "pop" && s.value.fn.obj.ty.kind === "array" &&
-          s.value.fn.obj.kind === "var") {
-        const arrName = s.value.fn.obj.name;
-        const { optValue, guardedTrunc } = buildPopLowering(arrName, s.value.fn.obj.ty);
-        return [
-          { kind: "assign", target: s.target, value: optValue },
-          { kind: "assign", target: arrName, value: guardedTrunc },
-          ...emitWriteBacksForTarget(arrName, _writeBackFrames),
-        ];
+          s.value.fn.field === "pop" && s.value.fn.obj.ty.kind === "array") {
+        const obj = s.value.fn.obj;
+        const arrName = obj.kind === "var" ? obj.name
+          : obj.kind === "checkedUnwrap" && obj.expr.kind === "var" ? obj.expr.name : undefined;
+        if (arrName) {
+          const arrExpr: Expr = obj.kind === "checkedUnwrap"
+            ? { kind: "checkedUnwrap", expr: { kind: "var", name: arrName } }
+            : { kind: "var", name: arrName };
+          const { optValue, guardedTrunc } = buildPopLoweringExpr(arrExpr, s.value.fn.obj.ty);
+          const truncVal: Expr = obj.kind === "checkedUnwrap" ? wrapCheckedUnwrapValue(guardedTrunc, obj.expr.ty) : guardedTrunc;
+          return [
+            { kind: "assign", target: s.target, value: optValue },
+            { kind: "assign", target: arrName, value: truncVal },
+            ...emitWriteBacksForTarget(arrName, _writeBackFrames),
+          ];
+        }
       }
       // Non-`this.` dotted field assignment on a record, union variant, or narrowed
-      // optional record (e.g. `b.count = 5`, `u.v = 99`, `u.items[0] = 10`, `u.box.count = 42`):
+      // optional/nullish record (e.g. `b.count = 5`, `u.v = 99`, `u.items[0] = 10`, `u.box.count = 42`):
       // lower through active `unwrap` & `variant` frames with cascading write-back.
       if (s.target.includes(".") && !s.target.startsWith("this.")) {
         const parts = s.target.split(".");
         const rootVar = parts[0]!;
         const fields = parts.slice(1);
         const { binds, expr } = liftMethodCalls(s.value);
-        const isUndefRhs = s.value.kind === "var" && s.value.name === "undefined";
+        const isUndefRhs = s.value.kind === "var" && (s.value.name === "undefined" || s.value.name === "null");
         const isOptRhs = s.value.ty.kind === "optional" || isUndefRhs;
         const resolved = resolveWriteTargetThroughFrames(rootVar, fields, _writeBackFrames);
         if (resolved.leafUnwrapFrame) {
@@ -2244,7 +2399,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
               ...emitWriteBacksForTarget(frame.binder, _writeBackFrames),
             ];
           }
-          // Assigning `undefined` or an `Option<T>` value to a narrowed optional field:
+          // Assigning `undefined`/`null` or an `Option<T>` value to a narrowed optional field:
           // write directly to the enclosing record field without double-wrapping in `Some`.
           const optExpr: Expr = isUndefRhs
             ? { kind: "constructor", name: "none", type: "Option", args: [] }
@@ -2264,10 +2419,10 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
         }
         if (resolved.leafVariantBinder) {
           const binderTy = _varTypes.get(resolved.leafVariantBinder);
-          const rhsExpr = binderTy?.kind === "optional" && !isOptRhs
-            ? { kind: "constructor" as const, name: "some", type: "Option", args: [expr] }
-            : isUndefRhs && binderTy?.kind === "optional"
-              ? { kind: "constructor" as const, name: "none", type: "Option", args: [] }
+          const rhsExpr = binderTy?.kind === "nullish"
+            ? wrapNullishBranch(expr, s.value)
+            : binderTy?.kind === "optional"
+              ? wrapOptionalBranch(expr, s.value)
               : expr;
           return [
             ...binds,
@@ -2276,14 +2431,30 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           ];
         }
         if (resolved.remainingFields.length > 0) {
-          const fieldTy = lookupFieldTy(_varTypes.get(resolved.currentRoot), resolved.remainingFields, typeDecls);
-          const rhsExpr = fieldTy?.kind === "optional"
-            ? (isUndefRhs
-                ? { kind: "constructor" as const, name: "none", type: "Option", args: [] }
-                : s.value.ty.kind === "optional"
-                  ? expr
-                  : { kind: "constructor" as const, name: "some", type: "Option", args: [expr] })
-            : expr;
+          const rootTy = _varTypes.get(resolved.currentRoot);
+          const fieldTy = lookupFieldTy(rootTy, resolved.remainingFields, typeDecls);
+          const rhsExpr = fieldTy?.kind === "nullish"
+            ? wrapNullishBranch(expr, s.value)
+            : fieldTy?.kind === "optional"
+              ? wrapOptionalBranch(expr, s.value)
+              : expr;
+          // If the root variable itself has Nullish<Record> or Option<Record> storage
+          // (narrowed without a someMatch frame), update `root.value` and re-wrap.
+          if (rootTy?.kind === "nullish" || rootTy?.kind === "optional") {
+            const unwrappedRoot: Expr = { kind: "checkedUnwrap", expr: { kind: "var", name: resolved.currentRoot } };
+            const buildNestedFromExpr = (base: Expr, fs: string[], val: Expr): Expr => {
+              if (fs.length === 1) return { kind: "record", spread: base, fields: [{ name: fs[0]!, value: val }] };
+              const nextBase: Expr = { kind: "field", obj: base, field: fs[0]! };
+              return { kind: "record", spread: base, fields: [{ name: fs[0]!, value: buildNestedFromExpr(nextBase, fs.slice(1), val) }] };
+            };
+            const updatedRecord = buildNestedFromExpr(unwrappedRoot, resolved.remainingFields, rhsExpr);
+            const wrappedRoot = wrapCheckedUnwrapValue(updatedRecord, rootTy);
+            return [
+              ...binds,
+              { kind: "assign", target: resolved.currentRoot, value: wrappedRoot },
+              ...emitWriteBacksForTarget(resolved.currentRoot, _writeBackFrames),
+            ];
+          }
           return [
             ...binds,
             { kind: "assign", target: resolved.currentRoot, value: buildNestedFieldExpr(resolved.currentRoot, resolved.remainingFields, rhsExpr) },
@@ -2708,13 +2879,15 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
     throw new Error(`switch scrutinee must be string-typed or a declared union, got ${typeName}`);
   }
   const baseName = s.expr.ty.kind === "user" ? tyBaseName(s.expr.ty.name) : undefined;
+  const switchVarName = s.expr.kind === "var" ? s.expr.name
+    : s.expr.kind === "checkedUnwrap" && s.expr.expr.kind === "var" ? s.expr.expr.name : "?";
   const arms = literalCases
     ? buildLiteralMatchArms(cases, (body) => transformStmts(body, typeDecls))!
     : ef
       ? buildMatchArms(cases, undefined, ctorDecl!.name, typeDecls, (body) => transformStmts(body, typeDecls))!
-      : buildMatchArms(cases, s.expr.kind === "var" ? s.expr.name : "?", ctorDecl!.name, typeDecls,
+      : buildMatchArms(cases, switchVarName, ctorDecl!.name, typeDecls,
         (body, vn, fields, ctorName) => {
-          const pushVariant = !!ctorName && !!vn && vn !== "?" && !!baseName && fields.length > 0;
+          const pushVariant = !!ctorName && !!vn && vn !== "?" && !!baseName && fields.length > 0 && s.expr.kind !== "checkedUnwrap";
           const variantMeta = ctorName ? ctorDecl?.variants?.find(v => v.name === ctorName) : undefined;
           if (pushVariant) {
             for (const f of fields) {
@@ -2745,7 +2918,10 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
           return out;
         })!;
   if (s.defaultBody.length > 0) arms.push({ pattern: pWild(), body: transformStmts(s.defaultBody, typeDecls) });
-  return { kind: "match", scrutinee: ef ? ef.scrutinee : varE(s.expr.kind === "var" ? s.expr.name : "?"), arms };
+  const scrutinee: Expr = ef ? ef.scrutinee
+    : s.expr.kind === "checkedUnwrap" ? transformExpr(s.expr)
+    : varE(switchVarName);
+  return { kind: "match", scrutinee, arms };
 }
 
 /** Replace obj.field → replacement var in typed IR.
@@ -2900,6 +3076,13 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
     switch (s.kind) {
       case "return": return transformExpr(s.value);
       case "let": {
+        // Mutating array methods (`pop`, `shift`) update the receiver in place
+        // and cannot be lowered as a pure expression.
+        if (s.init.kind === "call" && s.init.fn.kind === "field" &&
+            (s.init.fn.field === "pop" || s.init.fn.field === "shift") &&
+            s.init.fn.obj.ty.kind === "array") {
+          return null;
+        }
         const restExpr = transformPureBody(rest, typeDecls);
         if (!restExpr) return null;
         return { kind: "let", name: s.name, value: transformExpr(s.init), body: restExpr };
@@ -2961,7 +3144,8 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
   const ctorDecl = switchCtorDecl(typeDecls, s.expr.ty);
   if (!ctorDecl) return null;
   const typeName = ctorDecl.name;
-  const varName = s.expr.kind === "var" ? s.expr.name : undefined;
+  const varName = s.expr.kind === "var" ? s.expr.name
+    : s.expr.kind === "checkedUnwrap" && s.expr.expr.kind === "var" ? s.expr.expr.name : undefined;
   const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
   const arms = buildMatchArms(cases, varName, typeName, typeDecls,
     (body, vn, fields, ctorName) => {
@@ -2977,6 +3161,7 @@ function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclI
     if (!body) return null;
     arms.push({ pattern: pWild(), body });
   }
+  if (s.expr.kind === "checkedUnwrap") return { kind: "match", scrutinee: transformExpr(s.expr), arms };
   if (s.expr.kind !== "var") return null;
   return { kind: "match", scrutinee: varE(s.expr.name), arms };
 }

@@ -10,6 +10,8 @@ inductive Nullish (α : Type) where
   | value : α → Nullish α
   deriving Repr, BEq, DecidableEq
 
+instance {α : Type} : Inhabited (Nullish α) := ⟨.undefined⟩
+
 namespace Nullish
 
 def isValue {α : Type} : Nullish α → Bool

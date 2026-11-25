@@ -478,10 +478,26 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // parens (→ is right-associative, so `(a → b) → c` ≠ `a → b → c`), and
       // ↔ binds looser than → in Lean. The conclusion is the right-assoc tail,
       // where a nested implication is safe bare — only ↔ needs parens there.
+      // When any later premise or the conclusion contains `checkedUnwrap`
+      // (`(x).get (by grind)`), bind earlier premises dependently via
+      // `∀ (_hN : p), ...` so Lean puts each premise in local proof context.
       const wrapIff = (x: Expr) => x.kind === "binop" && x.op === "↔" ? `(${emitExpr(x)})` : undefined;
-      const parts = [...e.premises.map(p => wrapOperand(p, prec("→"))), wrapIff(e.conclusion) ?? emitExpr(e.conclusion)];
-      const s = parts.join(" → ");
-      return parentPrec !== undefined ? `(${s})` : s;
+      const tailHasCU = (idx: number): boolean =>
+        anyExpr(e.conclusion, x => x.kind === "checkedUnwrap") ||
+        e.premises.slice(idx + 1).some(p => anyExpr(p, x => x.kind === "checkedUnwrap"));
+      let acc = wrapIff(e.conclusion) ?? emitExpr(e.conclusion);
+      for (let i = e.premises.length - 1; i >= 0; i--) {
+        const p = e.premises[i];
+        if (tailHasCU(i)) {
+          const pStr = emitExpr(p);
+          const pProp = isPropValued(p) ? pStr : `(${pStr}) = true`;
+          const h = `_h${_depIfCounter++}`;
+          acc = `∀ (${h} : ${pProp}), ${acc}`;
+        } else {
+          acc = `${wrapOperand(p, prec("→"))} → ${acc}`;
+        }
+      }
+      return parentPrec !== undefined ? `(${acc})` : acc;
     }
 
     case "app": {

@@ -98,10 +98,24 @@ function tyFromTypeNode(tn: TypeNode): Ty {
     const hasNull = arms.some(isNullNode);
     const hasUndef = arms.some(isUndefNode);
     const wrapNullability = (inner: Ty): Ty => {
-      if (hasNull && hasUndef) return { kind: "nullish", inner };
-      if (hasNull) return { kind: "optional", inner, absent: "null" };
-      if (hasUndef) return { kind: "optional", inner };
-      return inner;
+      let payload = inner;
+      let mergedNull = hasNull;
+      let mergedUndef = hasUndef;
+      while (payload.kind === "optional" || payload.kind === "nullish") {
+        if (payload.kind === "nullish") {
+          mergedNull = true;
+          mergedUndef = true;
+          payload = payload.inner;
+        } else {
+          if (payload.absent === "null") mergedNull = true;
+          else mergedUndef = true;
+          payload = payload.inner;
+        }
+      }
+      if (mergedNull && mergedUndef) return { kind: "nullish", inner: payload };
+      if (mergedNull) return { kind: "optional", inner: payload, absent: "null" };
+      if (mergedUndef) return { kind: "optional", inner: payload };
+      return payload;
     };
     // Collapse expanded boolean (`true | false`) into a single bool slot, so
     // `boolean | undefined` (which TS expands to `false | true | undefined`)

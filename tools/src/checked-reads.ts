@@ -232,10 +232,13 @@ function rewriteExpr(e: TExpr, scope: Scope, mod: TModule): TExpr {
       return { ...e, left: rewriteExpr(e.left, scope, mod), right: rewriteExpr(e.right, scope, mod) };
     case "someMatch": {
       // Do NOT unwrap the scrutinee itself (it is supposed to remain Option<T>),
-      // but DO rewrite any optional prefix inside a nested scrutinee (e.g. `box.inner`).
+      // but DO rewrite subexpressions inside non-var scrutinees (e.g. `box.inner`
+      // or `(flag ? x : undefined)`).
       const scrutinee = e.scrutinee.kind === "field"
         ? { ...e.scrutinee, obj: rewriteExpr(e.scrutinee.obj, scope, mod) }
-        : e.scrutinee;
+        : e.scrutinee.kind === "var"
+          ? e.scrutinee
+          : rewriteExpr(e.scrutinee, scope, mod);
       const someScope = enterSomeMatch(scope, e.scrutinee, e.binder, e.binderTy);
       return {
         ...e,
