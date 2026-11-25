@@ -604,9 +604,10 @@ function emitExpr(e: Expr): string {
     }
 
     case "binop": {
-      // Discriminant check: x == .Ctor → x.Ctor?
+      // Discriminant check: x == .Ctor → x.Ctor? (0-arg constructors only;
+      // value-carrying constructors like `x == Some(v)` stay full equality).
       const op = mapOp(e.op);
-      if ((op === "==" || op === "!=") && e.right.kind === "constructor") {
+      if ((op === "==" || op === "!=") && e.right.kind === "constructor" && e.right.args.length === 0) {
         const ctorName = dafnyCtorName(e.right.name.replace(/^\./, ""));
         const pred = `${emitExpr(e.left)}.${ctorName}?`;
         return op === "!=" ? `(!${pred})` : pred;
@@ -725,6 +726,12 @@ function emitExpr(e: Expr): string {
 
     case "toReal":
       return `(${emitExpr(e.expr)} as real)`;
+
+    case "checkedUnwrap": {
+      const inner = emitExpr(e.expr);
+      const bare = e.expr.kind === "var" || e.expr.kind === "field" || e.expr.kind === "checkedUnwrap";
+      return bare ? `${inner}.value` : `(${inner}).value`;
+    }
 
     case "stringIndex":
       // TS indexing returns a string; Dafny's native string subscript is a

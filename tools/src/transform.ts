@@ -16,6 +16,18 @@ import { builtinSpec } from "./builtins.js";
 import { lowerIndexedCallback } from "./callback-lowering.js";
 import { isFalsyCapableTy } from "./condition-facts.js";
 import { declOf, declOfKind, declOfTy, unionDeclOfTy, declWithVariant, tyBaseName } from "./typedecls.js";
+import {
+  buildNestedFieldExpr,
+  collectAssignedIrTargets,
+  describeReceiver,
+  emitWriteBacksForTarget,
+  findActiveUnwrapFrame,
+  isMutatingCollectionMethod,
+  makeUnwrapFrame,
+  makeVariantFrame,
+  resolveWriteTargetThroughFrames,
+  type WriteBackFrame,
+} from "./place-lowering.js";
 
 // ── Generic IR walkers ──────────────────────────────────────
 
@@ -40,6 +52,7 @@ function mapExpr(e: Expr, f: (e: Expr) => Expr | null): Expr {
     case "toNat": return { ...e, expr: r(e.expr) };
     case "toInt": return { ...e, expr: r(e.expr) };
     case "toReal": return { ...e, expr: r(e.expr) };
+    case "checkedUnwrap": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
     case "stringIndex": return { ...e, str: r(e.str), idx: r(e.idx) };
     case "tupleLiteral": return { ...e, elems: e.elems.map(r) };
@@ -106,6 +119,7 @@ function mapTExpr(e: TExpr, f: (e: TExpr) => TExpr | null): TExpr {
         : s) };
     case "nullish": return { ...e, left: r(e.left), right: r(e.right) };
     case "someMatch": return { ...e, scrutinee: r(e.scrutinee), someBody: r(e.someBody), noneBody: r(e.noneBody) };
+    case "checkedUnwrap": return { ...e, expr: r(e.expr) };
     case "tagMatch": return { ...e, scrutinee: r(e.scrutinee),
       cases: e.cases.map(c => ({ ...c, body: r(c.body) })),
       fallthrough: e.fallthrough ? r(e.fallthrough) : null };
@@ -409,12 +423,19 @@ function promoteAssignedLets(stmts: Stmt[]): Stmt[] {
 
 /** Build a nested record-update assigning `newVal` to a field-path receiver
  *  rooted at a var: `b.a.items` → `b := b.(a := b.a.(items := newVal))`.
- *  Returns null if the path isn't a chain of field accesses ending at a var. */
+ *  Handles `checkedUnwrap` hops along the path by wrapping the updated record
+ *  in `Some(...)`. Returns null if the path isn't a chain of field accesses
+ *  (with optional checked unwraps) ending at a var. */
 function buildNestedFieldUpdate(recv: TExpr, newVal: Expr): { root: string; value: Expr } | null {
   if (recv.kind !== "field") return null;
   const upd: Expr = { kind: "record", spread: lowerExpr(recv.obj, null), fields: [{ name: recv.field, value: newVal }] };
   if (recv.obj.kind === "var") return { root: recv.obj.name, value: upd };
   if (recv.obj.kind === "field") return buildNestedFieldUpdate(recv.obj, upd);
+  if (recv.obj.kind === "checkedUnwrap") {
+    const wrapped: Expr = { kind: "app", fn: "Some", args: [upd] };
+    if (recv.obj.expr.kind === "var") return { root: recv.obj.expr.name, value: wrapped };
+    if (recv.obj.expr.kind === "field") return buildNestedFieldUpdate(recv.obj.expr, wrapped);
+  }
   return null;
 }
 
@@ -585,12 +606,34 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const valExpr: Expr = valSide.kind === "str" && innerTy.kind === "user"
           ? { kind: "constructor", name: valSide.value, type: innerTy.name, args: [] }
           : lowerExpr(valSide, binds);
-        // The bound value goes on the left, so mirror the operator when the
-        // optional was on the right: `x < opt` → `Some(v) => v > x`.
+        // Precondition preservation (#349): JavaScript evaluates BOTH operands of
+        // `===`, `!==`, `<`, `<=`, `>`, `>=` unconditionally. When `valSide` can
+        // carry preconditions (calls, indexing, checked reads, div/mod), bind
+        // `valExpr` in a `let` BEFORE matching `optExpr` so:
+        //   1. Every precondition in `valSide` is checked even when `optExpr` is `None`.
+        //   2. Comparing `bound op _cmp` unwrapped inside `Some` preserves Z3's
+        //      sequence/map extensionality triggers (unlike `opt == Some(val)`).
+        // Pure comparisons (e.g. `res.truncatedBy === "bytes"` in pi-lemmascript)
+        // skip the `let` binding completely (zero temporary churn).
         const op = e.left.ty.kind === "optional" ? e.op : MIRROR_OP[e.op] ?? e.op;
         const cmpOp = BOOL_OP_MAP[op] ?? op;
         const noneVal = e.op === "!==" ? true : false;
         const bound = matchBinder("value");
+        if (!_inSpec && valExpr.kind !== "var" && hasPreconditionExpr(valSide)) {
+          const tmp = freshName(`_cmp${_cmpCounter++}`);
+          return {
+            kind: "let",
+            name: tmp,
+            value: valExpr,
+            body: {
+              kind: "match", scrutinee: optExpr,
+              arms: [
+                { pattern: pCtor("some", bound), body: { kind: "binop", op: cmpOp, left: { kind: "var", name: bound }, right: { kind: "var", name: tmp } } },
+                { pattern: pCtor("none"), body: { kind: "bool", value: noneVal } },
+              ],
+            },
+          };
+        }
         return {
           kind: "match", scrutinee: optExpr,
           arms: [
@@ -1209,6 +1252,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       }
       return { kind: "havoc", type: e.ty };
 
+    case "checkedUnwrap":
+      return { kind: "checkedUnwrap", expr: lowerExpr(e.expr, binds) };
+
     case "someMatch": {
       let someBody: Expr;
       let scrutinee: Expr | string;
@@ -1729,7 +1775,7 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
         eliminateTopLevelContinue(transformStmts(s.body, typeDecls)), idxName);
       result.push({
         kind: "forin", idx: idxName, bound: arrSize,
-        invariants: [boundInv, ...s.invariants.map(transformExpr)],
+        invariants: [boundInv, ...s.invariants.map(transformSpecExpr)],
         body: [...perIter, ...bodyStmts],
       });
       i++;
@@ -1745,6 +1791,86 @@ let _liftCounter = 0;
 let _callbackCounter = 0;
 // Branch results must not renumber the existing lifted-call temporaries.
 let _branchCounter = 0;
+let _cmpCounter = 0;
+// True while lowering proof-only spec clauses (`requires`, `ensures`, `invariants`,
+// `decreases`, `doneWith`). Prevents executable-only rewrites like `#349` `let _cmp`
+// from firing inside specifications.
+let _inSpec = false;
+
+function transformSpecExpr(e: TExpr): Expr {
+  const prev = _inSpec;
+  _inSpec = true;
+  try {
+    return transformExpr(e);
+  } finally {
+    _inSpec = prev;
+  }
+}
+// Active narrowing write-back frames (`someMatch` unwraps & union variant arms).
+let _writeBackFrames: WriteBackFrame[] = [];
+// Declared types of in-scope variables and narrowing binders (for optional-field wrap checks).
+let _varTypes: Map<string, Ty> = new Map();
+
+/** Look up the declared field type reached by walking `fields` from `rootTy`. */
+function lookupFieldTy(rootTy: Ty | undefined, fields: string[], typeDecls: TypeDeclInfo[]): Ty | null {
+  let cur: Ty | undefined = rootTy;
+  for (const field of fields) {
+    if (!cur) return null;
+    if (cur.kind === "optional") cur = cur.inner;
+    if (cur.kind !== "user") return null;
+    const decl = declOfTy(typeDecls, cur);
+    if (!decl || decl.kind !== "record" || !decl.fields) return null;
+    const f = decl.fields.find(fi => fi.name === field);
+    if (!f) return null;
+    cur = f.type ?? parseTsType(f.tsType);
+  }
+  return cur ?? null;
+}
+
+/** True if `e` contains any subexpression that can carry a backend precondition
+ *  (calls, indexing, checked unwraps, division/modulo). Used to ensure optional
+ *  comparisons evaluate `valSide` unconditionally instead of skipping it in a
+ *  `None` match arm (#349), while leaving pure literal/variable comparisons
+ *  untouched (zero churn on `pi-lemmascript` and existing `examples/`). */
+const TOTAL_PURE_BUILTINS = new Set([
+  "set.has", "map.has", "array.includes", "string.includes",
+  "string.startsWith", "string.endsWith", "string.indexOf", "string.lastIndexOf",
+  "string.trim", "string.toLowerCase", "string.toUpperCase",
+]);
+
+function hasPreconditionExpr(e: TExpr): boolean {
+  switch (e.kind) {
+    case "call":
+      if (e.builtinId && TOTAL_PURE_BUILTINS.has(e.builtinId)) {
+        return hasPreconditionExpr(e.fn) || e.args.some(hasPreconditionExpr);
+      }
+      return true;
+    case "index":
+      return true;
+    case "checkedUnwrap":
+      return true;
+    case "binop":
+      return e.op === "/" || e.op === "%" || hasPreconditionExpr(e.left) || hasPreconditionExpr(e.right);
+    case "unop":
+      return hasPreconditionExpr(e.expr);
+    case "field":
+      return hasPreconditionExpr(e.obj);
+    case "record":
+      return (e.spread !== null && hasPreconditionExpr(e.spread)) || e.fields.some(f => hasPreconditionExpr(f.value));
+    case "arrayLiteral":
+      return e.elems.some(hasPreconditionExpr);
+    case "conditional":
+      return hasPreconditionExpr(e.cond) || hasPreconditionExpr(e.then) || hasPreconditionExpr(e.else);
+    case "nullish":
+      return hasPreconditionExpr(e.left) || hasPreconditionExpr(e.right);
+    case "someMatch":
+      return hasPreconditionExpr(e.scrutinee) || hasPreconditionExpr(e.someBody) || hasPreconditionExpr(e.noneBody);
+    case "tagMatch":
+      return hasPreconditionExpr(e.scrutinee) || e.cases.some(c => hasPreconditionExpr(c.body)) || (e.fallthrough !== null && hasPreconditionExpr(e.fallthrough));
+    default:
+      return false;
+  }
+}
 
 function liftMethodCalls(e: TExpr): { binds: Stmt[]; expr: Expr } {
   const binds: Stmt[] = [];
@@ -1756,6 +1882,7 @@ function liftMethodCalls(e: TExpr): { binds: Stmt[]; expr: Expr } {
 function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
   switch (s.kind) {
     case "let": {
+      _varTypes.set(s.name, s.ty);
       // Whole-init havoc: emit directly, no lifting
       if (s.init.kind === "havoc") {
         return [{ kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: { kind: "havoc", type: s.init.ty } }];
@@ -1770,7 +1897,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
             value: { kind: "index", arr: arrVar, idx: { kind: "num", value: 0 } } };
           const sliceTail: Stmt = { kind: "assign", target: arrName,
             value: { kind: "methodCall", obj: arrVar, objTy: init.fn.obj.ty, method: "slice", args: [{ kind: "num", value: 1 }], monadic: false } };
-          return [letHead, sliceTail];
+          return [letHead, sliceTail, ...emitWriteBacksForTarget(arrName, _writeBackFrames)];
         }
       }
       // let x = arr.pop() → let x: T? = (Option-expr); arr := (truncated-or-self)
@@ -1781,6 +1908,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           return [
             { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: optValue },
             { kind: "assign", target: arrName, value: guardedTrunc },
+            ...emitWriteBacksForTarget(arrName, _writeBackFrames),
           ];
         }
       }
@@ -1836,7 +1964,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     }
 
     case "assign": {
-      // x = arr.pop() → x := (Option-expr); arr := (truncated-or-self)
+      // x = arr.pop() → x := (Option-expr); arr := (truncated-or-self) + Place write-back
       if (s.value.kind === "call" && s.value.fn.kind === "field" &&
           s.value.fn.field === "pop" && s.value.fn.obj.ty.kind === "array" &&
           s.value.fn.obj.kind === "var") {
@@ -1845,13 +1973,108 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
         return [
           { kind: "assign", target: s.target, value: optValue },
           { kind: "assign", target: arrName, value: guardedTrunc },
+          ...emitWriteBacksForTarget(arrName, _writeBackFrames),
         ];
+      }
+      // Non-`this.` dotted field assignment on a record, union variant, or narrowed
+      // optional record (e.g. `b.count = 5`, `u.v = 99`, `u.items[0] = 10`, `u.box.count = 42`):
+      // lower through active `unwrap` & `variant` frames with cascading write-back.
+      if (s.target.includes(".") && !s.target.startsWith("this.")) {
+        const parts = s.target.split(".");
+        const rootVar = parts[0]!;
+        const fields = parts.slice(1);
+        const { binds, expr } = liftMethodCalls(s.value);
+        const isUndefRhs = s.value.kind === "var" && s.value.name === "undefined";
+        const isOptRhs = s.value.ty.kind === "optional" || isUndefRhs;
+        const resolved = resolveWriteTargetThroughFrames(rootVar, fields, _writeBackFrames);
+        if (resolved.leafUnwrapFrame) {
+          const frame = resolved.leafUnwrapFrame;
+          if (!isOptRhs) {
+            return [
+              ...binds,
+              { kind: "assign", target: frame.binder, value: expr },
+              ...emitWriteBacksForTarget(frame.binder, _writeBackFrames),
+            ];
+          }
+          // Assigning `undefined` or an `Option<T>` value to a narrowed optional field:
+          // write directly to the enclosing record field without double-wrapping in `Some`.
+          const optExpr: Expr = isUndefRhs
+            ? { kind: "constructor", name: "none", type: "Option", args: [] }
+            : expr;
+          if (frame.fields.length > 0) {
+            return [
+              ...binds,
+              { kind: "assign", target: frame.rootVar, value: buildNestedFieldExpr(frame.rootVar, frame.fields, optExpr) },
+              ...emitWriteBacksForTarget(frame.rootVar, _writeBackFrames),
+            ];
+          }
+          return [
+            ...binds,
+            { kind: "assign", target: frame.rootVar, value: optExpr },
+            ...emitWriteBacksForTarget(frame.rootVar, _writeBackFrames),
+          ];
+        }
+        if (resolved.leafVariantBinder) {
+          const binderTy = _varTypes.get(resolved.leafVariantBinder);
+          const rhsExpr = binderTy?.kind === "optional" && !isOptRhs
+            ? { kind: "constructor" as const, name: "some", type: "Option", args: [expr] }
+            : isUndefRhs && binderTy?.kind === "optional"
+              ? { kind: "constructor" as const, name: "none", type: "Option", args: [] }
+              : expr;
+          return [
+            ...binds,
+            { kind: "assign", target: resolved.leafVariantBinder, value: rhsExpr },
+            ...emitWriteBacksForTarget(resolved.leafVariantBinder, _writeBackFrames),
+          ];
+        }
+        if (resolved.remainingFields.length > 0) {
+          const fieldTy = lookupFieldTy(_varTypes.get(resolved.currentRoot), resolved.remainingFields, typeDecls);
+          const rhsExpr = fieldTy?.kind === "optional"
+            ? (isUndefRhs
+                ? { kind: "constructor" as const, name: "none", type: "Option", args: [] }
+                : s.value.ty.kind === "optional"
+                  ? expr
+                  : { kind: "constructor" as const, name: "some", type: "Option", args: [expr] })
+            : expr;
+          return [
+            ...binds,
+            { kind: "assign", target: resolved.currentRoot, value: buildNestedFieldExpr(resolved.currentRoot, resolved.remainingFields, rhsExpr) },
+            ...emitWriteBacksForTarget(resolved.currentRoot, _writeBackFrames),
+          ];
+        }
+      }
+      // Assignment to a narrowed optional variable (e.g., `arr[0] = v` desugared to
+      // `arr = arr.with(0, v)` or `a = 10` coerced to `Some(10)` by resolve):
+      // update the match binder and write back `arr := Option.Some(binder)` so
+      // storage and binder stay in sync (#342).
+      const activeUnwrap = !s.target.includes(".")
+        ? findActiveUnwrapFrame(s.target, [], _writeBackFrames)
+        : null;
+      if (activeUnwrap) {
+        if (s.value.kind === "call" && s.value.fn.kind === "var" &&
+            s.value.fn.name === "Some" && s.value.args.length === 1) {
+          const { binds, expr } = liftMethodCalls(s.value.args[0]!);
+          return [
+            ...binds,
+            { kind: "assign", target: activeUnwrap.binder, value: expr },
+            ...emitWriteBacksForTarget(activeUnwrap.binder, _writeBackFrames),
+          ];
+        }
+        if (s.value.ty.kind !== "optional" &&
+            !(s.value.kind === "var" && s.value.name === "undefined")) {
+          const { binds, expr } = liftMethodCalls(s.value);
+          return [
+            ...binds,
+            { kind: "assign", target: activeUnwrap.binder, value: expr },
+            ...emitWriteBacksForTarget(activeUnwrap.binder, _writeBackFrames),
+          ];
+        }
       }
       // Top-level method call → direct monadic bind, no lifting needed
       if (s.value.kind === "call" && s.value.callKind === "method")
-        return [{ kind: "bind", target: s.target, value: transformExpr(s.value) }];
+        return [{ kind: "bind", target: s.target, value: transformExpr(s.value) }, ...emitWriteBacksForTarget(s.target, _writeBackFrames)];
       const { binds, expr } = liftMethodCalls(s.value);
-      return [...binds, { kind: "assign", target: s.target, value: expr }];
+      return [...binds, { kind: "assign", target: s.target, value: expr }, ...emitWriteBacksForTarget(s.target, _writeBackFrames)];
     }
 
     case "return": {
@@ -1862,22 +2085,59 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     case "continue": return [{ kind: "continue" }];
     case "expr": {
       // Mutating collection call: m.set(k, v) → m := m.set(k, v) (same for set
-      // .add/.delete and array .push). The receiver may be a bare var, or a
-      // field path rooted at a var (b.items.push(v) → b := b.(items := b.items + [v])).
+      // .add/.delete and array .push/.unshift/.sort). The receiver may be a bare
+      // var or a field path rooted at a var, with Place write-back through any
+      // enclosing narrowing frames (`someMatch` unwrap or union variant arm).
+      // Non-Place receivers (e.g. `getArr().push(1)`) fail closed instead of
+      // silently discarding the updated collection.
       if (s.expr.kind === "call" && s.expr.fn.kind === "field") {
         const recv = s.expr.fn.obj;
         const f = s.expr.fn.field;
-        const isMutating =
-          ((recv.ty.kind === "map" || recv.ty.kind === "set") && (f === "set" || f === "add" || f === "delete")) ||
-          (recv.ty.kind === "array" && (f === "push" || f === "unshift" || f === "sort"));
-        if (isMutating && recv.kind === "var") {
-          const { binds, expr } = liftMethodCalls(s.expr);
-          return [...binds, { kind: "assign", target: recv.name, value: expr }];
-        }
-        if (isMutating && recv.kind === "field") {
-          const { binds, expr } = liftMethodCalls(s.expr);
-          const upd = buildNestedFieldUpdate(recv, expr);
-          if (upd) return [...binds, { kind: "assign", target: upd.root, value: upd.value }];
+        if (isMutatingCollectionMethod(recv.ty, f)) {
+          if (recv.kind === "var") {
+            const { binds, expr } = liftMethodCalls(s.expr);
+            return [
+              ...binds,
+              { kind: "assign", target: recv.name, value: expr },
+              ...emitWriteBacksForTarget(recv.name, _writeBackFrames),
+            ];
+          }
+          if (recv.kind === "field") {
+            const { binds, expr } = liftMethodCalls(s.expr);
+            const upd = buildNestedFieldUpdate(recv, expr);
+            if (upd) {
+              return [
+                ...binds,
+                { kind: "assign", target: upd.root, value: upd.value },
+                ...emitWriteBacksForTarget(upd.root, _writeBackFrames),
+              ];
+            }
+          }
+          if (recv.kind === "checkedUnwrap") {
+            const { binds, expr } = liftMethodCalls(s.expr);
+            const wrapped: Expr = { kind: "app", fn: "Some", args: [expr] };
+            if (recv.expr.kind === "var") {
+              return [
+                ...binds,
+                { kind: "assign", target: recv.expr.name, value: wrapped },
+                ...emitWriteBacksForTarget(recv.expr.name, _writeBackFrames),
+              ];
+            }
+            if (recv.expr.kind === "field") {
+              const upd = buildNestedFieldUpdate(recv.expr, wrapped);
+              if (upd) {
+                return [
+                  ...binds,
+                  { kind: "assign", target: upd.root, value: upd.value },
+                  ...emitWriteBacksForTarget(upd.root, _writeBackFrames),
+                ];
+              }
+            }
+          }
+          throw new Error(
+            `Unsupported in-place mutation \`${describeReceiver(recv)}.${f}(...)\`: ` +
+            `receiver is not a writable Place rooted at a variable (bind it to a variable or mutate through a field path).`,
+          );
         }
       }
       // Optional chaining on map.get at statement level: m.get(k)?.push(v)
@@ -1899,7 +2159,12 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           const pushed: Expr = { kind: "methodCall", obj: directGet, objTy: (mapExpr.ty as any).value, method: "push", args: [pushArg], monadic: false };
           const updated: Expr = { kind: "methodCall", obj: mapVar, objTy: mapExpr.ty, method: "set", args: [keyExpr, pushed], monadic: false };
           const hasCond: Expr = { kind: "methodCall", obj: mapVar, objTy: mapExpr.ty, method: "has", args: [keyExpr], monadic: false };
-          return [{ kind: "if", cond: hasCond, then: [{ kind: "assign", target: mapName, value: updated }], else: [] }];
+          return [{
+            kind: "if",
+            cond: hasCond,
+            then: [{ kind: "assign", target: mapName, value: updated }, ...emitWriteBacksForTarget(mapName, _writeBackFrames)],
+            else: [],
+          }];
         }
       }
       const { binds, expr } = liftMethodCalls(s.expr);
@@ -1916,9 +2181,9 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       return [{
         kind: "while",
         cond: transformExpr(asCondition(s.cond)),
-        invariants: s.invariants.map(transformExpr),
-        decreasing: s.decreases ? transformExpr(s.decreases) : null,
-        doneWith: s.doneWith ? transformExpr(s.doneWith) : null,
+        invariants: s.invariants.map(transformSpecExpr),
+        decreasing: s.decreases ? transformSpecExpr(s.decreases) : null,
+        doneWith: s.doneWith ? transformSpecExpr(s.doneWith) : null,
         body: eliminateTopLevelContinue(transformStmts(s.body, typeDecls)),
       }];
 
@@ -1944,7 +2209,20 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       const path = asTAccessPath(s.scrutinee);
       if (path) {
         const replaced = replacePathInTStmts(s.someBody, path, s.binder, s.binderTy);
-        const someBody = transformStmts(replaced, typeDecls);
+        _varTypes.set(s.binder, s.binderTy);
+        _writeBackFrames.push(makeUnwrapFrame(s.binder, path.rootVar, path.fields));
+        let someBody: Stmt[];
+        try {
+          someBody = transformStmts(replaced, typeDecls);
+        } finally {
+          _writeBackFrames.pop();
+        }
+        if (_opts.backend === "lean" && collectAssignedIrTargets(someBody).has(s.binder)) {
+          someBody = [
+            { kind: "let", name: s.binder, type: s.binderTy, mutable: true, value: varE(s.binder) },
+            ...someBody,
+          ];
+        }
         const noneBody = transformStmts(s.noneBody, typeDecls);
         const scrutinee: Expr = path.fields.length === 0 ? varE(path.rootVar) : transformExpr(s.scrutinee);
         return [{
@@ -2039,7 +2317,8 @@ function emitMatchStmt(
   const path = asTAccessPath(scrutinee);
   const isPath = !!path && path.fields.length > 0;
   const prefix = path ? [path.rootVar, ...path.fields].join("_") : "?";
-  function transformArmBody(body: TStmt[], fields: { name: string; tsType: string; type?: Ty }[]): Stmt[] {
+  const baseUnionName = tyBaseName(typeName);
+  function transformArmBody(body: TStmt[], fields: { name: string; tsType: string; type?: Ty }[], ctorName?: string): Stmt[] {
     let stmts: TStmt[];
     if (isPath && path) {
       // Path scrutinee: the matched value is referred to by the bare path, so
@@ -2055,11 +2334,36 @@ function emitMatchStmt(
         stmts = replaceVarInTStmts(stmts, prefix, matchBinder(f.name, prefix), f.type ?? parseTsType(f.tsType));
       }
     }
-    return transformStmts(stmts, typeDecls);
+    const pushVariant = !isPath && !!ctorName && fields.length > 0;
+    if (pushVariant) {
+      for (const f of fields) {
+        _varTypes.set(matchBinder(f.name, prefix), f.type ?? parseTsType(f.tsType));
+      }
+      _writeBackFrames.push(
+        makeVariantFrame(prefix, baseUnionName, ctorName!, fields.map(f => ({ fieldName: f.name, binder: matchBinder(f.name, prefix) }))),
+      );
+    }
+    let lowered: Stmt[];
+    try {
+      lowered = transformStmts(stmts, typeDecls);
+    } finally {
+      if (pushVariant) _writeBackFrames.pop();
+    }
+    if (_opts.backend === "lean" && pushVariant) {
+      const assigned = collectAssignedIrTargets(lowered);
+      const mutShadows: Stmt[] = fields
+        .filter(f => assigned.has(matchBinder(f.name, prefix)))
+        .map(f => {
+          const b = matchBinder(f.name, prefix);
+          return { kind: "let", name: b, type: f.type ?? parseTsType(f.tsType), mutable: true, value: varE(b) };
+        });
+      if (mutShadows.length > 0) lowered = [...mutShadows, ...lowered];
+    }
+    return lowered;
   }
   const armCases = cases.map(c => ({ name: c.variant, body: c.body }));
   const arms = buildMatchArms(armCases, prefix, typeName, typeDecls,
-    (body, _vn, fields) => transformArmBody(body, fields))!;
+    (body, _vn, fields, ctorName) => transformArmBody(body, fields, ctorName))!;
   // Add the fallthrough arm whenever the listed cases don't cover every
   // variant — needed for exhaustiveness even when there's no `else`
   // (`fallthrough` empty), e.g. `if (Array.isArray(x)) {...}` with no else
@@ -2071,13 +2375,13 @@ function emitMatchStmt(
       // Exactly one variant left — destructure so the fallthrough body can
       // access variant-specific fields (Lean requires this; Dafny tolerates `_`).
       const pattern = buildMatchPattern(remaining.name, remaining.fields, prefix);
-      const body = transformArmBody(fallthrough, remaining.fields);
+      const body = transformArmBody(fallthrough, remaining.fields, remaining.name);
       arms.push({ pattern, body });
     } else {
       arms.push({ pattern: pWild(), body: transformStmts(fallthrough, typeDecls) });
     }
   }
-  return { kind: "match", scrutinee: isPath ? transformExpr(scrutinee) : varE(prefix), arms };
+  return { kind: "match", scrutinee: (isPath || scrutinee.kind === "checkedUnwrap") ? transformExpr(scrutinee) : varE(prefix), arms };
 }
 
 /** Replace bare `var(oldName)` references → `var(newName)` with the given type.
@@ -2162,8 +2466,34 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
       ? buildMatchArms(cases, undefined, ctorDecl!.name, typeDecls, (body) => transformStmts(body, typeDecls))!
       : buildMatchArms(cases, s.expr.kind === "var" ? s.expr.name : "?", ctorDecl!.name, typeDecls,
         (body, vn, fields, ctorName) => {
-          let out = transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls);
+          const pushVariant = !!ctorName && !!vn && vn !== "?" && !!baseName && fields.length > 0;
+          const variantMeta = ctorName ? ctorDecl?.variants?.find(v => v.name === ctorName) : undefined;
+          if (pushVariant) {
+            for (const f of fields) {
+              const vf = variantMeta?.fields.find(vf => vf.name === f.name);
+              _varTypes.set(matchBinder(f.name, vn!), vf?.type ?? parseTsType(f.tsType));
+            }
+            _writeBackFrames.push(
+              makeVariantFrame(vn!, baseName!, ctorName!, fields.map(f => ({ fieldName: f.name, binder: matchBinder(f.name, vn!) }))),
+            );
+          }
+          let out: Stmt[];
+          try {
+            out = transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls);
+          } finally {
+            if (pushVariant) _writeBackFrames.pop();
+          }
           if (ctorName && vn && baseName) out = stampScrutineeUpdates(out, vn, ctorName, baseName);
+          if (_opts.backend === "lean" && pushVariant) {
+            const assigned = collectAssignedIrTargets(out);
+            const mutShadows: Stmt[] = fields
+              .filter(f => assigned.has(matchBinder(f.name, vn!)))
+              .map(f => {
+                const b = matchBinder(f.name, vn!);
+                return { kind: "let", name: b, type: parseTsType(f.tsType), mutable: true, value: varE(b) };
+              });
+            if (mutShadows.length > 0) out = [...mutShadows, ...out];
+          }
           return out;
         })!;
   if (s.defaultBody.length > 0) arms.push({ pattern: pWild(), body: transformStmts(s.defaultBody, typeDecls) });
@@ -2178,7 +2508,11 @@ function replaceFieldsInTStmts(
 ): TStmt[] {
   if (replacements.length === 0) return stmts;
   return stmts.map(s => mapTStmt(s, e => {
-    if (e.kind === "field" && e.obj.kind === "var" && e.obj.name === objName) {
+    const objMatches = e.kind === "field" && (
+      (e.obj.kind === "var" && e.obj.name === objName) ||
+      (e.obj.kind === "checkedUnwrap" && e.obj.expr.kind === "var" && e.obj.expr.name === objName)
+    );
+    if (objMatches && e.kind === "field") {
       const r = replacements.find(r => r.fieldName === e.field);
       if (r) {
         const ty = e.ty.kind !== "unknown" ? e.ty : r.fallbackTy;
@@ -2260,6 +2594,7 @@ interface AccessPath { rootVar: string; fields: string[] }
 
 function asTAccessPath(e: TExpr): AccessPath | null {
   if (e.kind === "var") return { rootVar: e.name, fields: [] };
+  if (e.kind === "checkedUnwrap") return asTAccessPath(e.expr);
   if (e.kind === "field") {
     const inner = asTAccessPath(e.obj);
     if (!inner) return null;
@@ -2272,7 +2607,10 @@ function asTAccessPath(e: TExpr): AccessPath | null {
 function matchesAccessPath(e: TExpr, path: AccessPath): boolean {
   const collected: string[] = [];
   let cur = e;
-  while (cur.kind === "field") { collected.unshift(cur.field); cur = cur.obj; }
+  while (cur.kind === "field" || cur.kind === "checkedUnwrap") {
+    if (cur.kind === "field") { collected.unshift(cur.field); cur = cur.obj; }
+    else { cur = cur.expr; }
+  }
   if (cur.kind !== "var" || cur.name !== path.rootVar) return false;
   if (collected.length !== path.fields.length) return false;
   return collected.every((f, i) => f === path.fields[i]);
@@ -2562,6 +2900,9 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   _liftCounter = 0;
   _callbackCounter = 0;
   _branchCounter = 0;
+  _cmpCounter = 0;
+  _inSpec = false;
+  _writeBackFrames = [];
   _typeDecls = mod.typeDecls;
   _neededKindHelpers = new Map();
   _pureDefNames = new Set(mod.functions.filter(f => f.isPure).map(f => f.name));
@@ -2584,21 +2925,22 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
     if (body) {
       // For pure-function lemmas, replace \result with the function call.
       const fnCall: Expr = { kind: "app", fn: fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) };
-      const ensures = fn.ensures.map(e => replaceVar(transformExpr(e), "\\result", fnCall));
+      const ensures = fn.ensures.map(e => replaceVar(transformSpecExpr(e), "\\result", fnCall));
       pureDefs.push({
         kind: "def",
         name: fn.name,
         typeParams: fn.typeParams,
         params: fn.params.map(p => ({ name: p.name, type: p.ty })),
         returnType: fn.returnTy,
-        requires: fn.requires.map(transformExpr),
+        requires: fn.requires.map(transformSpecExpr),
         ensures,
-        decreases: fn.decreases ? transformExpr(fn.decreases) : null,
+        decreases: fn.decreases ? transformSpecExpr(fn.decreases) : null,
         body,
       });
     } else if (fn.forcePure) {
       // //@ pure but body can't be auto-converted — emit function by method
       _forofCounters.clear();
+      _writeBackFrames = [];
       const methodBody = promoteAssignedLets(transformStmts(fn.body, mod.typeDecls));
       defByMethods.push({
         kind: "def-by-method",
@@ -2606,9 +2948,9 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
         typeParams: fn.typeParams,
         params: fn.params.map(p => ({ name: p.name, type: p.ty })),
         returnType: fn.returnTy,
-        requires: fn.requires.map(transformExpr),
-        ensures: fn.ensures.map(transformExpr),
-        decreases: fn.decreases ? transformExpr(fn.decreases) : null,
+        requires: fn.requires.map(transformSpecExpr),
+        ensures: fn.ensures.map(transformSpecExpr),
+        decreases: fn.decreases ? transformSpecExpr(fn.decreases) : null,
         methodBody,
       });
     }
@@ -2656,10 +2998,10 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
       typeParams: ext.typeParams,
       params: ext.params.map(p => ({ name: p.name, type: p.ty })),
       returnType: ext.returnTy,
-      requires: ext.requires.map(transformExpr),
+      requires: ext.requires.map(transformSpecExpr),
       ensures: ext.ensures.map(e => ext.impure
-        ? transformExpr(e)
-        : replaceVar(transformExpr(e), "\\result", fnCall)),
+        ? transformSpecExpr(e)
+        : replaceVar(transformSpecExpr(e), "\\result", fnCall)),
       impure: ext.impure,
     };
   });
@@ -2671,13 +3013,21 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   const pureDefNames = new Set([...pureDefs.map(d => d.name), ...defByMethods.map(d => d.name)]);
   const methods: FnMethod[] = mod.functions.map(fn => {
     const ensures: Expr[] = [];
-    for (const e of fn.ensures) {
-      const m = ensuresToMatch(e, mod.typeDecls);
-      if (m) ensures.push(m);
-      else ensures.push(transformExpr(e));
+    const prevInSpec = _inSpec;
+    _inSpec = true;
+    try {
+      for (const e of fn.ensures) {
+        const m = ensuresToMatch(e, mod.typeDecls);
+        if (m) ensures.push(m);
+        else ensures.push(transformExpr(e));
+      }
+    } finally {
+      _inSpec = prevInSpec;
     }
 
     _forofCounters.clear();
+    _writeBackFrames = [];
+    _varTypes = new Map(fn.params.map(p => [p.name, p.ty]));
     let body = pureDefNames.has(fn.name)
       ? [{ kind: "return" as const, value: { kind: "app" as const, fn: _opts.backend === "lean" ? `Pure.${fn.name}` : fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) } }]
       : promoteAssignedLets(transformStmts(fn.body, mod.typeDecls));
@@ -2691,14 +3041,18 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
     // since loom's default loop-exit fact `¬guard` does not hold across a break.
     if (_opts.backend === "lean" && !pureDefNames.has(fn.name)) {
       body = matchToIfChains(body);
-      const resultInvariants = fn.ensures.map(e => replaceVar(transformExpr(e), "\\result", { kind: "var", name: "_loopRet" }));
+      const resultInvariants = fn.ensures.map(e => replaceVar(transformSpecExpr(e), "\\result", { kind: "var", name: "_loopRet" }));
       body = eliminateReturnInLoops(body, fn.returnTy, resultInvariants);
       requireDoneWithForBreaks(body, fn.name);
     }
 
-    // Shadow reassigned parameters with mutable locals
+    // Shadow reassigned parameters with mutable locals (including parameters
+    // written back via Place lowering inside `someMatch`, `tagMatch`, or `switch`).
     const paramNames = new Set(fn.params.map(p => p.name));
     const reassigned = findReassignedNames(fn.body, paramNames);
+    for (const target of collectAssignedIrTargets(body)) {
+      if (paramNames.has(target)) reassigned.add(target);
+    }
     if (reassigned.size > 0) {
       const shadows: Stmt[] = fn.params
         .filter(p => reassigned.has(p.name))
@@ -2712,9 +3066,9 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
       typeParams: fn.typeParams,
       params: fn.params.map(p => ({ name: p.name, type: p.ty })),
       returnType: fn.returnTy,
-      requires: fn.requires.map(transformExpr),
+      requires: fn.requires.map(transformSpecExpr),
       ensures,
-      decreases: fn.decreases ? transformExpr(fn.decreases) : null,
+      decreases: fn.decreases ? transformSpecExpr(fn.decreases) : null,
       body,
     };
   });
@@ -2722,18 +3076,31 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
   // Class declarations
   const classDecls: Decl[] = (mod.classes ?? []).map(cls => {
     const classMethods: FnMethod[] = cls.methods.map(fn => {
-      const ensures: Expr[] = fn.ensures.map(transformExpr);
+      const ensures: Expr[] = fn.ensures.map(transformSpecExpr);
       _forofCounters.clear();
-      const body = promoteAssignedLets(transformStmts(fn.body, mod.typeDecls));
+      _writeBackFrames = [];
+      _varTypes = new Map(fn.params.map(p => [p.name, p.ty]));
+      let body = promoteAssignedLets(transformStmts(fn.body, mod.typeDecls));
+      const paramNames = new Set(fn.params.map(p => p.name));
+      const reassigned = findReassignedNames(fn.body, paramNames);
+      for (const target of collectAssignedIrTargets(body)) {
+        if (paramNames.has(target)) reassigned.add(target);
+      }
+      if (reassigned.size > 0) {
+        const shadows: Stmt[] = fn.params
+          .filter(p => reassigned.has(p.name))
+          .map(p => ({ kind: "let" as const, name: p.name, type: p.ty, mutable: true, value: { kind: "var" as const, name: p.name } }));
+        body = [...shadows, ...body];
+      }
       return {
         kind: "method" as const,
         name: fn.name,
         typeParams: fn.typeParams,
         params: fn.params.map(p => ({ name: p.name, type: p.ty })),
         returnType: fn.returnTy,
-        requires: fn.requires.map(transformExpr),
+        requires: fn.requires.map(transformSpecExpr),
         ensures,
-        decreases: fn.decreases ? transformExpr(fn.decreases) : null,
+        decreases: fn.decreases ? transformSpecExpr(fn.decreases) : null,
         body,
       };
     });

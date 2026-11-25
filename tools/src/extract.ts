@@ -677,9 +677,10 @@ function extractExpr(node: Expression): RawExpr {
     if (!hasSpread) {
       return { kind: "arrayLiteral", elems: elems.map(e => extractExpr(e as Expression)) };
     }
-    // [a, ...b, c] → [a] + b + [c] via shared helper
+    // [a, ...b, c] → [a] + b + [c] via shared helper; mark freshClone so
+    // `[...arr]` is not misread by alias analysis as a reference alias of `arr`.
     const result = buildSpreadConcat(elems);
-    return result;
+    return markFreshClone(result);
   }
 
   // Object literal: { res: true, done: false } or { ...obj, res: true }
@@ -696,7 +697,7 @@ function extractExpr(node: Expression): RawExpr {
     for (const prop of node.getProperties()) {
       if (Node.isSpreadAssignment(prop)) {
         const s = extractExpr(prop.getExpression());
-        acc = acc === null ? s : { kind: "recordMerge", base: acc, override: s };
+        acc = acc === null ? markFreshClone(s) : { kind: "recordMerge", base: acc, override: s };
       } else if (Node.isShorthandPropertyAssignment(prop)) {
         const name = prop.getName();
         update(name, { kind: "var", name: sourceName(prop.getNameNode()) });
@@ -745,8 +746,9 @@ function extractExpr(node: Expression): RawExpr {
         const argSymbol = argType.getSymbol()?.getName() ?? argType.getAliasSymbol()?.getName();
         const argTypeText = _eraseGenerics(typeToString(argType));
         if (argSymbol === "Map" || argTypeText.startsWith("Record<")) {
-          // new Map(existingMap) or new Map(record) — identity (Dafny maps are value types)
-          return extractExpr(args[0] as Expression);
+          // new Map(existingMap) or new Map(record) — identity (Dafny maps are value types),
+          // marked freshClone so alias analysis knows JS allocates a fresh Map.
+          return markFreshClone(extractExpr(args[0] as Expression));
         }
         // new Map(entries) — map-from-array constructor
         return { kind: "call", fn: { kind: "var", name: "__mapFromArray" }, args: [extractExpr(args[0] as Expression)] };
@@ -758,8 +760,8 @@ function extractExpr(node: Expression): RawExpr {
           return { kind: "emptyCollection", collectionType: "Set", tsType, initElems: arg.getElements().map(e => extractExpr(e as Expression)) };
         }
         const argSymbol = arg.getType().getSymbol()?.getName() ?? arg.getType().getAliasSymbol()?.getName();
-        // new Set(existingSet) — identity (sets are value types)
-        if (argSymbol === "Set") return extractExpr(arg);
+        // new Set(existingSet) — identity (sets are value types), marked freshClone.
+        if (argSymbol === "Set") return markFreshClone(extractExpr(arg));
         // new Set(arr) — build a deduplicated set from the array's elements
         return { kind: "call", fn: { kind: "var", name: "__setFromArray" }, args: [extractExpr(arg)] };
       }
@@ -1354,6 +1356,16 @@ function typeToString(type: Type): string {
     return name;
   }
   return type.getText();
+}
+
+function markFreshClone(e: RawExpr): RawExpr {
+  if (e.kind === "nonNull") {
+    return { ...e, expr: markFreshClone(e.expr) };
+  }
+  if (e.kind === "var" || e.kind === "field" || e.kind === "index" || e.kind === "call") {
+    return { ...e, freshClone: true };
+  }
+  return e;
 }
 
 const COMPOUND_OPS: Record<string, string> = {

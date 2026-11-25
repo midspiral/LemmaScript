@@ -415,6 +415,21 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         : _boolCtx && e.op === "∧" ? "&&"
         : _boolCtx && e.op === "∨" ? "||"
         : e.op;
+      // In Lean 4, `&&`, `||`, `∧`, and `∨` are non-dependent, so
+      // `checkedUnwrap` (`(x).get (by grind)`) in the right operand has no
+      // hypothesis in context. Emit dependent `if _h : ...` when the RHS contains
+      // a `checkedUnwrap` so Lean puts the presence guard in scope for `grind`.
+      if ((e.op === "∧" || e.op === "∨") && anyExpr(e.right, x => x.kind === "checkedUnwrap")) {
+        const l = emitExpr(e.left);
+        const r = emitExpr(e.right);
+        const condProp = isPropValued(e.left) ? l : `(${l}) = true`;
+        const tVal = _boolCtx ? "true" : "True";
+        const fVal = _boolCtx ? "false" : "False";
+        const rExpr = _boolCtx && isPropValued(e.right) ? `decide (${r})` : r;
+        return e.op === "∧"
+          ? `(if _h : ${condProp} then (${rExpr}) else ${fVal})`
+          : `(if _h : ${condProp} then ${tVal} else (${rExpr}))`;
+      }
       // Comparisons and ↔ do not chain in Lean. In particular, a Boolean
       // postcondition `res = (s = t)` must keep its inner equality grouped.
       const childPrec = ["↔", "=", "≠", "<", "≤", ">", "≥"].includes(e.op)
@@ -504,6 +519,9 @@ function emitExpr(e: Expr, parentPrec?: number): string {
 
     case "toInt": return `(Int.ofNat (${emitExpr(e.expr)}))`;
 
+    case "checkedUnwrap":
+      return `((${emitExpr(e.expr)}).get (by grind))`;
+
     case "toReal":
       // A real value reached the Lean backend via coercion (e.g. number `/`).
       // Same unsupported-real story as the `real` type case in tyToLean.
@@ -527,8 +545,19 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       return `{ ${fields.join(", ")} }`;
     }
 
-    case "if":
+    case "if": {
+      const hasCU = anyExpr(e.then, x => x.kind === "checkedUnwrap") || anyExpr(e.else, x => x.kind === "checkedUnwrap");
+      if (hasCU) {
+        const c = emitExpr(e.cond);
+        const condProp = isPropValued(e.cond) ? c : `(${c}) = true`;
+        const t = emitExpr(e.then);
+        const f = emitExpr(e.else);
+        const tExpr = _boolCtx && isPropValued(e.then) ? `decide (${t})` : t;
+        const fExpr = _boolCtx && isPropValued(e.else) ? `decide (${f})` : f;
+        return `(if _h : ${condProp} then (${tExpr}) else (${fExpr}))`;
+      }
       return `if ${emitExpr(e.cond)} then ${emitExpr(e.then)} else ${emitExpr(e.else)}`;
+    }
 
     case "match": {
       // Always parenthesize inline matches — Lean parses alternatives greedily,
@@ -542,7 +571,11 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "forall": return `∀ ${e.var} : ${tyToLean(e.type)}, ${emitExpr(e.body)}`;
     case "exists": return `∃ ${e.var} : ${tyToLean(e.type)}, ${emitExpr(e.body)}`;
 
-    case "let": return `let ${e.name}${e.type ? ` : ${tyToLean(e.type)}` : ""} := ${emitExpr(e.value)}\n${emitExpr(e.body)}`;
+    case "let":
+      if (e.name.startsWith("_cmp")) {
+        return `(let ${e.name}${e.type ? ` : ${tyToLean(e.type)}` : ""} := ${emitExpr(e.value)}; ${emitExpr(e.body)})`;
+      }
+      return `let ${e.name}${e.type ? ` : ${tyToLean(e.type)}` : ""} := ${emitExpr(e.value)}\n${emitExpr(e.body)}`;
     default: throw new Error(`Unsupported Lean expression: ${(e as Expr).kind}`);
   }
 }

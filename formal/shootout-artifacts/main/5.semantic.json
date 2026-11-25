@@ -1,0 +1,50 @@
+{
+  "schema": "lemmascript-imperative-semantic-case/1",
+  "family": "aliasing",
+  "label": "live-alias-mutation",
+  "fnName": "target",
+  "returnKind": "number",
+  "tsText": "export function target(a: number[]): number {\n  const b = a;\n  b.push(-7);\n  return a.length;\n}",
+  "inputs": [
+    {
+      "args": [
+        {
+          "kind": "int-array",
+          "value": []
+        }
+      ]
+    }
+  ],
+  "oracle": "soundness-refuted",
+  "stage": "both",
+  "signature": "soundness-refuted (aliasing/live-alias-mutation)",
+  "detail": "CRITICAL: Node returned 1 for target([]), yet Dafny proved result != 1.",
+  "checks": [
+    {
+      "inputIndex": 0,
+      "nodeOutcome": {
+        "kind": "value",
+        "value": 1
+      },
+      "dafnyArgs": [
+        "[]"
+      ],
+      "stage": "pre",
+      "status": "soundness-refuted",
+      "detail": "Dafny program verifier finished with 1 verified, 0 errors"
+    },
+    {
+      "inputIndex": 0,
+      "nodeOutcome": {
+        "kind": "value",
+        "value": 1
+      },
+      "dafnyArgs": [
+        "[]"
+      ],
+      "stage": "opt",
+      "status": "soundness-refuted",
+      "detail": "Dafny program verifier finished with 1 verified, 0 errors"
+    }
+  ]
+}

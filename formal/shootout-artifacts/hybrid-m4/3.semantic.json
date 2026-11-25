@@ -1,0 +1,23 @@
+{
+  "schema": "lemmascript-imperative-semantic-case/1",
+  "family": "aliasing",
+  "label": "live-alias-mutation",
+  "fnName": "target",
+  "returnKind": "number",
+  "tsText": "export function target(a: number[]): number {\n  const b = a;\n  b.push(0);\n  return a.length;\n}",
+  "inputs": [
+    {
+      "args": [
+        {
+          "kind": "int-array",
+          "value": []
+        }
+      ]
+    }
+  ],
+  "oracle": "rejected",
+  "stage": null,
+  "signature": "rejected: Live-alias mutation in `target`: mutating `b` in place while alias `a` is still observed afterward. LemmaScript models arrays, maps, sets, and records as immutable values, so mutating `b` would not update `a` (clone explicitly or mutate through a single live binding). (aliasing/live-alias-mutation)",
+  "detail": "Live-alias mutation in `target`: mutating `b` in place while alias `a` is still observed afterward. LemmaScript models arrays, maps, sets, and records as immutable values, so mutating `b` would not update `a` (clone explicitly or mutate through a single live binding).",
+  "checks": []
+}

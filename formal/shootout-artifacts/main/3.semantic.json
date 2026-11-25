@@ -1,0 +1,49 @@
+{
+  "schema": "lemmascript-imperative-semantic-case/1",
+  "family": "guard-eval",
+  "label": "eq-rhs-guard-false",
+  "fnName": "target",
+  "returnKind": "boolean",
+  "tsText": "//@ requires ok\nexport function guard(ok: boolean, v: number): number {\n  return v;\n}\nexport function target(x?: number): boolean {\n  return x === guard(false, 2);\n}",
+  "inputs": [
+    {
+      "args": [
+        {
+          "kind": "opt-int"
+        }
+      ]
+    }
+  ],
+  "oracle": "precondition-dropped",
+  "stage": "both",
+  "signature": "precondition-dropped (guard-eval/eq-rhs-guard-false)",
+  "detail": "Node violated guard(false) on input #0 (Option.None), but Dafny verified with 0 errors.",
+  "checks": [
+    {
+      "inputIndex": 0,
+      "nodeOutcome": {
+        "kind": "precondition-violated",
+        "detail": "__LS_PRECONDITION_VIOLATED__"
+      },
+      "dafnyArgs": [
+        "Option.None"
+      ],
+      "stage": "pre",
+      "status": "precondition-dropped",
+      "detail": "Dafny program verifier finished with 1 verified, 0 errors"
+    },
+    {
+      "inputIndex": 0,
+      "nodeOutcome": {
+        "kind": "precondition-violated",
+        "detail": "__LS_PRECONDITION_VIOLATED__"
+      },
+      "dafnyArgs": [
+        "Option.None"
+      ],
+      "stage": "opt",
+      "status": "precondition-dropped",
+      "detail": "Dafny program verifier finished with 1 verified, 0 errors"
+    }
+  ]
+}
