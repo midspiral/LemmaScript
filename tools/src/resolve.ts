@@ -2068,6 +2068,10 @@ export function resolveModule(raw: RawModule): TModule {
   // Pre-compute function parameter and return types
   const fnParams = new Map<string, Ty[]>();
   const fnReturns = new Map<string, Ty>();
+  for (const fn of raw.functionSignatures ?? []) {
+    fnParams.set(fn.name, fn.params.map(p => expandAlias(parseTsType(p.tsType), raw.typeDecls)));
+    fnReturns.set(fn.name, expandAlias(parseTsType(fn.returnType), raw.typeDecls));
+  }
   for (const fn of raw.functions) {
     const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
     fnParams.set(fn.name, fn.params.map(p => expandAlias(resolveTsType(p.tsType, overrides, p.name), raw.typeDecls)));

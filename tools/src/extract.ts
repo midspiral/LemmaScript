@@ -2617,6 +2617,8 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   }
 
   // In brownfield mode, keep dependencies of selected functions and methods.
+  const functionSignatures: NonNullable<RawModule["functionSignatures"]> = [];
+  const signatureNodes: FunctionDeclaration[] = [];
   if (hasVerifyDirective) {
     const referencedNames = new Set<string>();
     function collectSpecNames(spec: string | null) {
@@ -2698,6 +2700,25 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       }
     }
     constants.splice(0, constants.length, ...constants.filter(c => referencedNames.has(c.name)));
+    // Excluding a helper's implementation must not erase its known TS types.
+    // Contracts and bodies use the same call typing (notably for && and ||).
+    // Keep only referenced signatures; do not extract bodies or trust specs.
+    for (const f of nonExternFns) {
+      if (fnsToExtract.includes(f) || !referencedNames.has(f.name)) continue;
+      const signature = {
+        name: f.name,
+        params: f.node.getParameters().map(p => ({ name: p.getName(), tsType: typeToString(p.getType()) })),
+        returnType: typeToString(f.node.getReturnType()),
+      };
+      functionSignatures.push(signature);
+      signatureNodes.push(f.node);
+      for (const p of f.node.getParameters()) resolveTypeNodeRefs(p.getTypeNode());
+      resolveTypeNodeRefs(f.node.getReturnTypeNode());
+      for (const type of [...signature.params.map(p => p.tsType), signature.returnType]) {
+        typeReferencedNames.add(type);
+        sigTypes.add(type);
+      }
+    }
     // Filter types to only those referenced by verified functions (transitive)
     const neededTypes = new Set<string>();
     function markType(name: string) {
@@ -2831,6 +2852,10 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   for (const prop of classFields) {
     if (!fieldTypeOverride(prop)) resolveType(prop.getType(), prop);
   }
+  for (const node of signatureNodes) {
+    for (const p of node.getParameters()) resolveType(p.getType(), p);
+    resolveType(node.getReturnType(), node);
+  }
   // Extern signature types: see _externSigTypes.
   for (const r of _externSigTypes) resolveType(r.type, r.node);
   // Resolve anonymous object return types into synthetic named types
@@ -2924,6 +2949,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     externs: Array.from(_externs.values()),
     constants,
     functions,
+    ...(functionSignatures.length ? { functionSignatures } : {}),
     classes,
   };
 }

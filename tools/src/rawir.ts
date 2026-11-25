@@ -252,5 +252,8 @@ export interface RawModule {
   externs: RawExtern[];
   constants: RawConst[];
   functions: RawFunction[];
+  // Referenced helpers excluded by opt-in verification. Types only: these
+  // neither emit declarations nor contribute contracts or purity assumptions.
+  functionSignatures?: Pick<RawFunction, "name" | "params" | "returnType">[];
   classes: RawClass[];
 }
