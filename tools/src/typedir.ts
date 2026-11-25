@@ -137,6 +137,8 @@ export type TStmt =
       cases: { label: string; body: TStmt[] }[];
       defaultBody: TStmt[] }
   | { kind: "forof"; names: string[]; nameTypes: Ty[]; iterable: TExpr;
+      // Loop counter name, minted once by resolve; specs may name it.
+      idx: string;
       invariants: TExpr[]; doneWith: TExpr | null; body: TStmt[] }
   | { kind: "throw" }
   | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,3 +59,78 @@ for (const cmd of ["gen", "gen-check", "check", "regen"]) {
     assert.deepEqual(result.files, ["source.ts"]);
   });
 }
+
+for (const intermediate of ["gen", "gen-check", "check"] as const) {
+  test(`lsc ${intermediate} between an edit and regen preserves the merge base`, () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "lsc-commands-base-")));
+    try {
+      const tsPath = join(dir, "t.ts");
+      const dfyPath = join(dir, "t.dfy");
+      const basePath = join(dir, "t.dfy.base");
+      const run = (args: string[]) => spawnSync(process.execPath, [cli, ...args], {
+        cwd: dir, env: { ...process.env, LSC_RUN_LOG: "false" }, encoding: "utf8", timeout: 30_000,
+      });
+
+      const v1 = [
+        "export function inc(n: number): number {",
+        "  //@ requires n >= 0",
+        "  //@ ensures \\result > n",
+        "  return n + 1;",
+        "}",
+        "",
+      ].join("\n");
+      writeFileSync(tsPath, v1);
+
+      const init = run(["regen", "--backend=dafny", "--no-verify", "t.ts"]);
+      assert.equal(init.status, 0, init.stdout + init.stderr);
+      writeFileSync(dfyPath, readFileSync(dfyPath, "utf8") + "\nlemma UserProof() {}\n");
+
+      // Repeated gen-check on an unchanged file does not create a base file.
+      const cleanCheck = run(["gen-check", "--backend=dafny", "t.ts"]);
+      assert.equal(cleanCheck.status, 0, cleanCheck.stdout + cleanCheck.stderr);
+      assert.equal(existsSync(basePath), false);
+
+      // Edit source and run the intermediate command before regen.
+      writeFileSync(tsPath, v1.replace("return n + 1;", "return n + 2;"));
+      const mid = run([intermediate, "--backend=dafny", "t.ts"]);
+      assert.equal(mid.status, intermediate === "gen" ? 0 : 1, mid.stdout + mid.stderr);
+      assert.equal(existsSync(basePath), true);
+
+      // regen three-way merges using the saved base and removes it on success.
+      const merged = run(["regen", "--backend=dafny", "--no-verify", "t.ts"]);
+      assert.equal(merged.status, 0, merged.stdout + merged.stderr);
+      assert.equal(existsSync(basePath), false);
+      const proof = readFileSync(dfyPath, "utf8");
+      assert.match(proof, /\(n \+ 2\)/);
+      assert.match(proof, /lemma UserProof\(\) \{\}/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("lsc gen-check removes a leftover base file once the proof matches again", () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "lsc-commands-revert-")));
+  try {
+    const tsPath = join(dir, "t.ts");
+    const basePath = join(dir, "t.dfy.base");
+    const run = (args: string[]) => spawnSync(process.execPath, [cli, ...args], {
+      cwd: dir, env: { ...process.env, LSC_RUN_LOG: "false" }, encoding: "utf8", timeout: 30_000,
+    });
+
+    const v1 = "export function inc(n: number): number { return n + 1; }\n";
+    writeFileSync(tsPath, v1);
+    assert.equal(run(["regen", "--backend=dafny", "--no-verify", "t.ts"]).status, 0);
+
+    writeFileSync(tsPath, v1.replace("n + 1", "n + 2"));
+    assert.equal(run(["gen-check", "--backend=dafny", "t.ts"]).status, 1);
+    assert.equal(existsSync(basePath), true);
+
+    writeFileSync(tsPath, v1);
+    const reverted = run(["gen-check", "--backend=dafny", "t.ts"]);
+    assert.equal(reverted.status, 0, reverted.stdout + reverted.stderr);
+    assert.equal(existsSync(basePath), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

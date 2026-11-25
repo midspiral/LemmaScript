@@ -17,7 +17,7 @@ The `.dfy.gen` extension prevents Dafny tooling from auto-verifying it.
 
 The diff between gen and dfy must be **additions only** — the LLM may insert helper lemmas, ghost predicates, assert statements, and loop invariants, but may not modify generated lines.
 
-Added lines may not contain `assume` statements or `{:axiom}` / `@Axiom` attributes; occurrences inside comments, strings, and character literals are ignored. Added lines also may not introduce an `// lsc options:` line, since verifier options are read from that header.
+Added lines may not contain `assume`, `expect`, `decreases *`, `{:axiom}`, `@Axiom`, `{:verify ...}` (other than `{:verify true}`), `{:only}`, `@VerifyOnly`, or `{:extern}`; occurrences inside comments, strings, and character literals are ignored. Inside a generated declaration header, added lines may introduce complete `ensures`, `modifies`, `reads`, or `decreases` clauses (other than `decreases *`), but may not add `requires` clauses or extend or split a generated signature or header clause; auxiliary declarations added in the proof may declare their own clauses freely. Added lines also may not introduce an `// lsc options:` line, since verifier options are read from that header.
 
 `"proof-dir": "proofs"` in `lemmascript.json` relocates the complete Dafny
 artifact set while preserving the pair: a source `src/search/foo.ts` under that
@@ -68,7 +68,7 @@ Non-pure functions become Dafny `method` declarations.
 6. Verify merged `foo.dfy` unless `--no-verify`; if verification fails, advance `.dfy.base` to the new gen before exiting with failure
 7. On success, delete `.dfy.base` (gen is now the anchor), including when verification was explicitly skipped
 
-On merge conflict, `foo.dfy` is left unchanged and the merged result is saved as `foo.dfy.merged` for manual inspection. Conflicts and additions-only failures retain the old anchor. A verifier failure after a clean additions-only merge instead retains the new anchor, because the proof already contains that generation; the next retry must not merge it a second time.
+On merge conflict, `foo.dfy` is left unchanged and the merged result is saved as `foo.dfy.merged` for manual inspection. Conflicts and additions-only failures retain the old anchor. `lsc gen`, `lsc gen-check`, and `lsc check` also seed `.dfy.base` with the previous `.dfy.gen` before overwriting a changed generation beside an existing `.dfy` when no `.dfy.base` exists yet, so a later `lsc regen` still merges from the generation the proof derives from; `check` and `gen-check` remove `.dfy.base` once the additions-only check passes. A verifier failure after a clean additions-only merge instead retains the new anchor, because the proof already contains that generation; the next retry must not merge it a second time.
 
 Merges use `--diff-algorithm=minimal`, matching the additions-only check so large proof additions do not cause spurious generated-line deletions in the diff. Git versions before 2.44 fall back to the default algorithm with a warning; upgrading avoids the resulting false conflicts. Git execution errors leave the proof unchanged and retain the old anchor, but do not create `.dfy.merged` or record a verification conflict.
 
