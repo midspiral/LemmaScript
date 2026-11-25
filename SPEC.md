@@ -1293,11 +1293,11 @@ return { res: true, done: true, rec: true };
 
 **Record index by enum key** (`rec[k]`, `k` ranging over field names) lowers so the dynamic access verifies like a static one: a named string-union key becomes `match k { case f => rec.f }`; an inline union key (`"a" | "b"`) becomes an equality chain `if k === "a" then rec.a else …`. The chain/match covers exactly the key's members, so a key that is a subset of the fields stays sound. See [`examples/recordIndexByEnum.ts`](examples/recordIndexByEnum.ts).
 
-**Inline object types:** Anonymous object types in interface fields (e.g., `decision?: { decision: string; rationale: string }`) are extracted as named datatypes with synthetic names (e.g., `SpecEntryDecision`). The parent field references the generated name.
+**Inline object types:** Anonymous object types in interface fields (e.g., `decision?: { decision: string; rationale: string }`) are extracted as named datatypes with synthetic names (e.g., `SpecEntryDecision`). The parent field references the generated name, wrapped in `Option` when the key is optional or the value is nullable. This also applies with `exactOptionalPropertyTypes: true`: the `?` still permits an absent key. See [`examples/optionalInlineRecords.ts`](examples/optionalInlineRecords.ts).
 
 **Anonymous return types:** Functions returning inline object types (e.g., `(): { modules: Module[]; claims: Claim[] }`) get a synthetic return type (e.g., `ParseSpecYamlResult`). Named type aliases (e.g., `type Foo = { ... }`) are resolved by their alias name instead.
 
-**Record constructor padding (Dafny):** When an object literal has fewer fields than the target datatype (e.g., TS code omits optional fields), missing optional fields are filled with `None`. The emitter matches provided fields by name against the datatype declaration.
+**Record constructor padding (Dafny):** When an object literal has fewer fields than the target datatype (e.g., TS code omits optional fields), missing optional fields are filled with `None`, including for an empty literal `{}`. The resolved record type selects the constructor; fields are ordered by its declaration. Missing required fields and unknown fields are reported during emission with the enclosing declaration and source filename.
 
 **Optional field coercion:** When a non-optional value is assigned to an optional field in a record constructor (e.g., `createdAt: now` where `now: int` and the field type is `Option<int>`), the resolve phase wraps the value in `Some`. The coercion only fires when the value has a concrete non-optional type — `unknown` and `void` values are left as-is.
 
