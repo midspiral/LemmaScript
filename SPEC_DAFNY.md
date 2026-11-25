@@ -17,7 +17,7 @@ The `.dfy.gen` extension prevents Dafny tooling from auto-verifying it.
 
 The diff between gen and dfy must be **additions only** — the LLM may insert helper lemmas, ghost predicates, assert statements, and loop invariants, but may not modify generated lines.
 
-Added lines may not contain `assume` statements or `{:axiom}` / `@Axiom` attributes; occurrences inside comments, strings, and character literals are ignored. Added lines also may not introduce an `// lsc options:` line, since verifier options are read from that header.
+Added lines may not contain `assume`, `expect`, `decreases *`, `{:axiom}`, `@Axiom`, `{:verify ...}` (other than `{:verify true}`), `{:only}`, `@VerifyOnly`, or `{:extern}`; occurrences inside comments, strings, and character literals are ignored. Inside a generated declaration header, added lines may introduce complete `ensures`, `modifies`, `reads`, or `decreases` clauses (other than `decreases *`), but may not add `requires` clauses or extend or split a generated signature or header clause; auxiliary declarations added in the proof may declare their own clauses freely. Added lines also may not introduce an `// lsc options:` line, since verifier options are read from that header.
 
 `"proof-dir": "proofs"` in `lemmascript.json` relocates the complete Dafny
 artifact set while preserving the pair: a source `src/search/foo.ts` under that
@@ -68,7 +68,7 @@ Non-pure functions become Dafny `method` declarations.
 6. Verify merged `foo.dfy` unless `--no-verify`; if verification fails, advance `.dfy.base` to the new gen before exiting with failure
 7. On success, delete `.dfy.base` (gen is now the anchor), including when verification was explicitly skipped
 
-On merge conflict, `foo.dfy` is left unchanged and the merged result is saved as `foo.dfy.merged` for manual inspection. Conflicts and additions-only failures retain the old anchor. A verifier failure after a clean additions-only merge instead retains the new anchor, because the proof already contains that generation; the next retry must not merge it a second time.
+On merge conflict, `foo.dfy` is left unchanged and the merged result is saved as `foo.dfy.merged` for manual inspection. Conflicts and additions-only failures retain the old anchor. `lsc gen`, `lsc gen-check`, and `lsc check` also seed `.dfy.base` with the previous `.dfy.gen` before overwriting a changed generation beside an existing `.dfy` when no `.dfy.base` exists yet, so a later `lsc regen` still merges from the generation the proof derives from; `check` and `gen-check` remove `.dfy.base` once the additions-only check passes. A verifier failure after a clean additions-only merge instead retains the new anchor, because the proof already contains that generation; the next retry must not merge it a second time.
 
 Merges use `--diff-algorithm=minimal`, matching the additions-only check so large proof additions do not cause spurious generated-line deletions in the diff. Git versions before 2.44 fall back to the default algorithm with a warning; upgrading avoids the resulting false conflicts. Git execution errors leave the proof unchanged and retain the old anchor, but do not create `.dfy.merged` or record a verification conflict.
 
@@ -91,12 +91,18 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 | Helper | When | Purpose |
 |--------|------|---------|
 | `JSFloorDiv` | `Math.floor(a/b)` (int args) | JS-compatible floor division |
-| `FloorReal` / `CeilReal` | `Math.floor(x)` / `Math.ceil(x)` (real arg) | `real → int` via `.Floor` |
+| `FloorReal` / `CeilReal` | `Math.floor(x)` / `Math.ceil(x)` (real arg); `Math.round(x)` as `FloorReal(x + 0.5)` | `real → int` via `.Floor` |
+| `JSTruncDiv` | `Math.trunc(a/b)` (int/nat args), `bigint /` | JS-compatible truncated division |
+| `TruncReal` | `Math.trunc(x)` (real arg) | `real → int` toward zero |
 | `MathAbs` / `MathMin` / `MathMax` | `Math.abs/min/max` (int args) | Scalar integer abs/min/max |
 | `MathAbsReal` / `MathMinReal` / `MathMaxReal` | `Math.abs/min/max` (any real arg) | Scalar real abs/min/max; int/nat operands coerced with `as real` |
 | `MaxOfSeq` / `MinOfSeq` | `Math.max(...s)` / `Math.min(...s)` | Aggregate over a sequence (requires `\|s\| > 0`) |
+| `MaxOfSeqReal` / `MinOfSeqReal` | `Math.max/min` with a real spread or mixed real/integer segments | Real extrema over a nonempty sequence; `Concat` lemmas transfer bounds through concatenation |
+| `SeqIntToReal` | Integer spread mixed with real operands | Convert elements to real, preserving length and each indexed value |
 | `Pow2` / `BitAnd` | `<<` / `>>` / `&` on `bigint` | Bitwise ops as arithmetic |
 | `NatToString` / `IntToString` | `` `${n}` `` template literal (nat / signed int) | Number-to-digit-string for interpolation (`IntToString` prefixes `-`) |
+
+`Math.trunc` and `Math.round` are the identity on `int`/`nat` arguments. `Math.round` rounds halfway ties toward `+Infinity` (`Math.round(-2.5) == -2`). These lowerings use exact reals, so there is no `-0`, `NaN`, or `Infinity`. JS `Math.round` returns the nearest integer without rounding `x + 0.5`, so it agrees with `FloorReal(x + 0.5)` on every finite double (`Math.round(0.49999999999999994)` is `0` in both). A `bigint` argument is a compile error.
 
 **Sequence:**
 

@@ -6,12 +6,13 @@
  */
 
 import path from "path";
-import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
+import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ScriptTarget, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
 import { normalizeBigIntLiteral } from "./rawir.js";
 import { setUserNames, freshName } from "./names.js";
+import { LexicalNames, rejectForwardLocalCaptures } from "./lexical-names.js";
 import { DEFAULT_OPTIONS, fileCommentLines, isOptionDirective, type LscOptions } from "./config.js";
 
 // ── Expression extraction ────────────────────────────────────
@@ -63,6 +64,8 @@ let _validateDependency: (source: SourceFile) => void = () => {};
 /** Counter for synthetic names used by let-statement array destructuring
  *  when the initializer isn't a bare variable (single-eval temp). */
 let _destrCounter = 0;
+let _lexicalNames: LexicalNames | null = null;
+const sourceName = (node: Node): string => _lexicalNames?.name(node) ?? node.getText();
 
 /** Register the call's callee as a cross-file extern if applicable, then
  *  walk the source declaration's body for nested cross-file calls (so the
@@ -338,10 +341,6 @@ function _tsTypeFromUnionNode(tn: Node): string {
 /** Generic bounds erasure map — set during extractFunction, applied in extractStmts. */
 let _typeParamMap: Map<string, string> = new Map();
 
-// Fresh for-counter names allocated in the current function — so two sibling
-// loops that both need renaming don't independently pick the same `<name>_N`
-// (detection is read-only, so the source still shows the original names).
-let _reservedForCounterNames = new Set<string>();
 function _eraseGenerics(tsType: string): string {
   if (_typeParamMap.size === 0) return tsType;
   if (tsType.includes(" | ")) {
@@ -354,6 +353,18 @@ function _eraseGenerics(tsType: string): string {
 }
 
 const LOOSE_TO_STRICT: Record<string, string> = { "==": "===", "!=": "!==" };
+
+function unwrapParens(expr: Expression): Expression {
+  while (Node.isParenthesizedExpression(expr)) expr = expr.getExpression();
+  return expr;
+}
+
+function unsupportedAssignmentExpr(node: Expression): never {
+  const source = node.getSourceFile();
+  const { line, column } = source.getLineAndColumnAtPos(node.getStart());
+  const kind = Node.isBinaryExpression(node) ? "assignment" : "update";
+  throw new Error(`Unsupported ${kind} expression at ${source.getFilePath()}:${line}:${column}: ${node.getText().slice(0, 80)}. Use a separate assignment statement.`);
+}
 
 function extractExpr(node: Expression): RawExpr {
   // Havoc key matching: replace matching calls or new expressions with havoc expression
@@ -415,7 +426,7 @@ function extractExpr(node: Expression): RawExpr {
 
   // Identifier
   if (Node.isIdentifier(node)) {
-    return { kind: "var", name: node.getText() };
+    return { kind: "var", name: sourceName(node) };
   }
 
   // this
@@ -513,12 +524,11 @@ function extractExpr(node: Expression): RawExpr {
 
   // Binary expression: a + b, a === b, etc.
   if (Node.isBinaryExpression(node)) {
-    const op = node.getOperatorToken().getText();
-    // Assignment: a = b → handled at statement level, but can appear in expressions
-    if (op === "=") {
-      // This is an assignment expression; extract as binop for now
-      return { kind: "binop", op: "=", left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
+    const token = node.getOperatorToken().getKind();
+    if (token >= SyntaxKind.FirstAssignment && token <= SyntaxKind.LastAssignment) {
+      unsupportedAssignmentExpr(node);
     }
+    const op = node.getOperatorToken().getText();
     // Nullish coalescing: a ?? b — single-eval, narrow rewrites to someMatch
     if (op === "??") {
       return { kind: "nullish", left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
@@ -527,6 +537,12 @@ function extractExpr(node: Expression): RawExpr {
     // comparisons whose types do not overlap, and `null` and `undefined` both
     // model as `None`. One spelling lets every narrowing rule see `!= null`.
     return { kind: "binop", op: LOOSE_TO_STRICT[op] ?? op, left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
+  }
+
+  // Updates are supported only where desugarStmtExpr can preserve the write.
+  if ((Node.isPrefixUnaryExpression(node) || Node.isPostfixUnaryExpression(node)) &&
+      (node.getOperatorToken() === SyntaxKind.PlusPlusToken || node.getOperatorToken() === SyntaxKind.MinusMinusToken)) {
+    unsupportedAssignmentExpr(node);
   }
 
   // Prefix unary: !x, -x
@@ -549,6 +565,7 @@ function extractExpr(node: Expression): RawExpr {
 
   // Arrow function: (x) => expr or (x) => { stmts }
   if (Node.isArrowFunction(node)) {
+    rejectForwardLocalCaptures(node);
     // A binding pattern is not an identifier in either backend. Keep the
     // callback arity unchanged by replacing a flat object pattern with one
     // synthetic parameter and binding its fields at the start of the body:
@@ -566,7 +583,7 @@ function extractExpr(node: Expression): RawExpr {
       const tsType = typeNode ? annotationTypeText(typeNode, p.getType()) ?? typeNode.getText() : undefined;
       const nameNode = p.getNameNode();
       if (Node.isIdentifier(nameNode)) return {
-        name: nameNode.getText(), tsType,
+        name: sourceName(nameNode), tsType,
         ...(p.isRestParameter() ? { rest: true as const } : {}),
         ...(p.getInitializer() ? { defaultValue: extractExpr(p.getInitializer()!),
           inferredTsType: p.getType().getCallSignatures().length
@@ -593,7 +610,7 @@ function extractExpr(node: Expression): RawExpr {
           }
           destructureBindings.push({
             kind: "let",
-            name: localNode.getText(),
+            name: sourceName(localNode),
             mutable: false,
             tsType: null,
             init: { kind: "index", obj: { kind: "var", name: paramName }, idx: { kind: "num", value: i } },
@@ -628,7 +645,7 @@ function extractExpr(node: Expression): RawExpr {
         }
         destructureBindings.push({
           kind: "let",
-          name: localName,
+          name: sourceName(localNode),
           mutable: false,
           tsType: null,
           init: {
@@ -687,7 +704,7 @@ function extractExpr(node: Expression): RawExpr {
         acc = acc === null ? s : { kind: "recordMerge", base: acc, override: s };
       } else if (Node.isShorthandPropertyAssignment(prop)) {
         const name = prop.getName();
-        update(name, { kind: "var", name });
+        update(name, { kind: "var", name: sourceName(prop.getNameNode()) });
       } else if (Node.isPropertyAssignment(prop)) {
         const nameNode = prop.getNameNode();
         const init = prop.getInitializer();
@@ -889,7 +906,9 @@ function collectAnnotations(node: Node, body?: Node[]): Annotation[] {
 // body alone, unlike `collectAnnotations`, which also reads the node (needed for
 // functions, whose specs may precede the declaration).
 function collectLoopAnnotations(body: Node[]): Annotation[] {
-  return body.length > 0 ? parseAnnotations(body[0]) : [];
+  return body.length > 0 ? parseAnnotations(body[0]).map(a =>
+    ["invariant", "decreases", "done_with"].includes(a.kind)
+      ? { ...a, expr: _lexicalNames?.spec(a.expr, body[0]) ?? a.expr } : a) : [];
 }
 
 /** All `//@ ` annotations for a function-like node, regardless of whether its
@@ -1353,23 +1372,25 @@ const COMPOUND_OPS: Record<string, string> = {
  *  `ExpressionStatement` extraction (wrapped) and the C-style for-loop
  *  incrementor (bare Expression — same shape, no `;` wrapper). */
 function desugarStmtExpr(expr: Expression, line: number): RawStmt | null {
+  expr = unwrapParens(expr);
   if (Node.isBinaryExpression(expr)) {
     const opText = expr.getOperatorToken().getText();
-    const left = expr.getLeft();
+    const left = unwrapParens(expr.getLeft());
     if (opText === "=" && Node.isElementAccessExpression(left)) {
-      const obj = extractExpr(left.getExpression());
+      const receiver = unwrapParens(left.getExpression());
+      const obj = extractExpr(receiver);
       const idx = extractExpr(left.getArgumentExpression()!);
       const val = extractExpr(expr.getRight());
-      const target = left.getExpression().getText();
+      const target = sourceName(receiver);
       const withCall: RawExpr = { kind: "call", fn: { kind: "field", obj, field: "with" }, args: [idx, val] };
       return { kind: "assign", target, value: withCall, line };
     }
     if (opText === "=") {
-      return { kind: "assign", target: left.getText(), value: extractExpr(expr.getRight()), line };
+      return { kind: "assign", target: sourceName(left), value: extractExpr(expr.getRight()), line };
     }
     const compound = COMPOUND_OPS[opText];
     if (compound) {
-      const target = left.getText();
+      const target = sourceName(left);
       return {
         kind: "assign", target,
         value: { kind: "binop", op: compound, left: { kind: "var", name: target }, right: extractExpr(expr.getRight()) },
@@ -1379,7 +1400,7 @@ function desugarStmtExpr(expr: Expression, line: number): RawStmt | null {
   }
   if ((Node.isPostfixUnaryExpression(expr) || Node.isPrefixUnaryExpression(expr)) &&
       (expr.getOperatorToken() === SyntaxKind.PlusPlusToken || expr.getOperatorToken() === SyntaxKind.MinusMinusToken)) {
-    const target = expr.getOperand().getText();
+    const target = sourceName(unwrapParens(expr.getOperand()));
     const op = expr.getOperatorToken() === SyntaxKind.PlusPlusToken ? "+" : "-";
     return {
       kind: "assign", target,
@@ -1390,171 +1411,31 @@ function desugarStmtExpr(expr: Expression, line: number): RawStmt | null {
   return null;
 }
 
-// A C-style `for (let i …)` counter is hoisted out of its loop scope into the
-// enclosing block (the desugar runs `init; while (cond) { body; update }`). If
-// another binding of that name shares the hoisted scope — a sibling `let i`, or
-// an enclosing for-loop whose own `i` stays live where the inner counter and the
-// outer update sit — the two collapse to one Dafny `var i` ("Duplicate
-// local-variable name", or a silently-misbound update). When that happens we
-// rename this counter to a fresh `<name>_N` in the loop's own desugared pieces.
-//
-// `forCounterRename` is a read-only scope check (no AST mutation): it returns the
-// fresh name when this counter would collide, else null — so a non-conflicting
-// loop keeps its name and output is byte-identical. The rename itself is applied
-// to the extracted Raw IR by `renameRawStmts` / `renameRawExpr` (code) and
-// `renameSpec` (the `//@` strings, still unparsed at this phase).
-function forCounterRename(decl: VariableDeclaration, forStmt: Node): string | null {
-  const name = decl.getName();
-  const fnLike = forStmt.getFirstAncestor(a =>
-    Node.isFunctionDeclaration(a) || Node.isArrowFunction(a) ||
-    Node.isFunctionExpression(a) || Node.isMethodDeclaration(a));
-  const scopeRoot: Node = fnLike ?? forStmt.getSourceFile();
-
-  const isScope = (a: Node) => Node.isBlock(a) || Node.isSourceFile(a) ||
-    Node.isForStatement(a) || Node.isForOfStatement(a) || Node.isForInStatement(a);
-  // A counting-`for` counter is hoisted out of its `for`, so its real scope is
-  // the nearest enclosing block, not the `for` itself.
-  const hoistScope = (d: VariableDeclaration): Node | undefined => {
-    const owner = d.getParent()?.getParent();
-    return owner && Node.isForStatement(owner) && owner.getInitializer() === d.getParent()
-      ? d.getFirstAncestor(a => Node.isBlock(a) || Node.isSourceFile(a))
-      : undefined;
-  };
-  // Scopes that enclose this loop — its counter, once hoisted, lives in one of
-  // these, so a same-named binding scoped here would collide.
-  const enclosing = new Set<Node>(forStmt.getAncestors());
-
-  const paramClash = (fnLike as any)?.getParameters?.().some((p: any) => p.getName() === name) ?? false;
-  const declClash = scopeRoot.getDescendantsOfKind(SyntaxKind.VariableDeclaration).some(d => {
-    if (d === decl || d.getName() !== name) return false;
-    // Two sibling for-counters hoisting into the same block: rename only the
-    // later loop, so the first keeps its name. Any other clash (e.g. a `let`) yields.
-    const counterScope = hoistScope(d);
-    if (counterScope) return enclosing.has(counterScope) && d.getStart() < decl.getStart();
-    const scope = d.getFirstAncestor(isScope);
-    return !!scope && enclosing.has(scope);
-  });
-  if (!paramClash && !declClash) return null;
-
-  const used = new Set(scopeRoot.getDescendantsOfKind(SyntaxKind.Identifier).map(i => i.getText()));
-  let n = 2;
-  while (used.has(`${name}_${n}`) || _reservedForCounterNames.has(`${name}_${n}`)) n++;
-  const fresh = `${name}_${n}`;
-  _reservedForCounterNames.add(fresh);
-  return fresh;
-}
-
-/** Whole-word rename of an identifier inside an unparsed `//@` spec string. */
-function renameSpec(s: string, from: string, to: string): string {
-  return s.replace(new RegExp(`\\b${from}\\b`, "g"), to);
-}
-
-/** Rename free references to `from` → `to` in a Raw expression, stopping under a
- *  lambda / quantifier that re-binds the name (it shadows). */
-function renameRawExpr(e: RawExpr, from: string, to: string): RawExpr {
-  const r = (x: RawExpr) => renameRawExpr(x, from, to);
-  switch (e.kind) {
-    case "var": return e.name === from ? { kind: "var", name: to } : e;
-    case "num": case "bigint": case "str": case "bool": case "result": case "havoc": case "emptyCollection": return e;
-    case "binop": return { ...e, left: r(e.left), right: r(e.right) };
-    case "unop": return { ...e, expr: r(e.expr) };
-    case "call": return { ...e, fn: r(e.fn), args: e.args.map(r) };
-    case "index": return { ...e, obj: r(e.obj), idx: r(e.idx) };
-    case "field": return { ...e, obj: r(e.obj) };
-    case "record": return { ...e, spread: e.spread ? r(e.spread) : null, fields: e.fields.map(f => ({ ...f, value: r(f.value) })) };
-    case "recordMerge": return { ...e, base: r(e.base), override: r(e.override) };
-    case "arrayLiteral": return { ...e, elems: e.elems.map(r) };
-    case "conditional": return { ...e, cond: r(e.cond), then: r(e.then), else: r(e.else) };
-    case "nullish": return { ...e, left: r(e.left), right: r(e.right) };
-    case "nonNull": return { ...e, expr: r(e.expr) };
-    case "optChain": return { ...e, obj: r(e.obj), chain: e.chain.map(c =>
-      c.kind === "call" ? { ...c, args: c.args.map(r) } : c.kind === "index" ? { ...c, idx: r(c.idx) } : c) };
-    case "lambda": return e.params.some(p => p.name === from) ? e
-      : { ...e, params: e.params.map(p => p.defaultValue ? { ...p, defaultValue: r(p.defaultValue) } : p),
-          body: Array.isArray(e.body) ? renameRawStmts(e.body, from, to) : r(e.body) };
-    case "forall": case "exists": return e.var === from ? e : { ...e, body: r(e.body) };
-  }
-}
-
-/** Rename references to `from` → `to` across a Raw statement (code refs via
- *  `renameRawExpr`, `//@` strings via `renameSpec`). Statement lists stop
- *  renaming once a `let from` re-declares the name (it shadows). */
-function renameRawStmt(s: RawStmt, from: string, to: string): RawStmt {
-  const r = (x: RawExpr) => renameRawExpr(x, from, to);
-  const sp = (x: string) => renameSpec(x, from, to);
-  switch (s.kind) {
-    case "let": return { ...s, init: r(s.init) };  // name kept: a shadowing binding is a different variable
-    case "assign": return { ...s, target: s.target === from ? to : s.target, value: r(s.value) };
-    case "return": return { ...s, value: r(s.value) };
-    case "expr": return { ...s, expr: r(s.expr) };
-    case "if": return { ...s, cond: r(s.cond), then: renameRawStmts(s.then, from, to), else: renameRawStmts(s.else, from, to) };
-    case "while": return { ...s, cond: r(s.cond), invariants: s.invariants.map(sp),
-      decreases: s.decreases ? sp(s.decreases) : null, doneWith: s.doneWith ? sp(s.doneWith) : null,
-      body: renameRawStmts(s.body, from, to) };
-    case "forof": return e_forof(s);
-    case "switch": return { ...s, expr: r(s.expr), cases: s.cases.map(c => ({ ...c, body: renameRawStmts(c.body, from, to) })),
-      defaultBody: renameRawStmts(s.defaultBody, from, to) };
-    case "ghostLet": return { ...s, init: sp(s.init) };
-    case "ghostAssign": return { ...s, target: s.target === from ? to : s.target, value: sp(s.value) };
-    case "assert": return { ...s, expr: sp(s.expr) };
-    case "break": case "continue": case "throw": return s;
-  }
-  function e_forof(f: RawStmt & { kind: "forof" }): RawStmt {
-    // for-of names bind in the body; if one shadows `from`, leave the body alone.
-    const body = f.names.includes(from) ? f.body : renameRawStmts(f.body, from, to);
-    return { ...f, iterable: r(f.iterable), invariants: f.invariants.map(sp),
-      doneWith: f.doneWith ? sp(f.doneWith) : null, body };
-  }
-}
-
-/** Rename `from` → `to` through a statement list, stopping after a `let from`
- *  shadows it (subsequent references are a different variable). */
-function renameRawStmts(stmts: RawStmt[], from: string, to: string): RawStmt[] {
-  const out: RawStmt[] = [];
-  let active = true;
-  for (const s of stmts) {
-    if (!active) { out.push(s); continue; }
-    out.push(renameRawStmt(s, from, to));
-    if (s.kind === "let" && s.name === from) active = false;
-  }
-  return out;
-}
-
 // ── Statement extraction ─────────────────────────────────────
 
-/** Parse ghost and assert annotations from comment ranges. */
-function parseSpecComments(ranges: ReturnType<Node["getLeadingCommentRanges"]>, line: number): (RawGhostLet | RawGhostAssign | import("./rawir.js").RawAssert)[] {
-  const result: (RawGhostLet | RawGhostAssign | import("./rawir.js").RawAssert)[] = [];
-  for (const range of ranges) {
-    const text = range.getText().trim();
-    if (!text.startsWith(PREFIX)) continue;
-    const content = text.slice(PREFIX.length);
-    // assert expr
-    if (content.startsWith("assert ")) {
-      result.push({ kind: "assert", expr: content.slice(7).trim(), line });
-      continue;
-    }
-    // assume expr — trusted form of assert; emitted as `assume P;` in Dafny.
-    if (content.startsWith("assume ")) {
-      result.push({ kind: "assert", expr: content.slice(7).trim(), line, assumed: true });
-      continue;
-    }
-    if (!content.startsWith("ghost ")) continue;
-    const ghostBody = content.slice(6).trim();
-    // ghost let varName: type = expr  OR  ghost let varName = expr
-    // Type segment accepts compound forms like `number[]`, `Map<K,V>`, etc.
-    const letMatch = ghostBody.match(/^let\s+(\w+)(?:\s*:\s*([^=]+?))?\s*=\s*(.+)$/);
-    if (letMatch) {
-      result.push({ kind: "ghostLet", name: letMatch[1], tsType: letMatch[2]?.trim() ?? null, init: letMatch[3].trim(), line });
-      continue;
-    }
-    // ghost varName = expr
-    const assignMatch = ghostBody.match(/^(\w+)\s*=\s*(.+)$/);
-    if (assignMatch) {
-      result.push({ kind: "ghostAssign", target: assignMatch[1], value: assignMatch[2].trim(), line });
-    }
+/** Parse ghost and assert annotations in their original lexical scope. */
+function parseSpecComments(ranges: ReturnType<Node["getLeadingCommentRanges"]>, line: number, location: Node): (RawGhostLet | RawGhostAssign | import("./rawir.js").RawAssert)[] {
+  return ranges.flatMap(range => parseSpecComment(range.getText().trim(), line, location, range.getPos()));
+}
+
+function parseSpecComment(text: string, line: number, location: Node, pos: number): (RawGhostLet | RawGhostAssign | import("./rawir.js").RawAssert)[] {
+  if (!text.startsWith(PREFIX)) return [];
+  const content = text.slice(PREFIX.length);
+  const spec = (expr: string) => _lexicalNames?.spec(expr, location, pos) ?? expr;
+  if (content.startsWith("assert ")) return [{ kind: "assert", expr: spec(content.slice(7).trim()), line }];
+  if (content.startsWith("assume ")) return [{ kind: "assert", expr: spec(content.slice(7).trim()), line, assumed: true }];
+  if (!content.startsWith("ghost ")) return [];
+  const ghostBody = content.slice(6).trim();
+  const letMatch = ghostBody.match(/^let\s+(\w+)(?:\s*:\s*([^=]+?))?\s*=\s*(.+)$/);
+  if (letMatch) {
+    const init = spec(letMatch[3].trim());
+    const name = _lexicalNames?.ghost(letMatch[1], location, pos) ?? letMatch[1];
+    return [{ kind: "ghostLet", name, tsType: letMatch[2]?.trim() ?? null, init, line }];
   }
-  return result;
+  const assignMatch = ghostBody.match(/^(\w+)\s*=\s*(.+)$/);
+  return assignMatch ? [{ kind: "ghostAssign",
+    target: _lexicalNames?.specName(assignMatch[1], location, pos) ?? assignMatch[1],
+    value: spec(assignMatch[2].trim()), line }] : [];
 }
 
 /** Splice `update` before each `continue` in the same loop scope. Recurses
@@ -1584,13 +1465,17 @@ function insertUpdateBeforeContinue(stmts: RawStmt[], update: RawStmt): RawStmt[
 }
 
 function extractStmts(stmts: Node[]): RawStmt[] {
+  return _lexicalNames ? _lexicalNames.withScope(() => extractScopedStmts(stmts)) : extractScopedStmts(stmts);
+}
+
+function extractScopedStmts(stmts: Node[]): RawStmt[] {
   const result: RawStmt[] = [];
   for (const s of stmts) {
     const line = s.getStartLineNumber();
 
     // Ghost annotations from leading comments → inject before this statement
     const leadingComments = s.getLeadingCommentRanges();
-    result.push(...parseSpecComments(leadingComments, line));
+    result.push(...parseSpecComments(leadingComments, line, s));
 
     // //@ skip — omit this statement from the verification model
     if (leadingComments.some(r => r.getText().trim() === "//@ skip")) {
@@ -1612,8 +1497,8 @@ function extractStmts(stmts: Node[]): RawStmt[] {
           const elements = nameNode.getElements();
           for (let ei = 0; ei < elements.length; ei++) {
             const el = elements[ei];
-            const name = el.getName();
-            const propType = rhsType.getProperty(name)?.getTypeAtLocation(d);
+            const name = sourceName(el.getNameNode());
+            const propType = rhsType.getProperty(el.getPropertyNameNode()?.getText() ?? el.getName())?.getTypeAtLocation(d);
             const tsType = havocTypes[ei] ?? (propType ? _eraseGenerics(typeToString(propType)) : "unknown");
             result.push({
               kind: "let", name, mutable: s.getDeclarationKind() === "let",
@@ -1647,7 +1532,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
               if (!Node.isIdentifier(inner)) {
                 throw new Error(`nested binding pattern in array destructuring not yet supported: ${el.getText()}`);
               }
-              const name = inner.getText();
+              const name = sourceName(inner);
               const isRest = !!el.getDotDotDotToken();
               const elTs = _eraseGenerics(typeToString(el.getType()));
               const init: RawExpr = isRest
@@ -1692,7 +1577,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
                 const elTs = _eraseGenerics(typeToString(el.getType()));
                 result.push({
                   kind: "let",
-                  name: localName,
+                  name: sourceName(inner),
                   mutable: s.getDeclarationKind() === "let",
                   tsType: elTs,
                   init: { kind: "field", obj: initVar, field: fieldName },
@@ -1725,7 +1610,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
               const declType = d.getType();
               result.push({
                 kind: "let",
-                name: restEl.getName(),
+                name: sourceName(restEl.getNameNode()),
                 mutable: s.getDeclarationKind() === "let",
                 tsType: _eraseGenerics(typeToString(declType)),
                 init: deleteInit,
@@ -1786,7 +1671,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
           ?? (annotatedText ? _eraseGenerics(annotatedText) : (inferred === "any" ? null : inferred));
         result.push({
           kind: "let",
-          name: d.getName(),
+          name: sourceName(d.getNameNode()),
           mutable: s.getDeclarationKind() === "let",
           tsType,
           init,
@@ -1823,10 +1708,10 @@ function extractStmts(stmts: Node[]): RawStmt[] {
         if (nameNode && Node.isArrayBindingPattern(nameNode)) {
           for (const elem of nameNode.getElements()) {
             if (Node.isOmittedExpression(elem)) names.push("_");
-            else if (Node.isBindingElement(elem)) names.push(elem.getNameNode().getText());
+            else if (Node.isBindingElement(elem)) names.push(sourceName(elem.getNameNode()));
           }
         } else {
-          names.push(decl?.getName() ?? "_");
+          names.push(decl ? sourceName(decl.getNameNode()) : "_");
         }
       } else {
         names.push("_");
@@ -1881,15 +1766,10 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
       if (!init || !Node.isVariableDeclarationList(init))
         throw new Error(`for(...) at line ${line}: only variable-declaration init supported`);
-      // Hoist the counter declarations, renaming any that would collide once
-      // lifted out of the loop scope (see forCounterRename). The renames are
-      // then applied to the loop's own desugared pieces below.
+      // Binding names already account for the scope lost by hoisting.
       const hoisted: RawStmt[] = [];
-      const renames: [string, string][] = [];
       for (const decl of init.getDeclarations()) {
-        const fresh = forCounterRename(decl, s);
-        const name = fresh ?? decl.getName();
-        if (fresh) renames.push([decl.getName(), fresh]);
+        const name = sourceName(decl.getNameNode());
         const typeNode = decl.getTypeNode();
         const tsType = (typeNode && annotationTypeText(typeNode, decl.getType()))
           ?? typeNode?.getText() ?? typeToString(decl.getType());
@@ -1921,14 +1801,6 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       let invariants = annotExprs(annots, "invariant");
       let decreases = firstAnnotExpr(annots, "decreases");
       let doneWith = firstAnnotExpr(annots, "done_with");
-      for (const [from, to] of renames) {
-        for (let k = 0; k < hoisted.length; k++) hoisted[k] = renameRawStmt(hoisted[k], from, to);
-        condExpr = renameRawExpr(condExpr, from, to);
-        extractedBody = renameRawStmts(extractedBody, from, to);
-        invariants = invariants.map(inv => renameSpec(inv, from, to));
-        decreases = decreases ? renameSpec(decreases, from, to) : null;
-        doneWith = doneWith ? renameSpec(doneWith, from, to) : null;
-      }
 
       result.push(...hoisted);
       result.push({
@@ -1948,7 +1820,8 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       const init = s.getInitializer();
       let name = "_";
       if (Node.isVariableDeclarationList(init)) {
-        name = init.getDeclarations()[0]?.getName() ?? "_";
+        const decl = init.getDeclarations()[0];
+        name = decl ? sourceName(decl.getNameNode()) : "_";
       }
       const bodyNode = s.getStatement();
       const bodyStmts = Node.isBlock(bodyNode) ? bodyNode.getStatements() : [bodyNode];
@@ -2065,16 +1938,17 @@ function extractStmts(stmts: Node[]): RawStmt[] {
     }
 
     if (Node.isExpressionStatement(s)) {
-      const expr = s.getExpression();
+      const expr = unwrapParens(s.getExpression());
       // //@ havoc before `x = e` — discard the RHS, assign a nondeterministic
       // value of x's type. Only applies to plain `=` with an identifier LHS;
       // compound assigns, `arr[i] = v`, and `x++` fall through to desugaring.
       const havoc = havocDirective(s);
+      const left = Node.isBinaryExpression(expr) ? unwrapParens(expr.getLeft()) : null;
       if (havoc && !havoc.key && Node.isBinaryExpression(expr)
           && expr.getOperatorToken().getText() === "="
-          && Node.isIdentifier(expr.getLeft())) {
-        const target = expr.getLeft().getText();
-        const tsType = havoc.type ?? _eraseGenerics(typeToString(expr.getLeft().getType()));
+          && left && Node.isIdentifier(left)) {
+        const target = sourceName(left);
+        const tsType = havoc.type ?? _eraseGenerics(typeToString(left.getType()));
         result.push({ kind: "assign", target, value: { kind: "havoc", tsType }, line });
         continue;
       }
@@ -2101,30 +1975,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
     const last = stmts[stmts.length - 1];
     const line = last.getStartLineNumber();
     for (const sib of last.getNextSiblings()) {
-      const text = sib.getText().trim();
-      if (!text.startsWith(PREFIX)) continue;
-      const content = text.slice(PREFIX.length);
-      // assert expr
-      if (content.startsWith("assert ")) {
-        result.push({ kind: "assert", expr: content.slice(7).trim(), line });
-        continue;
-      }
-      // assume expr — trusted form of assert; emitted as `assume P;` in Dafny.
-      if (content.startsWith("assume ")) {
-        result.push({ kind: "assert", expr: content.slice(7).trim(), line, assumed: true });
-        continue;
-      }
-      if (!content.startsWith("ghost ")) continue;
-      const ghostBody = content.slice(6).trim();
-      const letMatch = ghostBody.match(/^let\s+(\w+)(?:\s*:\s*([^=]+?))?\s*=\s*(.+)$/);
-      if (letMatch) {
-        result.push({ kind: "ghostLet", name: letMatch[1], tsType: letMatch[2]?.trim() ?? null, init: letMatch[3].trim(), line });
-        continue;
-      }
-      const assignMatch = ghostBody.match(/^(\w+)\s*=\s*(.+)$/);
-      if (assignMatch) {
-        result.push({ kind: "ghostAssign", target: assignMatch[1], value: assignMatch[2].trim(), line });
-      }
+      result.push(...parseSpecComment(sib.getText().trim(), line, sib, sib.getStart()));
     }
   }
   return result;
@@ -2134,11 +1985,14 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
 function extractFunction(fn: FunctionDeclaration | MethodDeclaration, parentAnnotations?: Annotation[]): RawFunction {
   const prevInFn = _inFunctionExtraction;
+  const prevNames = _lexicalNames;
+  _lexicalNames = new LexicalNames(fn);
   _inFunctionExtraction = true;
   try {
     return extractFunctionInner(fn, parentAnnotations);
   } finally {
     _inFunctionExtraction = prevInFn;
+    _lexicalNames = prevNames;
   }
 }
 function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, parentAnnotations?: Annotation[]): RawFunction {
@@ -2148,7 +2002,6 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
   // can't model as one Dafny type (e.g. `string & {}` tricks), keep T as a Dafny
   // type param instead; such a T must be phantom (any field read won't typecheck).
   _typeParamMap = new Map();
-  _reservedForCounterNames = new Set();
   const typeParams: string[] = [];
   for (const tp of fn.getTypeParameters?.() ?? []) {
     const constraint = tp.getConstraint();
@@ -2179,7 +2032,9 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
       const parts = a.expr.split(/\s+/);
       if (parts.length !== 2) continue;
       readExpr(a);
-      typeAnnotations.push({ name: parts[0], type: parts[1] });
+      for (const name of _lexicalNames?.typeNames(parts[0]) ?? [parts[0]]) {
+        typeAnnotations.push({ name, type: parts[1] });
+      }
     }
   }
 
@@ -2295,8 +2150,8 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   // tests) must not leak a havoc key, temp-name counter, or function-local maps.
   _havocKey = null;
   _destrCounter = 0;
+  _lexicalNames = null;
   _typeParamMap = new Map();
-  _reservedForCounterNames = new Set();
   // Seed the fresh-name check (names.ts) before anything mints: every
   // Identifier token in the module, a deliberate over-approximation.
   setUserNames(new Set(sourceFile.getDescendantsOfKind(SyntaxKind.Identifier).map(i => i.getText())));
@@ -2460,6 +2315,9 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
           const isAnonObject = declTsType.startsWith("__");
           if (init && !isHugeString && !isAnonObject && !Node.isArrowFunction(init)) {
             try {
+              // Callbacks in the initializer get the same no-shadowing names
+              // as those in a function body.
+              _lexicalNames = new LexicalNames(init);
               constants.push({
                 name: decl.getName(),
                 tsType: declTsType,
@@ -2470,6 +2328,8 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
               throw new Error(
                 `Failed to extract const '${decl.getName()}' at ${sourceFile.getBaseName()}:${decl.getStartLineNumber()}: ${reason}`,
               );
+            } finally {
+              _lexicalNames = null;
             }
           }
         }

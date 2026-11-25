@@ -134,6 +134,8 @@ end Pure
 
 This enables proofs by standard Lean induction over sequences of calls. The Velvet method is also generated, but as a thin wrapper: `return Pure.foo params`. This avoids termination issues (the pure `def` handles termination natively) while keeping the method callable from other Velvet methods via `←`.
 
+Functions containing checked min/max spreads, and their callers, remain methods without a pure mirror so their nonempty-input obligations are preserved. Use their method contracts for composition.
+
 **Spec references:** In `//@ ensures`, `//@ requires`, and `//@ invariant` annotations, calls to pure functions are resolved as `Pure.fnName`. The resolve phase classifies these as `spec-pure` call kind, and the transform emits the qualified name. Calls to external Lean-defined spec helpers (e.g., `sumTo` in a hand-written `.spec.lean`) pass through unqualified.
 
 Deterministic extern declarations become opaque Lean functions. Impure externs are Dafny-only and are rejected by the Lean backend, whether selected explicitly with `//@ impure` or inherited from `extern-default: impure`; add `//@ pure` to an individual extern used by a Lean file.
@@ -230,6 +232,8 @@ Practical constraints for the current Velvet 2 backend.
 - String indexing: `JSString.index s i` returns a one-scalar `String`. Like array reads, its Lean definition uses defaulted indexing; source-domain bounds (`0 ≤ i < s.length`) must be established by callers.
 - Recursive ghost functions on array indices should take `Nat`. Calling code should use `//@ type` for the index variable.
 - Bridge lemmas (e.g., `(i + 1).toNat = i.toNat + 1`) may be needed in `.spec.lean` when mixing Int and Nat.
+
+`Math.min` / `Math.max` support one or more int/nat operands: unary calls are identity, and larger calls fold through native `Min.min` / `Max.max`. Mixed operands are promoted to `Int`. Spreads concatenate their segments as `Array Int` (mapping natural-number arrays with `Int.ofNat`) and use checked operations from [MinMax.lean](LemmaScript/MinMax.lean). Total correctness requires only the combined input to be nonempty; the result bounds every element and equals an element. Zero-argument calls and bigint operands are rejected; real arithmetic remains unsupported. [mathMinMaxInt.ts](examples/mathMinMaxInt.ts) verifies the shared behavior with both backends.
 
 ### 6.2 VC Generation and Discharging
 

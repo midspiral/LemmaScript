@@ -6,9 +6,9 @@
 // Adapted from dafny-aoc-2025/preorder.dfy. The TS-side has the Tree
 // datatype and the pure `preorderTraversal` / `childStack` helpers;
 // the imperative method body comes from `lsc gen`. The supporting
-// predicates (`nodeSet`, `ValidNode`, `AllDisjoint`, `UnionNodes`,
-// `StackToPreorder`) and the lemmas threading them through the loop
-// are hand-added below.
+// `StackToPreorder` helper and lemmas prove both functional equivalence
+// and termination (`decreases |StackToPreorder(stack)|`) without needing
+// any extra precondition beyond `root.Node?`.
 
 datatype Tree = Nil | Node(val: int, left: Tree, right: Tree)
 
@@ -52,45 +52,11 @@ function childStack(node: Tree): seq<Tree>
 
 // ═════════════════════ Hand-written proof scaffolding ═════════════════════
 
-function nodeSet(root: Tree): set<Tree>
-{
-  if root.Nil? then {}
-  else {root} + nodeSet(root.left) + nodeSet(root.right)
-}
-
-function UnionNodes(roots: seq<Tree>): set<Tree>
-  ensures forall r :: r in roots && r.Node? ==> r in UnionNodes(roots)
-{
-  if roots == [] then {}
-  else nodeSet(roots[0]) + UnionNodes(roots[1..])
-}
-
 function StackToPreorder(s: seq<Tree>): seq<Tree>
 {
   if s == [] then []
   else preorderTraversal(s[|s| - 1]) + StackToPreorder(s[..|s| - 1])
 }
-
-predicate ValidNode(tree: Tree)
-{
-  if tree.Nil? then true
-  else
-    tree !in nodeSet(tree.left)
-    && tree !in nodeSet(tree.right)
-    && nodeSet(tree.left) !! nodeSet(tree.right)
-    && ValidNode(tree.left)
-    && ValidNode(tree.right)
-}
-
-ghost predicate AllDisjoint(ts: seq<Tree>)
-{
-  forall x, y :: 0 <= x < y < |ts| ==> nodeSet(ts[x]) !! nodeSet(ts[y])
-}
-
-lemma PreorderTraversalSize(tree: Tree)
-  requires ValidNode(tree)
-  ensures |preorderTraversal(tree)| == |nodeSet(tree)|
-{ }
 
 lemma Lemma_StackToPreorder_App(a: seq<Tree>, b: seq<Tree>)
   ensures StackToPreorder(a + b) == StackToPreorder(b) + StackToPreorder(a)
@@ -131,138 +97,29 @@ lemma Lemma_PreserveInvariant(prefix: seq<Tree>, current: Tree)
   }
 }
 
-lemma Lemma_UnionNodes_App(a: seq<Tree>, b: seq<Tree>)
-  ensures UnionNodes(a + b) == UnionNodes(a) + UnionNodes(b)
-{
-  if a == [] {
-    assert a + b == b;
-  } else {
-    assert (a + b)[1..] == a[1..] + b;
-    Lemma_UnionNodes_App(a[1..], b);
-  }
-}
-
-lemma TreeUnionLemma(nodes: seq<Tree>)
-  ensures forall x :: x in UnionNodes(nodes) ==>
-    exists k :: 0 <= k < |nodes| && x in nodeSet(nodes[k])
-{ }
-
-// The prefix's union is disjoint from the last element's nodeSet. Extracted from
-// TreeUnionMaint (its forall+exists batched into one heavy VC); the explicit index
-// witness `k` lets AllDisjoint instantiate directly instead of searching.
-lemma UnionDisjointFromLast(stack: seq<Tree>, current: Tree)
-  requires |stack| > 0
-  requires current == stack[|stack| - 1]
-  requires AllDisjoint(stack)
-  ensures UnionNodes(stack[..|stack| - 1]) !! nodeSet(current)
-{
-  var prefix := stack[..|stack| - 1];
-  forall x | x in UnionNodes(prefix)
-    ensures x !in nodeSet(current)
-  {
-    TreeUnionLemma(prefix);
-    var xx :| xx in prefix && x in nodeSet(xx);
-    var k :| 0 <= k < |prefix| && prefix[k] == xx;
-    assert nodeSet(stack[k]) !! nodeSet(current);
-  }
-}
-
-lemma TreeUnionMaint(stack: seq<Tree>, current: Tree, unvisited: set<Tree>)
-  requires |stack| > 0
-  requires current.Node?
-  requires unvisited == UnionNodes(stack)
-  requires AllDisjoint(stack)
-  requires forall x :: x in stack ==> ValidNode(x)
-  requires current == stack[|stack| - 1]
-  ensures UnionNodes(stack[..|stack| - 1] + childStack(current))
-       == unvisited - {current}
-{
-  assert current in stack;
-  assert stack == stack[..|stack| - 1] + [stack[|stack| - 1]];
-  Lemma_UnionNodes_App(stack[..|stack| - 1], [stack[|stack| - 1]]);
-  assert UnionNodes([stack[|stack| - 1]]) == nodeSet(current);
-  UnionDisjointFromLast(stack, current);
-  if current.left != Nil && current.right != Nil {
-    assert nodeSet(current.right) + nodeSet(current.left) + {current} == nodeSet(current);
-    assert nodeSet(current.right) + nodeSet(current.left) == nodeSet(current) - {current};
-    Lemma_UnionNodes_App([current.right], [current.left]);
-    Lemma_UnionNodes_App(stack[..|stack| - 1], [current.right, current.left]);
-  } else if current.left != Nil && current.right == Nil {
-    assert nodeSet(current.left) == nodeSet(current) - {current};
-    Lemma_UnionNodes_App(stack[..|stack| - 1], [current.left]);
-  } else if current.left == Nil && current.right != Nil {
-    assert nodeSet(current.right) == nodeSet(current) - {current};
-    Lemma_UnionNodes_App(stack[..|stack| - 1], [current.right]);
-  } else if current.left == Nil && current.right == Nil {
-    Lemma_UnionNodes_App(stack[..|stack| - 1], []);
-  }
-}
-
-lemma AllDisjointMaint(stack: seq<Tree>, current: Tree)
-  requires ValidNode(current)
-  requires |stack| > 0
-  requires AllDisjoint(stack)
-  requires forall node :: node in stack ==> node.Node?
-  requires current == stack[|stack| - 1]
-  ensures current.left != Nil && current.right != Nil ==>
-    AllDisjoint(stack[..|stack| - 1] + [current.right, current.left])
-  ensures current.left != Nil && current.right == Nil ==>
-    AllDisjoint(stack[..|stack| - 1] + [current.left])
-  ensures current.left == Nil && current.right != Nil ==>
-    AllDisjoint(stack[..|stack| - 1] + [current.right])
-  ensures current.left == Nil && current.right == Nil ==>
-    AllDisjoint(stack[..|stack| - 1])
-{
-  if current.right != Nil && current.left != Nil {
-    assert nodeSet(current.right) !! nodeSet(current.left);
-  }
-}
-
 // ═════════════════════ Generated method (hand-annotated) ═════════════════════
 
 method traverseBasic(root: Tree) returns (res: seq<Tree>)
   requires root.Node?
-  requires ValidNode(root)
   ensures (res == preorderTraversal(root))
 {
   var result: seq<Tree> := [];
-  ghost var visited: set<Tree> := {};
-  ghost var unvisited: set<Tree> := nodeSet(root);
-  PreorderTraversalSize(root);
   var stack := [root];
-  var i := 0;
+  assert stack[..0] == [];
   while (|stack| > 0)
     invariant forall s: Tree :: ((s in stack) ==> s.Node?)
-    invariant forall s :: s in stack ==> ValidNode(s)
-    invariant forall n :: n in result ==> n in visited
-    invariant forall n :: n in visited ==> n in result
-    invariant visited !! unvisited
-    invariant AllDisjoint(stack)
-    invariant |result| == |visited| == i
-    invariant 0 <= i <= |preorderTraversal(root)|
-    invariant UnionNodes(stack) == unvisited
-    invariant visited + UnionNodes(stack) == nodeSet(root)
     invariant result + StackToPreorder(stack) == preorderTraversal(root)
-    decreases |unvisited|
+    decreases |StackToPreorder(stack)|
   {
     var current := stack[(|stack| - 1)];
-    var children := childStack(current);
-    ghost var old_stack := stack;
-    TreeUnionMaint(stack, current, unvisited);
-    AllDisjointMaint(stack, current);
+    assert current in stack;
     assert stack == stack[..|stack| - 1] + [stack[|stack| - 1]];
-    Lemma_UnionNodes_App(stack[..|stack| - 1], [stack[|stack| - 1]]);
-    Lemma_StackToPreorder_App(stack[..|stack| - 1], children);
     Lemma_PreserveInvariant(stack[..|stack| - 1], current);
     assert result + [current] + StackToPreorder(stack[..|stack| - 1] + childStack(current))
          == preorderTraversal(root);
     var i_t0 := childStack(current);
     stack := (stack[0..(|stack| - 1)] + i_t0);
     result := (result + [current]);
-    visited := visited + {current};
-    unvisited := unvisited - {current};
-    i := i + 1;
-    Lemma_UnionNodes_App(old_stack[..|old_stack| - 1], children);
   }
   return result;
 }

@@ -44,6 +44,13 @@ function lookup(env: Env | null, name: string): Ty | undefined {
 function extend(env: Env | null, name: string, ty: Ty): Env {
   return { name, ty, parent: env };
 }
+/** A quantified variable that reuses the name of a binding in scope is emitted
+ *  under a fresh name, so no later pass confuses it with that binding. */
+function quantified(env: Env | null, name: string, ty: Ty): Env {
+  const frame = extend(env, name, ty);
+  if (binding(env, name)) frame.emittedName = freshName(name);
+  return frame;
+}
 /** Shadow a binding with a narrowed type, keeping its callback state.
  *  Dropping that state would let the body reference a renamed parameter by its
  *  source name, which can silently bind an outer variable. The spread is exact
@@ -123,6 +130,7 @@ interface Ctx {
   inLambda: boolean;
   narrowedPaths: NarrowedPath[];  // pure access path narrowing for conditional then-branches
   narrowedIndices: NarrowedIndex[];  // `k in m` atoms known-true in this scope
+  forofCounts: Map<string, number>;  // per-function for-of loops seen, by head name
 }
 
 function withEnv(ctx: Ctx, env: Env | null): Ctx {
@@ -798,6 +806,41 @@ function coerceCallArgs(args: TExpr[], fn: TExpr, ctx: Ctx): TExpr[] {
   return args;
 }
 
+/** Join Math.min/max operands without losing bigint or depending on their order. */
+function minMaxNumericTy(types: Ty[], name: string): Ty {
+  for (const ty of types) {
+    if (isBigInt(ty)) throw new Error(`${name} does not accept bigint operands (JavaScript throws TypeError)`);
+    if (ty.kind !== "int" && ty.kind !== "nat" && ty.kind !== "real")
+      throw new Error(`${name} requires numeric operands, got ${tyToCanonical(ty)}`);
+  }
+  return types.some(ty => ty.kind === "real") ? { kind: "real" }
+    : types.length > 0 && types.every(ty => ty.kind === "nat") ? { kind: "nat" } : { kind: "int" };
+}
+
+/** Resolve the concat tree built by extract for Math.min/max spreads. Numeric
+ *  literal segments are sequences even when their elements mix int/nat/real;
+ *  ordinary array inference would turn those into heterogeneous tuples.
+ *  Empty literals contribute no operand type to the surrounding concat. */
+function resolveMinMaxSequence(raw: RawExpr, ctx: Ctx, name: string): { expr: TExpr; types: Ty[] } {
+  if (raw.kind === "binop" && raw.op === "arrayConcat") {
+    const left = resolveMinMaxSequence(raw.left, ctx, name);
+    const right = resolveMinMaxSequence(raw.right, ctx, name);
+    const types = [...left.types, ...right.types];
+    return { expr: { kind: "binop", op: "arrayConcat", left: left.expr, right: right.expr,
+      ty: { kind: "array", elem: minMaxNumericTy(types, name) } }, types };
+  }
+  if (raw.kind === "arrayLiteral") {
+    const elems = raw.elems.map(e => resolveExpr(e, ctx));
+    const types = elems.map(e => e.ty);
+    return { expr: { kind: "arrayLiteral", elems,
+      ty: { kind: "array", elem: minMaxNumericTy(types, name) } }, types };
+  }
+  const expr = resolveExpr(raw, ctx);
+  if (expr.ty.kind !== "array") throw new Error(`${name} spread requires a numeric array`);
+  minMaxNumericTy([expr.ty.elem], name);
+  return { expr, types: [expr.ty.elem] };
+}
+
 /** Infer return type for collection/string method calls. */
 function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
   if (fn.kind !== "field") return { kind: "unknown" };
@@ -818,8 +861,14 @@ function inferMethodReturnTy(fn: TExpr, args: TExpr[], ctx: Ctx): Ty {
   // (real if any operand is real); floor/ceil/round/trunc return an integer.
   if (fn.obj.kind === "var" && fn.obj.name === "Math") {
     if (fn.field === "abs" && args.length === 1) return args[0].ty;
-    if ((fn.field === "min" || fn.field === "max") && args.length >= 1)
-      return args.some(a => a.ty.kind === "real") ? { kind: "real" } : args[0].ty;
+    if (fn.field === "min" || fn.field === "max") {
+      if (args.length === 0)
+        throw new Error(`Math.${fn.field}() with zero arguments returns ${fn.field === "max" ? "-Infinity" : "Infinity"}, which is not supported by the numeric model`);
+      return minMaxNumericTy(args.map(a => a.ty), `Math.${fn.field}`);
+    }
+    // trunc/round are the identity on an integer, so a nat argument stays nat.
+    if ((fn.field === "trunc" || fn.field === "round") && args.length === 1 &&
+        args[0].ty.kind === "nat") return { kind: "nat" };
     if (["floor", "ceil", "round", "trunc"].includes(fn.field)) return { kind: "int" };
   }
   const objTy = fn.obj.ty;
@@ -1058,6 +1107,19 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "call": {
+      // Extract rewrites spread min/max calls to a single sequence argument.
+      if (e.fn.kind === "var" && (e.fn.name === "MaxOfSeq" || e.fn.name === "MinOfSeq") && e.args.length === 1) {
+        const name = e.fn.name === "MaxOfSeq" ? "Math.max" : "Math.min";
+        const { expr, types } = resolveMinMaxSequence(e.args[0], ctx, name);
+        // Integral spreads retain the existing int helper/result, including
+        // empty literals (whose nonemptiness obligation will fail verification).
+        const ty: Ty = minMaxNumericTy(types, name).kind === "real" ? { kind: "real" } : { kind: "int" };
+        // Integral helpers keep their historical call classification so method
+        // temporaries in existing proof files remain byte-identical. Real calls
+        // use the specialized lowering that promotes their sequence segments.
+        return { kind: "call", fn: { kind: "var", name: e.fn.name, ty: { kind: "unknown" } },
+          args: [expr], ty, callKind: ty.kind === "real" ? "pure" : classifyCall(e.fn, ctx) };
+      }
       // perm(a, b): spec-only permutation predicate — true iff `a` and `b` are
       // reorderings of each other (equal as multisets). Lowers to the `Perm`
       // preamble (Dafny `multiset(a) == multiset(b)`; Lean `a.toList ~ b.toList`).
@@ -1400,13 +1462,15 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
     case "forall": {
       const varTy: Ty = e.varType !== "int" ? parseTsType(e.varType)
         : inferQuantVarType(e.var, e.body, ctx) ?? { kind: "int" };
-      return { kind: "forall", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
+      const bound = quantified(ctx.env, e.var, varTy);
+      return { kind: "forall", var: bound.emittedName ?? e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, bound)), ty: { kind: "bool" } };
     }
 
     case "exists": {
       const varTy: Ty = e.varType !== "int" ? parseTsType(e.varType)
         : inferQuantVarType(e.var, e.body, ctx) ?? { kind: "int" };
-      return { kind: "exists", var: e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, extend(ctx.env, e.var, varTy))), ty: { kind: "bool" } };
+      const bound = quantified(ctx.env, e.var, varTy);
+      return { kind: "exists", var: bound.emittedName ?? e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, bound)), ty: { kind: "bool" } };
     }
 
     case "arrayLiteral": {
@@ -1737,16 +1801,19 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         // General tuple destructuring: all unknown
         for (const _ of s.names) nameTypes.push({ kind: "unknown" });
       }
-      // Must match the freshened counter transform mints for this loop, so a
-      // spec referencing the loop index resolves to the same name.
-      const idxName = freshName(`_${s.names[0]}_idx`);
+      // The loop counter is minted here, once, and recorded on the loop so
+      // transform emits the same name a spec here refers to. The first loop
+      // over a head name in a function gets `_x_idx`, later ones `_x_idx2`, ….
+      const count = ctx.forofCounts.get(s.names[0]) ?? 0;
+      ctx.forofCounts.set(s.names[0], count + 1);
+      const idxName = freshName(`_${s.names[0]}_idx${count === 0 ? "" : count + 1}`);
       env = extend(env, idxName, { kind: "nat" });
       for (let j = 0; j < s.names.length; j++) {
         env = extend(env, s.names[j], nameTypes[j] ?? { kind: "unknown" });
       }
       const bodyCtx = withEnv(ctx, env);
       return [{
-        kind: "forof", names: s.names, nameTypes, iterable,
+        kind: "forof", names: s.names, nameTypes, iterable, idx: idxName,
         invariants: resolveSpecs(s.invariants, { ...bodyCtx, inSpec: true }),
         doneWith: s.doneWith ? resolveSpec(s.doneWith, { ...bodyCtx, inSpec: true }) : null,
         body: resolveBlock(s.body, bodyCtx),
@@ -1967,7 +2034,7 @@ function resolveFunction(
   if (opts?.thisBinding) env = extend(env, opts.thisBinding.name, opts.thisBinding.ty);
   for (const p of params) env = extend(env, p.name, p.ty);
 
-  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
+  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [], forofCounts: new Map() };
   const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
   const ensuresCtx: Ctx = { ...baseCtx, env: extend(env, "\\result", returnTy), allowResult: true, inSpec: true };
 
@@ -2071,7 +2138,7 @@ export function resolveModule(raw: RawModule): TModule {
     for (let i = 0; i < ext.params.length; i++) {
       env = extend(env, ext.params[i].name, sig.params[i]);
     }
-    const baseCtx: Ctx = { env, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: sig.returnTy, pureFns, fnParams, fnReturns, externs, inSpec: true, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
+    const baseCtx: Ctx = { env, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: sig.returnTy, pureFns, fnParams, fnReturns, externs, inSpec: true, inLambda: false, narrowedPaths: [], narrowedIndices: [], forofCounts: new Map() };
     const ensuresCtx: Ctx = { ...baseCtx, env: extend(env, "\\result", sig.returnTy), allowResult: true };
     const resolveClauses = (kind: "requires" | "ensures", ctx: Ctx) => ext[kind].map(s => {
       try {
@@ -2092,7 +2159,7 @@ export function resolveModule(raw: RawModule): TModule {
       impure: ext.impure,
     };
   });
-  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [] };
+  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [], forofCounts: new Map() };
   const constants = (raw.constants ?? []).map(c => {
     const declaredTy = expandAlias(parseTsType(c.tsType), raw.typeDecls);
     // Propagate the declared type into the value's resolution context so that
