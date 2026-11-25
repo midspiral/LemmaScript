@@ -1,0 +1,2 @@
+tools/src/alias-check.ts
+tools/src/places.ts
