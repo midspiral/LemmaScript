@@ -55,6 +55,7 @@ import fc from "fast-check";
 import { Project, ScriptTarget, SyntaxKind } from "ts-morph";
 import { extractModule } from "../src/extract.js";
 import { resolveModule } from "../src/resolve.js";
+import { assertNoLiveAliasMutations } from "../src/alias-check-pass.js";
 import { narrowModule } from "../src/narrow.js";
 import { autoHavocModule } from "../src/autohavoc.js";
 import { checkNarrowedModule } from "../src/narrow-checks.js";
@@ -322,7 +323,7 @@ export function compileDafnyVariants(
     const fileOptions = parseFileOptions(text, sourceName);
     const options = resolveOptions(fileOptions, sourceName);
     const raw = extractModule(source, options);
-    const resolved = resolveModule(raw);
+    const resolved = assertNoLiveAliasMutations(resolveModule(raw));
     const narrowed = narrowModule(resolved);
     const typed = autoHavocModule(narrowed);
     const { typesFile, defFile } = transformModuleDafny(typed);

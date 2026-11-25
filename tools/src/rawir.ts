@@ -35,16 +35,16 @@ export type RawChainStep =
   | { kind: "index"; idx: RawExpr };
 
 export type RawExpr =
-  | { kind: "var"; name: string }
+  | { kind: "var"; name: string; freshClone?: true }
   | { kind: "num"; value: number }
   | { kind: "bigint"; value: string }   // BigInt literal (123n) — canonical decimal, no `n`
   | { kind: "str"; value: string }
   | { kind: "bool"; value: boolean }
   | { kind: "binop"; op: string; left: RawExpr; right: RawExpr }
   | { kind: "unop"; op: string; expr: RawExpr }
-  | { kind: "call"; fn: RawExpr; args: RawExpr[] }
-  | { kind: "index"; obj: RawExpr; idx: RawExpr }
-  | { kind: "field"; obj: RawExpr; field: string }
+  | { kind: "call"; fn: RawExpr; args: RawExpr[]; freshClone?: true }
+  | { kind: "index"; obj: RawExpr; idx: RawExpr; freshClone?: true }
+  | { kind: "field"; obj: RawExpr; field: string; freshClone?: true }
   | { kind: "record"; spread: RawExpr | null; fields: { name: string; value: RawExpr }[]; assertedTsType?: string }
   | { kind: "recordMerge"; base: RawExpr; override: RawExpr }   // { ...base, ...override } — field-wise merge; resolve expands to a record using the result type's fields
   | { kind: "arrayLiteral"; elems: RawExpr[] }

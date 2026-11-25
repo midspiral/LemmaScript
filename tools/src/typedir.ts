@@ -82,7 +82,7 @@ export type TChainStep =
 // ── Expressions ──────────────────────────────────────────────
 
 export type TExpr =
-  | { kind: "var"; name: string; ty: Ty }
+  | { kind: "var"; name: string; ty: Ty; freshClone?: true }
   | { kind: "num"; value: number; ty: Ty }
   | { kind: "bigint"; value: string; ty: Ty }   // exact integer, canonical decimal
   | { kind: "str"; value: string; ty: Ty }
@@ -93,11 +93,13 @@ export type TExpr =
       builtinId?: BuiltinId;
       /** Resolved parameter types for a named callee. Kept so nominal
        *  backends can realize TypeScript structural argument conversions. */
-      paramTys?: Ty[] }
-  | { kind: "index"; obj: TExpr; idx: TExpr; ty: Ty }
+      paramTys?: Ty[];
+      freshClone?: true }
+  | { kind: "index"; obj: TExpr; idx: TExpr; ty: Ty; freshClone?: true }
   | { kind: "field"; obj: TExpr; field: string; ty: Ty;
       isDiscriminant?: boolean;             // true if this is a discriminant field access
-      ofVariant?: string }                  // which union variant the field is read from, when narrowing determined it
+      ofVariant?: string;                   // which union variant the field is read from, when narrowing determined it
+      freshClone?: true }
   | { kind: "record"; spread: TExpr | null; fields: { name: string; value: TExpr }[]; ty: Ty }
   | { kind: "arrayLiteral"; elems: TExpr[]; ty: Ty }
   | { kind: "lambda"; params: { name: string; ty: Ty; rest?: true; defaultValue?: TExpr }[]; body: TStmt[]; ty: Ty }

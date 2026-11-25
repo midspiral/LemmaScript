@@ -1014,7 +1014,11 @@ function resolveConstEnumMember(obj: RawExpr, name: string, ctx: Ctx): TExpr | u
 
 function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
   const expr = resolveExprInner(e, ctx);
-  return { ...expr, ty: numericValueType(expr.ty, ctx.typeDecls) };
+  const out = { ...expr, ty: numericValueType(expr.ty, ctx.typeDecls) };
+  if ("freshClone" in e && e.freshClone && (out.kind === "var" || out.kind === "field" || out.kind === "index" || out.kind === "call")) {
+    return { ...out, freshClone: true };
+  }
+  return out;
 }
 
 function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
