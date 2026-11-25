@@ -45,7 +45,9 @@ test("a generated deletion after a large addition is reported as a deletion", (t
   const error = t.mock.method(console, "error", () => {});
   fixture(unchanged + "method Deleted() {}\n", largeProofAddition + unchanged, (g, p) => {
     assert.equal(dafnyCheckDiff(g, p), false);
-    assert.match(error.mock.calls.map(call => call.arguments.join(" ")).join("\n"), /modifications to generated lines/);
+    const diagnostic = error.mock.calls.map(call => call.arguments.join(" ")).join("\n");
+    assert.match(diagnostic, /modifications to generated lines/);
+    assert.match(diagnostic, /-method Deleted\(\) \{\}/);
   });
 });
 
@@ -57,7 +59,7 @@ test("missing inputs fail closed", () => fixture("x\n", "x\n", (g, p, dir) => {
   assert.equal(dafnyCheckDiff(g, join(dir, "missing")), false);
 }));
 
-test("Git summary handles control characters in distinct input paths", { skip: process.platform === "win32" }, () => {
+test("Git diff handles control characters in distinct input paths", { skip: process.platform === "win32" }, () => {
   fixture("", "", (_g, _p, dir) => {
     const generated = join(dir, "-gen \t\n雪.dfy.gen");
     const proof = join(dir, "-proof \n\tλ.dfy");
@@ -107,14 +109,13 @@ for (const script of ["exit 1", "printf 'not a patch\\n'; exit 1", "printf 'part
 
 for (const [exit, reason] of [
   ["exit 2", /git exited 2/],
-  ["kill -TERM $$", /signal SIGTERM/],
-  ["exit 0", /invalid numstat output/],
+  ["kill -TERM $$", /could not run `git diff`/],
 ] as const) {
-  test(`Git status must agree with its summary: ${exit}`, { skip: process.platform === "win32" }, (t) => {
+  test(`failed Git comparison with plausible patch output is rejected: ${exit}`, { skip: process.platform === "win32" }, (t) => {
     const error = t.mock.method(console, "error", () => {});
     fixture("method M() {}\n", "method M() {}\nlemma L() {}\n", (g, p, dir) => {
       const command = join(dir, "git");
-      writeFileSync(command, `#!/bin/sh\nprintf '1\\t0\\t\\000old\\000new\\000'\n${exit}\n`, { mode: 0o755 });
+      writeFileSync(command, `#!/bin/sh\nprintf 'diff --git a/old b/new\\n--- a/old\\n+++ b/new\\n@@ -1 +1,2 @@\\n method M() {}\\n+lemma L() {}\\n'\n${exit}\n`, { mode: 0o755 });
       env({ PATH: dir }, () => assert.equal(dafnyCheckDiff(g, p), false));
       assert.match(error.mock.calls.map(call => call.arguments.join(" ")).join("\n"), reason);
     });
