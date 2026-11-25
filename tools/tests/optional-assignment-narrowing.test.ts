@@ -67,7 +67,7 @@ const absentReads = [
 ];
 const specHelpers = `
 export function helperArgument(value: number | undefined): boolean {
-  //@ ensures \\result === (value !== undefined && narrowingPositive(value!))
+  //@ ensures \\result === (value !== undefined && narrowingPositive(value))
   return value !== undefined && value > 0;
 }
 export function helperConjunction(value: number): boolean {
@@ -83,6 +83,16 @@ const dafnyHelpers = `
 ghost predicate narrowingPositive(value: int) { value > 0 }
 ghost function narrowingZero(): int { 0 }
 `;
+const guardedHelper = `
+export function guardedHelper(value: number | undefined): number {
+  //@ requires value === 3
+  if (value !== undefined) {
+    //@ assert narrowingPositive(value)
+  }
+  return 0;
+}
+`;
+const clearedHelper = guardedHelper.replace("if (value !== undefined) {", "if (value !== undefined) { value = undefined;");
 const leanHelpers = `
 def narrowingPositive (value : Int) : Bool := decide (value > 0)
 def narrowingZero : Int := 0
@@ -209,6 +219,19 @@ test("both operands of an optional comparison execute, even when the optional is
   }
 });
 
+test("an absent comparison operand cannot hide an invalid array read", () => {
+  for (const expr of ["value === items[0]", "items[0] === value"]) {
+    const result = verify(`export function compare(value: number | undefined, items: number[]): boolean {
+      //@ requires value === undefined
+      //@ requires items.length === 0
+      return ${expr};
+    }`);
+    assert.notEqual(result.status, 0);
+    assert.match(result.output, /index out of range/);
+    assert.doesNotMatch(result.output, /resolution\/type errors|timed out/);
+  }
+});
+
 test("a guard does not justify a payload read after clearing storage", () => {
   const result = verify(`export function cleared(value: number | undefined): number {
     if (value !== undefined) { value = undefined; return value!; }
@@ -247,6 +270,15 @@ test("backend specification helpers infer saved values and accept checked payloa
   assert.doesNotMatch(falseClaim.output, /resolution\/type errors|timed out/);
 });
 
+test("a guard selects a helper argument's read type without trusting a stale value", () => {
+  const valid = verify(guardedHelper, true, dafnyHelpers);
+  assert.equal(valid.status, 0, valid.output);
+  const cleared = verify(clearedHelper, true, dafnyHelpers);
+  assert.notEqual(cleared.status, 0);
+  assert.match(cleared.output, /destructor 'value' can only be applied/);
+  assert.doesNotMatch(cleared.output, /resolution\/type errors|timed out/);
+});
+
 test("Lean proves optional assignment narrowing and rejects an absent payload", {
   skip: !existsSync(new URL("../../.lake/build/lib/lean/LemmaScript/Option.olean", import.meta.url)),
 }, () => {
@@ -258,6 +290,8 @@ test("Lean proves optional assignment narrowing and rejects an absent payload", 
       [skippedCalls, true],
       [specHelpers, true],
       [specHelpers.replace("return value > 0;", "return value >= 0;"), false],
+      [guardedHelper, true],
+      [clearedHelper, false],
       [requiredComparison, false],
       [fixture.replace("flag ==> \\result === 7", "flag ==> \\result === 5"), false],
       [`export function cleared(value: number | undefined): number {
@@ -273,7 +307,10 @@ test("Lean proves optional assignment narrowing and rejects an absent payload", 
         decls: [...(typesFile?.decls ?? []), ...defFile.decls] })
         .replace("import LemmaScript\n", "import LemmaScript\n" + leanHelpers);
       // Normalize specification lets before Velvet compares the helper contracts.
-      const proofs = mod.functions.map(f => f.name.startsWith("helper") ? `
+      const proofs = mod.functions.map(f => f.name === "guardedHelper" ? `
+prove_correct guardedHelper by
+  velvet_vcgen [guardedHelper] with finish [narrowingPositive]
+` : f.name.startsWith("helper") ? `
 prove_correct ${f.name} by
   simp only []
   velvet_vcgen [${f.name}] with finish [Pure.${f.name}, narrowingPositive, narrowingZero]
@@ -306,7 +343,7 @@ example (value : Int) : guardedCallback (some value) = some #[1 + value, 2 + val
       assert.ifError(result.error);
       const log = result.stdout + result.stderr;
       assert.equal(result.status === 0, valid, log + output);
-      if (!valid) assert.match(log, /unsolved goals|`finish` failed/);
+      if (!valid) assert.match(log, /unsolved goals|`(?:finish|grind)` failed/);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

@@ -81,7 +81,8 @@ function accessPathsEqual(a: AccessPath, b: AccessPath): boolean {
 
 interface NarrowedPath {
   path: AccessPath;
-  variant: string;   // union variant selected by a discriminant check
+  variant?: string;  // union variant selected by a discriminant check
+  defined?: true;    // requests a checked payload read for an untyped callee
 }
 
 /** A `k in m` atom known to hold in the current scope. Both sides are pure
@@ -114,7 +115,7 @@ interface Ctx {
   externs: Map<string, ExternSignature>;  // qualified name → declared signature (from `//@ extern`)
   inSpec: boolean;
   inLambda: boolean;
-  narrowedPaths: NarrowedPath[];  // union-variant facts for pure access paths
+  narrowedPaths: NarrowedPath[];  // read-type hints for pure access paths
   narrowedIndices: NarrowedIndex[];  // `k in m` atoms known-true in this scope
 }
 
@@ -313,11 +314,17 @@ function withInAtoms(ctx: Ctx, atoms: NarrowedIndex[]): Ctx {
   return { ...ctx, narrowedIndices: [...existing, ...added] };
 }
 
-/** Collect union-variant facts from an && chain for subsequent field resolution. */
+/** Collect read-type hints from an && chain without changing storage types. */
 function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
   if (cond.kind === "binop" && cond.op === "&&") {
     const leftCtx = collectAndChainNarrowings(cond.left, ctx);
     return collectAndChainNarrowings(cond.right, leftCtx);
+  }
+  if (cond.kind === "binop" && cond.op === "!==") {
+    const isUndefined = (e: TExpr) => e.kind === "var" && e.name === "undefined";
+    const value = isUndefined(cond.right) ? cond.left : isUndefined(cond.left) ? cond.right : null;
+    const path = value?.ty.kind === "optional" ? asTExprAccessPath(value) : null;
+    if (path) return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, defined: true }] };
   }
   // Positive discriminant check (`x.kind === "bool"`): record the variant so
   // field reads on the path resolve against that variant's field types.
@@ -776,7 +783,14 @@ function coerceCallArgs(args: TExpr[], fn: TExpr, ctx: Ctx): TExpr[] {
   if (fn.kind !== "var") return args;
   const paramTys = fn.ty.kind === "fn" ? fn.ty.params
     : !binding(ctx.env, fn.name) ? ctx.fnParams.get(fn.name) : undefined;
-  if (!paramTys) return args;
+  if (!paramTys) return args.map(arg => {
+    // Proof-defined helpers have no TS signature. A guarded argument uses its
+    // narrowed read type, as in TS; the backend must still prove the unwrap at
+    // this call, even when a write has made the earlier guard stale.
+    const path = asTExprAccessPath(arg);
+    return path && ctx.narrowedPaths.some(p => p.defined && accessPathsEqual(p.path, path))
+      ? optionalValue(arg) : arg;
+  });
   args = args.map((a, i) => {
     if (i >= paramTys.length) return a;
     return coerceToTargetTy(a, paramTys[i], ctx.typeDecls);

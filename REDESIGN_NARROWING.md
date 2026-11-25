@@ -1,6 +1,8 @@
 # REDESIGN_NARROWING — Checked reads of current storage
 
-**Status:** steps 1–2 implemented on `redesign-narrowing`, November 23, 2026.
+**Status:** draft implementation of steps 1–2 on `redesign-narrowing`.
+The November 24 migration audit leaves generated-code churn and two slow proofs
+unresolved; this is not yet a merge candidate.
 Baseline: `main` at
 [`966272f`](https://github.com/midspiral/LemmaScript/commit/966272f70ea708ba8d84e95bafa610c3e2b8a1d3).
 The prototype reviewed here is [PR #378](https://github.com/midspiral/LemmaScript/pull/378)
@@ -272,7 +274,7 @@ optional storage reconstruct the enclosing value; unsupported mutation results
 and optional `pop`/`shift` produce diagnostics. Both backends check non-null
 assertions, including assertions on map lookups.
 
-Local validation passes the 647 unit tests, fixture checks, compiler and
+Local validation passes the 654 unit tests, fixture checks, compiler and
 example typechecks, all 91 Dafny examples, and the full Lean build. The focused
 regressions include false postconditions, reads after clearing storage, absent
 map lookups, optional comparisons whose other operand must execute, skipped
@@ -287,9 +289,22 @@ mirrors. Topological sort uses the existing invariant lemmas with the proved
 map-lookup bridge; its contracts are unchanged. The migration no longer needs
 the old tactic macro and reduces its heartbeat limit from 16 million to 2 million.
 
-Dedicated staging branches are needed for 15 affected case-study pins, with
-proof additions preserved. Five migrations disappear when sibling match arms
-reuse their names: talktimer, colorwheel, quota, and both guardians pins.
+Dedicated staging branches remain for 12 affected case-study pins. Eight
+migrations disappear after restoring scoped binder names and retaining helper
+signatures: talktimer, colorwheel, quota, both guardians pins, and all three Henri
+pins. The remaining branches contain no changes to the original TypeScript or
+annotations. Hono's original guarded helper contract now verifies through a
+checked read; its added non-null assertion has been removed.
+
+The audit covers 19 changed Dafny proof files. Seventeen retain their proof
+additions byte-for-byte; the other two change only indentation or a comment.
+No handwritten Lean proof files change. The generated changes still include
+avoidable churn: Pi's migration consists only of comparison temporaries, and
+ESLint's consists of expanded Boolean contracts and temporary renumbering.
+Similar churn accompanies the optional-read changes in other migrations.
+These diffs must not be presented as necessary proof adaptations merely because
+regeneration and CI pass. The PR records the per-case findings.
+
 The ordinary Dafny verification checks pass locally;
 the slow balanced-match and workflow proofs exceeded their 500s/600s limits.
 Their generation and additions-only checks pass, which is also their existing

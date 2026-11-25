@@ -50,13 +50,18 @@ initializers retain the model's optional result even when TypeScript reports a
 non-optional type. Evolving locals whose storage type cannot be established
 require an explicit annotation.
 
+For proof helpers without a TypeScript signature, an enclosing `x !== undefined`
+guard selects a checked payload argument. This is a read-type hint: the backend
+still checks the current value, including after reassignment. Known parameter
+types take precedence, so helpers accepting an optional keep that argument type.
+
 ## Responsibilities
 
 - **Extract** preserves source binding identity with `LexicalNames`. It retains
   explicit optional chains and coalescing, including their evaluation boundaries.
 - **Resolve** preserves storage types, inserts checked payload reads, and
   converts values written into typed slots. Its `narrowedPaths` tracks union
-  variants; it no longer changes optional storage types after a guard.
+  variants and guarded read-type hints; it does not change optional storage types.
 - **Narrow** handles union matches, array-index bounds, and the snapshots needed
   by `?.` and `??`. It does not rewrite optional `if`, early-return, or loop
   scopes into payload binders.
