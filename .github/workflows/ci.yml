@@ -38,6 +38,9 @@ jobs:
       - name: Fixture checks (reject implicit declaration skips, CLI, Dafny fixtures)
         run: ./tools/test-fixtures.sh --fixtures
 
+      - name: Verify formal narrowing core calculus
+        run: dafny verify formal/narrowing-model.dfy
+
   # Sharded by test file. Tests within one file run in sequence, so the slowest
   # file bounds a shard however many shards there are.
   unit-tests:

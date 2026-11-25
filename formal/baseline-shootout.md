@@ -1,27 +1,33 @@
-# Baseline Narrowing and Mutation Fuzzer Shootout (`midspiral/main` vs. PR #379)
+# Narrowing and Mutation Fuzzer Shootout (`midspiral/main` vs. PR #379 vs. Hybrid M0–M4)
 
-This document compares two versions of LemmaScript on a shared set of 40 generated TypeScript programs where type narrowing interacts with imperative code (reassignment, in-place array/map/record mutation, loops, shadowing, discriminated unions, `null` vs. `undefined`, aliasing, and precondition-bearing calls). The goal is to measure which bugs the checked-reads prototype in PR #379 already fixes and which soundness or compilation gaps still need to be solved by the rewrite planned in midspiral/LemmaScript#387.
+This document compares three versions of LemmaScript on a shared fixed-seed corpus of generated TypeScript programs where type narrowing interacts with imperative code (reassignment, in-place array/map/record mutation, loops, shadowing, discriminated unions, `null` vs. `undefined`, aliasing, and precondition-bearing calls):
+
+- `midspiral/main` (`f991de5`, baseline `someMatch` pipeline)
+- `midspiral/redesign-narrowing` (`261609a`, midspiral/LemmaScript#379 checked-reads prototype)
+- **Hybrid rewrite Milestones 0–4** (`4fb1af6`: self-verified `Place` write-back, live-alias mutation rejection, checked reads, and precondition-preserving optional comparisons; midspiral/LemmaScript#387)
 
 For each generated program and concrete input, the harness runs the TypeScript in Node to observe JavaScript's actual behavior, compiles the same program to Dafny, and asks Dafny two soundness checks:
 
 - **False-proof check (`soundness-refuted`):** When JavaScript returns a value `v`, the harness asks Dafny to prove `result != v`. If Dafny verifies that claim, the translation silently contradicts JavaScript semantics.
 - **Dropped-precondition check (`precondition-dropped`):** Some programs call a helper `guard(false, v)` carrying `//@ requires ok` inside comparisons or boolean chains. When JavaScript executes that call, Dafny must reject it; if Dafny verifies with zero errors, the translation dropped an operand JavaScript still evaluates.
 
-Both branches ran the exact same 40-program seed (`--seed 1 --runs 40`). Three findings stand out before the detailed tables below:
+Four findings stand out before the detailed tables below:
 
-1. **PR #379 fixes two critical soundness bugs present on `midspiral/main`:** mutating a narrowed optional array (`if (arr !== undefined) arr.push(v)`, midspiral/LemmaScript#350) and skipping the right-hand side of `x === guard(false, v)` when `x` is `undefined` (midspiral/LemmaScript#349). It also fixes compilation errors on reassignment narrowing (midspiral/LemmaScript#340) and `while`-loop presence checks (midspiral/LemmaScript#339).
-2. **Two critical false-proof bugs remain on both branches:** mutating an array through an alias while the original variable is still read (`const b = a; b.push(v); return a.length`, where Dafny models arrays as independent values and proves the old length), and distinguishing `null` from `undefined` in `number | null | undefined` (midspiral/LemmaScript#304, where both encode as `Option.None`).
-3. **PR #379 has a new write-back bug on optional array indexing:** writing `arr[0] = 10` inside `if (arr !== undefined && arr.length > 0)` emits `arr := arr.value[0 := 10]` without re-wrapping `Some(...)`, producing a Dafny type error.
+1. **PR #379 fixed `#350` and `#349` relative to `midspiral/main`,** plus compilation errors on `#340` and `#339`, while introducing a missing `Some(...)` write-back bug on optional array index assignment (`arr[0] = 10`).
+2. **Both `midspiral/main` and PR #379 left two critical false-proof bugs open:** mutating an array through a live alias (`const b = a; b.push(v); return a.length`, where Dafny proves the old length), and distinguishing `null` from `undefined` in `number | null | undefined` (midspiral/LemmaScript#304).
+3. **Hybrid Milestones 0–4 (`4fb1af6`) eliminate every `precondition-dropped` (`0`), `dafny-resolve` (`0`), and `timeout` (`0`) failure on the hardened 33-variant `pre`+`opt` corpus,** convert `aliasing/live-alias-mutation` from a silent false proof to an explicit fail-closed compiler rejection (`rejected`), and pass 37/47 generated/shrunk runs (306 `dafny verify` calls, 0 IR violations).
+4. **Only one critical soundness class remains:** `nullish-falsy/null-vs-undefined-eq` (midspiral/LemmaScript#304), intentionally deferred to Milestone 5 (`Nullish<T>`).
 
 ## Run metadata
 
-- **Tracking:** robertpenner/LemmaScript#47 (part of robertpenner/LemmaScript#43; Milestone 0 baseline scorecard for midspiral/LemmaScript#387).
+- **Tracking:** robertpenner/LemmaScript#47 (part of robertpenner/LemmaScript#43; baseline and post-rewrite scorecard for midspiral/LemmaScript#387).
 - **Branches evaluated:**
-  - `midspiral/main` (`f991de5`, current `someMatch` pipeline)
+  - `midspiral/main` (`f991de5`, baseline `someMatch` pipeline)
   - `midspiral/redesign-narrowing` (`261609a`, midspiral/LemmaScript#379 checked-reads prototype)
-- **Harness revision for scorecard table:** `29d0636` (captured in `f1bbb2e`, 25 variants, single-sample `opt`-stage run). Subsequent hardening in `1201487` expanded the generator to 33 variants (adding empty-string/false/empty-array falsy traps, `!==`/`<=`/`||`/`?.`/call-arg guard positions, real nested-field reassignment, and post-branch reads on `nested-box-push` and `union-switch-mutate`), switched campaigns to stage-locked `fc.check` shrinking, and defaulted evaluation and `--case` replay to both `pre` and `opt` stages; the saved `.semantic.json` artifacts under `formal/shootout-artifacts/{main,pr379}/` were re-recorded with `pre`+`opt` checks (`stage: "both"`) and verified to replay deterministically.
+  - `hybrid-m0-m4` (`4fb1af6`, Milestones 0–4)
+- **Harness revisions:** The baseline `main` and PR #379 columns ran at `29d0636` (25 variants, single-sample `opt`-stage run). Subsequent hardening in `1201487` expanded the generator to 33 variants (adding empty-string/false/empty-array falsy traps, `!==`/`<=`/`||`/`?.`/call-arg guard positions, real nested-field reassignment, and post-branch reads on `nested-box-push` and `union-switch-mutate`), switched campaigns to stage-locked `fc.check` shrinking, and defaulted evaluation and `--case` replay to both `pre` and `opt` stages. The `hybrid-m0-m4` column ran on this hardened 33-variant `pre`+`opt` harness, and all 7 saved baseline artifacts under `formal/shootout-artifacts/{main,pr379}/` were replayed directly against `4fb1af6`.
 - **Toolchain:** Node `v24.17.0`, Dafny `4.11.0+fcb2042d6d043a2634f0854338c08feeaaaf4ae2`.
-- **Exact CLI command (run at harness revision `29d0636`, identical on both branches):**
+- **Exact CLI command (identical across all three runs):**
 
 ```sh
 cd tools
@@ -32,19 +38,19 @@ All 7 families were enabled: `reassign`, `mutation`, `loop-shadow`, `union`, `nu
 
 ## 1. Scorecard Summary
 
-| Metric | `midspiral/main` (`f991de5`) | `midspiral/redesign-narrowing` (`261609a`) | Notes |
-| --- | ---: | ---: | --- |
-| Programs generated | 40 | 40 | Identical fixed-seed sample (`--seed 1 --runs 40`) |
-| `dafny verify` calls | 111 | 127 | Specialized refutation + positive/precondition checks |
-| Wall time | 156.0s | 259.8s | Local macOS arm64 |
-| **Passed (refutation rejected + positive verified)** | **24** | **27** | +3 passing on PR #379 |
-| **CRITICAL: `soundness-refuted`** | **6** (3 classes) | **5** (2 classes) | PR #379 fixes `#350`; both still prove false postconditions on live-alias mutation and `#304` |
-| **CRITICAL: `precondition-dropped`** | **1** (1 class) | **0** | PR #379 fixes `#349` (`x === guard(false, v)`) |
-| `semantic-mismatch` (unproved, not refuted) | 0 | 6 (1 class) | PR #379 compiles `#339` `while` loops that `main` rejected at resolve; unannotated loop cannot prove concrete sum |
-| `dafny-resolve` (invalid Dafny emitted) | 9 (3 classes) | 1 (1 class) | PR #379 fixes `#340` and `#339` resolve; both fail `array-index-assign` (new PR #379 missing `Some(...)` wrap) |
-| `rejected` (explicit compiler rejection) | 0 | 0 | Neither branch explicitly rejects live-alias mutation yet |
-| `timeout` (`15s` cap) | 0 | 1 | `reassign/nested-field-reassign` timed out once on PR #379 |
-| `invalid-ts` / `tool-error` | 0 / 0 | 0 / 0 | Zero generator or harness errors |
+| Metric | `midspiral/main` (`f991de5`, 25 variants / `opt`) | `PR #379` (`261609a`, 25 variants / `opt`) | `Hybrid M0–M4` (`4fb1af6`, 33 variants / `pre`+`opt`) | Notes |
+| --- | ---: | ---: | ---: | --- |
+| Programs evaluated (incl. shrink steps) | 40 | 40 | 47 | `--seed 1 --runs 40` (hardened harness runs `fc.check` shrink steps on failing classes) |
+| `dafny verify` calls | 111 | 127 | 306 | Specialized refutation + positive/precondition checks (`pre`+`opt` on M0–M4) |
+| Wall time | 156.0s | 259.8s | 1795.1s | Local macOS arm64 (`pre`+`opt` runs 2x stages + shrink) |
+| **Passed (refutation rejected + positive verified)** | **24** | **27** | **37** | Every non-`#304`, non-live-alias, non-unannotated-loop program passes on both `pre` and `opt` |
+| **CRITICAL: `soundness-refuted`** | **6** (3 classes) | **5** (2 classes) | **2** (1 class) | Only `#304` (`null-vs-undefined-eq`) remains; `#350` passes, live-alias mutation fails closed |
+| **CRITICAL: `precondition-dropped`** | **1** (1 class) | **0** | **0** | `#349` fixed across `===`, `!==`, and relational comparisons (`pre`+`opt`) |
+| `semantic-mismatch` (unproved, not refuted) | 0 | 6 (1 class) | 6 (1 class) | Expected unannotated `#339` `while` loop without loop invariants |
+| `dafny-resolve` (invalid Dafny emitted) | 9 (3 classes) | 1 (1 class) | **0** | `#340`, `#339`, and `array-index-assign` all emit valid, verifying Dafny |
+| `rejected` (explicit compiler rejection) | 0 | 0 | **2** (1 class) | Live-alias mutation rejected soundly by `alias-check.ts` instead of proving false postconditions |
+| `timeout` (`15s` cap) | 0 | 1 | **0** | Zero timeouts across all 306 Dafny calls |
+| `invalid-ts` / `tool-error` | 0 / 0 | 0 / 0 | **0 / 0** | Zero generator, IR-invariant, or harness errors |
 
 ## 2. Failure Classes and Upstream Mapping
 
@@ -70,6 +76,14 @@ All 7 families were enabled: `reassign`, `mutation`, `loop-shadow`, `union`, `nu
 | #2 | `semantic-mismatch` | `loop-shadow/while-presence-countdown` | Expected unannotated loop behavior (no false proof; Dafny cannot prove concrete loop sum without loop invariants) | (none) |
 | #1 | `timeout` | `reassign/nested-field-reassign` | 15s cap exceeded once on PR #379 | (none) |
 
+### `hybrid-m0-m4` (`4fb1af6`, Milestones 0–4): 3 non-passing classes (0 unexpected regressions)
+
+| Class | Severity / Oracle | Family / Label | Status | Saved artifact |
+| --- | --- | --- | --- | --- |
+| #2 | **CRITICAL** (`soundness-refuted`) | `nullish-falsy/null-vs-undefined-eq` | Deferred to Milestone 5 (midspiral/LemmaScript#304, `Nullish<T>`) | [`hybrid-m4/2.ts`](./shootout-artifacts/hybrid-m4/2.ts), [`hybrid-m4/2.semantic.json`](./shootout-artifacts/hybrid-m4/2.semantic.json) |
+| #3 | `rejected` (sound fail-closed) | `aliasing/live-alias-mutation` | **Fixed** (was `soundness-refuted` on both `main` and PR #379; now explicitly rejected by `alias-check.ts`) | [`hybrid-m4/3.ts`](./shootout-artifacts/hybrid-m4/3.ts), [`hybrid-m4/3.semantic.json`](./shootout-artifacts/hybrid-m4/3.semantic.json) |
+| #1 | `semantic-mismatch` | `loop-shadow/while-presence-countdown` | Expected unannotated loop behavior (no false proof; Dafny cannot prove concrete loop sum without loop invariants) | (none) |
+
 ## 3. Deterministic Replay Verification
 
 Every saved artifact in `formal/shootout-artifacts/` was replayed without reshrinking using:
@@ -81,9 +95,14 @@ npx tsx fuzz/narrowing-fuzz.ts --case ../formal/shootout-artifacts/<branch>/<N>.
 
 - On `midspiral/main` (`f991de5`): `main/3.semantic.json` (`precondition-dropped`), `main/5.semantic.json` (`soundness-refuted`), `main/6.semantic.json` (`soundness-refuted`), and `main/7.semantic.json` (`soundness-refuted`) all reproduced their exact original oracle verdicts (`exit 1`).
 - On `midspiral/redesign-narrowing` (`261609a`): `pr379/3.semantic.json` (`dafny-resolve`, missing `Some(...)` wrap on `arr[0] = 10`), `pr379/4.semantic.json` (`soundness-refuted`, live-alias mutation), and `pr379/5.semantic.json` (`soundness-refuted`, `#304`) all reproduced their exact original oracle verdicts (`exit 1`).
+- On `hybrid-m0-m4` (`4fb1af6`):
+  - `main/3.semantic.json` (`#349` `precondition-dropped`): **passed** (`exit 0`, 2 checks verified).
+  - `main/6.semantic.json` (`#350` `opt-array-push` `soundness-refuted`): **passed** (`exit 0`, 4 checks verified).
+  - `pr379/3.semantic.json` (`array-index-assign` `dafny-resolve`): **passed** (`exit 0`, 4 checks verified).
+  - `main/5.semantic.json` and `pr379/4.semantic.json` (`live-alias-mutation` `soundness-refuted`): **explicitly rejected** (`rejected: Live-alias mutation in target`, sound fail-closed).
+  - `main/7.semantic.json` and `pr379/5.semantic.json` (`#304` `null-vs-undefined-eq`): still `soundness-refuted` (deferred to Milestone 5).
 
-## 4. Implications for Milestones 3 through 5
+## 4. Remaining Work (Milestone 5)
 
-1. **Unified `Place` write-back (Milestone 3):** PR #379 fixed optional `.push` (`#350`) with a dedicated special case, yet missed optional index assignment (`arr[0] = v`, omitting the `Some(...)` wrapper). Routing all in-place updates through `Place` (`PIndex(PUnwrap(PVar("arr")), 0)`) enforces wrapper preservation across every mutation form (proved in `formal/narrowing-model.dfy` Theorem 3c).
-2. **Precise live-alias rejection (Milestone 3):** Both branches silently prove `res != 1` for `const b = a; b.push(v); return a.length`, while `dead-source-move` (`return b.length`) and `read-only-alias` verify soundly. Implementing `alias-check.ts` eliminates this false-proof class without breaking read-only sharing or dead-source moves.
-3. **`Nullish<T>` representation (Milestone 5):** Both branches still prove false postconditions on `number | null | undefined` (`#304`), confirming `Nullish<T>` (proved injective in `formal/narrowing-model.dfy` Theorem 4) is needed to close the remaining critical soundness gap.
+1. **Completed in Milestones 3–4 (`4fb1af6`):** Unified `Place` write-back (`places.ts`, `place-lowering.ts`, `transform.ts`), precise live-alias mutation rejection (`alias-check.ts`, `alias-check-pass.ts`), checked reads (`checked-reads.ts`, Dafny `.value` and Lean dependent `if _h :` + `.get (by grind)`), and precondition-preserving optional comparisons (`#349`). Together these close 9 of 10 open upstream narrowing/mutation issues (`#268`, `#339`, `#340`, `#342`, `#349`, `#350`, `#352`, `#353`, `#354`) with 0/91 example drift and 35/35 case studies passing.
+2. **Deferred to Milestone 5 (`Nullish<T>`):** Both baseline branches and `4fb1af6` still prove false postconditions on `number | null | undefined` (midspiral/LemmaScript#304), confirming `Nullish<T>` (proved injective in `formal/narrowing-model.dfy` Theorem 4) as the final soundness milestone.
