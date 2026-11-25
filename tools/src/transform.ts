@@ -1668,12 +1668,13 @@ function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
 
       // All for-of shapes lower to the same range loop `for idx in 0..seq.size`;
       // they differ only in (a) which indexable `seq` is iterated and (b) the
-      // per-iteration `let`s that bind the loop names. Compute the shared loop-
-      // variable naming once, then let each shape fill in `seq` + `perIter`.
+      // per-iteration `let`s that bind the loop names. The counter name was
+      // minted by resolve, where specs naming it are resolved; the suffix
+      // numbers this loop's helper names. Each shape fills in `seq` + `perIter`.
       const count = _forofCounters.get(headName) ?? 0;
       _forofCounters.set(headName, count + 1);
       const suffix = count === 0 ? "" : `${count + 1}`;
-      const idxName = freshName(`_${headName}_idx${suffix}`);
+      const idxName = s.idx;
       const idxVar: Expr = { kind: "var", name: idxName };
 
       let seq: Expr;
