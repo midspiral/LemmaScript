@@ -35,14 +35,19 @@ function pathKey(e: TExpr): string | null {
   return null;
 }
 
-function isOptional(ty: Ty | null): ty is { kind: "optional"; inner: Ty } {
-  return ty !== null && ty.kind === "optional";
+function isNullable(ty: Ty | null): ty is Extract<Ty, { kind: "optional" | "nullish" }> {
+  return ty !== null && (ty.kind === "optional" || ty.kind === "nullish");
 }
 
 function fieldInfoTy(f: FieldInfo | null): Ty | null {
   if (!f) return null;
   const ty = f.type ?? parseTsType(f.tsType);
-  return f.optionalKey && ty.kind !== "optional" ? { kind: "optional", inner: ty } : ty;
+  if (!f.optionalKey) return ty;
+  if (ty.kind === "nullish") return ty;
+  if (ty.kind === "optional") {
+    return ty.absent === "null" ? { kind: "nullish", inner: ty.inner } : ty;
+  }
+  return { kind: "optional", inner: ty };
 }
 
 function declField(decl: TypeDeclInfo, field: string, ofVariant: string | undefined): FieldInfo | null {
@@ -51,8 +56,8 @@ function declField(decl: TypeDeclInfo, field: string, ofVariant: string | undefi
   const variants = ofVariant ? decl.variants.filter(v => v.name === ofVariant) : decl.variants;
   const found = variants.map(v => v.fields.find(f => f.name === field)).filter((f): f is FieldInfo => !!f);
   if (found.length === 0) return null;
-  const optional = found.map(f => isOptional(fieldInfoTy(f)));
-  return optional.every(o => o === optional[0]) ? found[0]! : null;
+  const nullable = found.map(f => isNullable(fieldInfoTy(f)));
+  return nullable.every(o => o === nullable[0]) ? found[0]! : null;
 }
 
 function fieldStorageTy(ty: Ty, field: string, ofVariant: string | undefined, mod: TModule, depth = 0): Ty | null {
@@ -76,7 +81,7 @@ function storageTyOf(e: TExpr, scope: Scope, mod: TModule): Ty | null {
   }
   if (e.kind !== "field") return null;
   const objTy = storageTyOf(e.obj, scope, mod);
-  if (!objTy || objTy.kind === "optional") return null;
+  if (!objTy || objTy.kind === "optional" || objTy.kind === "nullish") return null;
   return fieldStorageTy(objTy, e.field, e.ofVariant, mod);
 }
 
@@ -99,38 +104,45 @@ function enterSomeMatch(scope: Scope, scrutinee: TExpr, binder: string, binderTy
 }
 
 function isDefinitelyUnwrappedStamp(ty: Ty): boolean {
-  return !isOptional(ty) && ty.kind !== "unknown" && ty.kind !== "void";
+  return !isNullable(ty) && ty.kind !== "unknown" && ty.kind !== "void" && ty.kind !== "null";
 }
 
-/** Rewrite an expression that is the direct operand of `=== undefined` /
- *  `!== undefined`: never wrap the operand itself in `checkedUnwrap` (restore
- *  its declared optional storage type so `transform.ts` emits an `Option`
- *  presence check), while still rewriting any optional receiver prefix. */
+/** Rewrite an expression that is the direct operand of `===`/`!==`/`==`/`!=`
+ *  with `undefined` or `null`: never wrap the operand itself in `checkedUnwrap`
+ *  (restore its declared `Option<T>` or `Nullish<T>` storage type so
+ *  `transform.ts` emits the right presence check), while still rewriting any
+ *  optional/nullish receiver prefix. */
 function rewritePresenceOperand(e: TExpr, scope: Scope, mod: TModule): TExpr {
   const storage = storageTyOf(e, scope, mod);
-  if (e.kind === "var" && isOptional(storage)) {
+  if (e.kind === "var" && isNullable(storage)) {
     return { ...e, ty: storage };
   }
   if (e.kind === "field") {
     const obj = rewriteExpr(e.obj, scope, mod);
     const updated: TExpr = obj === e.obj ? e : { ...e, obj };
     const fStorage = storageTyOf(updated, scope, mod);
-    if (isOptional(fStorage)) return { ...updated, ty: fStorage };
+    if (isNullable(fStorage)) return { ...updated, ty: fStorage };
     return updated;
   }
   return rewriteExpr(e, scope, mod);
 }
 
-function isUndefinedVar(e: TExpr): boolean {
-  return e.kind === "var" && e.name === "undefined";
+function isNullishVar(e: TExpr): boolean {
+  return e.kind === "var" && (e.name === "undefined" || e.name === "null");
 }
 
 function rewriteExpr(e: TExpr, scope: Scope, mod: TModule): TExpr {
   switch (e.kind) {
     case "var": {
       const storage = storageTyOf(e, scope, mod);
-      if (isOptional(storage) && isDefinitelyUnwrappedStamp(e.ty)) {
-        return { kind: "checkedUnwrap", expr: { ...e, ty: storage }, ty: e.ty };
+      if (isNullable(storage)) {
+        if (isDefinitelyUnwrappedStamp(e.ty)) {
+          return { kind: "checkedUnwrap", expr: { ...e, ty: storage }, ty: e.ty };
+        }
+        // Partially narrowed `fromNullish` value still lives in `Nullish<T>` storage.
+        if (storage.kind === "nullish" && e.ty.kind === "optional" && e.ty.fromNullish) {
+          return { ...e, ty: storage };
+        }
       }
       return e;
     }
@@ -139,13 +151,18 @@ function rewriteExpr(e: TExpr, scope: Scope, mod: TModule): TExpr {
     case "checkedUnwrap":
       return { ...e, expr: rewriteExpr(e.expr, scope, mod) };
     case "field": {
-      // Rewrite receiver first (so an optional receiver `box` becomes `checkedUnwrap(box)`).
+      // Rewrite receiver first (so an optional/nullish receiver `box` becomes `checkedUnwrap(box)`).
       const obj = rewriteExpr(e.obj, scope, mod);
       const updated: TExpr = obj === e.obj ? e : { ...e, obj };
-      // Check if this field itself is optional by declaration (or bound in scope) while stamped non-optional.
+      // Check if this field itself is optional/nullish by declaration (or bound in scope) while stamped non-nullable.
       const storage = storageTyOf(updated, scope, mod);
-      if (isOptional(storage) && isDefinitelyUnwrappedStamp(updated.ty)) {
-        return { kind: "checkedUnwrap", expr: { ...updated, ty: storage }, ty: updated.ty };
+      if (isNullable(storage)) {
+        if (isDefinitelyUnwrappedStamp(updated.ty)) {
+          return { kind: "checkedUnwrap", expr: { ...updated, ty: storage }, ty: updated.ty };
+        }
+        if (storage.kind === "nullish" && updated.ty.kind === "optional" && updated.ty.fromNullish) {
+          return { ...updated, ty: storage };
+        }
       }
       return updated;
     }
@@ -154,16 +171,16 @@ function rewriteExpr(e: TExpr, scope: Scope, mod: TModule): TExpr {
     case "binop": {
       let left: TExpr;
       let right: TExpr;
-      if ((e.op === "===" || e.op === "!==") && (isUndefinedVar(e.left) || isUndefinedVar(e.right))) {
-        left = isUndefinedVar(e.right) ? rewritePresenceOperand(e.left, scope, mod) : rewriteExpr(e.left, scope, mod);
-        right = isUndefinedVar(e.left) ? rewritePresenceOperand(e.right, scope, mod) : rewriteExpr(e.right, scope, mod);
+      if (["===", "!==", "==", "!="].includes(e.op) && (isNullishVar(e.left) || isNullishVar(e.right))) {
+        left = isNullishVar(e.right) ? rewritePresenceOperand(e.left, scope, mod) : rewriteExpr(e.left, scope, mod);
+        right = isNullishVar(e.left) ? rewritePresenceOperand(e.right, scope, mod) : rewriteExpr(e.right, scope, mod);
       } else {
         left = rewriteExpr(e.left, scope, mod);
         right = rewriteExpr(e.right, scope, mod);
       }
       let ty = e.ty;
-      // Clear stale optional arithmetic stamp once operands are unwrapped.
-      if (ARITH.has(e.op) && isOptional(ty) && !isOptional(left.ty) && !isOptional(right.ty)) {
+      // Clear stale optional/nullish arithmetic stamp once operands are unwrapped.
+      if (ARITH.has(e.op) && isNullable(ty) && !isNullable(left.ty) && !isNullable(right.ty)) {
         ty = left.ty;
       }
       return { ...e, left, right, ty };
@@ -171,7 +188,7 @@ function rewriteExpr(e: TExpr, scope: Scope, mod: TModule): TExpr {
     case "unop": {
       const expr = rewriteExpr(e.expr, scope, mod);
       let ty = e.ty;
-      if (e.op === "-" && isOptional(ty) && !isOptional(expr.ty)) ty = expr.ty;
+      if (e.op === "-" && isNullable(ty) && !isNullable(expr.ty)) ty = expr.ty;
       return { ...e, expr, ty };
     }
     case "call":

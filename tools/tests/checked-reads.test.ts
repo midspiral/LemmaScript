@@ -353,7 +353,7 @@ test("Milestone 4 (#52): review regressions — Lean dependent checkedUnwrap & n
     const leanTypes = leanMod.typesFile ? emitLeanFile(leanMod.typesFile) : "";
     const pureMatch = leanTypes.match(/namespace Pure[\s\S]*?end Pure/);
     assert.ok(pureMatch, `expected Pure namespace in Lean output:\n${leanTypes}`);
-    assert.match(pureMatch[0], /if _h : /, `expected dependent if _h : guard for Lean checkedUnwrap:\n${pureMatch[0]}`);
+    assert.match(pureMatch[0], /if _h\d+ : /, `expected dependent if _hN : guard for Lean checkedUnwrap:\n${pureMatch[0]}`);
     assert.match(pureMatch[0], /\(let _cmp\d+ := /, `expected parenthesized (let _cmpN := ...; ...) in Lean:\n${pureMatch[0]}`);
     const leanProbe = spawnSync("lean", ["--version"], { encoding: "utf8", timeout: 10_000 });
     if (leanProbe.status === 0) {

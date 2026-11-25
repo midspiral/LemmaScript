@@ -6,7 +6,7 @@
  */
 
 import type { TExpr, TStmt, TModule, Ty } from "./typedir.js";
-import { isBigInt, tyEqual } from "./typedir.js";
+import { isBigInt, optAbsent, tyEqual } from "./typedir.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
 import { anyExpr, anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
@@ -376,6 +376,13 @@ function asCondition(e: TExpr): TExpr {
     return { kind: "binop", op: ">",
       left: { kind: "field", obj: e, field: "length", ty: { kind: "nat" } },
       right: { kind: "num", value: 0, ty: { kind: "nat" } }, ty: bool };
+  if (e.ty.kind === "void" || e.ty.kind === "null")
+    return { kind: "bool", value: false, ty: bool };
+  // Nullish<T> truthiness in `if (x)` / `while (x)` / `x ? a : b`:
+  // lower as `!(!x)` so `lowerExpr`'s nullish truthiness rule handles both
+  // falsy-capable inners (0, "", false) and always-truthy inners uniformly.
+  if (e.ty.kind === "nullish")
+    return { kind: "unop", op: "!", expr: { kind: "unop", op: "!", expr: e, ty: bool }, ty: bool };
   // Arrays, objects, maps, sets, tuples are always truthy in JS (even `[]`/`{}`).
   if (["array", "user", "map", "set", "tuple"].includes(e.ty.kind))
     return { kind: "bool", value: true, ty: bool };
@@ -383,15 +390,46 @@ function asCondition(e: TExpr): TExpr {
 }
 
 /** Wrap an expression in Some/None for optional-typed conditionals.
- *  If the raw TExpr is `undefined`, emit `.none`; otherwise wrap in `Some`. */
+ *  If the raw TExpr is `undefined`/`null`, emit `.none`; otherwise wrap in `Some`. */
 function wrapOptionalBranch(expr: Expr, raw: TExpr): Expr {
   // Set type: "Option" so Lean emits `Option.some`/`Option.none` (qualified).
   // The dotted form `.some`/`.none` would be ambiguous in expression positions
   // like the scrutinee of an outer match. Dafny treats `Option.Some` and bare
   // `Some` equivalently — the qualification is harmless there.
-  if (raw.kind === "var" && raw.name === "undefined") return { kind: "constructor", name: "none", type: "Option", args: [] };
+  if (raw.kind === "var" && (raw.name === "undefined" || raw.name === "null")) return { kind: "constructor", name: "none", type: "Option", args: [] };
   if (raw.ty.kind === "optional") return expr;  // already Option<T>, don't double-wrap
   return { kind: "constructor", name: "some", type: "Option", args: [expr] };
+}
+
+/** Wrap an expression in Nullish.Undefined / Nullish.Null / Nullish.Value for
+ *  nullish-typed conditionals and matches (#304). */
+function wrapNullishBranch(expr: Expr, raw: TExpr): Expr {
+  if (raw.kind === "var" && raw.name === "undefined") {
+    return { kind: "constructor", name: "nullishUndefined", type: "Nullish", args: [] };
+  }
+  if (raw.kind === "var" && raw.name === "null") {
+    return { kind: "constructor", name: "nullishNull", type: "Nullish", args: [] };
+  }
+  if (raw.ty.kind === "nullish") return expr;
+  if (raw.ty.kind === "optional" && !raw.ty.fromNullish) {
+    const bound = matchBinder("value");
+    const noneCtor = optAbsent(raw.ty) === "null" ? "nullishNull" : "nullishUndefined";
+    return {
+      kind: "match", scrutinee: expr,
+      arms: [
+        { pattern: pCtor("some", bound), body: { kind: "constructor", name: "nullishValue", type: "Nullish", args: [{ kind: "var", name: bound }] } },
+        { pattern: pCtor("none"), body: { kind: "constructor", name: noneCtor, type: "Nullish", args: [] } },
+      ],
+    };
+  }
+  return { kind: "constructor", name: "nullishValue", type: "Nullish", args: [expr] };
+}
+
+function wrapCheckedUnwrapValue(expr: Expr, storageTy: Ty): Expr {
+  if (storageTy.kind === "nullish") {
+    return { kind: "constructor", name: "nullishValue", type: "Nullish", args: [expr] };
+  }
+  return { kind: "app", fn: "Some", args: [expr] };
 }
 
 /** Lean needs `let mut` for any local that is later reassigned. A const local
@@ -432,7 +470,7 @@ function buildNestedFieldUpdate(recv: TExpr, newVal: Expr): { root: string; valu
   if (recv.obj.kind === "var") return { root: recv.obj.name, value: upd };
   if (recv.obj.kind === "field") return buildNestedFieldUpdate(recv.obj, upd);
   if (recv.obj.kind === "checkedUnwrap") {
-    const wrapped: Expr = { kind: "app", fn: "Some", args: [upd] };
+    const wrapped: Expr = wrapCheckedUnwrapValue(upd, recv.obj.expr.ty);
     if (recv.obj.expr.kind === "var") return { root: recv.obj.expr.name, value: wrapped };
     if (recv.obj.expr.kind === "field") return buildNestedFieldUpdate(recv.obj.expr, wrapped);
   }
@@ -490,7 +528,16 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
   }
 
   switch (e.kind) {
-    case "var": return { kind: "var", name: e.name };
+    case "var":
+      if (e.name === "undefined") {
+        if (e.ty.kind === "nullish") return { kind: "constructor", name: "nullishUndefined", type: "Nullish", args: [] };
+        return { kind: "var", name: "undefined" };
+      }
+      if (e.name === "null") {
+        if (e.ty.kind === "nullish") return { kind: "constructor", name: "nullishNull", type: "Nullish", args: [] };
+        return { kind: "var", name: "undefined" };
+      }
+      return { kind: "var", name: e.name };
     case "num": {
       const literal: Expr = { kind: "num", value: e.value };
       return e.ty.kind === "real" && Number.isInteger(e.value)
@@ -513,6 +560,43 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       // String truthiness: !str → str == ""
       if (e.op === "!" && e.expr.ty.kind === "string")
         return { kind: "binop", op: "=", left: lowerExpr(e.expr, binds), right: { kind: "str", value: "" } };
+      // Double negation of Nullish<T> (synthesized by asCondition for `if (x)`):
+      // true iff `x` is Value(v) and `v` is truthy.
+      if (e.op === "!" && e.expr.kind === "unop" && e.expr.op === "!" && e.expr.expr.ty.kind === "nullish") {
+        const inner = e.expr.expr;
+        const innerTy = e.expr.expr.ty;
+        const innerExpr = lowerExpr(inner, binds);
+        const bound = matchBinder("value");
+        const truthy = valueTruthyCond({ kind: "var", name: bound }, innerTy.inner);
+        if (!truthy) {
+          return { kind: "methodCall", obj: innerExpr, objTy: innerTy, method: "isValue", args: [], monadic: false };
+        }
+        return {
+          kind: "match", scrutinee: innerExpr,
+          arms: [
+            { pattern: pCtor("nullishValue", bound), body: truthy },
+            { pattern: pCtor("nullishNull"), body: { kind: "bool", value: false } },
+            { pattern: pCtor("nullishUndefined"), body: { kind: "bool", value: false } },
+          ],
+        };
+      }
+      // Nullish<T> truthiness: !x → true on Null/Undefined; on Value(v), !(truthy v).
+      if (e.op === "!" && e.expr.ty.kind === "nullish") {
+        const innerExpr = lowerExpr(e.expr, binds);
+        const bound = matchBinder("value");
+        const truthy = valueTruthyCond({ kind: "var", name: bound }, e.expr.ty.inner);
+        if (!truthy) {
+          return { kind: "unop", op: "¬", expr: { kind: "methodCall", obj: innerExpr, objTy: e.expr.ty, method: "isValue", args: [], monadic: false } };
+        }
+        return {
+          kind: "match", scrutinee: innerExpr,
+          arms: [
+            { pattern: pCtor("nullishValue", bound), body: { kind: "unop", op: "¬", expr: truthy } },
+            { pattern: pCtor("nullishNull"), body: { kind: "bool", value: true } },
+            { pattern: pCtor("nullishUndefined"), body: { kind: "bool", value: true } },
+          ],
+        };
+      }
       // Optional truthiness: !opt → None negates to `true`. The Some branch is
       // `!(value truthy)`: always-truthy inners (array/user) give a plain `false`,
       // while falsy-capable inners re-test the wrapped value (`!Some(0)` is `true`).
@@ -572,10 +656,21 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           right: { kind: "constructor", name: e.right.value, type: objTy, args: [] },
         };
       }
+      // Literal null/undefined comparison (e.g. `null === undefined` → false,
+      // `null == undefined` → true, `null === null` → true).
+      if (["===", "!==", "==", "!="].includes(e.op) &&
+          e.left.kind === "var" && (e.left.name === "null" || e.left.name === "undefined") &&
+          e.right.kind === "var" && (e.right.name === "null" || e.right.name === "undefined")) {
+        const isLoose = e.op === "==" || e.op === "!=";
+        const eq = isLoose ? true : e.left.name === e.right.name;
+        const res = (e.op === "===" || e.op === "==") ? eq : !eq;
+        return { kind: "bool", value: res };
+      }
       // String literal comparison — constructor if user type, string literal if string.
-      // Skip when the left is optional: fall through to the optional-comparison rule,
-      // which unwraps and compares the inner value (`Some(v) => v == "")`.
-      if ((e.op === "===" || e.op === "!==") && e.right.kind === "str" && e.left.ty.kind !== "optional") {
+      // Skip when the left is optional/nullish: fall through to the nullable-comparison rules,
+      // which unwrap and compare the inner value (`Some(v) => v == ""`).
+      if ((e.op === "===" || e.op === "!==") && e.right.kind === "str" &&
+          e.left.ty.kind !== "optional" && e.left.ty.kind !== "nullish") {
         const left = lowerExpr(e.left, binds);
         const leftTy = e.left.ty.kind === "user" ? e.left.ty.name : undefined;
         const right: Expr = isUser(e.left.ty)
@@ -583,19 +678,68 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           : { kind: "str", value: e.right.value };
         return { kind: "binop", op: e.op === "===" ? "=" : "≠", left, right };
       }
+      // Nullish<T> comparison against null / undefined / non-nullish value (#304).
+      if (["===", "!==", "==", "!=", ">=", "<=", ">", "<"].includes(e.op) &&
+          (e.left.ty.kind === "nullish") !== (e.right.ty.kind === "nullish")) {
+        const [nulSide, valSide] = e.left.ty.kind === "nullish" ? [e.left, e.right] : [e.right, e.left];
+        const nulExpr = lowerExpr(nulSide, binds);
+        const nulTy = nulSide.ty as Extract<Ty, { kind: "nullish" }>;
+        if (valSide.kind === "var" && (valSide.name === "undefined" || valSide.name === "null")) {
+          const isLoose = e.op === "==" || e.op === "!=";
+          const isEq = e.op === "===" || e.op === "==";
+          if (isLoose) {
+            // x == null / x == undefined → !x.isValue; x != null / x != undefined → x.isValue
+            const isVal: Expr = { kind: "methodCall", obj: nulExpr, objTy: nulTy, method: "isValue", args: [], monadic: false };
+            return isEq ? { kind: "unop", op: "¬", expr: isVal } : isVal;
+          }
+          const pred: Expr = {
+            kind: "methodCall", obj: nulExpr, objTy: nulTy,
+            method: valSide.name === "null" ? "isNull" : "isUndefined", args: [], monadic: false,
+          };
+          return isEq ? pred : { kind: "unop", op: "¬", expr: pred };
+        }
+        const innerTy = nulTy.inner;
+        const valExpr: Expr = valSide.kind === "str" && innerTy.kind === "user"
+          ? { kind: "constructor", name: valSide.value, type: innerTy.name, args: [] }
+          : lowerExpr(valSide, binds);
+        const op = e.left.ty.kind === "nullish" ? e.op : MIRROR_OP[e.op] ?? e.op;
+        const cmpOp = BOOL_OP_MAP[op] ?? op;
+        const absentVal = (e.op === "!==" || e.op === "!=") ? true : false;
+        const bound = matchBinder("value");
+        const makeNullishCmpMatch = (rhs: Expr): Expr => ({
+          kind: "match", scrutinee: nulExpr,
+          arms: [
+            { pattern: pCtor("nullishValue", bound), body: { kind: "binop", op: cmpOp, left: { kind: "var", name: bound }, right: rhs } },
+            { pattern: pCtor("nullishNull"), body: { kind: "bool", value: absentVal } },
+            { pattern: pCtor("nullishUndefined"), body: { kind: "bool", value: absentVal } },
+          ],
+        });
+        if (!_inSpec && valExpr.kind !== "var" && hasPreconditionExpr(valSide)) {
+          const tmp = freshName(`_cmp${_cmpCounter++}`);
+          return { kind: "let", name: tmp, value: valExpr, body: makeNullishCmpMatch({ kind: "var", name: tmp }) };
+        }
+        return makeNullishCmpMatch(valExpr);
+      }
       // Optional comparison: optExpr op val → match optExpr { Some(v) => v op val, None => false/true }
-      if (["===", "!==", ">=", "<=", ">", "<"].includes(e.op) &&
+      if (["===", "!==", "==", "!=", ">=", "<=", ">", "<"].includes(e.op) &&
           (e.left.ty.kind === "optional") !== (e.right.ty.kind === "optional")) {
         const [optSide, valSide] = e.left.ty.kind === "optional" ? [e.left, e.right] : [e.right, e.left];
         const optExpr = lowerExpr(optSide, binds);
-        // x === undefined → None?, x !== undefined → Some?
-        if (valSide.kind === "var" && valSide.name === "undefined") {
-          const isNone = e.op === "===";
+        const optTy = optSide.ty as Extract<Ty, { kind: "optional" }>;
+        // x === undefined / x === null / loose x == null / x == undefined
+        if (valSide.kind === "var" && (valSide.name === "undefined" || valSide.name === "null")) {
+          const isLoose = e.op === "==" || e.op === "!=";
+          const isEq = e.op === "===" || e.op === "==";
+          // Strict comparison against the OTHER sentinel (`x: T | undefined; x === null`
+          // or `x: T | null; x === undefined`) is always false (and `!==` is always true).
+          if (!isLoose && valSide.name !== optAbsent(optTy)) {
+            return { kind: "bool", value: !isEq };
+          }
           return {
             kind: "match", scrutinee: optExpr,
             arms: [
-              { pattern: pCtor("some", "_"), body: { kind: "bool", value: !isNone } },
-              { pattern: pCtor("none"), body: { kind: "bool", value: isNone } },
+              { pattern: pCtor("some", "_"), body: { kind: "bool", value: !isEq } },
+              { pattern: pCtor("none"), body: { kind: "bool", value: isEq } },
             ],
           };
         }
@@ -660,6 +804,27 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
               then: { kind: "app", fn: "Some", args: [{ kind: "var", name: bound }] },
               else: { kind: "var", name: "undefined" } } },
             { pattern: pCtor("none"), body: { kind: "var", name: "undefined" } },
+          ],
+        };
+      }
+      // || on nullish → 3-arm match Value/Null/Undefined with default.
+      if (e.op === "||" && e.left.ty.kind === "nullish") {
+        const nulExpr = lowerExpr(e.left, binds);
+        const defaultExpr = lowerExpr(e.right, binds);
+        const bound = matchBinder("value");
+        const truthy = valueTruthyCond({ kind: "var", name: bound }, e.left.ty.inner);
+        const valPresent: Expr = e.ty.kind === "optional"
+          ? { kind: "constructor", name: "some", type: "Option", args: [{ kind: "var", name: bound }] }
+          : { kind: "var", name: bound };
+        const someBody: Expr = truthy
+          ? { kind: "if", cond: truthy, then: valPresent, else: defaultExpr }
+          : valPresent;
+        return {
+          kind: "match", scrutinee: nulExpr,
+          arms: [
+            { pattern: pCtor("nullishValue", bound), body: someBody },
+            { pattern: pCtor("nullishNull"), body: defaultExpr },
+            { pattern: pCtor("nullishUndefined"), body: defaultExpr },
           ],
         };
       }
@@ -1074,6 +1239,32 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       }
       if (e.fn.kind !== "var")
         throw new Error(`Unsupported call expression: ${e.fn.kind}`);
+      // Synthetic Nullish<T> constructors and widening/narrowing helpers (#304).
+      if (e.fn.name === "NullishValue" && e.args.length === 1) {
+        return { kind: "constructor", name: "nullishValue", type: "Nullish", args: [lowerExpr(e.args[0], binds)] };
+      }
+      if ((e.fn.name === "__optUndefToNullish" || e.fn.name === "__optNullToNullish") && e.args.length === 1) {
+        const bound = matchBinder("value");
+        const noneCtor = e.fn.name === "__optNullToNullish" ? "nullishNull" : "nullishUndefined";
+        return {
+          kind: "match", scrutinee: lowerExpr(e.args[0], binds),
+          arms: [
+            { pattern: pCtor("some", bound), body: { kind: "constructor", name: "nullishValue", type: "Nullish", args: [{ kind: "var", name: bound }] } },
+            { pattern: pCtor("none"), body: { kind: "constructor", name: noneCtor, type: "Nullish", args: [] } },
+          ],
+        };
+      }
+      if (e.fn.name === "__nullishToOption" && e.args.length === 1) {
+        const bound = matchBinder("value");
+        return {
+          kind: "match", scrutinee: lowerExpr(e.args[0], binds),
+          arms: [
+            { pattern: pCtor("nullishValue", bound), body: { kind: "constructor", name: "some", type: "Option", args: [{ kind: "var", name: bound }] } },
+            { pattern: pCtor("nullishNull"), body: { kind: "constructor", name: "none", type: "Option", args: [] } },
+            { pattern: pCtor("nullishUndefined"), body: { kind: "constructor", name: "none", type: "Option", args: [] } },
+          ],
+        };
+      }
       const prefix = e.callKind === "spec-pure" && _opts.backend === "lean" ? "Pure." : "";
       return { kind: "app", fn: prefix + e.fn.name, args: e.args.map(a => lowerExpr(a, binds)) };
     }
@@ -1137,12 +1328,14 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
             fieldValue = { ...fieldValue, ty: declaredTy } as TExpr;
           }
           let value = lowerExpr(fieldValue, binds);
-          // Wrap non-optional values in Some for optional fields
+          // Wrap non-optional/non-nullish values for optional/nullish fields
           if (declaredTy?.kind === "optional") {
-            const isUndef = f.value.kind === "var" && f.value.name === "undefined";
+            const isUndef = f.value.kind === "var" && (f.value.name === "undefined" || f.value.name === "null");
             if (f.value.ty.kind !== "optional" && !isUndef) {
               value = { kind: "app", fn: "Some", args: [value] };
             }
+          } else if (declaredTy?.kind === "nullish") {
+            value = wrapNullishBranch(value, f.value);
           }
           return { name: f.name, value };
         });
@@ -1220,6 +1413,9 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       if (e.ty.kind === "optional") {
         thenExpr = wrapOptionalBranch(thenExpr, e.then);
         elseExpr = wrapOptionalBranch(elseExpr, e.else);
+      } else if (e.ty.kind === "nullish") {
+        thenExpr = wrapNullishBranch(thenExpr, e.then);
+        elseExpr = wrapNullishBranch(elseExpr, e.else);
       }
       if (binds && (thenBinds?.length || elseBinds?.length)) {
         const name = freshName(`_branch${_branchCounter++}`);
@@ -1235,13 +1431,65 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "if", cond, then: thenExpr, else: elseExpr };
     }
 
-    case "optChain":
-      // Narrow should have rewritten optChain to someMatch.
+    case "optChain": {
+      if (e.obj.ty.kind === "nullish") {
+        const scrutinee = lowerExpr(e.obj, binds);
+        const binder = freshName(`_oc${_liftCounter++}_val`);
+        let bodyT: TExpr = { kind: "var", name: binder, ty: e.obj.ty.inner };
+        for (const step of e.chain) {
+          if (step.kind === "field") bodyT = { kind: "field", obj: bodyT, field: step.name, ty: step.ty };
+          else if (step.kind === "index") bodyT = { kind: "index", obj: bodyT, idx: step.idx, ty: step.ty };
+          else bodyT = { kind: "call", fn: bodyT, args: step.args, ty: step.ty, callKind: step.callKind,
+            ...(step.builtinId ? { builtinId: step.builtinId } : {}) };
+        }
+        let valBody = lowerExpr(bodyT, binds);
+        let absentBody: Expr;
+        if (e.ty.kind === "nullish") {
+          valBody = wrapNullishBranch(valBody, bodyT);
+          absentBody = { kind: "constructor", name: "nullishUndefined", type: "Nullish", args: [] };
+        } else {
+          valBody = wrapOptionalBranch(valBody, bodyT);
+          absentBody = { kind: "constructor", name: "none", type: "Option", args: [] };
+        }
+        return {
+          kind: "match", scrutinee,
+          arms: [
+            { pattern: pCtor("nullishValue", binder), body: valBody },
+            { pattern: pCtor("nullishNull"), body: absentBody },
+            { pattern: pCtor("nullishUndefined"), body: absentBody },
+          ],
+        };
+      }
+      // Narrow should have rewritten non-nullish optChain to someMatch.
       throw new Error(`optChain reached transform — narrow should have rewritten it: ${JSON.stringify(e).slice(0, 400)}`);
+    }
 
-    case "nullish":
-      // Narrow should have rewritten nullish to someMatch.
+    case "nullish": {
+      if (e.left.ty.kind === "nullish") {
+        const scrutinee = lowerExpr(e.left, binds);
+        const binder = freshName(`_oc${_liftCounter++}_val`);
+        const rawBinder: TExpr = { kind: "var", name: binder, ty: e.left.ty.inner };
+        let valBody: Expr = { kind: "var", name: binder };
+        let rightBody = lowerExpr(e.right, binds);
+        if (e.ty.kind === "optional") {
+          valBody = wrapOptionalBranch(valBody, rawBinder);
+          rightBody = wrapOptionalBranch(rightBody, e.right);
+        } else if (e.ty.kind === "nullish") {
+          valBody = wrapNullishBranch(valBody, rawBinder);
+          rightBody = wrapNullishBranch(rightBody, e.right);
+        }
+        return {
+          kind: "match", scrutinee,
+          arms: [
+            { pattern: pCtor("nullishValue", binder), body: valBody },
+            { pattern: pCtor("nullishNull"), body: rightBody },
+            { pattern: pCtor("nullishUndefined"), body: rightBody },
+          ],
+        };
+      }
+      // Narrow should have rewritten non-nullish ?? to someMatch.
       throw new Error(`nullish reached transform — narrow should have rewritten it: ${JSON.stringify(e).slice(0, 300)}`);
+    }
 
     case "havoc":
       // Dafny's * only works in var/assign positions — lift to own declaration
@@ -2115,7 +2363,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           }
           if (recv.kind === "checkedUnwrap") {
             const { binds, expr } = liftMethodCalls(s.expr);
-            const wrapped: Expr = { kind: "app", fn: "Some", args: [expr] };
+            const wrapped: Expr = wrapCheckedUnwrapValue(expr, recv.expr.ty);
             if (recv.expr.kind === "var") {
               return [
                 ...binds,

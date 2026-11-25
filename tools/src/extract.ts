@@ -788,9 +788,10 @@ function extractExpr(node: Expression): RawExpr {
     }
   }
 
-  // null → undefined (both map to None in backends)
+  // Preserve `null` distinctly from `undefined` so `T | null | undefined`
+  // (`Nullish<T>`) and single-sentinel `T | null` / `T | undefined` stay sound (#304).
   if (Node.isNullLiteral(node)) {
-    return { kind: "var", name: "undefined" };
+    return { kind: "var", name: "null" };
   }
 
   // `typeof X` — only meaningful in a `typeof X === "string"` discriminator over
@@ -1268,6 +1269,7 @@ function annotationTypeText(tn: TypeNode, type: Type): string | undefined {
 function typeToString(type: Type): string {
   if (constEnumInfo(type)) return "number";
   if (type.isUndefined()) return "undefined";
+  if (type.isNull()) return "null";
   if (type.isNumber() || type.isNumberLiteral()) return "number";
   if (type.isBigInt() || type.isBigIntLiteral()) return "bigint";
   if (type.isString() || type.isStringLiteral()) return "string";
@@ -1329,9 +1331,14 @@ function typeToString(type: Type): string {
     const real = parts.filter(p => p !== "undefined" && p !== "null");
     if (real.length <= 1) return parts.join(" | ");
     // A genuine multi-member union with no tagged-union shape LS can model →
-    // a single opaque type. (See _synthOpaque.) Preserve an outer optional.
+    // a single opaque type. (See _synthOpaque.) Preserve outer null/undefined.
     const opaque = _synthOpaque(real);
-    return real.length === parts.length ? opaque : `${opaque} | undefined`;
+    const hasNull = parts.includes("null");
+    const hasUndef = parts.includes("undefined");
+    if (hasNull && hasUndef) return `${opaque} | null | undefined`;
+    if (hasNull) return `${opaque} | null`;
+    if (hasUndef) return `${opaque} | undefined`;
+    return opaque;
   }
   if (type.isTuple()) {
     return `[${type.getTupleElements().map(t => typeToString(t)).join(", ")}]`;
@@ -2881,15 +2888,16 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     // already-extracted `fn.returnType` string for nullish suffixes to detect
     // the wrap-in-Optional case.
     let innerType: Type | null = null;
-    let wrapOptional = false;
     const sourceReturnText = fn.returnType ?? "";
-    const sourceHadNullish = / \| (null|undefined)$/.test(sourceReturnText)
-      || sourceReturnText.includes(" | null ") || sourceReturnText.includes(" | undefined ")
-      || sourceReturnText.includes(" | null|") || sourceReturnText.includes(" | undefined|");
+    const sourceHasNull = /(^|\|\s*)null(\s*\||$)/.test(sourceReturnText);
+    const sourceHasUndef = /(^|\|\s*)undefined(\s*\||$)/.test(sourceReturnText);
+    let wrapNull = false;
+    let wrapUndef = false;
     const sym = retType.getSymbol();
     if ((sym?.getName() === "__type" || sym?.getName() === "__object") && retType.isObject() && !retType.isArray()) {
       innerType = retType;
-      if (sourceHadNullish) wrapOptional = true;
+      wrapNull = sourceHasNull;
+      wrapUndef = sourceHasUndef;
     } else if (retType.isUnion()) {
       const arms = retType.getUnionTypes();
       const nullish = arms.filter(t => t.isNull() || t.isUndefined());
@@ -2899,15 +2907,22 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
         const otherSym = onlyOther.getSymbol();
         if ((otherSym?.getName() === "__type" || otherSym?.getName() === "__object") && onlyOther.isObject() && !onlyOther.isArray()) {
           innerType = onlyOther;
-          wrapOptional = true;
+          wrapNull = nullish.some(t => t.isNull());
+          wrapUndef = nullish.some(t => t.isUndefined());
         }
       }
     }
+    const formatReturnNullability = (base: string): string => {
+      if (wrapNull && wrapUndef) return `${base} | null | undefined`;
+      if (wrapNull) return `${base} | null`;
+      if (wrapUndef) return `${base} | undefined`;
+      return base;
+    };
     if (innerType) {
       // Try typeToString first — it resolves collapsed single-variant unions
       const resolved = typeToString(innerType);
       if (resolved !== "__type" && !resolved.includes("__type") && knownTypes.has(resolved)) {
-        fn.returnType = wrapOptional ? `${resolved} | undefined` : resolved;
+        fn.returnType = formatReturnNullability(resolved);
         continue;
       }
       const synName = f.owner + fn.name.charAt(0).toUpperCase() + fn.name.slice(1) + "Result";
@@ -2916,7 +2931,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
         const info = extractRecord(synName, innerType, f.node, undefined, extra);
         if (info) { typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(synName); }
       }
-      fn.returnType = wrapOptional ? `${synName} | undefined` : synName;
+      fn.returnType = formatReturnNullability(synName);
       // Also resolve imported types referenced in the return type's fields
       for (const prop of innerType.getProperties()) {
         resolveType(prop.getTypeAtLocation(f.node), f.node);

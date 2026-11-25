@@ -21,11 +21,13 @@ export type Ty =
   | { kind: "real" }
   | { kind: "string"; values?: string[] }   // values: members of an inline string-union (`"a" | "b"`), kept for record-index-by-enum
   | { kind: "void" }
+  | { kind: "null" }
   | { kind: "array"; elem: Ty }
   | { kind: "tuple"; elems: Ty[] }           // heterogeneous fixed-arity tuple (`[A, B]`); homogeneous tuples lower to `array`
   | { kind: "map"; key: Ty; value: Ty }
   | { kind: "set"; elem: Ty }
-  | { kind: "optional"; inner: Ty }
+  | { kind: "optional"; inner: Ty; absent?: "undefined" | "null"; fromNullish?: true }
+  | { kind: "nullish"; inner: Ty }
   | { kind: "user"; name: string }
   | { kind: "fn"; params: Ty[]; result: Ty }
   | { kind: "unknown" }
@@ -33,6 +35,22 @@ export type Ty =
 /** True for an int/nat that came from a TS `bigint` (integer division semantics). */
 export function isBigInt(ty: Ty): boolean {
   return (ty.kind === "int" || ty.kind === "nat") && !!ty.big;
+}
+
+/** Which absent sentinel an `optional` type models (`"undefined"` by default). */
+export function optAbsent(ty: Extract<Ty, { kind: "optional" }>): "undefined" | "null" {
+  return ty.absent ?? "undefined";
+}
+
+/** True for any nullable storage type (`Option<T>` or `Nullish<T>`). */
+export function isNullableTy(ty: Ty): ty is Extract<Ty, { kind: "optional" | "nullish" }> {
+  return ty.kind === "optional" || ty.kind === "nullish";
+}
+
+/** True when a value's runtime storage is `Nullish<T>` (either unnarrowed
+ *  `nullish` or partially narrowed `optional` with `fromNullish: true`). */
+export function isNullishStorageTy(ty: Ty): boolean {
+  return ty.kind === "nullish" || (ty.kind === "optional" && !!ty.fromNullish);
 }
 
 /** Structural equality on Ty. Used to decide whether a tuple type is homogeneous
@@ -50,7 +68,11 @@ export function tyEqual(a: Ty, b: Ty): boolean {
       const bm = b as typeof a;
       return tyEqual(a.key, bm.key) && tyEqual(a.value, bm.value);
     }
-    case "optional": return tyEqual(a.inner, (b as typeof a).inner);
+    case "optional": {
+      const bo = b as typeof a;
+      return tyEqual(a.inner, bo.inner) && optAbsent(a) === optAbsent(bo) && !!a.fromNullish === !!bo.fromNullish;
+    }
+    case "nullish": return tyEqual(a.inner, (b as typeof a).inner);
     case "user":     return a.name === (b as typeof a).name;
     case "fn": {
       const bf = b as typeof a;
@@ -63,7 +85,7 @@ export function tyEqual(a: Ty, b: Ty): boolean {
       return JSON.stringify(a.values ?? null) === JSON.stringify(bs.values ?? null);
     }
     case "int": case "nat": return !!a.big === !!(b as typeof a).big;
-    case "bool": case "real": case "void": case "unknown": return true;   // no payload
+    case "bool": case "real": case "void": case "null": case "unknown": return true;   // no payload
   }
 }
 

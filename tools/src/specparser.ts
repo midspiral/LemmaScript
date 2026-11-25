@@ -192,9 +192,14 @@ class Parser {
     }
     if (t?.type === "op" && ["===", "!==", "==", "!=", ">=", "<=", ">", "<"].includes(t.value)) {
       this.advance();
-      // Normalize == to ===, != to !== so downstream sees one spelling
-      const op = t.value === "==" ? "===" : t.value === "!=" ? "!==" : t.value;
-      return { kind: "binop", op, left, right: this.parseAdd() };
+      const right = this.parseAdd();
+      const isNullishAtom = (x: Expr) => x.kind === "var" && (x.name === "null" || x.name === "undefined");
+      // Keep loose `==` / `!=` distinct when comparing against `null`/`undefined`
+      // so `//@ ensures x == null` checks both sentinels on `Nullish<T>` (#304),
+      // while non-nullish spec equalities (`a == b`) continue normalizing to `===`.
+      const keepLoose = (t.value === "==" || t.value === "!=") && (isNullishAtom(left) || isNullishAtom(right));
+      const op = keepLoose ? t.value : t.value === "==" ? "===" : t.value === "!=" ? "!==" : t.value;
+      return { kind: "binop", op, left, right };
     }
     return left;
   }
@@ -261,9 +266,8 @@ class Parser {
     if (t.type === "ident") {
       if (t.value === "true") { this.advance(); return { kind: "bool", value: true }; }
       if (t.value === "false") { this.advance(); return { kind: "bool", value: false }; }
-      // Match the body extractor (extract.ts NullLiteral): `null` and
-      // `undefined` are interchangeable in LS, both map to None.
-      if (t.value === "null") { this.advance(); return { kind: "var", name: "undefined" }; }
+      // Preserve `null` distinctly from `undefined` (#304).
+      if (t.value === "null") { this.advance(); return { kind: "var", name: "null" }; }
       // new Set<T>() / new Map<K,V>()
       if (t.value === "new") {
         this.advance();

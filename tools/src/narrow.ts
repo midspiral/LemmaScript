@@ -39,7 +39,7 @@ import { isTerminatorKind } from "./typedir.js";
 import { builtinSpec } from "./builtins.js";
 import {
   type CondCtx, type PresentFact, type NoneDetector,
-  presentFact, leadingPresent, leadingIsArray, flattenOr, noneDetector,
+  optionalPresentFact, leadingPresent, leadingIsArray, flattenOr, noneDetector,
   bindPresentFact, freshPathBinder, binderHintForMapAccess, freshOcBinder,
   applyChain, restoreDiscriminantFlag, arrayBoundsCond, exprEqual,
   isArrayFact, typeofStringFact, variantFact, negVariantFact,
@@ -186,10 +186,11 @@ function stmtsMayClearPath(stmts: readonly TStmt[], pathStr: string): boolean {
   for (const s of stmts) {
     if (s.kind === "assign") {
       if (s.target === pathStr) {
-        const isSomeWrap = s.value.kind === "call" && s.value.fn.kind === "var" &&
-          s.value.fn.name === "Some" && s.value.args.length === 1;
-        if (!isSomeWrap && (s.value.ty.kind === "optional" || s.value.ty.kind === "void" ||
-            (s.value.kind === "var" && s.value.name === "undefined"))) {
+        const isPresentWrap = s.value.kind === "call" && s.value.fn.kind === "var" &&
+          (s.value.fn.name === "Some" || s.value.fn.name === "NullishValue") && s.value.args.length === 1;
+        if (!isPresentWrap && (s.value.ty.kind === "optional" || s.value.ty.kind === "nullish" ||
+            s.value.ty.kind === "void" || s.value.ty.kind === "null" ||
+            (s.value.kind === "var" && (s.value.name === "undefined" || s.value.name === "null")))) {
           return true;
         }
       } else if (pathStr.startsWith(`${s.target}.`)) {
@@ -223,7 +224,7 @@ function scrutineeMayBeCleared(scrutinee: TExpr, stmts: readonly TStmt[]): boole
  *  clear `e` (or a prefix of `e`) to `undefined`/optional (#342). */
 function ruleIfOptionalSimple(s: TStmt, ctx: CondCtx): TStmt | null {
   if (s.kind !== "if") return null;
-  const check = presentFact(s.cond);
+  const check = optionalPresentFact(s.cond);
   if (!check) return null;
   const someBody = check.negated ? s.else : s.then;
   const noneBody = check.negated ? s.then : s.else;
@@ -238,7 +239,7 @@ function ruleIfOptionalSimple(s: TStmt, ctx: CondCtx): TStmt | null {
 function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | null {
   if (s.kind !== "if") return null;
   if (rest.length === 0) return null;
-  const check = presentFact(s.cond);
+  const check = optionalPresentFact(s.cond);
   if (!check) return null;
   const someBranch = check.negated ? s.else : s.then;
   const noneBranch = check.negated ? s.then : s.else;
@@ -302,7 +303,7 @@ function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[], ctx: CondCtx): 
   const c = s.cond;
   if (c.kind !== "binop" || c.op !== "!==") return null;
   const oc = c.left.kind === "optChain" ? c.left : c.right.kind === "optChain" ? c.right : null;
-  if (!oc || oc.kind !== "optChain" || oc.obj.ty.kind !== "optional") return null;
+  if (!oc || oc.kind !== "optChain" || oc.obj.ty.kind !== "optional" || oc.obj.ty.fromNullish) return null;
   if (scrutineeMayBeCleared(oc.obj, rest)) return null;
   const lit = c.left === oc ? c.right : c.left;
   const innerTy = oc.obj.ty.inner;
@@ -324,7 +325,7 @@ function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[], ctx: CondCtx): 
  *  ternary position. */
 function ruleConditionalOptionalSimple(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "conditional") return null;
-  const check = presentFact(e.cond);
+  const check = optionalPresentFact(e.cond);
   if (!check) return null;
   const someBody = check.negated ? e.else : e.then;
   const noneBody = check.negated ? e.then : e.else;
@@ -347,7 +348,7 @@ function ruleImplOptional(e: TExpr, ctx: CondCtx): TExpr | null {
     check = extracted.check;
     restCond = extracted.restCond;
   } else {
-    const c = presentFact(e.left);
+    const c = optionalPresentFact(e.left);
     if (!c || c.negated) return null;
     check = c;
   }
@@ -371,10 +372,12 @@ function ruleImplOptional(e: TExpr, ctx: CondCtx): TExpr | null {
  *  semantics (`??` tests null/undefined, not falsiness) — no falsy gate. */
 function ruleNullish(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "nullish") return null;
-  // Non-optional left operand (#352): `undefined ?? r` -> `r`; plain `x ?? r` -> `x`.
+  // Nullish<T> (and partially narrowed fromNullish) lowers via a 3-arm match in transform.ts.
+  if (e.left.ty.kind === "nullish" || (e.left.ty.kind === "optional" && e.left.ty.fromNullish)) return null;
+  // Non-optional left operand (#352): `undefined ?? r` / `null ?? r` -> `r`; plain `x ?? r` -> `x`.
   if (e.left.ty.kind !== "optional") {
-    if (e.left.kind === "var" && e.left.name === "undefined") return e.right;
-    if (e.left.ty.kind === "void") return e.right;
+    if (e.left.kind === "var" && (e.left.name === "undefined" || e.left.name === "null")) return e.right;
+    if (e.left.ty.kind === "void" || e.left.ty.kind === "null") return e.right;
     return e.left;
   }
   const innerTy = e.left.ty.inner;
@@ -444,9 +447,12 @@ function ruleOptionalIndexBinding(s: TStmt): TStmt | null {
  *  so transform doesn't substitute. Scrutinee can be any expression. */
 function ruleOptChain(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "optChain") return null;
-  // Non-optional receiver (#352): `undefined?.foo` -> `undefined`; plain `s?.length` -> `s.length`.
+  // Nullish<T> (and partially narrowed fromNullish) lowers via a 3-arm match in transform.ts.
+  if (e.obj.ty.kind === "nullish" || (e.obj.ty.kind === "optional" && e.obj.ty.fromNullish)) return null;
+  // Non-optional receiver (#352): `undefined?.foo` / `null?.foo` -> `undefined`; plain `s?.length` -> `s.length`.
   if (e.obj.ty.kind !== "optional") {
-    if ((e.obj.kind === "var" && e.obj.name === "undefined") || e.obj.ty.kind === "void") {
+    if ((e.obj.kind === "var" && (e.obj.name === "undefined" || e.obj.name === "null")) ||
+        e.obj.ty.kind === "void" || e.obj.ty.kind === "null") {
       return { kind: "var", name: "undefined", ty: { kind: "void" } };
     }
     return applyChain(e.obj, e.chain);
@@ -498,7 +504,7 @@ function ruleConditionalInMap(e: TExpr, ctx: CondCtx): TExpr | null {
  *  no falsy gate on the bound value (unlike the other truthiness positions). */
 function ruleConditionalOptionalTruthy(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "conditional") return null;
-  if (e.cond.ty.kind !== "optional") return null;
+  if (e.cond.ty.kind !== "optional" || e.cond.ty.fromNullish) return null;
   const binder = freshPathBinder(e.cond, ctx);
   if (binder === null) return null;
   return {
