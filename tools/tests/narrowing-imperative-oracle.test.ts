@@ -169,7 +169,7 @@ test("negated-postcondition refutation oracle catches #304 false proof, verifies
   }
 });
 
-test("precondition-drop oracle detects skipped guard(false) (#349) and accepts short-circuited guard(false) (#46)", () => {
+test("precondition-drop oracle verifies #349 fixed (x === guard(false, 1) caught by Dafny) and short-circuited guard(false) accepted (#46, #52)", () => {
   const project = makeProject();
   const workDir = mkdtempSync(path.join(tmpdir(), "lsc-imp-guard-"));
   try {
@@ -180,8 +180,9 @@ test("precondition-drop oracle detects skipped guard(false) (#349) and accepts s
       "}",
     ].join("\n");
 
-    // 1. #349 shape: `x === guard(false, 1)` evaluates RHS in JS even when x is undefined.
-    const bug349: ImperativeProgram = {
+    // 1. #349 is now fixed by Milestone 4: `x === guard(false, 1)` lowers to `x == Some(guard(false, 1))`,
+    //    so Dafny catches the violated precondition even when x is Option.None -> oracle passes!
+    const fixed349: ImperativeProgram = {
       family: "guard-eval",
       label: "issue-349-eq-rhs-guard-false",
       fnName: "target",
@@ -195,10 +196,21 @@ test("precondition-drop oracle detects skipped guard(false) (#349) and accepts s
       inputs: [{ args: [{ kind: "opt-int", value: undefined }] }],
     };
     const c1 = createImperativeCounts();
-    const r1 = evaluateImperativeProgram(bug349, { project, workDir, counts: c1, timeoutSec: 15 });
-    assert.equal(r1.ok, false);
-    assert.equal(r1.oracle, "precondition-dropped", `expected precondition-dropped for #349, got ${r1.oracle}: ${r1.detail}`);
-    assert.equal(c1.preconditionDropped, 1);
+    const r1 = evaluateImperativeProgram(fixed349, { project, workDir, counts: c1, timeoutSec: 15 });
+    assert.equal(r1.ok, true, `expected #349 to pass after Milestone 4, got ${r1.oracle}: ${r1.detail}`);
+    assert.equal(c1.preconditionDropped, 0);
+
+    // 1b. Negative control on the precondition-drop oracle itself: a synthetic postEmit hook
+    //     that drops the guard call in emitted Dafny is caught as `precondition-dropped`.
+    const cDrop = createImperativeCounts();
+    const rDrop = evaluateImperativeProgram(
+      fixed349,
+      { project, workDir, counts: cDrop, timeoutSec: 15, stages: ["opt"] },
+      { postEmitOptimized: (optDfy) => optDfy.replace(/function target\(x: Option<int>\): bool[\s\S]*$/, "function target(x: Option<int>): bool\n{\n  false\n}\n") },
+    );
+    assert.equal(rDrop.ok, false);
+    assert.equal(rDrop.oracle, "precondition-dropped", `expected precondition-dropped control, got ${rDrop.oracle}: ${rDrop.detail}`);
+    assert.equal(cDrop.preconditionDropped, 1);
 
     // 2. Short-circuited `false && guard(false, 1) > 0`: JS skips guard(false), Dafny agrees!
     const shortCircuitOk: ImperativeProgram = {

@@ -74,6 +74,7 @@ function forEachChildExpr(e: TExpr, f: (c: TExpr) => void): void {
   switch (e.kind) {
     case "binop": f(e.left); f(e.right); return;
     case "unop": f(e.expr); return;
+    case "checkedUnwrap": f(e.expr); return;
     case "call": f(e.fn); e.args.forEach(f); return;
     case "index": f(e.obj); f(e.idx); return;
     case "field": f(e.obj); return;
@@ -242,6 +243,7 @@ function rewriteExpr(e: TExpr, hoisted: TStmt[]): TExpr {
     case "var": case "num": case "bigint": case "str": case "bool": case "havoc": return e;
     case "binop": return { ...e, left: rewriteExpr(e.left, hoisted), right: rewriteExpr(e.right, hoisted) };
     case "unop": return { ...e, expr: rewriteExpr(e.expr, hoisted) };
+    case "checkedUnwrap": return { ...e, expr: rewriteExpr(e.expr, hoisted) };
     case "call": return { ...e, fn: rewriteExpr(e.fn, hoisted), args: e.args.map(a => rewriteExpr(a, hoisted)) };
     case "index": return { ...e, obj: rewriteExpr(e.obj, hoisted), idx: rewriteExpr(e.idx, hoisted) };
     case "field": return { ...e, obj: rewriteExpr(e.obj, hoisted) };

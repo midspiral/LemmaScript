@@ -61,15 +61,12 @@ test("strict input validation rejects null/undefined mismatches, -0, fractions, 
   assert.equal(argToDafny({ kind: "nullable", value: { kind: "null" } }), "Option.None");
 });
 
-test("supported positions on midspiral/main verify on both pre and opt, while #268 returnAnd is caught (#13)", () => {
-  // On unmodified midspiral/main (f991de5), 9 of the 13 positions compile cleanly;
-  // returnAnd, constAnd, callArg, and ifElse hit open upstream bug midspiral/LemmaScript#268.
-  const mainSupportedPositions = POSITIONS.filter(
-    p => p !== "returnAnd" && p !== "constAnd" && p !== "callArg" && p !== "ifElse",
-  );
-  const specs: FnSpec[] = mainSupportedPositions.map((position, idx) => ({
-    targets: idx === 0 ? [0] : idx === 1 ? [3, 4] : idx === 2 ? [2] : idx === 3 ? [8] : [0],
-    truthy: [false, false, false, false, false, false],
+test("all 13 positions and absent/present/nested/zero/negative/similar-name cases verify on both pre and opt (#13, #52)", () => {
+  // After Milestone 4 (#52), all 13 positions (including returnAnd, constAnd,
+  // callArg, ifElse, and multi-target returnOr from #268) verify cleanly on both pre and opt.
+  const specs: FnSpec[] = POSITIONS.map((position, idx) => ({
+    targets: idx === 0 ? [3, 4] : idx === 1 ? [2] : idx === 2 ? [8] : [0],
+    truthy: [idx % 2 === 0, idx % 3 === 0, false, false, false, false],
     position,
     use: idx % 5,
     ensures: true, // must be omitted by omitEnsures in semantic mode
@@ -79,33 +76,30 @@ test("supported positions on midspiral/main verify on both pre and opt, while #2
   assert.ok(!tsText.includes("//@ ensures"), "semantic-mode source must omit arbitrary //@ ensures");
 
   const inputs: ConcreteCallInput[] = [
-    // f0: returnOr (boolean) on single optional o
-    { fn: "f0", paramNames: ["x", "o"], args: [{ kind: "number", value: 5 }, { kind: "optional", value: { kind: "undefined" } }] },
-    { fn: "f0", paramNames: ["x", "o"], args: [{ kind: "number", value: -5 }, { kind: "optional", value: { kind: "number", value: 3 } }] },
-    // f1: ifThen on colliding names a_b and a.b with distinct values + zero cases
+    // f0: returnAnd on colliding names a_b and a.b with distinct values + zero cases
     {
-      fn: "f1",
+      fn: "f0",
       paramNames: ["x", "a", "a_b"],
       args: [{ kind: "number", value: 5 }, { kind: "box", box: makeBox({ b: 7 }) }, { kind: "optional", value: { kind: "number", value: 3 } }],
     },
     {
-      fn: "f1",
+      fn: "f0",
       paramNames: ["x", "a", "a_b"],
       args: [{ kind: "number", value: -5 }, { kind: "box", box: makeBox({ b: 0 }) }, { kind: "optional", value: { kind: "number", value: 0 } }],
     },
-    // f2: ternaryBool on nullable n (null, present 0, present negative)
-    { fn: "f2", paramNames: ["x", "n"], args: [{ kind: "number", value: 0 }, { kind: "nullable", value: { kind: "null" } }] },
-    { fn: "f2", paramNames: ["x", "n"], args: [{ kind: "number", value: -3 }, { kind: "nullable", value: { kind: "number", value: 0 } }] },
-    { fn: "f2", paramNames: ["x", "n"], args: [{ kind: "number", value: -10 }, { kind: "nullable", value: { kind: "number", value: -4 } }] },
-    // f3: ternaryValue on box.inner.value (absent box, absent inner, absent value, present value)
-    { fn: "f3", paramNames: ["x", "box"], args: [{ kind: "number", value: 1 }, { kind: "optional-box", value: { kind: "undefined" } }] },
-    { fn: "f3", paramNames: ["x", "box"], args: [{ kind: "number", value: 1 }, { kind: "optional-box", value: { kind: "box", box: makeBox({ inner: "absent" }) } }] },
-    { fn: "f3", paramNames: ["x", "box"], args: [{ kind: "number", value: 1 }, { kind: "optional-box", value: { kind: "box", box: makeBox({ inner: "empty" }) } }] },
-    { fn: "f3", paramNames: ["x", "box"], args: [{ kind: "number", value: -2 }, { kind: "optional-box", value: { kind: "box", box: makeBox({ inner: 5 }) } }] },
+    // f1: constAnd on nullable n (null, present 0, present negative)
+    { fn: "f1", paramNames: ["x", "n"], args: [{ kind: "number", value: 0 }, { kind: "nullable", value: { kind: "null" } }] },
+    { fn: "f1", paramNames: ["x", "n"], args: [{ kind: "number", value: -3 }, { kind: "nullable", value: { kind: "number", value: 0 } }] },
+    { fn: "f1", paramNames: ["x", "n"], args: [{ kind: "number", value: -10 }, { kind: "nullable", value: { kind: "number", value: -4 } }] },
+    // f2: callArg on box.inner.value (absent box, absent inner, absent value, present value)
+    { fn: "f2", paramNames: ["x", "box"], args: [{ kind: "number", value: 1 }, { kind: "optional-box", value: { kind: "undefined" } }] },
+    { fn: "f2", paramNames: ["x", "box"], args: [{ kind: "number", value: 1 }, { kind: "optional-box", value: { kind: "box", box: makeBox({ inner: "absent" }) } }] },
+    { fn: "f2", paramNames: ["x", "box"], args: [{ kind: "number", value: 1 }, { kind: "optional-box", value: { kind: "box", box: makeBox({ inner: "empty" }) } }] },
+    { fn: "f2", paramNames: ["x", "box"], args: [{ kind: "number", value: -2 }, { kind: "optional-box", value: { kind: "box", box: makeBox({ inner: 5 }) } }] },
   ];
 
-  // Remaining supported positions f4..f8 (absent, present 0, present negative/positive)
-  for (let i = 4; i < mainSupportedPositions.length; i++) {
+  // Remaining positions f3..f12 (absent, present 0, present negative/positive)
+  for (let i = 3; i < POSITIONS.length; i++) {
     inputs.push(
       { fn: `f${i}`, paramNames: ["x", "o"], args: [{ kind: "number", value: 4 }, { kind: "optional", value: { kind: "undefined" } }] },
       { fn: `f${i}`, paramNames: ["x", "o"], args: [{ kind: "number", value: -2 }, { kind: "optional", value: { kind: "number", value: 0 } }] },
@@ -114,7 +108,7 @@ test("supported positions on midspiral/main verify on both pre and opt, while #2
   }
 
   const returnKinds = new Map<string, "boolean" | "number">(
-    mainSupportedPositions.map((p, i) => [`f${i}`, BOOL_POSITIONS.has(p) ? "boolean" : "number"]),
+    POSITIONS.map((p, i) => [`f${i}`, BOOL_POSITIONS.has(p) ? "boolean" : "number"]),
   );
 
   const workDir = mkdtempSync(path.join(tmpdir(), "lsc-sem13-allpos-"));

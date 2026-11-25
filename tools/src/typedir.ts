@@ -111,6 +111,7 @@ export type TExpr =
   | { kind: "tagMatch"; scrutinee: TExpr; typeName: string;
       cases: { variant: string; body: TExpr }[];
       fallthrough: TExpr | null; ty: Ty }
+  | { kind: "checkedUnwrap"; expr: TExpr; ty: Ty }
   // Spec-only (from //@ annotations):
   // Note: \result is desugared by resolve.ts into a regular var named "\\result";
   // there is no kind: "result" variant in the typed IR.

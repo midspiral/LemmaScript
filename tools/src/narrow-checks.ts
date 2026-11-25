@@ -130,10 +130,12 @@ export function pathKey(e: TExpr): string | null {
 }
 
 function declaredTy(e: TExpr, scope: Scope, ctx: Ctx): Ty | null {
+  if (e.kind === "checkedUnwrap") return e.ty;
   const key = pathKey(e);
-  if (key === null) return null;
-  const bound = scope.types.get(key);
-  if (bound) return bound;
+  if (key !== null) {
+    const bound = scope.types.get(key);
+    if (bound) return bound;
+  }
   if (e.kind !== "field") return null;
   const objTy = declaredTy(e.obj, scope, ctx);
   if (!objTy || objTy.kind === "optional") return null;
@@ -230,6 +232,9 @@ function walkExpr(e: TExpr, scope: Scope, ctx: Ctx): void {
       return;
     }
     case "num": case "bigint": case "str": case "bool": case "havoc":
+      return;
+    case "checkedUnwrap":
+      walkScrutinee(e.expr, scope, ctx);
       return;
     case "field": {
       requireUnwrapped(e.obj, "a field receiver", scope, ctx);
@@ -402,6 +407,7 @@ export function show(e: TExpr): string {
     case "conditional": return `(${show(e.cond)} ? ${show(e.then)} : ${show(e.else)})`;
     case "nullish": return `(${show(e.left)} ?? ${show(e.right)})`;
     case "someMatch": return `someMatch ${show(e.scrutinee)} { Some(${e.binder}) => ${show(e.someBody)}, None => ${show(e.noneBody)} }`;
+    case "checkedUnwrap": return `(${show(e.expr)}).value`;
     default: return `<${e.kind}>`;
   }
 }

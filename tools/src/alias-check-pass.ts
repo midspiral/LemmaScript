@@ -105,6 +105,7 @@ function hasNestedMutableRef(ty: Ty, typeDecls: TypeDeclInfo[], seen = new Set<s
 function accessPathRoot(e: TExpr): string | null {
   if (e.kind === "var") return e.name;
   if (e.kind === "field") return accessPathRoot(e.obj);
+  if (e.kind === "checkedUnwrap") return accessPathRoot(e.expr);
   return null;
 }
 
@@ -241,6 +242,8 @@ function aliasSourceInfo(e: TExpr, typeDecls: TypeDeclInfo[], allowNonMutableWra
         aliasSourceInfo(e.someBody, typeDecls),
         aliasSourceInfo(e.noneBody, typeDecls),
       ]);
+    case "checkedUnwrap":
+      return aliasSourceInfo(e.expr, typeDecls, true);
     default:
       return empty;
   }
@@ -260,6 +263,9 @@ function collectFreeVarsExpr(e: TExpr, out: Set<string>): void {
       collectFreeVarsExpr(e.right, out);
       return;
     case "unop":
+      collectFreeVarsExpr(e.expr, out);
+      return;
+    case "checkedUnwrap":
       collectFreeVarsExpr(e.expr, out);
       return;
     case "call":
@@ -797,6 +803,9 @@ function checkLambdasInExpr(
       checkLambdasInExpr(e.right, state, liveAfter, ensuresVars, typeDecls, fnName, out);
       return;
     case "unop":
+      checkLambdasInExpr(e.expr, state, liveAfter, ensuresVars, typeDecls, fnName, out);
+      return;
+    case "checkedUnwrap":
       checkLambdasInExpr(e.expr, state, liveAfter, ensuresVars, typeDecls, fnName, out);
       return;
     case "call":
