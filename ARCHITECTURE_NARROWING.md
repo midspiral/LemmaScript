@@ -204,9 +204,55 @@ this for variant-specific field access in the fallthrough).
 - **Compound discriminants** (`x.kind === "a" || x.kind === "b" ==> use(x.shared)`).
   TS narrows to the variants that share the field; we don't.
 - **Complex-expression narrowing.** `if (m.get(k) !== undefined) use(m.get(k))` is rejected (TS-faithful). Users must bind first.
-- **Re-widening on mutation.** TS conservatively widens a narrowed access
-  after any function call that could mutate. We don't widen — once narrowed,
-  stays narrowed within the scope.
+- **Re-widening on mutation.** Within a function, `resolve.ts` tracks each variable's declared `storageTy` separately from its narrowed flow type and restores `storageTy` (dropping affected `narrowedPaths`) after mutating `assign`, `if`, `while`, `forof`, and `switch` statements. Cross-function mutation re-widening is not modeled.
 - **Map.get ceremony elimination.** That's the peephole's job, not narrow's.
   Once narrowing lowers to `match m.get(k) { ... }`, peephole collapses
   the shape into `if k in m { ... m[k] ... }`.
+
+---
+
+## Hybrid Checked Reads, `Place` Write-Back, and Live-Alias Rejection
+
+`someMatch` alone breaks down when a narrowed value is mutated in place,
+cleared to `undefined` inside a branch, or narrowed across a `while`
+condition, definite assignment, or `||` chain. Three additions extend the
+pipeline while keeping `someMatch` for safe cases (preserving zero diff
+churn on existing proofs):
+
+1. **Checked reads (`checked-reads.ts`).** Runs at the end of `narrow` on
+   any variable or field path whose declared `storageTy` is `Option<T>`
+   but whose flow type was narrowed without an enclosing `someMatch`
+   (such as `while (cur !== undefined)`, definite assignment `if (v === undefined) { v = 6; }`, `||` chains, or a branch that may clear the
+   variable). `checked-reads.ts` wraps those reads in a `checkedUnwrap`
+   node, which lowers to `.value` in Dafny and `.get (by grind)` in Lean
+   (with `lean-emit.ts` emitting dependent `if _h : ...` around `&&`/`||`/`if`
+   expressions that guard a `checkedUnwrap` so `grind` has the presence
+   hypothesis in scope). Direct operands of `=== undefined` / `!== undefined`
+   are never unwrapped.
+2. **Unified `Place` write-back (`places.ts`, `place-lowering.ts`, `transform.ts`).**
+   In-place mutations (`arr.push`, `arr[i] = v`, nested field writes,
+   optional `pop`/`shift`, `m.get(k)?.push`) inside a `someMatch` or
+   union-variant arm write back through the active narrowing frames so
+   storage and binder stay in sync (e.g. re-wrapping `Option.Some(...)`).
+   The pure `PlacePath` kernel in `tools/src/places.ts` is self-verified
+   in CI (`LemmaScript-files.txt`).
+3. **Live-alias mutation rejection (`alias-check.ts`, `alias-check-pass.ts`).**
+   Because Dafny and Lean model arrays, maps, sets, and records as
+   immutable values, mutating a container through an alias while the
+   original binding is still read afterward would silently prove false
+   postconditions. `alias-check-pass.ts` combines backward liveness with
+   forward alias tracking and rejects live-alias mutations while allowing
+   read-only sharing, dead-source moves, and explicit clones. Its conflict
+   kernel in `tools/src/alias-check.ts` is also self-verified in CI.
+4. **Precondition-preserving optional comparisons (`transform.ts`).**
+   When an executable optional comparison (`===`, `!==`, `<`, `<=`, `>`, `>=`)
+   has a precondition-bearing non-optional operand (calls, indexing,
+   checked reads, `/`, `%`), `transform.ts` binds it in `let _cmpN := ...`
+   before matching the `Option` so its preconditions are checked even on
+   `None`. Spec clauses (`requires`/`ensures`/`invariants`) skip this
+   hoisting.
+
+The formal core calculus for checked reads, `Place` write-back, and
+`Nullish<T>` lives in [formal/narrowing-model.dfy](formal/narrowing-model.dfy)
+(verified in CI), and the 3-way fuzzer scorecard lives in
+[formal/narrowing-shootout.md](formal/narrowing-shootout.md).
