@@ -91,6 +91,12 @@ Arrays, strings, maps, and sets all carry a useful slice of their standard libra
 
 Indexing into an array under `noUncheckedIndexedAccess` yields an optional element, matching TypeScript's own typing.
 
+### Narrowing and in-place mutation
+
+Flow-sensitive narrowing works across `if`, `else`, early returns (including `||` chains and `opt?.field !== lit`), `while` conditions, and definite assignment (`if (v === undefined) { v = 6; }`). In-place updates on narrowed optionals and union variants (`arr.push`, `arr[i] = v`, field writes) automatically write back to the underlying binding.
+
+Because Dafny and Lean model arrays, maps, sets, and records as immutable values, LemmaScript **rejects mutating a container through a live alias** — e.g. `const b = a; b.push(1); return a.length;` fails to compile with a diagnostic instead of proving a false postcondition. Read-only sharing (`const b = a; return a.length + b.length`), dead-source moves (`const b = a; b.push(1); return b.length`), and explicit clones (`const b = [...a]`, `a.slice()`, `{ ...obj }`) are allowed.
+
 ## Modeling data
 
 Two shapes cover most domain modeling, and both translate directly:
