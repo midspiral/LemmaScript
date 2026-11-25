@@ -64,7 +64,7 @@ function additionsOnly(genPath: string, dfyPath: string): boolean {
     diff = execFileSync(
       "git",
       ["diff", "--no-index", "--minimal", "--no-color", "--no-ext-diff", "--no-textconv", "--text", "--", genPath, dfyPath],
-      { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: Infinity },
     );
   } catch (e: any) {
     // `git diff --no-index` exits 1 for a valid, non-empty comparison. Every
