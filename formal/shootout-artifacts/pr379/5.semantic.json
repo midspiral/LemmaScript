@@ -1,0 +1,117 @@
+{
+  "schema": "lemmascript-imperative-semantic-case/1",
+  "family": "nullish-falsy",
+  "label": "null-vs-undefined-eq",
+  "fnName": "target",
+  "returnKind": "boolean",
+  "tsText": "export function target(x: number | null | undefined): boolean {\n  return x === null;\n}",
+  "inputs": [
+    {
+      "args": [
+        {
+          "kind": "nullish-int",
+          "value": null
+        }
+      ]
+    },
+    {
+      "args": [
+        {
+          "kind": "nullish-int"
+        }
+      ]
+    },
+    {
+      "args": [
+        {
+          "kind": "nullish-int",
+          "value": 0
+        }
+      ]
+    }
+  ],
+  "oracle": "soundness-refuted",
+  "stage": "both",
+  "signature": "soundness-refuted (nullish-falsy/null-vs-undefined-eq)",
+  "detail": "CRITICAL: Node returned false for target(Option.None), yet Dafny proved result != false.",
+  "checks": [
+    {
+      "inputIndex": 0,
+      "nodeOutcome": {
+        "kind": "value",
+        "value": true
+      },
+      "dafnyArgs": [
+        "Option.None"
+      ],
+      "stage": "pre",
+      "status": "ok",
+      "detail": "verified"
+    },
+    {
+      "inputIndex": 1,
+      "nodeOutcome": {
+        "kind": "value",
+        "value": false
+      },
+      "dafnyArgs": [
+        "Option.None"
+      ],
+      "stage": "pre",
+      "status": "soundness-refuted",
+      "detail": "Dafny program verifier finished with 1 verified, 0 errors"
+    },
+    {
+      "inputIndex": 2,
+      "nodeOutcome": {
+        "kind": "value",
+        "value": false
+      },
+      "dafnyArgs": [
+        "Option.Some(0)"
+      ],
+      "stage": "pre",
+      "status": "ok",
+      "detail": "verified"
+    },
+    {
+      "inputIndex": 0,
+      "nodeOutcome": {
+        "kind": "value",
+        "value": true
+      },
+      "dafnyArgs": [
+        "Option.None"
+      ],
+      "stage": "opt",
+      "status": "ok",
+      "detail": "verified"
+    },
+    {
+      "inputIndex": 1,
+      "nodeOutcome": {
+        "kind": "value",
+        "value": false
+      },
+      "dafnyArgs": [
+        "Option.None"
+      ],
+      "stage": "opt",
+      "status": "soundness-refuted",
+      "detail": "Dafny program verifier finished with 1 verified, 0 errors"
+    },
+    {
+      "inputIndex": 2,
+      "nodeOutcome": {
+        "kind": "value",
+        "value": false
+      },
+      "dafnyArgs": [
+        "Option.Some(0)"
+      ],
+      "stage": "opt",
+      "status": "ok",
+      "detail": "verified"
+    }
+  ]
+}
