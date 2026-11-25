@@ -449,15 +449,15 @@ function runFile(
       ? new RunLog({ logDir: resolveLogDir(absPath, configFile), cmd: logCmd, sourcePath: absPath, extraFlags, lscVersion: safely(lscVersion) })
       : undefined;
 
-    if (cmd === "gen") { dafnyGen(genPath, dfyPath, text); return; }
+    if (cmd === "gen") { dafnyGen(genPath, dfyPath, text, basePath); return; }
     if (cmd === "gen-check") {
-      dafnyGen(genPath, dfyPath, text);
-      if (!dafnyCheckDiff(genPath, dfyPath)) process.exit(1);
+      dafnyGen(genPath, dfyPath, text, basePath);
+      if (!dafnyCheckDiff(genPath, dfyPath, undefined, basePath)) process.exit(1);
       return;
     }
     if (cmd === "check") {
-      dafnyGen(genPath, dfyPath, text);
-      if (!dafnyCheckDiff(genPath, dfyPath, log)) process.exit(1);
+      dafnyGen(genPath, dfyPath, text, basePath);
+      if (!dafnyCheckDiff(genPath, dfyPath, log, basePath)) process.exit(1);
       if (!dafnyVerify(dfyPath, artifactDir, timeLimit, extraFlags, log)) process.exit(1);
       return;
     }
