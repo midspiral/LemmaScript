@@ -38,7 +38,7 @@ lemma single_ensures(n: int)
 
 function anyOdd(n: int): bool
 {
-  (exists n' :: n' in single(n) && (JSRem(n', 2) == 1))
+  (exists n_2 :: n_2 in single(n) && (JSRem(n_2, 2) == 1))
 }
 
 lemma anyOdd_ensures(n: int)
@@ -91,7 +91,7 @@ lemma callee_ensures(x: int)
 
 function someEscCollision(i_x': int, i_x: int): bool
 {
-  (exists i_x'' :: i_x'' in single(i_x') && (i_x'' > 0))
+  (exists i_x_2 :: i_x_2 in single(i_x') && (i_x_2 > 0))
 }
 
 lemma someEscCollision_ensures(i_x': int, i_x: int)
