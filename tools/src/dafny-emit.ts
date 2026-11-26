@@ -3,7 +3,8 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { decimalNumberLiteral, exactIntegerLiteral, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
+import { decimalNumberLiteral, exactIntegerLiteral, patternBinders, usesName, usesNameInDecl, usesNameInStmts } from "./ir.js";
+import { collectAssignedIrTargets } from "./place-lowering.js";
 import type { Ty } from "./typedir.js";
 import { freshNameWhere, userNames } from "./names.js";
 import { DEFAULT_OPTIONS, resolveOptions, type LscOptions } from "./config.js";
@@ -911,8 +912,21 @@ function emitStmt(s: Stmt, indent: number): string {
       const scrut = emitScrutinee(s.scrutinee);
       const lines = [`${pad}match ${scrut} {`];
       for (const arm of s.arms) {
-        lines.push(`${pad}  case ${translatePattern(arm.pattern)} =>`);
-        lines.push(emitStmts(arm.body, indent + 2));
+        const binders = patternBinders(arm.pattern);
+        const assigned = binders.length > 0 ? collectAssignedIrTargets(arm.body) : null;
+        const mutated = assigned ? binders.filter(b => assigned.has(b)) : [];
+        if (mutated.length > 0) {
+          lines.push(`${pad}  case ${translatePattern(arm.pattern)} => {`);
+          for (const b of mutated) {
+            const eb = escapeName(b);
+            lines.push(`${pad}    var ${eb} := ${eb};`);
+          }
+          lines.push(emitStmts(arm.body, indent + 2));
+          lines.push(`${pad}  }`);
+        } else {
+          lines.push(`${pad}  case ${translatePattern(arm.pattern)} =>`);
+          lines.push(emitStmts(arm.body, indent + 2));
+        }
       }
       lines.push(`${pad}}`);
       return lines.join("\n");

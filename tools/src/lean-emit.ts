@@ -541,15 +541,30 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // access with a discriminator test, so that branch is never reached.
       if (e.fromUnion) {
         const ctors = _unionCtors.get(e.fromUnion);
-        // Pin the owning ctor when given (field names repeat across variants);
-        // otherwise fall back to the sole variant carrying this field name.
-        const owner = (e.ctor ? ctors?.find(c => c.name === e.ctor) : undefined)
-          ?? ctors?.find(c => c.fields.some(f => f.name === e.field));
-        if (owner) {
-          const idx = owner.fields.findIndex(f => f.name === e.field);
-          const pats = owner.fields.map((_, i) => (i === idx ? "_v" : "_")).join(" ");
-          const fty = tyToLean(owner.fields[idx].type);
-          return `(match ${emitExpr(e.obj)} with | .${leanCtorName(owner.name)} ${pats} => _v | _ => (default : ${fty}))`;
+        if (ctors) {
+          // Pin the owning ctor when given (field names repeat across variants);
+          // otherwise match every variant carrying this field with a uniform type
+          // (falling back to the first matching variant for heterogeneous fields).
+          const pinned = e.ctor ? ctors.find(c => c.name === e.ctor) : undefined;
+          const matching = pinned ? [pinned] : ctors.filter(c => c.fields.some(f => f.name === e.field));
+          if (matching.length > 0) {
+            const firstIdx = matching[0].fields.findIndex(f => f.name === e.field);
+            const firstTy = tyToLean(matching[0].fields[firstIdx].type);
+            const uniform = matching.every(c => {
+              const idx = c.fields.findIndex(f => f.name === e.field);
+              return tyToLean(c.fields[idx].type) === firstTy;
+            });
+            const owners = uniform ? matching : [matching[0]];
+            const arms = owners.map(owner => {
+              const idx = owner.fields.findIndex(f => f.name === e.field);
+              const pats = owner.fields.map((_, i) => (i === idx ? "_v" : "_")).join(" ");
+              return `| .${leanCtorName(owner.name)} ${pats} => _v`;
+            });
+            if (owners.length < ctors.length) {
+              arms.push(`| _ => (default : ${firstTy})`);
+            }
+            return `(match ${emitExpr(e.obj)} with ${arms.join(" ")})`;
+          }
         }
       }
       const obj = emitExpr(e.obj);
