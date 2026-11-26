@@ -2277,12 +2277,20 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     case "throw":
       return [{ kind: "throw" }, ctx.env];
 
-    case "switch":
-      return [{
-        kind: "switch", expr: resolveExpr(s.expr, ctx), discriminant: s.discriminant,
-        cases: s.cases.map(c => ({ label: c.label, body: resolveBlock(c.body, ctx) })),
-        defaultBody: resolveBlock(s.defaultBody, ctx),
-      }, ctx.env];
+    case "switch": {
+      const expr = resolveExpr(s.expr, ctx);
+      const decl = expr.ty.kind === "user" ? findDecl(ctx, tyBaseName(expr.ty.name)) : undefined;
+      const path = decl?.kind === "discriminated-union" && decl.discriminant === s.discriminant
+        ? asTExprAccessPath(expr) : null;
+      const cases = s.cases.map(c => {
+        const branch = path ? { ...ctx, narrowedPaths: [
+          ...ctx.narrowedPaths, { path, narrowedTy: expr.ty, variant: c.label },
+        ] } : ctx;
+        return { label: c.label, body: resolveBlock(c.body, branch) };
+      });
+      return [{ kind: "switch", expr, discriminant: s.discriminant, cases,
+        defaultBody: resolveBlock(s.defaultBody, ctx) }, ctx.env];
+    }
 
     case "ghostLet": {
       const specCtx = { ...ctx, inSpec: true };
