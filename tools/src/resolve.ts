@@ -13,7 +13,7 @@ import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
 import { recognizeBuiltin, builtinSpec, callbackArgumentTypes, callbackBaseArity } from "./builtins.js";
-import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName } from "./typedecls.js";
+import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName, remainingVariant } from "./typedecls.js";
 import { presentFact, variantFact } from "./condition-facts.js";
 
 // ── Environment ──────────────────────────────────────────────
@@ -387,14 +387,16 @@ function collectEarlyReturnNarrowings(cond: TExpr): { varName: string; innerTy: 
   return n ? [n] : [];
 }
 
-/** Negated discriminant check (`path.kind !== "lit"`) on a var or field path.
- *  After `if (path.kind !== "lit") return`, the rest of the block knows the
- *  path is that variant. */
-function negatedVariantCheck(cond: TExpr): NarrowedPath | null {
-  if (cond.kind === "binop" && cond.op === "!==" && cond.right.kind === "str" &&
+/** Variant known when a discriminant check is false: the named variant for
+ *  `!==`, or the sole remaining variant for `===`. Used by else branches and
+ *  continuations after an early return. */
+function falseVariantCheck(cond: TExpr, ctx: Ctx): NarrowedPath | null {
+  if (cond.kind === "binop" && (cond.op === "!==" || cond.op === "===") && cond.right.kind === "str" &&
       cond.left.kind === "field" && cond.left.isDiscriminant && cond.left.obj.ty.kind === "user") {
     const path = asTExprAccessPath(cond.left.obj);
-    if (path) return { path, narrowedTy: cond.left.obj.ty, variant: cond.right.value };
+    const variant = cond.op === "!==" ? cond.right.value
+      : remainingVariant(findDecl(ctx, tyBaseName(cond.left.obj.ty.name)), [cond.right.value])?.name;
+    if (path && variant !== undefined) return { path, narrowedTy: cond.left.obj.ty, variant };
   }
   return null;
 }
@@ -1827,6 +1829,8 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       if (negPaths.length > 0) {
         elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, ...negPaths] };
       }
+      const variant = falseVariantCheck(cond, ctx);
+      if (variant) elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, variant] };
       // Map-index narrowing: `k in m` in the cond narrows the then-branch; `!(k in m)`
       // narrows the else-branch. Parallel to the if-statement hook in resolveStmt.
       thenCtx = withInAtoms(thenCtx, extractInAtoms(cond));
@@ -2061,7 +2065,7 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
             narrowedPaths = [...narrowedPaths, np];
           }
         }
-        const nv = negatedVariantCheck(typed.cond);
+        const nv = falseVariantCheck(typed.cond, currentCtx);
         if (nv) narrowedPaths = [...narrowedPaths, nv];
       }
       // Map-index narrowing: `if (!(k in m)) return;` means `k in m` holds in rest.
@@ -2196,6 +2200,8 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       if (negPaths.length > 0) {
         elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, ...negPaths] };
       }
+      const variant = falseVariantCheck(resolvedCond, ctx);
+      if (variant) elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, variant] };
       // Narrow map index access across `k in m` / `!(k in m)` in the cond:
       // positive atoms (from `k in m` or &&-chains containing it) → then-branch;
       // negated atoms (from `!(k in m)`) → else-branch.
@@ -2282,14 +2288,13 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       const decl = expr.ty.kind === "user" ? findDecl(ctx, tyBaseName(expr.ty.name)) : undefined;
       const path = decl?.kind === "discriminated-union" && decl.discriminant === s.discriminant
         ? asTExprAccessPath(expr) : null;
-      const cases = s.cases.map(c => {
-        const branch = path ? { ...ctx, narrowedPaths: [
-          ...ctx.narrowedPaths, { path, narrowedTy: expr.ty, variant: c.label },
-        ] } : ctx;
-        return { label: c.label, body: resolveBlock(c.body, branch) };
-      });
+      const branchCtx = (variant: string): Ctx => path ? { ...ctx, narrowedPaths: [
+        ...ctx.narrowedPaths, { path, narrowedTy: expr.ty, variant },
+      ] } : ctx;
+      const cases = s.cases.map(c => ({ label: c.label, body: resolveBlock(c.body, branchCtx(c.label)) }));
+      const remaining = path ? remainingVariant(decl, s.cases.map(c => c.label)) : undefined;
       return [{ kind: "switch", expr, discriminant: s.discriminant, cases,
-        defaultBody: resolveBlock(s.defaultBody, ctx) }, ctx.env];
+        defaultBody: resolveBlock(s.defaultBody, remaining ? branchCtx(remaining.name) : ctx) }, ctx.env];
     }
 
     case "ghostLet": {

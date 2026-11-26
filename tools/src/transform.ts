@@ -15,7 +15,7 @@ import { freshName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
 import { lowerIndexedCallback } from "./callback-lowering.js";
 import { isFalsyCapableTy } from "./condition-facts.js";
-import { declOf, declOfKind, declOfTy, unionDeclOfTy, declWithVariant, tyBaseName } from "./typedecls.js";
+import { declOf, declOfKind, declOfTy, unionDeclOfTy, declWithVariant, tyBaseName, remainingVariant } from "./typedecls.js";
 import {
   buildNestedFieldExpr,
   collectAssignedIrTargets,
@@ -2789,7 +2789,7 @@ function emitMatchStmt(
   // becomes `match x { case ArrayBranch(..) => ... case NonArrayBranch(..) => }`.
   const allCovered = !!decl?.variants && cases.length >= decl.variants.length;
   if (!allCovered) {
-    const remaining = remainingVariant(typeName, cases, typeDecls);
+    const remaining = remainingVariant(decl, cases.map(c => c.variant));
     if (remaining) {
       // Exactly one variant left — destructure so the fallthrough body can
       // access variant-specific fields (Lean requires this; Dafny tolerates `_`).
@@ -2813,16 +2813,6 @@ function replaceVarInTStmts(stmts: TStmt[], oldName: string, newName: string, ne
     }
     return null;
   }));
-}
-
-/** If the chain has matched all variants but one, return that remaining variant. */
-function remainingVariant(typeName: string, cases: { variant: string }[], typeDecls: TypeDeclInfo[]): { name: string; fields: { name: string; tsType: string; type?: Ty }[] } | null {
-  const decl = declOf(typeDecls, typeName);
-  if (!decl?.variants) return null;
-  const matched = new Set(cases.map(c => c.variant));
-  const remaining = decl.variants.filter(v => !matched.has(v.name));
-  if (remaining.length !== 1) return null;
-  return remaining[0];
 }
 
 /** `switch(obj.field)` is stripped at extraction to scrutinee `obj` + discriminant
@@ -2868,7 +2858,18 @@ function stampScrutineeUpdates(body: Stmt[], varName: string, ctorName: string, 
   return body.map(st => mapStmt(st, stamp));
 }
 
+/** A default covering one union variant needs the same payload binders as an
+ *  explicit case, in both pure and imperative lowering. */
+function withExplicitVariantDefault(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): TStmt & { kind: "switch" } {
+  if (s.defaultBody.length === 0) return s;
+  const decl = unionDeclOfTy(typeDecls, s.expr.ty);
+  if (decl?.discriminant !== s.discriminant) return s;
+  const remaining = remainingVariant(decl, s.cases.map(c => c.label));
+  return remaining ? { ...s, cases: [...s.cases, { label: remaining.name, body: s.defaultBody }], defaultBody: [] } : s;
+}
+
 function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Stmt {
+  s = withExplicitVariantDefault(s, typeDecls);
   const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
   const ef = enumFieldSwitch(s, typeDecls);
   const matchTy = ef ? ef.fieldTy : s.expr.ty;
@@ -3124,6 +3125,7 @@ function transformPureBody(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Expr | nu
 }
 
 function transformPureSwitch(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]): Expr | null {
+  s = withExplicitVariantDefault(s, typeDecls);
   const ef = enumFieldSwitch(s, typeDecls);
   if (ef) {
     const cases = s.cases.map(c => ({ name: c.label, body: c.body }));
@@ -3190,7 +3192,7 @@ function transformPureMatch(chain: Chain, typeDecls: TypeDeclInfo[]): Expr | nul
   // since Lean errors on redundant match arms.
   const allCovered = decl?.variants && chain.cases.length >= decl.variants.length;
   if (chain.fallthrough.length > 0 && !allCovered) {
-    const remaining = remainingVariant(chain.typeName, chain.cases, typeDecls);
+    const remaining = remainingVariant(decl, chain.cases.map(c => c.variant));
     if (remaining) {
       // Exactly one variant left — destructure for variant-specific field access.
       const projected = projectStructuralCallArgsInTStmts(chain.fallthrough, chain.varName, remaining.fields);
