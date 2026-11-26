@@ -1,5 +1,6 @@
 //@ backend dafny
 //@ option string-semantics javascript-utf16
+//@ option dafny-library local
 
 interface Deadline { day: string }
 type Bound = { tag: "always"; value: boolean } | { tag: "until"; value: Deadline };
