@@ -14,7 +14,14 @@ function writeGen(genPath: string, text: string) {
   console.log(`Generated: ${genPath}`);
 }
 
-export function dafnyGen(genPath: string, dfyPath: string, text: string) {
+export function dafnyGen(genPath: string, dfyPath: string, text: string, basePath?: string) {
+  // Preserve the previous generation as the three-way merge base when overwriting
+  // a changed .dfy.gen beside an existing .dfy, so a later `lsc regen` still
+  // merges from the generation the proof derives from.
+  if (basePath && existsSync(dfyPath) && existsSync(genPath) && !existsSync(basePath)) {
+    const oldGen = readFileSync(genPath, "utf-8");
+    if (oldGen !== text) writeFileSync(basePath, oldGen);
+  }
   writeGen(genPath, text);
   if (!existsSync(dfyPath)) {
     writeFileSync(dfyPath, text);
@@ -22,10 +29,14 @@ export function dafnyGen(genPath: string, dfyPath: string, text: string) {
   }
 }
 
-export function dafnyCheckDiff(genPath: string, dfyPath: string, log?: RunLog): boolean {
+export function dafnyCheckDiff(genPath: string, dfyPath: string, log?: RunLog, basePath?: string): boolean {
   const ok = additionsOnly(genPath, dfyPath);
-  if (!ok) log?.finish({ stage: "diff", exit: 1, dfyPath });
-  return ok;
+  if (!ok) {
+    log?.finish({ stage: "diff", exit: 1, dfyPath });
+    return false;
+  }
+  if (basePath && existsSync(basePath)) unlinkSync(basePath);
+  return true;
 }
 
 function additionsOnly(genPath: string, dfyPath: string): boolean {
@@ -53,7 +64,7 @@ function additionsOnly(genPath: string, dfyPath: string): boolean {
     diff = execFileSync(
       "git",
       ["diff", "--no-index", "--minimal", "--no-color", "--no-ext-diff", "--no-textconv", "--text", "--", genPath, dfyPath],
-      { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: Infinity },
     );
   } catch (e: any) {
     // `git diff --no-index` exits 1 for a valid, non-empty comparison. Every
@@ -86,11 +97,11 @@ function additionsOnly(genPath: string, dfyPath: string): boolean {
     for (const d of deletions.slice(0, 5)) console.error("  " + d);
     return false;
   }
-  // Added lines must not bypass the verifier or change its options.
+  // Added lines must not bypass the verifier, weaken generated contracts, or change verifier options.
   const violations = proofAdditionViolations(
     readFileSync(genPath, "utf-8"), readFileSync(dfyPath, "utf-8"), path.basename(dfyPath));
   if (violations.length > 0) {
-    console.error(`ERROR: ${path.basename(dfyPath)} has proof additions that bypass verification:`);
+    console.error(`ERROR: ${path.basename(dfyPath)} has disallowed proof additions:`);
     for (const v of violations) console.error("  " + v);
     return false;
   }

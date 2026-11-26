@@ -1,0 +1,87 @@
+{
+  "schema": "lemmascript-imperative-semantic-case/1",
+  "family": "mutation",
+  "label": "opt-array-push",
+  "fnName": "target",
+  "returnKind": "number",
+  "tsText": "export function target(arr?: number[]): number {\n  if (arr !== undefined) {\n    arr.push(9);\n  }\n  return arr !== undefined ? arr.length : 0;\n}",
+  "inputs": [
+    {
+      "args": [
+        {
+          "kind": "opt-int-array",
+          "value": [
+            -1,
+            -4,
+            6
+          ]
+        }
+      ]
+    },
+    {
+      "args": [
+        {
+          "kind": "opt-int-array"
+        }
+      ]
+    }
+  ],
+  "oracle": "soundness-refuted",
+  "stage": "both",
+  "signature": "soundness-refuted (mutation/opt-array-push)",
+  "detail": "CRITICAL: Node returned 4 for target(Option.Some([(-1), (-4), 6])), yet Dafny proved result != 4.",
+  "checks": [
+    {
+      "inputIndex": 0,
+      "nodeOutcome": {
+        "kind": "value",
+        "value": 4
+      },
+      "dafnyArgs": [
+        "Option.Some([(-1), (-4), 6])"
+      ],
+      "stage": "pre",
+      "status": "soundness-refuted",
+      "detail": "Dafny program verifier finished with 1 verified, 0 errors"
+    },
+    {
+      "inputIndex": 1,
+      "nodeOutcome": {
+        "kind": "value",
+        "value": 0
+      },
+      "dafnyArgs": [
+        "Option.None"
+      ],
+      "stage": "pre",
+      "status": "ok",
+      "detail": "verified"
+    },
+    {
+      "inputIndex": 0,
+      "nodeOutcome": {
+        "kind": "value",
+        "value": 4
+      },
+      "dafnyArgs": [
+        "Option.Some([(-1), (-4), 6])"
+      ],
+      "stage": "opt",
+      "status": "soundness-refuted",
+      "detail": "Dafny program verifier finished with 1 verified, 0 errors"
+    },
+    {
+      "inputIndex": 1,
+      "nodeOutcome": {
+        "kind": "value",
+        "value": 0
+      },
+      "dafnyArgs": [
+        "Option.None"
+      ],
+      "stage": "opt",
+      "status": "ok",
+      "detail": "verified"
+    }
+  ]
+}
