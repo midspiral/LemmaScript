@@ -40,7 +40,8 @@ Two things shape what you can verify:
 | `[T, T, ...]` (homogeneous tuple) | sequence | Same-typed elements model as a `seq` (more capable than a fixed tuple). |
 | `Map<K, V>` / `Record<K, V>` | map | |
 | `Set<T>` | set | |
-| `T \| undefined`, `T \| null` | optional | `undefined` and `null` model identically. |
+| `T \| undefined`, `T \| null` | optional (`Option<T>`) | Single-sentinel optional; strict `===` distinguishes the two sentinels (`null !== undefined`), while loose `== null` / `== undefined` matches either. |
+| `T \| null \| undefined` | nullish (`Nullish<T>`) | Three-case datatype (`Undefined \| Null \| Value(value: T)`) emitted on demand when both `null` and `undefined` are present. |
 | user `type` / `interface` | generated datatype | Records and unions — see [Modeling data](#modeling-data). |
 | `<T extends Base>` | generic | Type parameter erased to its bound; `.map`/`.filter` etc. work over it. |
 | `(a: T) => R` | function value | Used for higher-order params and lambdas. |

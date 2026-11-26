@@ -6,7 +6,7 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { anyExpr, decimalNumberLiteral, usesNameInDecl, patternBinders } from "./ir.js";
+import { anyExpr, anyExprInStmts, decimalNumberLiteral, usesNameInDecl, patternBinders } from "./ir.js";
 import type { Ty } from "./typedir.js";
 import { freshName, freshNameWhere } from "./names.js";
 
@@ -35,6 +35,7 @@ function tyToLean(ty: Ty): string {
     case "bool": return "Bool";
     case "string": return "String";
     case "void": return "Unit";
+    case "null": return "Unit";
     case "array": {
       const elem = tyToLean(ty.elem);
       return elem.includes(" ") ? `Array (${elem})` : `Array ${elem}`;
@@ -60,6 +61,11 @@ function tyToLean(ty: Ty): string {
     case "optional": {
       const inner = tyToLean(ty.inner);
       return inner.includes(" ") ? `Option (${inner})` : `Option ${inner}`;
+    }
+    case "nullish": {
+      _needsNullish = true;
+      const inner = tyToLean(ty.inner);
+      return inner.includes(" ") ? `Nullish (${inner})` : `Nullish ${inner}`;
     }
     case "user": return ty.name;
     case "fn": {
@@ -185,8 +191,10 @@ function emitDeriving(name: string, deriving: string[]): string {
 }
 
 let _needsJSString = false;
+let _needsNullish = false;
 let _needsUnknown = false;
 let _unknownEmitted = false;  // across files in one run — the def file imports the types file
+let _depIfCounter = 0;
 
 // Bool-vs-Prop context. Lean keeps `Bool` and `Prop` distinct; the IR uses the
 // Prop connectives (∧/∨/¬) uniformly. In a computational position the connectives
@@ -196,10 +204,20 @@ let _unknownEmitted = false;  // across files in one run — the def file import
 // and stays in the more proof-friendly Prop form.
 let _boolCtx = false;
 
+const LEAN_CTOR_MAP: Record<string, string> = {
+  "nullishUndefined": "undefined",
+  "nullishNull": "null",
+  "nullishValue": "value",
+};
+
 /** Constructor names come from source strings (string-union values,
  *  discriminated-union tags) and may contain non-identifier characters
  *  ("spec-pure"); guillemet-quote those — exact and collision-free. */
 function leanCtorName(name: string): string {
+  if (Object.hasOwn(LEAN_CTOR_MAP, name)) {
+    _needsNullish = true;
+    return LEAN_CTOR_MAP[name];
+  }
   return /^[A-Za-z_][A-Za-z0-9_'!?]*$/.test(name) ? name : `«${name}»`;
 }
 
@@ -238,10 +256,21 @@ function connectiveHasNonCoercibleOperand(e: Expr): boolean {
 // so a body with no such operand stays Prop — this keeps arithmetic predicates like
 // `x ≥ 0 ∧ x < n` in `∧` form rather than forcing `&&`.)
 function needsBoolConnectives(e: Expr): boolean {
-  return anyExpr(e, connectiveHasNonCoercibleOperand);
+  return anyExpr(e, x =>
+    connectiveHasNonCoercibleOperand(x) ||
+    ((x.kind === "binop" && (x.op === "∧" || x.op === "∨") && anyExpr(x.right, y => y.kind === "checkedUnwrap")) ||
+     (x.kind === "if" && (anyExpr(x.then, y => y.kind === "checkedUnwrap") || anyExpr(x.else, y => y.kind === "checkedUnwrap")))),
+  );
 }
 
 function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: string, args: string[]): string {
+  // Nullish<T> discriminators (#304)
+  if (tyKind === "nullish") {
+    _needsNullish = true;
+    if (method === "isNull" || method === "isUndefined" || method === "isValue") {
+      return `(${obj}).${method}`;
+    }
+  }
   // Array methods
   if (tyKind === "array") {
     if (method === "map")      return `${obj}.${monadic ? "mapM" : "map"} ${args[0]}`;
@@ -316,6 +345,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "str": return `"${e.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
 
     case "constructor": {
+      if (e.type === "Nullish") _needsNullish = true;
       // With type: emit `Type.name` (unambiguous; needed in expression positions
       // like `match ... | .none => Type.some x` where elaboration can't infer).
       // Without type: emit `.name` (dotted form; works in pattern positions
@@ -423,12 +453,13 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         const l = emitExpr(e.left);
         const r = emitExpr(e.right);
         const condProp = isPropValued(e.left) ? l : `(${l}) = true`;
+        const h = `_h${_depIfCounter++}`;
         const tVal = _boolCtx ? "true" : "True";
         const fVal = _boolCtx ? "false" : "False";
         const rExpr = _boolCtx && isPropValued(e.right) ? `decide (${r})` : r;
         return e.op === "∧"
-          ? `(if _h : ${condProp} then (${rExpr}) else ${fVal})`
-          : `(if _h : ${condProp} then ${tVal} else (${rExpr}))`;
+          ? `(if ${h} : ${condProp} then (${rExpr}) else ${fVal})`
+          : `(if ${h} : ${condProp} then ${tVal} else (${rExpr}))`;
       }
       // Comparisons and ↔ do not chain in Lean. In particular, a Boolean
       // postcondition `res = (s = t)` must keep its inner equality grouped.
@@ -447,10 +478,26 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // parens (→ is right-associative, so `(a → b) → c` ≠ `a → b → c`), and
       // ↔ binds looser than → in Lean. The conclusion is the right-assoc tail,
       // where a nested implication is safe bare — only ↔ needs parens there.
+      // When any later premise or the conclusion contains `checkedUnwrap`
+      // (`(x).get (by grind)`), bind earlier premises dependently via
+      // `∀ (_hN : p), ...` so Lean puts each premise in local proof context.
       const wrapIff = (x: Expr) => x.kind === "binop" && x.op === "↔" ? `(${emitExpr(x)})` : undefined;
-      const parts = [...e.premises.map(p => wrapOperand(p, prec("→"))), wrapIff(e.conclusion) ?? emitExpr(e.conclusion)];
-      const s = parts.join(" → ");
-      return parentPrec !== undefined ? `(${s})` : s;
+      const tailHasCU = (idx: number): boolean =>
+        anyExpr(e.conclusion, x => x.kind === "checkedUnwrap") ||
+        e.premises.slice(idx + 1).some(p => anyExpr(p, x => x.kind === "checkedUnwrap"));
+      let acc = wrapIff(e.conclusion) ?? emitExpr(e.conclusion);
+      for (let i = e.premises.length - 1; i >= 0; i--) {
+        const p = e.premises[i];
+        if (tailHasCU(i)) {
+          const pStr = emitExpr(p);
+          const pProp = isPropValued(p) ? pStr : `(${pStr}) = true`;
+          const h = `_h${_depIfCounter++}`;
+          acc = `∀ (${h} : ${pProp}), ${acc}`;
+        } else {
+          acc = `${wrapOperand(p, prec("→"))} → ${acc}`;
+        }
+      }
+      return parentPrec !== undefined ? `(${acc})` : acc;
     }
 
     case "app": {
@@ -550,11 +597,12 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       if (hasCU) {
         const c = emitExpr(e.cond);
         const condProp = isPropValued(e.cond) ? c : `(${c}) = true`;
+        const h = `_h${_depIfCounter++}`;
         const t = emitExpr(e.then);
         const f = emitExpr(e.else);
         const tExpr = _boolCtx && isPropValued(e.then) ? `decide (${t})` : t;
         const fExpr = _boolCtx && isPropValued(e.else) ? `decide (${f})` : f;
-        return `(if _h : ${condProp} then (${tExpr}) else (${fExpr}))`;
+        return `(if ${h} : ${condProp} then (${tExpr}) else (${fExpr}))`;
       }
       return `if ${emitExpr(e.cond)} then ${emitExpr(e.then)} else ${emitExpr(e.else)}`;
     }
@@ -602,7 +650,26 @@ function isPropValued(e: Expr): boolean {
 // ── Statement emission ──────────────────────────────────────
 
 function emitStmts(stmts: Stmt[], indent: number): string {
-  return stmts.map(s => emitStmt(s, indent)).join("\n");
+  const pad = "  ".repeat(indent);
+  const out: string[] = [];
+  for (let i = 0; i < stmts.length; i++) {
+    const s = stmts[i];
+    const rest = stmts.slice(i + 1);
+    // Early-exit `if` followed by statements containing `checkedUnwrap`:
+    // nest the continuation in the `else` branch of a dependent `if _hN : ...`
+    // so Lean keeps the negated guard in local proof context for `grind`.
+    if (s.kind === "if" && s.else.length === 0 && rest.length > 0 && s.then.length > 0 &&
+        ["return", "break", "continue"].includes(s.then[s.then.length - 1].kind) &&
+        anyExprInStmts(rest, x => x.kind === "checkedUnwrap")) {
+      const c = emitExpr(s.cond);
+      const condProp = isPropValued(s.cond) ? c : `(${c}) = true`;
+      const h = `_h${_depIfCounter++}`;
+      out.push(`${pad}if ${h} : ${condProp} then\n${emitStmts(s.then, indent + 1)}\n${pad}else\n${emitStmts(rest, indent + 1)}`);
+      break;
+    }
+    out.push(emitStmt(s, indent));
+  }
+  return out.join("\n");
 }
 
 function emitStmt(s: Stmt, indent: number): string {
@@ -646,9 +713,18 @@ function emitStmt(s: Stmt, indent: number): string {
     case "continue": return `${pad}continue`;
 
     case "if": {
-      let out = `${pad}if ${emitExpr(s.cond)} then\n${emitStmts(s.then, indent + 1)}`;
+      const hasCU = anyExprInStmts(s.then, x => x.kind === "checkedUnwrap") ||
+        anyExprInStmts(s.else, x => x.kind === "checkedUnwrap");
+      const condText = hasCU
+        ? (() => {
+          const c = emitExpr(s.cond);
+          const condProp = isPropValued(s.cond) ? c : `(${c}) = true`;
+          return `_h${_depIfCounter++} : ${condProp}`;
+        })()
+        : emitExpr(s.cond);
+      let out = `${pad}if ${condText} then\n${emitStmts(s.then, indent + 1)}`;
       if (s.else.length > 0) {
-        if (s.else.length === 1 && s.else[0].kind === "if") {
+        if (!hasCU && s.else.length === 1 && s.else[0].kind === "if") {
           const ei = s.else[0];
           out += `\n${pad}else if ${emitExpr(ei.cond)} then\n${emitStmts(ei.then, indent + 1)}`;
           if (ei.else.length > 0) out += `\n${pad}else\n${emitStmts(ei.else, indent + 1)}`;
@@ -906,8 +982,16 @@ function emitDecl(d: Decl): string {
 function emitPureExpr(e: Expr, indent: number): string {
   const pad = "  ".repeat(indent);
   switch (e.kind) {
-    case "if":
+    case "if": {
+      const hasCU = anyExpr(e.then, x => x.kind === "checkedUnwrap") || anyExpr(e.else, x => x.kind === "checkedUnwrap");
+      if (hasCU) {
+        const c = emitExpr(e.cond);
+        const condProp = isPropValued(e.cond) ? c : `(${c}) = true`;
+        const h = `_h${_depIfCounter++}`;
+        return `${pad}if ${h} : ${condProp} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
+      }
       return `${pad}if ${emitExpr(e.cond)} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
+    }
     case "match": {
       const lines = [`${pad}match ${emitExpr(e.scrutinee)} with`];
       for (const arm of e.arms) {
@@ -935,16 +1019,20 @@ export function resetLeanModule(): void {
   _typeRefs.clear();
   _taintedTypes.clear();
   _needsJSString = false;
+  _needsNullish = false;
   _needsUnknown = false;
   _unknownEmitted = false;
+  _depIfCounter = 0;
   _boolCtx = false;
 }
 
 export function emitLeanFile(file: Module): string {
   _needsJSString = false;
+  _needsNullish = false;
   _needsUnknown = false;
+  _depIfCounter = 0;
   registerInductives(file.decls);
-  // Emit declarations first so _needsJSString / _needsUnknown are set
+  // Emit declarations first so _needsJSString / _needsNullish / _needsUnknown are set
   const declLines: string[] = [];
   for (const decl of file.decls) {
     declLines.push("");
@@ -964,6 +1052,8 @@ export function emitLeanFile(file: Module): string {
   for (const imp of file.imports) lines.push(`import ${imp}`);
   if (_needsJSString && !file.imports.includes("LemmaScript.JSString"))
     lines.push("import LemmaScript.JSString");
+  if (_needsNullish && !file.imports.includes("LemmaScript.Nullish"))
+    lines.push("import LemmaScript.Nullish");
   if (file.options.length > 0) lines.push("");
   for (const opt of file.options) lines.push(`set_option ${opt.key} ${opt.value}`);
   lines.push(...declLines);

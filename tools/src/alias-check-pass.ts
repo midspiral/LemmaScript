@@ -54,6 +54,7 @@ export function isMutableRefTy(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
     case "tuple":
       return true;
     case "optional":
+    case "nullish":
       return isMutableRefTy(ty.inner, typeDecls);
     case "user": {
       const decl = declOfTy(typeDecls, ty);
@@ -80,6 +81,7 @@ function hasNestedMutableRef(ty: Ty, typeDecls: TypeDeclInfo[], seen = new Set<s
     case "tuple":
       return ty.elems.some(e => isMutableRefTy(e, typeDecls));
     case "optional":
+    case "nullish":
       return hasNestedMutableRef(ty.inner, typeDecls, seen);
     case "user": {
       const decl = declOfTy(typeDecls, ty);
@@ -171,6 +173,17 @@ function aliasSourceInfo(e: TExpr, typeDecls: TypeDeclInfo[], allowNonMutableWra
       return { direct: [...base.direct], shallow: [...base.shallow], derefBases: [...new Set(derefs)] };
     }
     case "call":
+      if (e.fn.kind === "var" && e.args.length === 1 && (
+        e.fn.name === "Some" ||
+        e.fn.name === "NullishValue" ||
+        e.fn.name === "__optNullToNullish" ||
+        e.fn.name === "__optUndefToNullish" ||
+        e.fn.name === "__nullishToOption" ||
+        e.fn.name === "ArrayBranch" ||
+        e.fn.name === "NonArrayBranch"
+      )) {
+        return aliasSourceInfo(e.args[0], typeDecls, true);
+      }
       if (e.fn.kind === "field") {
         const m = e.fn.field;
         const objTy = e.fn.obj.ty.kind;

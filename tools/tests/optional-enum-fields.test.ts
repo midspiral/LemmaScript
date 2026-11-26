@@ -33,11 +33,15 @@ function emit(source: string, dependencies: Record<string, string> = {}) {
   return { dafny, lean: emitLeanFile(lean.typesFile) };
 }
 
-test("both backends preserve the enum in every optional record field", () => {
+test("both backends preserve the enum in every optional and nullish record field", () => {
   const { dafny, lean } = emit(fixture);
-  for (const name of ["previous", "scheduled", "hint", "fallback", "retryHint"]) {
+  for (const name of ["previous", "scheduled", "hint"]) {
     assert.ok(dafny.includes(`${name}: Option<Phase>`), name);
     assert.ok(lean.includes(`${name} : Option Phase`), name);
+  }
+  for (const name of ["fallback", "retryHint"]) {
+    assert.ok(dafny.includes(`${name}: Nullish<Phase>`), name);
+    assert.ok(lean.includes(`${name} : Nullish Phase`), name);
   }
   assert.match(dafny, /current: Phase/);
   assert.match(dafny, /timeline: seq<Phase>/);
@@ -112,9 +116,8 @@ export function read(e: Envelope): boolean {
 test("uninstantiated generic fields keep their type parameter", () => {
   const typed = resolveModule(extract("interface Cell<T> { value: T | null; hint?: T }"));
   const cell = typed.typeDecls.find(d => d.name === "Cell")!;
-  for (const field of cell.fields!) {
-    assert.deepEqual(field.type, { kind: "optional", inner: { kind: "user", name: "T" } });
-  }
+  assert.deepEqual(cell.fields![0].type, { kind: "optional", inner: { kind: "user", name: "T" }, absent: "null" });
+  assert.deepEqual(cell.fields![1].type, { kind: "optional", inner: { kind: "user", name: "T" } });
 });
 
 for (const declaration of [

@@ -138,7 +138,7 @@ function declaredTy(e: TExpr, scope: Scope, ctx: Ctx): Ty | null {
   }
   if (e.kind !== "field") return null;
   const objTy = declaredTy(e.obj, scope, ctx);
-  if (!objTy || objTy.kind === "optional") return null;
+  if (!objTy || objTy.kind === "optional" || objTy.kind === "nullish") return null;
   return fieldTy(objTy, e.field, e.ofVariant, ctx);
 }
 
@@ -166,10 +166,13 @@ function declField(decl: TypeDeclInfo, field: string, ofVariant: string | undefi
 function fieldInfoTy(f: FieldInfo | null): Ty | null {
   if (!f) return null;
   const ty = f.type ?? parseTsType(f.tsType);
-  return f.optionalKey && ty.kind !== "optional" ? { kind: "optional", inner: ty } : ty;
+  if (!f.optionalKey) return ty;
+  if (ty.kind === "nullish") return ty;
+  if (ty.kind === "optional") return ty.absent === "null" ? { kind: "nullish", inner: ty.inner } : ty;
+  return { kind: "optional", inner: ty };
 }
 
-const isOptional = (ty: Ty | null): boolean => ty?.kind === "optional";
+const isOptional = (ty: Ty | null): boolean => ty?.kind === "optional" || ty?.kind === "nullish";
 
 /** The type to judge a value by: declared for an access path, otherwise the stamp. */
 function valueTy(e: TExpr, scope: Scope, ctx: Ctx): Ty {

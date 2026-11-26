@@ -39,11 +39,13 @@ function tyToDafny(ty: Ty): string {
     case "bool": return "bool";
     case "string": return "string";
     case "void": return "()";
+    case "null": return "()";
     case "array": return `seq<${tyToDafny(ty.elem)}>`;
     case "tuple": return `(${ty.elems.map(tyToDafny).join(", ")})`;
     case "map": return `map<${tyToDafny(ty.key)}, ${tyToDafny(ty.value)}>`;
     case "set": return `set<${tyToDafny(ty.elem)}>`;
     case "optional": { needPreamble("OptionType"); return `Option<${tyToDafny(ty.inner)}>`; }
+    case "nullish": { needPreamble("NullishType"); return `Nullish<${tyToDafny(ty.inner)}>`; }
     case "user": return escapeName(ty.name);
     case "fn": return `(${ty.params.map(tyToDafny).join(", ")}) -> ${tyToDafny(ty.result)}`;
     // Out-of-subset (`any`/`unknown`); opaque so real ops on it fail loudly
@@ -304,6 +306,7 @@ function emitExpr(e: Expr): string {
       // (e.g. lambda result) without an explicit `optional<T>` in any
       // signature, so request the preamble here.
       if (e.type === "Option") needPreamble("OptionType");
+      if (e.type === "Nullish") needPreamble("NullishType");
       const head = qualifyCtor(e.name, e.type);
       if (!e.args || e.args.length === 0) return head;
       return `${head}(${e.args.map(emitExpr).join(", ")})`;
@@ -547,6 +550,14 @@ function emitExpr(e: Expr): string {
         if (e.method === "charCodeAt") return `(${obj}[${args[0]}] as int)`;
         if (e.method === "repeat") { needPreamble("StringRepeat"); return `StringRepeat(${obj}, ${args[0]})`; }
       }
+      // Nullish<T> discriminators (#304)
+      if (ty === "nullish") {
+        needPreamble("NullishType");
+        const recv = e.obj.kind === "var" || e.obj.kind === "field" ? obj : `(${obj})`;
+        if (e.method === "isNull") return `${recv}.Null?`;
+        if (e.method === "isUndefined") return `${recv}.Undefined?`;
+        if (e.method === "isValue") return `${recv}.Value?`;
+      }
       // Map methods
       if (ty === "map") {
         if (e.method === "getDirect") return `${obj}[${args[0]}]`;
@@ -764,7 +775,7 @@ function emitExpr(e: Expr): string {
         const fieldNames = new Set(e.fields.map(f => f.name));
         const matches: string[] = [];
         for (const [name, fields] of _structureDecls) {
-          if (fields.length >= e.fields.length && fields.every(f => fieldNames.has(f.name) || f.type.kind === "optional")) {
+          if (fields.length >= e.fields.length && fields.every(f => fieldNames.has(f.name) || f.type.kind === "optional" || f.type.kind === "nullish")) {
             matches.push(name);
           }
         }
@@ -785,6 +796,7 @@ function emitExpr(e: Expr): string {
             const f = provided.get(sf.name);
             if (f) return emitExpr(f.value);
             if (sf.type.kind === "optional") { needPreamble("OptionType"); return "None"; }
+            if (sf.type.kind === "nullish") { needPreamble("NullishType"); return "Nullish.Undefined"; }
             return `/* missing: ${sf.name} */`;
           });
           return `${ctorName}(${vals.join(", ")})`;
@@ -1720,6 +1732,7 @@ const SET_TO_SEQ = `method SetToSeq<T>(s: set<T>) returns (res: seq<T>)
 /** Preamble code keyed by name. Emitted in this order when needed. */
 const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["OptionType", "datatype Option<T> = None | Some(value: T)"],
+  ["NullishType", "datatype Nullish<T> = Undefined | Null | Value(value: T)"],
   // Opaque carrier for `unknown`-typed values. `(==)` for compare/map-key/match;
   // `(0)` (auto-init ⇒ nonempty) so `havoc` (`:= *`) is well-formed.
   ["UnknownType", "type Unknown(==, 0)"],
@@ -1858,7 +1871,8 @@ function buildRecordCtorMap(decls: Decl[]) {
 /** Resolve a Ty to a Dafny-safe type, falling back to string for undeclared user types. */
 function resolveTy(ty: Ty): Ty {
   if (ty.kind === "user" && !_declaredTypes.has(ty.name)) return { kind: "string" };
-  if (ty.kind === "optional") return { kind: "optional", inner: resolveTy(ty.inner) };
+  if (ty.kind === "optional") return { ...ty, inner: resolveTy(ty.inner) };
+  if (ty.kind === "nullish") return { kind: "nullish", inner: resolveTy(ty.inner) };
   if (ty.kind === "array") return { kind: "array", elem: resolveTy(ty.elem) };
   if (ty.kind === "tuple") return { kind: "tuple", elems: ty.elems.map(resolveTy) };
   if (ty.kind === "map") return { kind: "map", key: resolveTy(ty.key), value: resolveTy(ty.value) };
@@ -1890,7 +1904,13 @@ function qualifyCtor(name: string, type?: string): string {
  *  literal value → quoted Dafny string
  *  "_" → "_"
  */
-const CTOR_MAP: Record<string, string> = { "some": "Some", "none": "None" };
+const CTOR_MAP: Record<string, string> = {
+  "some": "Some",
+  "none": "None",
+  "nullishUndefined": "Undefined",
+  "nullishNull": "Null",
+  "nullishValue": "Value",
+};
 
 function translatePattern(p: MatchPattern): string {
   if (p.kind === "wild") return "_";

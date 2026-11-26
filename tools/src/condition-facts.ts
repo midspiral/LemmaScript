@@ -21,6 +21,7 @@
  */
 
 import type { TExpr, TStmt, Ty } from "./typedir.js";
+import { isNullishStorageTy, optAbsent } from "./typedir.js";
 import { freshName, freshNameWhere, isUserName } from "./names.js";
 import type { TypeDecls } from "./typedecls.js";
 import { unionDeclOfTy, discriminantOf } from "./typedecls.js";
@@ -62,6 +63,11 @@ export interface PresentFact {
   negated: boolean;
   binder: string;
   truthiness: boolean;
+  /** True when `scrutinee`'s runtime storage is `Nullish<T>` (either
+   *  `ty.kind === "nullish"` or `optional` with `fromNullish: true`).
+   *  `narrow.ts` skips `someMatch` for these; `checked-reads.ts` lowers
+   *  unwrapped reads to `checkedUnwrap` instead. */
+  isNullish?: true;
 }
 
 /** Pure access paths: the raw var root followed by its field names;
@@ -93,41 +99,81 @@ export function bindPresentFact(f: PresentFact, ctx: CondCtx): PresentFact {
   return { ...f, binder: freshPathBinder(f.scrutinee, ctx)! };
 }
 
-/** Detect optional checks: `e !== undefined`, `e === undefined`, `!e`, or a
- *  bare optional `e` — for a pure-access-path optional-typed `e`. `!e` and
- *  bare `e` are truthiness forms. `!!c` is the same check as `c`. Following
- *  TS, only pure access paths narrow; complex scrutinees return null. */
+/** Detect optional/nullish checks: `e !== undefined`, `e === undefined`,
+ *  `e !== null`, `e === null`, loose `e == null`/`e != null`/`e == undefined`/`e != undefined`,
+ *  `!e`, or a bare nullable `e` — for a pure-access-path `Option<T>` or `Nullish<T>`.
+ *  `!e` and bare `e` are truthiness forms. `!!c` is the same check as `c`.
+ *  Following TS, only pure access paths narrow; complex scrutinees return null. */
 export function presentFact(cond: TExpr): PresentFact | null {
   if (cond.kind === "unop" && cond.op === "!" && cond.expr.kind === "unop" && cond.expr.op === "!")
     return presentFact(cond.expr.expr);
-  // `!e` where e is optional — a truthiness form: false iff e is absent OR its
-  // inner value is itself falsy (so `Some(0)`/`Some("")` count as falsy too).
-  if (cond.kind === "unop" && cond.op === "!" && cond.expr.ty.kind === "optional") {
+  // `!e` where e is optional or nullish — a truthiness form: false iff e is
+  // absent (None / Null / Undefined) OR its inner value is itself falsy.
+  if (cond.kind === "unop" && cond.op === "!" && (cond.expr.ty.kind === "optional" || cond.expr.ty.kind === "nullish")) {
     const e = cond.expr;
     const innerTy = cond.expr.ty.inner;
     const hint = binderHintFor(e);
     if (hint === null) return null;
-    return { scrutinee: e, innerTy, negated: true, binder: freshName(hint), truthiness: true };
+    const isNullish = isNullishStorageTy(e.ty) ? true as const : undefined;
+    return { scrutinee: e, innerTy, negated: true, binder: freshName(hint), truthiness: true, ...(isNullish ? { isNullish } : {}) };
   }
-  if (cond.kind !== "binop" || (cond.op !== "!==" && cond.op !== "===")) {
-    // Bare optional truthiness: `if (e)` where e: T | undefined — true iff e is
-    // present AND its inner value is truthy.
-    if (cond.ty.kind === "optional") {
+  if (cond.kind !== "binop" || !["!==", "===", "!=", "=="].includes(cond.op)) {
+    // Bare nullable truthiness: `if (e)` where e: T | undefined | null.
+    if (cond.ty.kind === "optional" || cond.ty.kind === "nullish") {
       const hint = binderHintFor(cond);
       if (hint === null) return null;
-      return { scrutinee: cond, innerTy: cond.ty.inner, negated: false, binder: freshName(hint), truthiness: true };
+      const isNullish = isNullishStorageTy(cond.ty) ? true as const : undefined;
+      return { scrutinee: cond, innerTy: cond.ty.inner, negated: false, binder: freshName(hint), truthiness: true, ...(isNullish ? { isNullish } : {}) };
     }
     return null;
   }
-  // Explicit `e === undefined` / `e !== undefined` — a pure presence check,
-  // independent of the inner value (so NOT a truthiness form).
+  // Explicit sentinel comparison: `e === undefined`, `e === null`, `e == null`, etc.
   let e: TExpr | null = null;
-  if (cond.right.kind === "var" && cond.right.name === "undefined") e = cond.left;
-  if (cond.left.kind === "var" && cond.left.name === "undefined") e = cond.right;
-  if (!e || e.ty.kind !== "optional") return null;
-  const hint = binderHintFor(e);
-  if (hint === null) return null;
-  return { scrutinee: e, innerTy: e.ty.inner, negated: cond.op === "===", binder: freshName(hint), truthiness: false };
+  let sentinel: "undefined" | "null" | null = null;
+  if (cond.right.kind === "var" && (cond.right.name === "undefined" || cond.right.name === "null")) {
+    e = cond.left;
+    sentinel = cond.right.name;
+  } else if (cond.left.kind === "var" && (cond.left.name === "undefined" || cond.left.name === "null")) {
+    e = cond.right;
+    sentinel = cond.left.name;
+  }
+  if (!e || !sentinel) return null;
+  const isLoose = cond.op === "==" || cond.op === "!=";
+  const negated = cond.op === "===" || cond.op === "==";
+
+  if (e.ty.kind === "nullish") {
+    const hint = binderHintFor(e);
+    if (hint === null) return null;
+    // Loose `== null` / `== undefined` checks BOTH sentinels, narrowing directly to T.
+    // Strict `=== null` rules out null (leaving T | undefined); strict `=== undefined`
+    // rules out undefined (leaving T | null).
+    const innerTy: Ty = isLoose
+      ? e.ty.inner
+      : sentinel === "null"
+        ? { kind: "optional", inner: e.ty.inner, absent: "undefined", fromNullish: true }
+        : { kind: "optional", inner: e.ty.inner, absent: "null", fromNullish: true };
+    return { scrutinee: e, innerTy, negated, binder: freshName(hint), truthiness: false, isNullish: true };
+  }
+
+  if (e.ty.kind === "optional") {
+    // On single-sentinel Option<T>, strict check against the *other* sentinel
+    // never matches and does NOT narrow (`x: T | undefined; x !== null` leaves
+    // x as T | undefined). Loose `==`/`!=` against either sentinel checks None.
+    if (!isLoose && sentinel !== optAbsent(e.ty)) return null;
+    const hint = binderHintFor(e);
+    if (hint === null) return null;
+    const isNullish = e.ty.fromNullish ? true as const : undefined;
+    return { scrutinee: e, innerTy: e.ty.inner, negated, binder: freshName(hint), truthiness: false, ...(isNullish ? { isNullish } : {}) };
+  }
+
+  return null;
+}
+
+/** Presence fact restricted to genuine `Option<T>` storage (excluding `Nullish<T>`
+ *  and partially narrowed `fromNullish` values, which stay off `someMatch`). */
+export function optionalPresentFact(cond: TExpr): PresentFact | null {
+  const f = presentFact(cond);
+  return f && !f.isNullish ? f : null;
 }
 
 /** Which types have falsy values in JS (`0`, `""`, `false`); everything else
@@ -176,7 +222,7 @@ export function extractConjunct<C>(cond: TExpr, parse: (e: TExpr) => C | null): 
  *  It becomes the outermost match, keeping later path checks in its arm. */
 export function leadingPresent(cond: TExpr): { check: PresentFact; restCond: TExpr } | null {
   return extractConjunct(cond, e => {
-    const f = presentFact(e);
+    const f = optionalPresentFact(e);
     return f && !f.negated ? f : null;
   });
 }
@@ -199,7 +245,7 @@ export function noneDetector(leaf: TExpr, ctx: CondCtx): NoneDetector | null {
   // `x?.chain !== lit` — `undefined !== lit` is true when x is None.
   if (leaf.kind === "binop" && leaf.op === "!==") {
     const oc = leaf.left.kind === "optChain" ? leaf.left : leaf.right.kind === "optChain" ? leaf.right : null;
-    if (oc && oc.kind === "optChain" && oc.obj.ty.kind === "optional") {
+    if (oc && oc.kind === "optChain" && oc.obj.ty.kind === "optional" && !oc.obj.ty.fromNullish) {
       const binder = freshPathBinder(oc.obj, ctx);
       if (binder === null) return null;
       const unwrapped = applyChain({ kind: "var", name: binder, ty: oc.obj.ty.inner }, oc.chain);
@@ -208,8 +254,8 @@ export function noneDetector(leaf: TExpr, ctx: CondCtx): NoneDetector | null {
       return { scrutinee: oc.obj, innerTy: oc.obj.ty.inner, binder, residual: { kind: "binop", op: "!==", left: unwrapped, right: lit, ty: { kind: "bool" } } };
     }
   }
-  // `!x` / `x === undefined`.
-  const detected = presentFact(leaf);
+  // `!x` / `x === undefined` (genuine Option<T> only; Nullish<T> uses checked reads).
+  const detected = optionalPresentFact(leaf);
   if (detected && detected.negated) {
     const f = bindPresentFact(detected, ctx);
     const residual: TExpr | null = canBeFalsy(f)

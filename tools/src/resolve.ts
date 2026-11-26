@@ -7,7 +7,7 @@
 
 import type { RawExpr, RawStmt, RawFunction, RawModule } from "./rawir.js";
 import type { Ty, TExpr, TStmt, TFunction, TModule, TParam, CallKind } from "./typedir.js";
-import { isBigInt, tyEqual, isTerminatorKind } from "./typedir.js";
+import { isBigInt, optAbsent, tyEqual, isTerminatorKind } from "./typedir.js";
 import { parseTsType, tyToCanonical } from "./types.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
@@ -155,30 +155,39 @@ function resolveTsType(tsType: string, overrides: Map<string, string>, varName?:
 }
 
 /** Infer a conditional's result type after its branches have been resolved or
- *  contextually coerced. A void branch is the source-level null/undefined arm. */
+ *  contextually coerced. `void` is `undefined`, `null` is `null`; mixing both
+ *  sentinels yields `nullish<T>` so `null !== undefined` is preserved (#304). */
 function conditionalResultTy(thenTy: Ty, elseTy: Ty): Ty {
   if ((thenTy.kind === "int" || thenTy.kind === "nat") &&
       (elseTy.kind === "int" || elseTy.kind === "nat")) {
     return { ...thenTy, kind: thenTy.kind === "int" || elseTy.kind === "int" ? "int" : "nat" };
   }
-  let ty = thenTy.kind !== "unknown" ? thenTy : elseTy;
-  if (thenTy.kind === "void" && elseTy.kind !== "void" && elseTy.kind !== "unknown") {
-    ty = { kind: "optional", inner: elseTy };
-  } else if (elseTy.kind === "void" && thenTy.kind !== "void" && thenTy.kind !== "unknown") {
-    ty = { kind: "optional", inner: thenTy };
-  } else if (thenTy.kind === "optional" && elseTy.kind !== "optional" && elseTy.kind !== "unknown") {
-    ty = thenTy;
-  } else if (elseTy.kind === "optional" && thenTy.kind !== "optional" && thenTy.kind !== "unknown") {
-    ty = elseTy;
+  const hasNull = (t: Ty) => t.kind === "null" || t.kind === "nullish" || (t.kind === "optional" && optAbsent(t) === "null");
+  const hasUndef = (t: Ty) => t.kind === "void" || t.kind === "nullish" || (t.kind === "optional" && optAbsent(t) === "undefined");
+  const payloadOf = (t: Ty): Ty | null =>
+    t.kind === "void" || t.kind === "null" || t.kind === "unknown" ? null
+      : (t.kind === "optional" || t.kind === "nullish") ? t.inner : t;
+  const bothNull = hasNull(thenTy) || hasNull(elseTy);
+  const bothUndef = hasUndef(thenTy) || hasUndef(elseTy);
+  if (bothNull || bothUndef) {
+    const p1 = payloadOf(thenTy);
+    const p2 = payloadOf(elseTy);
+    const inner = p1 ?? p2;
+    if (inner) {
+      if (bothNull && bothUndef) return { kind: "nullish", inner };
+      if (bothNull) return { kind: "optional", inner, absent: "null" };
+      return { kind: "optional", inner };
+    }
+    if (bothNull && bothUndef) return { kind: "nullish", inner: { kind: "void" } };
   }
-  return ty;
+  return thenTy.kind !== "unknown" ? thenTy : elseTy;
 }
 
 /** Contextually type string literals as string-union constructors. Ternary branches inherit
- *  the ternary's target, and an optional target contributes its payload type —
- *  the caller adds the Some wrapper only after the payload has been coerced. */
+ *  the ternary's target, and an optional/nullish target contributes its payload type —
+ *  the caller adds the Some/Value wrapper only after the payload has been coerced. */
 function coerceStr(expr: TExpr, targetTy: Ty, typeDecls: TypeDeclInfo[]): TExpr {
-  const payloadTy = targetTy.kind === "optional" ? targetTy.inner : targetTy;
+  const payloadTy = (targetTy.kind === "optional" || targetTy.kind === "nullish") ? targetTy.inner : targetTy;
   if (expr.kind === "str" && payloadTy.kind === "user") {
     const enumTy = expandAlias(payloadTy, typeDecls);
     // A synthesized string/array union has a string payload, not a constructor
@@ -204,6 +213,14 @@ function wrapSome(value: TExpr, optionalTy: Ty): TExpr {
   };
 }
 
+/** Wrap a resolved non-nullish value in Nullish.Value(...) for Nullish<T> coercion. */
+function wrapNullishValue(value: TExpr, nullishTy: Ty): TExpr {
+  return {
+    kind: "call", fn: { kind: "var", name: "NullishValue", ty: nullishTy },
+    args: [value], ty: nullishTy, callKind: "pure",
+  };
+}
+
 /** Find the synth array-union TypeDecl named `name` (discriminant `__isArray__`). */
 function findSynthArrayUnion(name: string, typeDecls: TypeDeclInfo[]): TypeDeclInfo | null {
   const decl = declOf(typeDecls, name);
@@ -214,6 +231,8 @@ function findSynthArrayUnion(name: string, typeDecls: TypeDeclInfo[]): TypeDeclI
 /** Coerce `value` to `targetTy` at an assignment-position. Contextually types
  *  real literals, then mirrors TS subtyping for the upcast shapes LS synthesizes:
  *    - `T` into `optional<T>` slot  → wrap with `Some(...)`
+ *    - `T` / `Option<T>` / `null` / `undefined` into `nullish<T>` slot → `Nullish<T>`
+ *    - `fromNullish` into `optional<T>` slot → `__nullishToOption(...)`
  *    - `T[]` into a synth `T[] | U` slot → wrap with `ArrayBranch(...)`
  *    - `U`   into a synth `T[] | U` slot → wrap with `NonArrayBranch(...)`
  *  Returns `value` unchanged if no coercion applies (types already match,
@@ -221,8 +240,8 @@ function findSynthArrayUnion(name: string, typeDecls: TypeDeclInfo[]): TypeDeclI
 function coerceToTargetTy(value: TExpr, targetTy: Ty, typeDecls: TypeDeclInfo[]): TExpr {
   value = coerceStr(value, targetTy, typeDecls);
   // Real targets also type integer literals, including negative literals and
-  // conditional arms. Coerce optional payloads before adding Some wrappers.
-  const payloadTy = targetTy.kind === "optional" ? targetTy.inner : targetTy;
+  // conditional arms. Coerce optional/nullish payloads before adding wrappers.
+  const payloadTy = (targetTy.kind === "optional" || targetTy.kind === "nullish") ? targetTy.inner : targetTy;
   if (payloadTy.kind === "real") {
     if (value.kind === "num") {
       value = { ...value, ty: payloadTy };
@@ -234,9 +253,47 @@ function coerceToTargetTy(value: TExpr, targetTy: Ty, typeDecls: TypeDeclInfo[])
       value = { ...value, then: then_, else: else_, ty: conditionalResultTy(then_.ty, else_.ty) };
     }
   }
-  if (value.ty.kind === "unknown" || value.ty.kind === "void") return value;
-  if (targetTy.kind === "optional" && value.ty.kind !== "optional") {
-    return wrapSome(value, targetTy);
+  if (targetTy.kind === "nullish") {
+    if (value.ty.kind === "unknown") return value;
+    if (value.kind === "var" && (value.name === "undefined" || value.name === "null")) {
+      return { ...value, ty: targetTy };
+    }
+    if (value.ty.kind === "void") return { kind: "var", name: "undefined", ty: targetTy };
+    if (value.ty.kind === "null") return { kind: "var", name: "null", ty: targetTy };
+    if (value.ty.kind === "nullish") return value;
+    if (value.ty.kind === "optional") {
+      // Partially narrowed fromNullish already lives in Nullish<T> storage.
+      if (value.ty.fromNullish) return { ...value, ty: targetTy };
+      const helper = optAbsent(value.ty) === "null" ? "__optNullToNullish" : "__optUndefToNullish";
+      return {
+        kind: "call",
+        fn: { kind: "var", name: helper, ty: targetTy },
+        args: [value],
+        ty: targetTy,
+        callKind: "pure",
+      };
+    }
+    if (value.kind === "conditional") {
+      const then_ = coerceToTargetTy(value.then, targetTy, typeDecls);
+      const else_ = coerceToTargetTy(value.else, targetTy, typeDecls);
+      return { ...value, then: then_, else: else_, ty: targetTy };
+    }
+    return wrapNullishValue(value, targetTy);
+  }
+  if (value.ty.kind === "unknown" || value.ty.kind === "void" || value.ty.kind === "null") return value;
+  if (targetTy.kind === "optional") {
+    if (value.ty.kind === "nullish" || (value.ty.kind === "optional" && value.ty.fromNullish)) {
+      return {
+        kind: "call",
+        fn: { kind: "var", name: "__nullishToOption", ty: targetTy },
+        args: [value],
+        ty: targetTy,
+        callKind: "pure",
+      };
+    }
+    if (value.ty.kind !== "optional") {
+      return wrapSome(value, targetTy);
+    }
   }
   if (targetTy.kind === "user") {
     if (value.ty.kind === "user" && value.ty.name === targetTy.name) return value;
@@ -479,13 +536,29 @@ function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new 
       // Numeric enums must behave as numbers (not truthy user objects).
       if (decl.constEnumMembers) return { kind: "int" };
       const target = decl.aliasOfTy;
-      if (target.kind === "array" || target.kind === "map" || target.kind === "set" || target.kind === "optional" || target.kind === "user") {
+      if (target.kind === "array" || target.kind === "map" || target.kind === "set" || target.kind === "optional" || target.kind === "nullish" || target.kind === "user") {
         return expandAlias(target, typeDecls, new Set([...seen, ty.name]));
       }
     }
     return ty;
   }
-  if (ty.kind === "optional") return { kind: "optional", inner: expandAlias(ty.inner, typeDecls, seen) };
+  if (ty.kind === "optional") {
+    const expanded = expandAlias(ty.inner, typeDecls, seen);
+    if (expanded.kind === "nullish") return expanded;
+    if (expanded.kind === "optional") {
+      const mergedNull = optAbsent(ty) === "null" || optAbsent(expanded) === "null";
+      const mergedUndef = optAbsent(ty) === "undefined" || optAbsent(expanded) === "undefined";
+      if (mergedNull && mergedUndef) return { kind: "nullish", inner: expanded.inner };
+      return { ...ty, inner: expanded.inner };
+    }
+    return { ...ty, inner: expanded };
+  }
+  if (ty.kind === "nullish") {
+    const expanded = expandAlias(ty.inner, typeDecls, seen);
+    if (expanded.kind === "nullish") return expanded;
+    if (expanded.kind === "optional") return { kind: "nullish", inner: expanded.inner };
+    return { kind: "nullish", inner: expanded };
+  }
   if (ty.kind === "array") return { kind: "array", elem: expandAlias(ty.elem, typeDecls, seen) };
   if (ty.kind === "tuple") return { kind: "tuple", elems: ty.elems.map(e => expandAlias(e, typeDecls, seen)) };
   if (ty.kind === "set") return { kind: "set", elem: expandAlias(ty.elem, typeDecls, seen) };
@@ -494,10 +567,11 @@ function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new 
 }
 
 /** Numeric aliases keep their names in declarations but use their underlying
- *  types in expressions. Optional payloads need the same treatment for zero's
- *  falsiness; collection elements are resolved when read. */
+ *  types in expressions. Optional/nullish payloads need the same treatment for
+ *  zero's falsiness; collection elements are resolved when read. */
 function numericValueType(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new Set()): Ty {
   if (ty.kind === "optional") return { ...ty, inner: numericValueType(ty.inner, typeDecls, seen) };
+  if (ty.kind === "nullish") return { kind: "nullish", inner: numericValueType(ty.inner, typeDecls, seen) };
   if (ty.kind !== "user" || seen.has(ty.name)) return ty;
   const decl = declOfDotted(typeDecls, ty.name);
   if (decl?.kind === "alias" && decl.aliasOfTy) {
@@ -547,7 +621,7 @@ function warnRefEq(op: string, l: Ty, r: Ty): void {
  *  structure. */
 function isUnmodeledTy(ty: Ty, typeDecls: TypeDeclInfo[]): boolean {
   if (ty.kind === "unknown") return true;
-  if (ty.kind === "optional") return isUnmodeledTy(ty.inner, typeDecls);
+  if (ty.kind === "optional" || ty.kind === "nullish") return isUnmodeledTy(ty.inner, typeDecls);
   if (ty.kind === "array") return isUnmodeledTy(ty.elem, typeDecls);
   if (ty.kind === "tuple") return ty.elems.some(e => isUnmodeledTy(e, typeDecls));
   if (ty.kind === "set") return isUnmodeledTy(ty.elem, typeDecls);
@@ -701,7 +775,10 @@ let callbackCounter = 0;
 
 function callbackDefaultState(ty: Ty, ctx: Ctx, seen = new Set<string>()): "missing" | "defined" | "optional" | "unknown" {
   if (ty.kind === "void") return "missing";
-  if (ty.kind === "optional" || ty.kind === "unknown") return ty.kind;
+  if (ty.kind === "null") return "defined";
+  if (ty.kind === "optional") return optAbsent(ty) === "null" ? "defined" : "optional";
+  if (ty.kind === "nullish") return "optional";
+  if (ty.kind === "unknown") return "unknown";
   if (ty.kind !== "user" || ty.name === "null") return "defined";
   if (seen.has(ty.name)) return "unknown";
   const decl = declOfDotted(ctx.typeDecls, ty.name);
@@ -856,18 +933,23 @@ function argumentPack(e: RawExpr, ctx: Ctx): Env["argumentPack"] {
   return pack;
 }
 
-/** A defined-check filter predicate: `(x) => x !== undefined` (expression or
- *  single-return body). Detected on the raw IR before narrowing rewrites it. */
-function isDefinedCheckRawLambda(raw: RawExpr): boolean {
-  if (raw.kind !== "lambda" || raw.params.length !== 1) return false;
+/** A defined-check filter predicate: `(x) => x !== undefined`, `(x) => x !== null`,
+ *  or loose `(x) => x != null` / `(x) => x != undefined`. Returns which sentinel
+ *  the filter removes so `filterSome` only fires when it matches the array
+ *  element's absent sentinel (`#304`). */
+function definedCheckRawLambdaSentinel(raw: RawExpr): "undefined" | "null" | "both" | null {
+  if (raw.kind !== "lambda" || raw.params.length !== 1) return null;
   const p = raw.params[0].name;
   const body = Array.isArray(raw.body)
     ? (raw.body.length === 1 && raw.body[0].kind === "return" ? raw.body[0].value : null)
     : raw.body;
-  if (!body || body.kind !== "binop" || body.op !== "!==") return false;
+  if (!body || body.kind !== "binop" || (body.op !== "!==" && body.op !== "!=")) return null;
   const isParam = (x: RawExpr) => x.kind === "var" && x.name === p;
-  const isUndef = (x: RawExpr) => x.kind === "var" && x.name === "undefined";
-  return (isParam(body.left) && isUndef(body.right)) || (isParam(body.right) && isUndef(body.left));
+  const sentinelOf = (x: RawExpr): "undefined" | "null" | null =>
+    x.kind === "var" && (x.name === "undefined" || x.name === "null") ? x.name : null;
+  const s = isParam(body.left) ? sentinelOf(body.right) : isParam(body.right) ? sentinelOf(body.left) : null;
+  if (!s) return null;
+  return body.op === "!=" ? "both" : s;
 }
 
 /** Coerce call arguments to their declared parameter slots and pad missing optional args. */
@@ -878,9 +960,9 @@ function coerceCallArgs(args: TExpr[], fn: TExpr, ctx: Ctx): TExpr[] {
     if (i >= paramTys.length) return a;
     return coerceToTargetTy(a, paramTys[i], ctx.typeDecls);
   });
-  // Pad missing optional args with None
+  // Pad missing optional/nullish args with undefined (None / Nullish.Undefined)
   for (let i = args.length; i < paramTys.length; i++) {
-    if (paramTys[i].kind === "optional") {
+    if (paramTys[i].kind === "optional" || paramTys[i].kind === "nullish") {
       args.push({ kind: "var" as const, name: "undefined", ty: paramTys[i] });
     }
   }
@@ -998,8 +1080,8 @@ let mergeBinder = 0;
 function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
   const tbase = resolveExpr(base, ctx);
   const tover = resolveExpr(override, ctx);
-  const overInner = tover.ty.kind === "optional" ? tover.ty.inner : tover.ty;
-  // Result record type: prefer the override's (an optional override still merges
+  const overInner = (tover.ty.kind === "optional" || tover.ty.kind === "nullish") ? tover.ty.inner : tover.ty;
+  // Result record type: prefer the override's (an optional/nullish override still merges
   // into its inner type), else the base's.
   const rTy = overInner.kind === "user" ? overInner
             : tbase.ty.kind === "user" ? tbase.ty : null;
@@ -1008,7 +1090,7 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
     throw new Error(`object spread merge { ...a, ...b } needs a known record type for both operands ` +
       `(base: ${tyToCanonical(tbase.ty)}, override: ${tyToCanonical(tover.ty)})`);
   }
-  if (tbase.ty.kind === "optional") {
+  if (tbase.ty.kind === "optional" || tbase.ty.kind === "nullish") {
     throw new Error(`object spread merge with an optional base operand is not supported (base: ${tyToCanonical(tbase.ty)})`);
   }
   const userTy = rTy;
@@ -1020,9 +1102,18 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
       const ft = f.type!;
       const ovf: TExpr = { kind: "field", obj: ov, field: f.name, ty: ft };
       // A required key is always copied, even when its value is null/undefined.
-      if (ft.kind !== "optional" || !f.optionalKey) return { name: f.name, value: ovf };
-      // `f?:` key: override field wins iff present, else base's field
+      if (!f.optionalKey || (ft.kind !== "optional" && ft.kind !== "nullish")) return { name: f.name, value: ovf };
       const bvf: TExpr = { kind: "field", obj: bv, field: f.name, ty: ft };
+      if (ft.kind === "nullish") {
+        // `f?: T | null`: override wins unless `ov.f === undefined` (null still overrides!).
+        const isUndef: TExpr = {
+          kind: "binop", op: "===",
+          left: ovf, right: { kind: "var", name: "undefined", ty: { kind: "void" } },
+          ty: { kind: "bool" },
+        };
+        return { name: f.name, value: { kind: "conditional", cond: isUndef, then: bvf, else: ovf, ty: ft } };
+      }
+      // `f?:` optional key: override field wins iff present, else base's field
       const binder = freshName(`_m${mergeBinder++}`);
       // someBody is the unwrapped present value; transform re-wraps each arm in
       // the backend's Some constructor (Dafny `Some`, Lean `Option.some`).
@@ -1032,6 +1123,16 @@ function resolveRecordMerge(base: RawExpr, override: RawExpr, ctx: Ctx): TExpr {
       } };
     }),
   });
+  if (tover.ty.kind === "nullish" || (tover.ty.kind === "optional" && tover.ty.fromNullish)) {
+    // Nullish override: undefined/null spreads nothing → base unchanged; Value(v) merges.
+    const isPresent: TExpr = {
+      kind: "binop", op: "!=",
+      left: tover, right: { kind: "var", name: "null", ty: { kind: "null" } },
+      ty: { kind: "bool" },
+    };
+    const unwrappedOver: TExpr = { kind: "checkedUnwrap", expr: tover, ty: userTy };
+    return { kind: "conditional", cond: isPresent, then: merged(tbase, unwrappedOver), else: tbase, ty: userTy };
+  }
   if (tover.ty.kind === "optional") {
     // override may be absent (undefined spreads nothing) → base unchanged
     const binder = freshName(`_mo${mergeBinder++}`);
@@ -1108,6 +1209,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
   switch (e.kind) {
     case "var": {
       if (e.name === "undefined") return { kind: "var", name: "undefined", ty: { kind: "void" } };
+      if (e.name === "null") return { kind: "var", name: "null", ty: { kind: "null" } };
       const entry = binding(ctx.env, e.name);
       if (entry?.argumentPack) {
         throw new Error(`cannot materialize callback rest parameter '${e.name}'; use its length or a constant indexed read`);
@@ -1138,13 +1240,13 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
           expr.fn.obj.ty.kind === "map" && expr.fn.field === "get") {
         return { ...expr, ty: expr.fn.obj.ty.value };
       }
-      const ty = expr.ty.kind === "optional" ? expr.ty.inner : expr.ty;
+      const ty = (expr.ty.kind === "optional" || expr.ty.kind === "nullish") ? expr.ty.inner : expr.ty;
       return { ...expr, ty };
     }
 
     case "binop": {
       let left = resolveExpr(e.left, ctx);
-      // && and ==> narrowing: left-side optional checks narrow the right side.
+      // && and ==> narrowing: left-side optional/nullish checks narrow the right side.
       // (For ==>, the premise is assumed in the conclusion — same principle.)
       let rightCtx = ctx;
       let rawRight = e.right;
@@ -1154,18 +1256,17 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         // Preserve direct single-optional var comparisons (`opt === null || x < opt`,
         // `excludeTag === undefined || getTagId(t) !== excludeTag`) for transform's
         // native mirrored match lowering, as long as the non-optional side doesn't
-        // also depend on a variable narrowed by `left`; narrow all other RHS shapes
-        // (arithmetic, calls using the narrowed var, nested paths, two-optional
-        // comparisons) via checked reads.
+        // also depend on a variable narrowed by `left` and neither side is `Nullish<T>`;
+        // narrow all other RHS shapes via checked reads.
         const orCtx = collectOrChainNarrowings(left, ctx);
         const narrowedVars = new Set<string>();
         for (let cur = orCtx.env; cur && cur !== ctx.env; cur = cur.parent) {
           narrowedVars.add(cur.name);
         }
-        const leftIsOptVar = rawRight.kind === "binop" && rawRight.left.kind === "var" &&
-          lookup(ctx.env, rawRight.left.name)?.kind === "optional";
-        const rightIsOptVar = rawRight.kind === "binop" && rawRight.right.kind === "var" &&
-          lookup(ctx.env, rawRight.right.name)?.kind === "optional";
+        const leftTy = rawRight.kind === "binop" && rawRight.left.kind === "var" ? lookup(ctx.env, rawRight.left.name) : undefined;
+        const rightTy = rawRight.kind === "binop" && rawRight.right.kind === "var" ? lookup(ctx.env, rawRight.right.name) : undefined;
+        const leftIsOptVar = leftTy?.kind === "optional" && !leftTy.fromNullish;
+        const rightIsOptVar = rightTy?.kind === "optional" && !rightTy.fromNullish;
         const isDirectSingleOptCmp =
           rawRight.kind === "binop" &&
           ["===", "!==", "<", "<=", ">", ">="].includes(rawRight.op) &&
@@ -1176,7 +1277,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         }
       }
       let right = resolveExpr(rawRight, rightCtx);
-      if (e.op === "===" || e.op === "!==") {
+      if (e.op === "===" || e.op === "!==" || e.op === "==" || e.op === "!=") {
         left = coerceStr(left, right.ty, ctx.typeDecls);
         right = coerceStr(right, left.ty, ctx.typeDecls);
         // Spec (`//@`) comparisons are proof-only, so they can't diverge at
@@ -1188,11 +1289,22 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       let ty: Ty = { kind: "unknown" };
       // <==> is bool like the comparisons; unlike ==>, neither side narrows
       // the other (no premise to assume).
-      if (["===", "!==", ">=", "<=", ">", "<", "in", "<==>"].includes(e.op)) ty = { kind: "bool" };
+      if (["===", "!==", "==", "!=", ">=", "<=", ">", "<", "in", "<==>"].includes(e.op)) ty = { kind: "bool" };
       else if (e.op === "&&") ty = right.ty;
-      else if (e.op === "||" && left.ty.kind === "optional") {
-        // || undefined is identity for optionals — keep the optional type
-        ty = (e.right.kind === "var" && e.right.name === "undefined") ? left.ty : left.ty.inner;
+      else if (e.op === "||" && (left.ty.kind === "optional" || left.ty.kind === "nullish")) {
+        // || undefined / || null / || nullable preserves the RHS nullability;
+        // otherwise yields inner type.
+        if (e.right.kind === "var" && e.right.name === "undefined") {
+          ty = left.ty.kind === "optional" && optAbsent(left.ty) === "undefined"
+            ? left.ty
+            : { kind: "optional", inner: left.ty.inner };
+        } else if (e.right.kind === "var" && e.right.name === "null") {
+          ty = { kind: "optional", inner: left.ty.inner, absent: "null" };
+        } else if (right.ty.kind === "optional" || right.ty.kind === "nullish") {
+          ty = right.ty;
+        } else {
+          ty = left.ty.inner;
+        }
       }
       else if (e.op === "||") ty = right.ty;
       else if (e.op === "/") {
@@ -1289,7 +1401,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       let args = coerceCallArgs(rawArgs.map((a, i) => {
         let aCtx = argCtx;
         if (paramTypes && i < paramTypes.length &&
-            (paramTypes[i].kind === "user" || paramTypes[i].kind === "array" || paramTypes[i].kind === "optional")) {
+            (paramTypes[i].kind === "user" || paramTypes[i].kind === "array" || paramTypes[i].kind === "optional" || paramTypes[i].kind === "nullish")) {
           aCtx = { ...aCtx, returnTy: paramTypes[i] };
         }
         if (i === 0 && a.kind === "lambda" && callback)
@@ -1320,9 +1432,11 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       // seq<T>. Rewrite to a synthetic `filterSome` call lowered to the proven
       // SeqFilterSome preamble (a plain `Map(.value, Filter(.Some?))` wouldn't
       // verify — `.value` is partial).
-      if (e.fn.kind === "field" && e.fn.field === "filter" && e.args.length === 1
-          && isDefinedCheckRawLambda(e.args[0])
-          && fn.kind === "field" && fn.obj.ty.kind === "array" && fn.obj.ty.elem.kind === "optional") {
+      const filterSentinel = e.fn.kind === "field" && e.fn.field === "filter" && e.args.length === 1
+        ? definedCheckRawLambdaSentinel(e.args[0]) : null;
+      if (filterSentinel !== null
+          && fn.kind === "field" && fn.obj.ty.kind === "array" && fn.obj.ty.elem.kind === "optional"
+          && (filterSentinel === "both" || filterSentinel === optAbsent(fn.obj.ty.elem))) {
         return { kind: "call", fn: { ...fn, field: "filterSome" }, args: [], ty: { kind: "array", elem: fn.obj.ty.elem.inner }, callKind: "method" };
       }
       const builtinId = fn.kind === "field" ? recognizeBuiltin(fn.obj.ty, fn.field) : null;
@@ -1390,8 +1504,12 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       if (ctx.narrowedPaths.length > 0) {
         const myPath = asRawAccessPath(e);
         if (myPath) {
-          const np = ctx.narrowedPaths.find(n => accessPathsEqual(n.path, myPath));
-          if (np) ty = np.narrowedTy;
+          for (let i = ctx.narrowedPaths.length - 1; i >= 0; i--) {
+            if (accessPathsEqual(ctx.narrowedPaths[i]!.path, myPath)) {
+              ty = ctx.narrowedPaths[i]!.narrowedTy;
+              break;
+            }
+          }
         }
       }
 
@@ -1400,7 +1518,13 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       let ofVariant: string | undefined;
       if (ty.kind === "unknown" && ctx.narrowedPaths.length > 0 && obj.ty.kind === "user") {
         const objPath = asRawAccessPath(e.obj);
-        const np = objPath ? ctx.narrowedPaths.find(n => n.variant && accessPathsEqual(n.path, objPath)) : undefined;
+        let np: NarrowedPath | undefined;
+        if (objPath) {
+          for (let i = ctx.narrowedPaths.length - 1; i >= 0; i--) {
+            const cand = ctx.narrowedPaths[i]!;
+            if (cand.variant && accessPathsEqual(cand.path, objPath)) { np = cand; break; }
+          }
+        }
         if (np?.variant) {
           const decl = findDecl(ctx, tyBaseName(obj.ty.name));
           const f = decl?.variants?.find(v => v.name === np.variant)?.fields.find(f => f.name === e.field);
@@ -1418,38 +1542,43 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "nullish": {
-      // left ?? right — result type is left's inner (when left is optional)
+      // left ?? right — result type is left's inner (when left is optional/nullish)
       // or just left's type, unified with right's type.
       const left = resolveExpr(e.left, ctx);
-      const isLeftUndef = (left.kind === "var" && left.name === "undefined") || left.ty.kind === "void";
+      const isLeftNullishLit = (left.kind === "var" && (left.name === "undefined" || left.name === "null")) ||
+        left.ty.kind === "void" || left.ty.kind === "null";
       const isArrayIndex = left.kind === "index" && left.obj.ty.kind === "array";
-      const inner: Ty = left.ty.kind === "optional" ? left.ty.inner : left.ty;
+      const isLeftNullable = left.ty.kind === "optional" || left.ty.kind === "nullish";
+      const inner: Ty = (left.ty.kind === "optional" || left.ty.kind === "nullish") ? left.ty.inner : left.ty;
       // The default shares the result type, so coerce a string literal to a
       // string-union enum (e.g. `availableLevels[0] ?? "off"`).
-      const right = coerceToTargetTy(resolveExpr(e.right, ctx), isLeftUndef ? { kind: "unknown" } : inner, ctx.typeDecls);
-      // When `left` is non-optional and not an unchecked array index (#352):
-      // `undefined ?? right` has `right`'s type, and `nonOpt ?? right` evaluates
-      // to `left` directly (narrow.ts strips the dead fallback).
-      if (left.ty.kind !== "optional" && !isArrayIndex) {
-        return { kind: "nullish", left, right, ty: isLeftUndef ? right.ty : left.ty };
+      const right = coerceToTargetTy(resolveExpr(e.right, ctx), isLeftNullishLit ? { kind: "unknown" } : inner, ctx.typeDecls);
+      // When `left` is non-nullable and not an unchecked array index (#352):
+      // `undefined ?? right` / `null ?? right` has `right`'s type, and `nonOpt ?? right`
+      // evaluates to `left` directly (narrow.ts strips the dead fallback).
+      if (!isLeftNullable && !isArrayIndex) {
+        return { kind: "nullish", left, right, ty: isLeftNullishLit ? right.ty : left.ty };
       }
-      // `??` is only total when its default is: with a nullable right operand
-      // (rule-chain style `ruleA(e) ?? ruleB(e) ?? null`), the result stays
-      // optional — otherwise the enclosing chain level loses its optionality
-      // and narrowing can't rewrite it.
-      const ty: Ty = right.ty.kind === "optional" ? right.ty : inner;
+      // `??` is only total when its default is: with a nullable/null/undefined
+      // right operand (`x ?? undefined`, `ruleA(e) ?? ruleB(e) ?? null`), the
+      // result keeps the right operand's nullability.
+      let ty: Ty = inner;
+      if (right.ty.kind === "optional" || right.ty.kind === "nullish") ty = right.ty;
+      else if (right.ty.kind === "void" || (right.kind === "var" && right.name === "undefined")) ty = { kind: "optional", inner };
+      else if (right.ty.kind === "null" || (right.kind === "var" && right.name === "null")) ty = { kind: "optional", inner, absent: "null" };
       return { kind: "nullish", left, right, ty };
     }
 
     case "optChain": {
-      // obj?.<chain> — obj has type Option<T>; we walk the chain stepping
-      // through types from T. The final result is Option<finalStepTy>
-      // (collapsed: if finalStepTy is already optional, we don't double-wrap).
-      // Narrow rewrites this to a someMatch with the chain applied to the binder.
+      // obj?.<chain> — obj has type Option<T> or Nullish<T>; we walk the chain
+      // stepping through types from T. Short-circuiting always yields `undefined`
+      // in JS (so a `T | null` chain step becomes `Nullish<T>`).
       const obj = resolveExpr(e.obj, ctx);
-      const isObjUndef = (obj.kind === "var" && obj.name === "undefined") || obj.ty.kind === "void";
+      const isObjNullishLit = (obj.kind === "var" && (obj.name === "undefined" || obj.name === "null")) ||
+        obj.ty.kind === "void" || obj.ty.kind === "null";
       const isObjArrayIndex = obj.kind === "index" && obj.obj.ty.kind === "array";
-      let stepInTy = obj.ty.kind === "optional" ? obj.ty.inner : obj.ty;
+      const isObjNullable = obj.ty.kind === "optional" || obj.ty.kind === "nullish";
+      let stepInTy = (obj.ty.kind === "optional" || obj.ty.kind === "nullish") ? obj.ty.inner : obj.ty;
       const chain: import("./typedir.js").TChainStep[] = [];
       for (const step of e.chain) {
         if (step.kind === "field") {
@@ -1477,7 +1606,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
           let rawArgs = step.args;
           if (lastField) {
             const priorInTy = chain.length >= 2 ? chain[chain.length - 2].ty
-              : (obj.ty.kind === "optional" ? obj.ty.inner : obj.ty);
+              : ((obj.ty.kind === "optional" || obj.ty.kind === "nullish") ? obj.ty.inner : obj.ty);
             const fakeObj: TExpr = { kind: "var", name: "_chain_recv", ty: priorInTy };
             const fakeFn: TExpr = { kind: "field", obj: fakeObj, field: lastField.name, ty: lastField.ty };
             rawArgs = inferLambdaParamTypes(fakeFn, rawArgs);
@@ -1502,9 +1631,17 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       const finalTy = stepInTy;
       // Non-optional receiver (excluding unchecked array index) never produces
       // None from the `?.` step itself (#352); narrow.ts lowers it directly.
-      const ty: Ty = isObjUndef ? { kind: "void" }
-        : (obj.ty.kind !== "optional" && !isObjArrayIndex) ? finalTy
-        : finalTy.kind === "optional" ? finalTy : { kind: "optional", inner: finalTy };
+      // When the receiver IS nullable, short-circuiting adds `| undefined`:
+      //   - `T | null` + `| undefined` → `Nullish<T>`
+      //   - `Nullish<T>` → `Nullish<T>`
+      //   - `T | undefined` → `T | undefined`
+      //   - `T` → `T | undefined`
+      const ty: Ty = isObjNullishLit ? { kind: "void" }
+        : (!isObjNullable && !isObjArrayIndex) ? finalTy
+        : finalTy.kind === "nullish" ? finalTy
+        : finalTy.kind === "optional"
+          ? (optAbsent(finalTy) === "null" ? { kind: "nullish", inner: finalTy.inner } : finalTy)
+          : { kind: "optional", inner: finalTy };
       return { kind: "optChain", obj, chain, ty };
     }
 
@@ -1523,9 +1660,9 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         return { kind: "record", spread: null, fields, ty: mapTy };
       }
       // Infer record type: from spread, or from return type context. Unwrap
-      // an outer Optional when looking at returnTy — `return {...} : null`
-      // has ctx.returnTy = Option<T>, but the record literal's natural type is T.
-      const returnTyUnwrapped = ctx.returnTy.kind === "optional" ? ctx.returnTy.inner : ctx.returnTy;
+      // an outer Optional/Nullish when looking at returnTy — `return {...} : null`
+      // has ctx.returnTy = Option<T>/Nullish<T>, but the record literal's natural type is T.
+      const returnTyUnwrapped = (ctx.returnTy.kind === "optional" || ctx.returnTy.kind === "nullish") ? ctx.returnTy.inner : ctx.returnTy;
       const recordTy = ty.kind === "user" ? ty : returnTyUnwrapped.kind === "user" ? returnTyUnwrapped : null;
       const decl = recordTy ? declOfKind(ctx.typeDecls, recordTy.name, "record") : undefined;
       // Union-variant literal in union-typed context (a constructed IR node,
@@ -1551,7 +1688,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         // by coerceToTargetTy below); array fields propagate whole, so the
         // arrayLiteral case can thread the element type.
         const fdTy = fieldDecl?.type;
-        const fdCtxTy = fdTy?.kind === "optional" ? fdTy.inner : fdTy;
+        const fdCtxTy = (fdTy?.kind === "optional" || fdTy?.kind === "nullish") ? fdTy.inner : fdTy;
         const valueCtx = fdCtxTy && (fdCtxTy.kind === "user" || fdCtxTy.kind === "array")
           ? { ...fieldCtx, returnTy: fdCtxTy }
           : fieldCtx;
@@ -1614,7 +1751,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       // get their type via ctx.returnTy). Only narrow when the context type is an
       // array (unwrapping one optional level — `TStmt[] | null` return positions);
       // otherwise leave ctx untouched.
-      const rtUnwrapped = ctx.returnTy.kind === "optional" ? ctx.returnTy.inner : ctx.returnTy;
+      const rtUnwrapped = (ctx.returnTy.kind === "optional" || ctx.returnTy.kind === "nullish") ? ctx.returnTy.inner : ctx.returnTy;
       const expectedElem = rtUnwrapped.kind === "array" ? rtUnwrapped.elem : null;
       const elemCtx = expectedElem ? { ...ctx, returnTy: expectedElem } : ctx;
       const elems = e.elems.map(el => {
@@ -1672,20 +1809,23 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       let thenCtx = collectAndChainNarrowings(cond, ctx);
       let elseCtx = ctx;
 
-      // Truthiness — cond itself is optional (`opt ? a : b`), only for simple vars.
-      if (cond.ty.kind === "optional" && cond.kind === "var") {
+      // Truthiness — cond itself is optional/nullish (`opt ? a : b`), only for simple vars.
+      if ((cond.ty.kind === "optional" || cond.ty.kind === "nullish") && cond.kind === "var") {
         thenCtx = withEnv(thenCtx, refine(thenCtx.env, cond.name, cond.ty.inner));
       }
 
-      // Single === undefined check narrows the else-branch.
+      // Negated presence check (single or `||`-chain, var or field path) narrows else-branch.
       const single = negatedVarPresence(cond);
       if (single) {
         elseCtx = withEnv(elseCtx, refine(elseCtx.env, single.varName, single.innerTy));
-      }
-      if (!single && cond.kind === "binop" && cond.op === "||") {
+      } else if (cond.kind === "binop" && cond.op === "||") {
         for (const n of collectEarlyReturnNarrowings(cond)) {
           elseCtx = withEnv(elseCtx, refine(elseCtx.env, n.varName, n.innerTy));
         }
+      }
+      const negPaths = collectEarlyReturnPathNarrowings(cond);
+      if (negPaths.length > 0) {
+        elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, ...negPaths] };
       }
       // Map-index narrowing: `k in m` in the cond narrows the then-branch; `!(k in m)`
       // narrows the else-branch. Parallel to the if-statement hook in resolveStmt.
@@ -1792,7 +1932,7 @@ function invalidateNarrowings(
   for (const root of roots) {
     const cur = lookup(nextEnv, root);
     const storage = storageLookup(nextEnv, root);
-    if (storage?.kind === "optional" && cur && cur.kind !== "optional") {
+    if ((storage?.kind === "optional" || storage?.kind === "nullish") && cur && !tyEqual(cur, storage)) {
       nextEnv = refine(nextEnv, root, storage);
     }
   }
@@ -1800,7 +1940,7 @@ function invalidateNarrowings(
   return { env: nextEnv, narrowedPaths: nextPaths };
 }
 
-/** True if `stmts` definitely assigns a non-optional, non-`undefined` value
+/** True if `stmts` definitely assigns a non-optional/non-nullish value
  *  to `varName` (without subsequently clearing or shadowing it) on every
  *  non-terminating exit path. Used for `#340` assignment narrowing:
  *  `if (v === undefined) { v = 6; } return v + 3;`. */
@@ -1818,12 +1958,13 @@ function definitelyAssignsNonOptional(stmts: RawStmt[], varName: string, ctx: Ct
       continue;
     }
     if (st.kind === "assign" && st.target === varName) {
-      if (st.value.kind === "var" && st.value.name === "undefined") {
+      if (st.value.kind === "var" && (st.value.name === "undefined" || st.value.name === "null")) {
         assigned = false;
       } else {
         const rhsCtx: Ctx = { ...ctx, env, returnTy: targetStorage ?? ctx.returnTy };
         const rhsTy = resolveExpr(st.value, rhsCtx).ty;
-        assigned = rhsTy.kind !== "optional" && rhsTy.kind !== "void" && rhsTy.kind !== "unknown";
+        assigned = rhsTy.kind !== "optional" && rhsTy.kind !== "nullish" &&
+          rhsTy.kind !== "void" && rhsTy.kind !== "null" && rhsTy.kind !== "unknown";
       }
     } else if (st.kind === "if") {
       const subCtx: Ctx = { ...ctx, env };
@@ -1870,11 +2011,13 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
       narrowedPaths = narrowedPaths.filter(np => np.path.rootVar !== root);
       if (!s.target.includes(".")) {
         const storage = storageLookup(env, s.target);
-        if (storage?.kind === "optional") {
-          const isUndef = s.value.kind === "var" && s.value.name === "undefined";
+        if (storage?.kind === "optional" || storage?.kind === "nullish") {
+          const isNullLit = s.value.kind === "var" && s.value.name === "null";
+          const isUndefLit = s.value.kind === "var" && s.value.name === "undefined";
           const rhsCtx: Ctx = { ...currentCtx, returnTy: storage };
-          const rawTy = isUndef ? { kind: "void" as const } : resolveExpr(s.value, rhsCtx).ty;
-          if (!isUndef && rawTy.kind !== "optional" && rawTy.kind !== "void" && rawTy.kind !== "unknown") {
+          const rawTy = isUndefLit ? { kind: "void" as const } : isNullLit ? { kind: "null" as const } : resolveExpr(s.value, rhsCtx).ty;
+          if (!isUndefLit && !isNullLit && rawTy.kind !== "optional" && rawTy.kind !== "nullish" &&
+              rawTy.kind !== "void" && rawTy.kind !== "null" && rawTy.kind !== "unknown") {
             env = refine(env, s.target, storage.inner);
           } else {
             env = refine(env, s.target, storage);
@@ -1960,7 +2103,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // type into the array literal (see the arrayLiteral case). Optionals too
       // (`const r: TExpr | null = cond ? {…} : null`) — the record case unwraps
       // one optional level when consulting returnTy.
-      const initCtx = (declTy.kind === "user" || declTy.kind === "array" || declTy.kind === "optional")
+      const initCtx = (declTy.kind === "user" || declTy.kind === "array" || declTy.kind === "optional" || declTy.kind === "nullish")
         ? { ...ctx, returnTy: declTy } : ctx;
       let init = coerceStr(resolveExpr(s.init, initCtx), declTy, ctx.typeDecls);
       // Under noUncheckedIndexedAccess, TS gives `const e = arr[i]` type T | undefined
@@ -1977,9 +2120,11 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         // by inlining an alias we shadow via declare-type, or any-laden), but
         // LS resolved the initializer to something concrete. Take the structure
         // from `init.ty`, keeping only the optionality ts-morph reported.
-        ty = declTy.kind === "optional" && init.ty.kind !== "optional"
-          ? { kind: "optional", inner: init.ty }
-          : init.ty;
+        ty = declTy.kind === "nullish" && init.ty.kind !== "nullish"
+          ? { kind: "nullish", inner: init.ty.kind === "optional" ? init.ty.inner : init.ty }
+          : declTy.kind === "optional" && init.ty.kind !== "optional"
+            ? { ...declTy, inner: init.ty }
+            : init.ty;
       } else if (isWidenedStringUnionTy(declTy, init.ty, ctx.typeDecls) && !ctx.overrides.has(s.name)) {
         // ts-morph widened a string-union to `string`; keep the initializer's
         // datatype so `local === "lit"` lowers to a discriminant test.
@@ -1991,7 +2136,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         ty = init.ty;
       } else {
         // Map indexing: TS says T, but access can fail → use Optional<T> from init
-        ty = (declTy.kind !== "optional" && init.ty.kind === "optional") ? init.ty : declTy;
+        ty = (declTy.kind !== "optional" && declTy.kind !== "nullish" && init.ty.kind === "optional") ? init.ty : declTy;
       }
       // const collections are mutable in value-semantics world (TS mutates in place, Dafny/Lean reassign)
       const mutable = s.mutable || isRefMutableInTS(ty);
@@ -2011,7 +2156,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // Propagate the target's type as returnTy, mirroring the annotated-let
       // case, so record/union literals and array literals in the RHS resolve
       // to their named datatypes.
-      const valueCtx = (targetTy.kind === "user" || targetTy.kind === "array" || targetTy.kind === "optional")
+      const valueCtx = (targetTy.kind === "user" || targetTy.kind === "array" || targetTy.kind === "optional" || targetTy.kind === "nullish")
         ? { ...ctx, returnTy: targetTy } : ctx;
       const value = coerceToTargetTy(resolveExpr(s.value, valueCtx), targetTy, ctx.typeDecls);
       return [{ kind: "assign", target: entry?.emittedName ?? s.target, value }, ctx.env];
@@ -2042,6 +2187,14 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       const single = negatedVarPresence(resolvedCond);
       if (single) {
         elseCtx = withEnv(ctx, refine(ctx.env, single.varName, single.innerTy));
+      } else if (resolvedCond.kind === "binop" && resolvedCond.op === "||") {
+        for (const n of collectEarlyReturnNarrowings(resolvedCond)) {
+          elseCtx = withEnv(elseCtx, refine(elseCtx.env, n.varName, n.innerTy));
+        }
+      }
+      const negPaths = collectEarlyReturnPathNarrowings(resolvedCond);
+      if (negPaths.length > 0) {
+        elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, ...negPaths] };
       }
       // Narrow map index access across `k in m` / `!(k in m)` in the cond:
       // positive atoms (from `k in m` or &&-chains containing it) → then-branch;

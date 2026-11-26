@@ -53,7 +53,7 @@ test("generator produces 100 valid TypeScript modules across all 7 imperative/mu
   }
 });
 
-test("negated-postcondition refutation oracle catches #304 false proof, verifies #350 fixed, and rejects live-alias mutation (#46, #49, #50)", () => {
+test("negated-postcondition refutation oracle verifies #304 and #350 fixed and rejects live-alias mutation (#46, #49, #50, #304)", () => {
   const project = makeProject();
   const workDir = mkdtempSync(path.join(tmpdir(), "lsc-imp-refute-"));
   try {
@@ -79,8 +79,8 @@ test("negated-postcondition refutation oracle catches #304 false proof, verifies
     assert.equal(res350.ok, true, `expected #350 to pass after Milestone 3a, got ${res350.oracle}: ${res350.detail}`);
     assert.equal(counts350.passed, 1);
 
-    // 2. Known false proof #304 (deferred to Milestone 5): null vs undefined conflation in `number | null | undefined`.
-    const bug304: ImperativeProgram = {
+    // 2. Milestone 5 (#304): null vs undefined stay distinct via Nullish<T> in `number | null | undefined`.
+    const fixed304: ImperativeProgram = {
       family: "nullish-falsy",
       label: "issue-304-null-vs-undefined",
       fnName: "target",
@@ -90,13 +90,17 @@ test("negated-postcondition refutation oracle catches #304 false proof, verifies
         "  return x === null;",
         "}",
       ].join("\n"),
-      inputs: [{ args: [{ kind: "nullish-int", value: undefined }] }],
+      inputs: [
+        { args: [{ kind: "nullish-int", value: undefined }] },
+        { args: [{ kind: "nullish-int", value: null }] },
+        { args: [{ kind: "nullish-int", value: 0 }] },
+      ],
     };
     const counts304 = createImperativeCounts();
-    const res304 = evaluateImperativeProgram(bug304, { project, workDir, counts: counts304, timeoutSec: 15 });
-    assert.equal(res304.ok, false);
-    assert.equal(res304.oracle, "soundness-refuted", `expected soundness-refuted for #304, got ${res304.oracle}: ${res304.detail}`);
-    assert.equal(counts304.soundnessRefuted, 1);
+    const res304 = evaluateImperativeProgram(fixed304, { project, workDir, counts: counts304, timeoutSec: 15 });
+    assert.equal(res304.ok, true, `expected #304 to pass after Milestone 5, got ${res304.oracle}: ${res304.detail}`);
+    assert.equal(counts304.soundnessRefuted, 0);
+    assert.equal(counts304.passed, 1);
 
     // 3. Sound function: refutation fails and positive check succeeds.
     const soundProg: ImperativeProgram = {
@@ -157,13 +161,35 @@ test("negated-postcondition refutation oracle catches #304 false proof, verifies
     const resUnion = evaluateImperativeProgram(unionProg, { project, workDir, counts: createImperativeCounts(), timeoutSec: 15 });
     assert.equal(resUnion.ok, true, `${resUnion.signature}\n${resUnion.detail}`);
 
-    // 4. Lossless .semantic.json save & replay reproduces #304 soundness-refuted without reshrinking.
-    const casePath = path.join(workDir, "bug304.semantic.json");
-    const saved = saveImperativeCase(casePath, bug304, res304);
-    assert.equal(saved.schema, IMPERATIVE_SCHEMA);
-    const replayed = replaySavedImperativeCase(casePath, { timeoutSec: 15 });
-    assert.equal(replayed.ok, false);
-    assert.equal(replayed.oracle, "soundness-refuted");
+    // 4. Lossless .semantic.json save & replay verifies fixed #304 and reproduces live-alias rejection without reshrinking.
+    const fixed304Path = path.join(workDir, "fixed304.semantic.json");
+    const saved304 = saveImperativeCase(fixed304Path, fixed304, res304);
+    assert.equal(saved304.schema, IMPERATIVE_SCHEMA);
+    const replayed304 = replaySavedImperativeCase(fixed304Path, { timeoutSec: 15 });
+    assert.equal(replayed304.ok, true);
+
+    const liveAliasProg: ImperativeProgram = {
+      family: "aliasing",
+      label: "live-alias-mutation",
+      fnName: "target",
+      returnKind: "number",
+      tsText: [
+        "export function target(a: number[]): number {",
+        "  const b = a;",
+        "  b.push(7);",
+        "  return a.length;",
+        "}",
+      ].join("\n"),
+      inputs: [{ args: [{ kind: "int-array", value: [1, 2] }] }],
+    };
+    const resAlias = evaluateImperativeProgram(liveAliasProg, { project, workDir, counts: createImperativeCounts(), timeoutSec: 15 });
+    assert.equal(resAlias.ok, false);
+    assert.equal(resAlias.oracle, "rejected");
+    const aliasPath = path.join(workDir, "live-alias.semantic.json");
+    saveImperativeCase(aliasPath, liveAliasProg, resAlias);
+    const replayedAlias = replaySavedImperativeCase(aliasPath, { timeoutSec: 15 });
+    assert.equal(replayedAlias.ok, false);
+    assert.equal(replayedAlias.oracle, "rejected");
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
@@ -299,29 +325,35 @@ test("batched dafny run fast screening detects runtime divergence alongside matc
           dafnyArgs: [imperativeArgToDafny(nullishArg, badCompiled.compiled.optDfy)],
           expectedJs: badNode.value,
         },
+        {
+          id: "synthetic-divergence-control",
+          dfy: badCompiled.compiled.optDfy,
+          fnName: "target",
+          dafnyArgs: [imperativeArgToDafny(nullishArg, badCompiled.compiled.optDfy)],
+          expectedJs: !(badNode.value as boolean),
+        },
       ],
       workDir,
       45,
     );
     assert.equal(screen.error, undefined, screen.error);
     assert.equal(screen.ok, false);
-    assert.equal(screen.matched, 2);
+    assert.equal(screen.matched, 3);
     assert.equal(screen.divergences.length, 1);
-    assert.equal(screen.divergences[0].id, "issue-304-null-vs-undefined");
-    assert.equal(screen.divergences[0].expected, "false");
-    assert.equal(screen.divergences[0].actual, "true");
+    assert.equal(screen.divergences[0].id, "synthetic-divergence-control");
+    assert.equal(screen.divergences[0].expected, "true");
+    assert.equal(screen.divergences[0].actual, "false");
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
 });
 
-test("imperative campaign exercises --fast-run screening and stage-locked shrinking with pre/opt attribution (#46, #50)", () => {
+test("imperative campaign exercises --fast-run screening with zero nullish-falsy or aliasing false proofs (#46, #50, #304)", () => {
   const outFast = mkdtempSync(path.join(tmpdir(), "lsc-imp-fastrun-"));
   const outShrink = mkdtempSync(path.join(tmpdir(), "lsc-imp-shrink-"));
   const outAlias = mkdtempSync(path.join(tmpdir(), "lsc-imp-alias-"));
   try {
-    // 1. fastRun mode on nullish-falsy (#304): screens batch and confirms
-    //    soundness-refuted divergence via `dafny verify` on both pre and opt stages.
+    // 1. fastRun mode on nullish-falsy: after Milestone 5 (#304), all runs match with 0 soundness-refuted.
     const fastSummary = runImperativeCampaign({
       seed: 1,
       runs: 12,
@@ -331,19 +363,19 @@ test("imperative campaign exercises --fast-run screening and stage-locked shrink
       fastRun: true,
     });
     assert.ok((fastSummary.fastRunScreened ?? 0) >= 1, "expected fastRunScreened >= 1");
-    assert.ok(fastSummary.classes.some(c => c.oracle === "soundness-refuted" && c.stage === "both"));
+    assert.equal(fastSummary.counts.soundnessRefuted, 0, "Milestone 5 must eliminate #304 soundness-refuted");
+    assert.equal(fastSummary.counts.dafnyResolve, 0);
 
-    // 2. Standard campaign shrinks #304 soundness-refuted via stage-locked fc.check.
+    // 2. Standard campaign on loop-shadow exercises stage-locked fc.check shrinking.
     const shrinkSummary = runImperativeCampaign({
       seed: 1,
-      runs: 10,
-      families: ["nullish-falsy"],
+      runs: 6,
+      families: ["loop-shadow"],
       out: outShrink,
       timeoutSec: 15,
     });
-    const cls = shrinkSummary.classes.find(c => c.oracle === "soundness-refuted");
-    assert.ok(cls, "expected shrunk #304 soundness-refuted class");
-    assert.equal(cls.stage, "both");
+    assert.equal(shrinkSummary.counts.soundnessRefuted, 0);
+    assert.equal(shrinkSummary.counts.dafnyResolve, 0);
 
     // 3. Aliasing family: live-alias-mutation is explicitly rejected (zero soundness-refuted).
     const aliasSummary = runImperativeCampaign({
