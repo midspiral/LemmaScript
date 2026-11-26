@@ -677,9 +677,10 @@ function extractExpr(node: Expression): RawExpr {
     if (!hasSpread) {
       return { kind: "arrayLiteral", elems: elems.map(e => extractExpr(e as Expression)) };
     }
-    // [a, ...b, c] → [a] + b + [c] via shared helper
+    // [a, ...b, c] → [a] + b + [c] via shared helper; mark freshClone so
+    // `[...arr]` is not misread by alias analysis as a reference alias of `arr`.
     const result = buildSpreadConcat(elems);
-    return result;
+    return markFreshClone(result);
   }
 
   // Object literal: { res: true, done: false } or { ...obj, res: true }
@@ -696,7 +697,7 @@ function extractExpr(node: Expression): RawExpr {
     for (const prop of node.getProperties()) {
       if (Node.isSpreadAssignment(prop)) {
         const s = extractExpr(prop.getExpression());
-        acc = acc === null ? s : { kind: "recordMerge", base: acc, override: s };
+        acc = acc === null ? markFreshClone(s) : { kind: "recordMerge", base: acc, override: s };
       } else if (Node.isShorthandPropertyAssignment(prop)) {
         const name = prop.getName();
         update(name, { kind: "var", name: sourceName(prop.getNameNode()) });
@@ -745,8 +746,9 @@ function extractExpr(node: Expression): RawExpr {
         const argSymbol = argType.getSymbol()?.getName() ?? argType.getAliasSymbol()?.getName();
         const argTypeText = _eraseGenerics(typeToString(argType));
         if (argSymbol === "Map" || argTypeText.startsWith("Record<")) {
-          // new Map(existingMap) or new Map(record) — identity (Dafny maps are value types)
-          return extractExpr(args[0] as Expression);
+          // new Map(existingMap) or new Map(record) — identity (Dafny maps are value types),
+          // marked freshClone so alias analysis knows JS allocates a fresh Map.
+          return markFreshClone(extractExpr(args[0] as Expression));
         }
         // new Map(entries) — map-from-array constructor
         return { kind: "call", fn: { kind: "var", name: "__mapFromArray" }, args: [extractExpr(args[0] as Expression)] };
@@ -758,8 +760,8 @@ function extractExpr(node: Expression): RawExpr {
           return { kind: "emptyCollection", collectionType: "Set", tsType, initElems: arg.getElements().map(e => extractExpr(e as Expression)) };
         }
         const argSymbol = arg.getType().getSymbol()?.getName() ?? arg.getType().getAliasSymbol()?.getName();
-        // new Set(existingSet) — identity (sets are value types)
-        if (argSymbol === "Set") return extractExpr(arg);
+        // new Set(existingSet) — identity (sets are value types), marked freshClone.
+        if (argSymbol === "Set") return markFreshClone(extractExpr(arg));
         // new Set(arr) — build a deduplicated set from the array's elements
         return { kind: "call", fn: { kind: "var", name: "__setFromArray" }, args: [extractExpr(arg)] };
       }
@@ -786,9 +788,10 @@ function extractExpr(node: Expression): RawExpr {
     }
   }
 
-  // null → undefined (both map to None in backends)
+  // Preserve `null` distinctly from `undefined` so `T | null | undefined`
+  // (`Nullish<T>`) and single-sentinel `T | null` / `T | undefined` stay sound (#304).
   if (Node.isNullLiteral(node)) {
-    return { kind: "var", name: "undefined" };
+    return { kind: "var", name: "null" };
   }
 
   // `typeof X` — only meaningful in a `typeof X === "string"` discriminator over
@@ -1266,6 +1269,7 @@ function annotationTypeText(tn: TypeNode, type: Type): string | undefined {
 function typeToString(type: Type): string {
   if (constEnumInfo(type)) return "number";
   if (type.isUndefined()) return "undefined";
+  if (type.isNull()) return "null";
   if (type.isNumber() || type.isNumberLiteral()) return "number";
   if (type.isBigInt() || type.isBigIntLiteral()) return "bigint";
   if (type.isString() || type.isStringLiteral()) return "string";
@@ -1327,9 +1331,14 @@ function typeToString(type: Type): string {
     const real = parts.filter(p => p !== "undefined" && p !== "null");
     if (real.length <= 1) return parts.join(" | ");
     // A genuine multi-member union with no tagged-union shape LS can model →
-    // a single opaque type. (See _synthOpaque.) Preserve an outer optional.
+    // a single opaque type. (See _synthOpaque.) Preserve outer null/undefined.
     const opaque = _synthOpaque(real);
-    return real.length === parts.length ? opaque : `${opaque} | undefined`;
+    const hasNull = parts.includes("null");
+    const hasUndef = parts.includes("undefined");
+    if (hasNull && hasUndef) return `${opaque} | null | undefined`;
+    if (hasNull) return `${opaque} | null`;
+    if (hasUndef) return `${opaque} | undefined`;
+    return opaque;
   }
   if (type.isTuple()) {
     return `[${type.getTupleElements().map(t => typeToString(t)).join(", ")}]`;
@@ -1354,6 +1363,16 @@ function typeToString(type: Type): string {
     return name;
   }
   return type.getText();
+}
+
+function markFreshClone(e: RawExpr): RawExpr {
+  if (e.kind === "nonNull") {
+    return { ...e, expr: markFreshClone(e.expr) };
+  }
+  if (e.kind === "var" || e.kind === "field" || e.kind === "index" || e.kind === "call") {
+    return { ...e, freshClone: true };
+  }
+  return e;
 }
 
 const COMPOUND_OPS: Record<string, string> = {
@@ -2869,15 +2888,16 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     // already-extracted `fn.returnType` string for nullish suffixes to detect
     // the wrap-in-Optional case.
     let innerType: Type | null = null;
-    let wrapOptional = false;
     const sourceReturnText = fn.returnType ?? "";
-    const sourceHadNullish = / \| (null|undefined)$/.test(sourceReturnText)
-      || sourceReturnText.includes(" | null ") || sourceReturnText.includes(" | undefined ")
-      || sourceReturnText.includes(" | null|") || sourceReturnText.includes(" | undefined|");
+    const sourceHasNull = /(^|\|\s*)null(\s*\||$)/.test(sourceReturnText);
+    const sourceHasUndef = /(^|\|\s*)undefined(\s*\||$)/.test(sourceReturnText);
+    let wrapNull = false;
+    let wrapUndef = false;
     const sym = retType.getSymbol();
     if ((sym?.getName() === "__type" || sym?.getName() === "__object") && retType.isObject() && !retType.isArray()) {
       innerType = retType;
-      if (sourceHadNullish) wrapOptional = true;
+      wrapNull = sourceHasNull;
+      wrapUndef = sourceHasUndef;
     } else if (retType.isUnion()) {
       const arms = retType.getUnionTypes();
       const nullish = arms.filter(t => t.isNull() || t.isUndefined());
@@ -2887,15 +2907,22 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
         const otherSym = onlyOther.getSymbol();
         if ((otherSym?.getName() === "__type" || otherSym?.getName() === "__object") && onlyOther.isObject() && !onlyOther.isArray()) {
           innerType = onlyOther;
-          wrapOptional = true;
+          wrapNull = nullish.some(t => t.isNull());
+          wrapUndef = nullish.some(t => t.isUndefined());
         }
       }
     }
+    const formatReturnNullability = (base: string): string => {
+      if (wrapNull && wrapUndef) return `${base} | null | undefined`;
+      if (wrapNull) return `${base} | null`;
+      if (wrapUndef) return `${base} | undefined`;
+      return base;
+    };
     if (innerType) {
       // Try typeToString first — it resolves collapsed single-variant unions
       const resolved = typeToString(innerType);
       if (resolved !== "__type" && !resolved.includes("__type") && knownTypes.has(resolved)) {
-        fn.returnType = wrapOptional ? `${resolved} | undefined` : resolved;
+        fn.returnType = formatReturnNullability(resolved);
         continue;
       }
       const synName = f.owner + fn.name.charAt(0).toUpperCase() + fn.name.slice(1) + "Result";
@@ -2904,7 +2931,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
         const info = extractRecord(synName, innerType, f.node, undefined, extra);
         if (info) { typeDecls.push(...extra); typeDecls.push(info); knownTypes.add(synName); }
       }
-      fn.returnType = wrapOptional ? `${synName} | undefined` : synName;
+      fn.returnType = formatReturnNullability(synName);
       // Also resolve imported types referenced in the return type's fields
       for (const prop of innerType.getProperties()) {
         resolveType(prop.getTypeAtLocation(f.node), f.node);

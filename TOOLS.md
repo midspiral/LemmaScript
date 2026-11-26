@@ -6,12 +6,13 @@ The `lsc` toolchain translates annotated TypeScript to formal verification artif
 
 ```
 TS source (.ts)
-  → extract    (ts-morph → Raw IR)
-  → resolve    (Raw IR → Typed IR; types, callback bindings, type narrowing)
-  → narrow     (Typed IR → Typed IR; structural narrowing — `someMatch` rewrites)
-  → transform  (Typed IR → IR; includes shared callback lowering)
-  → peephole   (IR → IR, local rewrites that eliminate Some/None ceremony)
-  → emit       (IR → Lean text or Dafny text)
+  → extract       (ts-morph → Raw IR)
+  → resolve       (Raw IR → Typed IR; types, storageTy, callback bindings, flow narrowing)
+  → narrow        (Typed IR → Typed IR; `someMatch`/`tagMatch` rewrites + `checked-reads.ts`)
+  → alias-check   (Typed IR check; rejects in-place mutations through live aliases)
+  → transform     (Typed IR → IR; `Place` write-back, callback lowering, `#349` `let _cmpN`)
+  → peephole      (IR → IR, local rewrites that eliminate Some/None ceremony)
+  → emit          (IR → Lean text or Dafny text)
 ```
 
 ## Three IRs
@@ -49,11 +50,15 @@ Type names: `Expr`, `Stmt`, `Module`, `MatchArm`, `StmtMatchArm`, and `Decl` = `
 
 **Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedPaths`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: simple vars and pure access paths (`a.b.c`, any depth) narrow. `&&` chains accumulate narrowings (each premise in scope for later ones); `==>` propagates premise narrowings into the conclusion. Narrowing here changes types; structural narrowing remains in `narrow.ts`. Resolve also binds inline callbacks to their actual arguments and simplifies symbolic rest observations; see [Callback binding and lowering](#callback-binding-and-lowering).
 
-**Narrow** (`narrow.ts`): Typed IR → Typed IR. Owns all structural narrowing — both for optional checks and for discriminated unions. Optional patterns rewrite to `someMatch`; discriminant patterns (`x.kind === "v"`, `'k' in x`, `Array.isArray(x)` for synthesized array-unions, `x.kind !== "v") return; ...`) rewrite to `tagMatch`. Also handles `==>` premise narrowing in specs, `left ?? right` (nullish coalescing), `k in m ? m[k] : default` for map-typed `m`, and `obj?.<chain>` for any combination of `?.field`, `?.foo()`, `?.[i]`, and continuations (via the `optChain` IR node). Rules fire for pure access paths (`var(x)`, `field(purePath, name)`); `optChain` and `nullish` are the sole paths for complex scrutinees. The pass owns *where* a condition sits; *what* a condition establishes lives in `condition-facts.ts` (shared with resolve). See [Narrow rules](#narrow-rules) below.
+**Narrow** (`narrow.ts` + `checked-reads.ts`): Typed IR → Typed IR. Owns all structural narrowing — both for optional checks and for discriminated unions. Optional patterns rewrite to `someMatch` (deferring when the narrowed path may be cleared to `undefined`/optional inside the branch); discriminant patterns (`x.kind === "v"`, `'k' in x`, `Array.isArray(x)` for synthesized array-unions, `x.kind !== "v") return; ...`) rewrite to `tagMatch`. Also handles `==>` premise narrowing in specs, `left ?? right` (nullish coalescing, including non-optional operands), `k in m ? m[k] : default` for map-typed `m`, and `obj?.<chain>` for any combination of `?.field`, `?.foo()`, `?.[i]`, and continuations (via the `optChain` IR node). At the end of `narrow`, `checked-reads.ts` wraps remaining narrowed reads of `Option<T>` storage (e.g. `while` conditions, definite assignment, `||` chains, or clearing branches) in `checkedUnwrap` nodes. `narrow-checks.ts` validates post-narrow IR invariants. The pass owns *where* a condition sits; *what* a condition establishes lives in `condition-facts.ts` (shared with resolve). See [Narrow rules](#narrow-rules) below and [ARCHITECTURE_NARROWING.md](ARCHITECTURE_NARROWING.md).
 
-**Transform** (`transform.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None — substituting the binder for any pure access path scrutinee, or lowering naively when the scrutinee is complex (narrow pre-bound the someBody). No optional-narrowing logic of its own.
+**Alias check** (`alias-check-pass.ts` + self-verified `alias-check.ts`): Typed IR validation pass run before transform. Combines backward liveness with forward alias tracking to reject in-place mutations (`push`, index assignment, `Map.set`, `Set.add`, field writes) on a binding while another alias to the same mutable container is still read afterward. Read-only sharing, dead-source moves, and explicit clones are allowed.
+
+**Transform** (`transform.ts` + `place-lowering.ts` + self-verified `places.ts`): Typed IR → IR. Consumes resolved types and classifications. Pattern-matches on `ty` to decide: constructor vs string, `.toNat` vs direct, `if` vs `match`, pure def vs method. Configured with `TransformOptions` for backend-specific behavior (`backend`, `monadic`). Lowers `someMatch` to IR `match` Some/None — substituting the binder for any pure access path scrutinee, or lowering naively when the scrutinee is complex (narrow pre-bound the someBody) — and routes in-place mutations through `Place` write-back frames so narrowed binders and underlying `Option`/union storage stay in sync. For executable optional comparisons with precondition-bearing operands, hoists the operand into `let _cmpN` before matching.
 
 For array callbacks, transform invokes `lowerIndexedCallback` from `callback-lowering.ts` after lowering the receiver and arguments. This shared adapter constructs ordinary IR inside transform; it does not run as a separate module-wide phase.
+
+**Differential fuzzing** (`tools/fuzz/narrowing-fuzz.ts`, `semantic-oracle.ts`, `imperative-oracle.ts`): `npm --prefix tools run fuzz:semantic` and `npm --prefix tools run fuzz:imperative` run property-based differential tests comparing Node execution against Dafny verification (including false-proof refutation and dropped-precondition checks). See [formal/narrowing-shootout.md](formal/narrowing-shootout.md).
 
 **Peephole** (`peephole.ts`): IR → IR. Local rewrite rules applied bottom-up to fixed point. Eliminates wrap-then-unwrap ceremony around partial-access expressions like `m.get(k)` (which is internally lowered to `methodCall(map, "get", [k])` and emits as `(if k in m then Some(m[k]) else None)`). See [Peephole rules](#peephole-rules) below.
 
@@ -192,7 +197,7 @@ Each TS source produces two Dafny files:
 
 - **`foo.dfy.gen`** — always regeneratable from TS. The merge base.
 - **`foo.dfy`** — source of truth. Starts as a copy of `.dfy.gen`, then accumulates user/LLM proof additions. The diff between `.dfy.gen` and `.dfy` must be additions-only.
-- **`foo.dfy.base`** — transient three-way-merge anchor. A conflict or additions-only failure retains the old anchor; verification failure after a clean additions-only merge advances it to the new gen. Successful `regen` removes it, including with `--no-verify`. Do not discard it simply because a command failed.
+- **`foo.dfy.base`** — transient three-way-merge anchor. `gen`, `gen-check`, and `check` seed it with the previous `.dfy.gen` when overwriting a changed generation beside an existing `.dfy` and no base exists yet. A conflict or additions-only failure retains the old anchor; verification failure after a clean additions-only merge advances it to the new gen. A passing additions-only `check`/`gen-check` or successful `regen` (including with `--no-verify`) removes it. Do not discard it simply because a command failed.
 
 With `proof-dir`, `lsc.ts` mirrors the source's config-relative directory under
 the configured root and places `.dfy.gen`, `.dfy`, `.dfy.base`, and

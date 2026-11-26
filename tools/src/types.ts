@@ -90,10 +90,33 @@ function tyFromTypeNode(tn: TypeNode): Ty {
     const arms = tn.getTypeNodes();
     const isBoolLit = (a: TypeNode) =>
       Node.isLiteralTypeNode(a) && (a.getLiteral().getKind() === SyntaxKind.TrueKeyword || a.getLiteral().getKind() === SyntaxKind.FalseKeyword);
-    const isNullish = (a: TypeNode) =>
+    const isNullNode = (a: TypeNode) =>
       a.getKind() === SyntaxKind.NullKeyword ||
-      a.getKind() === SyntaxKind.UndefinedKeyword ||
       (Node.isLiteralTypeNode(a) && a.getLiteral().getKind() === SyntaxKind.NullKeyword);
+    const isUndefNode = (a: TypeNode) => a.getKind() === SyntaxKind.UndefinedKeyword;
+    const isNullish = (a: TypeNode) => isNullNode(a) || isUndefNode(a);
+    const hasNull = arms.some(isNullNode);
+    const hasUndef = arms.some(isUndefNode);
+    const wrapNullability = (inner: Ty): Ty => {
+      let payload = inner;
+      let mergedNull = hasNull;
+      let mergedUndef = hasUndef;
+      while (payload.kind === "optional" || payload.kind === "nullish") {
+        if (payload.kind === "nullish") {
+          mergedNull = true;
+          mergedUndef = true;
+          payload = payload.inner;
+        } else {
+          if (payload.absent === "null") mergedNull = true;
+          else mergedUndef = true;
+          payload = payload.inner;
+        }
+      }
+      if (mergedNull && mergedUndef) return { kind: "nullish", inner: payload };
+      if (mergedNull) return { kind: "optional", inner: payload, absent: "null" };
+      if (mergedUndef) return { kind: "optional", inner: payload };
+      return payload;
+    };
     // Collapse expanded boolean (`true | false`) into a single bool slot, so
     // `boolean | undefined` (which TS expands to `false | true | undefined`)
     // still reads as `optional<bool>` rather than falling through to user.
@@ -106,6 +129,11 @@ function tyFromTypeNode(tn: TypeNode): Ty {
         : arms.map(node => ({ node }));
     if (normalized.length === 1 && "syntheticBool" in normalized[0]) return { kind: "bool" };
     const nonNullish = normalized.filter(a => "syntheticBool" in a || !isNullish(a.node));
+    if (nonNullish.length === 0) {
+      if (hasNull && hasUndef) return { kind: "nullish", inner: { kind: "void" } };
+      if (hasNull) return { kind: "null" };
+      return { kind: "void" };
+    }
     // Inline string-literal union (`"a" | "b"`, not a //@ declare-type): no datatype
     // to resolve against, so lower to plain string (the arms are strings; == holds).
     const isStrLit = (a: { node: TypeNode } | { syntheticBool: true }) =>
@@ -117,9 +145,7 @@ function tyFromTypeNode(tn: TypeNode): Ty {
         const inner = Node.isLiteralTypeNode(lit) ? lit.getLiteral() : lit;
         return Node.isStringLiteral(inner) ? inner.getLiteralValue() : inner.getText();
       });
-      return normalized.some(a => !("syntheticBool" in a) && isNullish(a.node))
-        ? { kind: "optional", inner: { kind: "string", values } }
-        : { kind: "string", values };
+      return wrapNullability({ kind: "string", values });
     }
     // Numeric literal unions have the same integer model as number, including
     // in inline annotations and optional types with several numeric arms.
@@ -128,24 +154,21 @@ function tyFromTypeNode(tn: TypeNode): Ty {
       const ty = tyFromTypeNode(a.node);
       return ty.kind === "int" && !ty.big;
     })) {
-      const inner: Ty = { kind: "int" };
-      return normalized.some(a => !("syntheticBool" in a) && isNullish(a.node))
-        ? { kind: "optional", inner } : inner;
+      return wrapNullability({ kind: "int" });
     }
     if (nonNullish.length === 1 && normalized.length >= 2) {
       const sole = nonNullish[0];
       const inner: Ty = "syntheticBool" in sole ? { kind: "bool" } : tyFromTypeNode(sole.node);
-      return { kind: "optional", inner };
+      return wrapNullability(inner);
     }
     // Multi-member union with a nullish arm (`A | B | undefined`): the
     // structured part is opaque to us, but the optionality isn't. Expose it as
-    // optional<user "A | B"> so downstream (e.g. the let-type merge in resolve)
-    // can keep the nullability while taking structure from a more precise
-    // source. Without this the whole thing collapses to one opaque user blob.
-    const hadNullish = normalized.some(a => !("syntheticBool" in a) && isNullish(a.node));
-    if (hadNullish && nonNullish.length >= 2) {
+    // optional/nullish<user "A | B"> so downstream (e.g. the let-type merge in
+    // resolve) can keep the nullability while taking structure from a more
+    // precise source. Without this the whole thing collapses to one opaque blob.
+    if ((hasNull || hasUndef) && nonNullish.length >= 2) {
       const innerName = nonNullish.map(a => ("syntheticBool" in a ? "boolean" : a.node.getText())).join(" | ");
-      return { kind: "optional", inner: { kind: "user", name: innerName } };
+      return wrapNullability({ kind: "user", name: innerName });
     }
     // Other unions: leave as a user type spelled how the source wrote it.
     return { kind: "user", name: tn.getText() };
@@ -170,6 +193,7 @@ function tyFromTypeNode(tn: TypeNode): Ty {
   if (Node.isLiteralTypeNode(tn)) {
     const literal = tn.getLiteral();
     const lk = literal.getKind();
+    if (lk === SyntaxKind.NullKeyword) return { kind: "null" };
     if (lk === SyntaxKind.TrueKeyword || lk === SyntaxKind.FalseKeyword) return { kind: "bool" };
     if (Node.isNumericLiteral(literal) ||
         (Node.isPrefixUnaryExpression(literal) && Node.isNumericLiteral(literal.getOperand()))) return { kind: "int" };
@@ -183,6 +207,8 @@ function tyFromTypeNode(tn: TypeNode): Ty {
       return { kind: "bool" };
     case SyntaxKind.StringKeyword:
       return { kind: "string" };
+    case SyntaxKind.NullKeyword:
+      return { kind: "null" };
     case SyntaxKind.VoidKeyword:
     case SyntaxKind.UndefinedKeyword:
       return { kind: "void" };
@@ -218,12 +244,14 @@ export function tyToCanonical(ty: Ty): string {
     case "real":   return "real";
     case "string": return "string";
     case "void":   return "void";
+    case "null":   return "null";
     case "unknown":return "unknown";
     case "array":  return `seq<${tyToCanonical(ty.elem)}>`;
     case "tuple":  return `(${ty.elems.map(tyToCanonical).join(", ")})`;
     case "map":    return `map<${tyToCanonical(ty.key)}, ${tyToCanonical(ty.value)}>`;
     case "set":    return `set<${tyToCanonical(ty.elem)}>`;
     case "optional": return `Option<${tyToCanonical(ty.inner)}>`;
+    case "nullish":  return `Nullish<${tyToCanonical(ty.inner)}>`;
     case "user":   return ty.name;
     case "fn":     return `(${ty.params.map(tyToCanonical).join(", ")}) -> ${tyToCanonical(ty.result)}`;
   }

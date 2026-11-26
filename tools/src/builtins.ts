@@ -103,7 +103,7 @@ export const BUILTINS = {
       }
       return UNKNOWN;
     } },
-  "array.with": { ret: () => UNKNOWN, pure: true,
+  "array.with": { ret: (objTy) => objTy, pure: true,
     intArgPositions: [0] },
 
   // ── string ────────────────────────────────────────────────

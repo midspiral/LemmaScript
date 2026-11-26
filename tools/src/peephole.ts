@@ -252,6 +252,7 @@ function rewriteChildrenExpr(e: Expr): Expr {
     case "toNat": return { ...e, expr: r(e.expr) };
     case "toInt": return { ...e, expr: r(e.expr) };
     case "toReal": return { ...e, expr: r(e.expr) };
+    case "checkedUnwrap": return { ...e, expr: r(e.expr) };
     case "index": return { ...e, arr: r(e.arr), idx: r(e.idx) };
     case "stringIndex": return { ...e, str: r(e.str), idx: r(e.idx) };
     case "tupleLiteral": return { ...e, elems: e.elems.map(r) };

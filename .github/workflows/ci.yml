@@ -38,6 +38,9 @@ jobs:
       - name: Fixture checks (reject implicit declaration skips, CLI, Dafny fixtures)
         run: ./tools/test-fixtures.sh --fixtures
 
+      - name: Verify formal narrowing core calculus
+        run: dafny verify formal/narrowing-model.dfy
+
   # Sharded by test file. Tests within one file run in sequence, so the slowest
   # file bounds a shard however many shards there are.
   unit-tests:
@@ -190,6 +193,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Self-verification uses this checkout, including changes in the PR.
+          - repo: midspiral/LemmaScript
+            branch: ${{ github.head_ref || github.ref_name }}
+            self: true
           - repo: midspiral/collab-todo-lemmascript
             branch: main
           - repo: midspiral/colorwheel-lemmascript
@@ -261,6 +268,7 @@ jobs:
       # Lets case studies be updated against an in-flight LemmaScript branch
       # without touching the branch that main's CI pins.
       - name: Clone case study
+        if: ${{ !matrix.self }}
         env:
           DEFAULT_BRANCH: ${{ matrix.branch }}
           LS_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -292,15 +300,15 @@ jobs:
       - uses: ./.github/actions/setup-dafny
 
       - name: Regenerate and verify Dafny
-        working-directory: ../case-study
-        run: ../LemmaScript/tools/check.sh dafny
+        working-directory: ${{ matrix.self && '.' || '../case-study' }}
+        run: '"$GITHUB_WORKSPACE/tools/check.sh" dafny'
 
       - name: Verify extra Dafny files
-        working-directory: ../case-study
+        working-directory: ${{ matrix.self && '.' || '../case-study' }}
         run: test -f ./check-extra.sh && ./check-extra.sh || true
 
       - name: Check generated Dafny files are up to date
-        working-directory: ../case-study
+        working-directory: ${{ matrix.self && '.' || '../case-study' }}
         run: |
           git diff --exit-code -- '*.dfy.gen' '*.dfy'
           untracked=$(git ls-files --others --exclude-standard -- '*.dfy.gen')

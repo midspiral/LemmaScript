@@ -12,6 +12,7 @@ import { createRequire } from "module";
 import path from "path";
 import { extractModule } from "./extract.js";
 import { resolveModule } from "./resolve.js";
+import { assertNoLiveAliasMutations } from "./alias-check-pass.js";
 import { narrowModule } from "./narrow.js";
 import { autoHavocModule } from "./autohavoc.js";
 import { transformModuleLean, transformModuleDafny } from "./transform.js";
@@ -396,7 +397,7 @@ function runFile(
   }
 
   // Resolve: Raw IR → Typed IR
-  const resolved = resolveModule(raw);
+  const resolved = assertNoLiveAliasMutations(resolveModule(raw));
   // Narrow: Typed IR → Typed IR (rewrites optional-narrowing patterns to someMatch)
   // auto-havoc (//@ autohavoc): replace unmodellable expressions with arbitrary
   // values so verification rests only on the declared contracts (a sound
@@ -449,15 +450,15 @@ function runFile(
       ? new RunLog({ logDir: resolveLogDir(absPath, configFile), cmd: logCmd, sourcePath: absPath, extraFlags, lscVersion: safely(lscVersion) })
       : undefined;
 
-    if (cmd === "gen") { dafnyGen(genPath, dfyPath, text); return; }
+    if (cmd === "gen") { dafnyGen(genPath, dfyPath, text, basePath); return; }
     if (cmd === "gen-check") {
-      dafnyGen(genPath, dfyPath, text);
-      if (!dafnyCheckDiff(genPath, dfyPath)) process.exit(1);
+      dafnyGen(genPath, dfyPath, text, basePath);
+      if (!dafnyCheckDiff(genPath, dfyPath, undefined, basePath)) process.exit(1);
       return;
     }
     if (cmd === "check") {
-      dafnyGen(genPath, dfyPath, text);
-      if (!dafnyCheckDiff(genPath, dfyPath, log)) process.exit(1);
+      dafnyGen(genPath, dfyPath, text, basePath);
+      if (!dafnyCheckDiff(genPath, dfyPath, log, basePath)) process.exit(1);
       if (!dafnyVerify(dfyPath, artifactDir, timeLimit, extraFlags, log)) process.exit(1);
       return;
     }

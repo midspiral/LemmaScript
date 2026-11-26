@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { dafnyCheckDiff, dafnyRegen } from "../src/dafny-commands.ts";
+import { dafnyCheckDiff, dafnyGen, dafnyRegen } from "../src/dafny-commands.ts";
 import { RunLog, readRecords } from "../src/run-log.ts";
 
 class ExitSignal extends Error {
@@ -151,5 +151,65 @@ test("a failed first verification can be followed by a clean generation", posixO
   assert.equal(readFileSync(f.proof, "utf8"), generation(1));
   dafnyRegen(f.gen, f.proof, f.base, generation(2), f.dir, undefined, undefined, true);
   assert.equal(readFileSync(f.proof, "utf8"), generation(2));
+  assert.equal(existsSync(f.base), false);
+}));
+
+test("gen before regen preserves the previous generation as the merge base", posixOnly, () => fixture(f => {
+  dafnyGen(f.gen, f.proof, generation(1), f.base);
+  assert.equal(readFileSync(f.base, "utf8"), generation(0));
+  assert.equal(readFileSync(f.gen, "utf8"), generation(1));
+  assert.equal(readFileSync(f.proof, "utf8"), generation(0) + addition);
+  dafnyRegen(f.gen, f.proof, f.base, generation(1), f.dir, undefined, undefined, true);
+  assert.equal(readFileSync(f.proof, "utf8"), generation(1) + addition);
+  assert.equal(existsSync(f.base), false);
+}));
+
+test("repeated gen across multiple edits keeps the original merge base", posixOnly, () => fixture(f => {
+  dafnyGen(f.gen, f.proof, generation(1), f.base);
+  dafnyGen(f.gen, f.proof, generation(2), f.base);
+  assert.equal(readFileSync(f.base, "utf8"), generation(0));
+  assert.equal(readFileSync(f.gen, "utf8"), generation(2));
+  dafnyRegen(f.gen, f.proof, f.base, generation(2), f.dir, undefined, undefined, true);
+  assert.equal(readFileSync(f.proof, "utf8"), generation(2) + addition);
+  assert.equal(existsSync(f.base), false);
+}));
+
+test("gen and check on an unchanged generation do not create a base file", posixOnly, () => fixture(f => {
+  dafnyGen(f.gen, f.proof, generation(0), f.base);
+  assert.equal(dafnyCheckDiff(f.gen, f.proof, undefined, f.base), true);
+  assert.equal(existsSync(f.base), false);
+  dafnyGen(f.gen, f.proof, generation(0), f.base);
+  assert.equal(dafnyCheckDiff(f.gen, f.proof, undefined, f.base), true);
+  assert.equal(existsSync(f.base), false);
+}));
+
+test("gen without an existing proof creates the proof without seeding a base file", posixOnly, () => fixture(f => {
+  rmSync(f.proof);
+  dafnyGen(f.gen, f.proof, generation(1), f.base);
+  assert.equal(readFileSync(f.proof, "utf8"), generation(1));
+  assert.equal(existsSync(f.base), false);
+}));
+
+test("a passing additions-only check clears a leftover base file, while a failing one keeps it", posixOnly, () => fixture(f => {
+  // Failing check after an edit keeps the merge base for a later regen.
+  dafnyGen(f.gen, f.proof, generation(1), f.base);
+  assert.equal(dafnyCheckDiff(f.gen, f.proof, undefined, f.base), false);
+  assert.equal(readFileSync(f.base, "utf8"), generation(0));
+
+  // Reverting the edit and re-running check clears the stale base file.
+  dafnyGen(f.gen, f.proof, generation(0), f.base);
+  assert.equal(dafnyCheckDiff(f.gen, f.proof, undefined, f.base), true);
+  assert.equal(existsSync(f.base), false);
+
+  // Hand-updating the proof to match a new generation and checking also clears the base file.
+  dafnyGen(f.gen, f.proof, generation(1), f.base);
+  assert.equal(existsSync(f.base), true);
+  writeFileSync(f.proof, generation(1) + addition);
+  assert.equal(dafnyCheckDiff(f.gen, f.proof, undefined, f.base), true);
+  assert.equal(existsSync(f.base), false);
+
+  // A subsequent edit then merges from generation(1), not stale generation(0).
+  dafnyRegen(f.gen, f.proof, f.base, generation(2), f.dir, undefined, undefined, true);
+  assert.equal(readFileSync(f.proof, "utf8"), generation(2) + addition);
   assert.equal(existsSync(f.base), false);
 }));

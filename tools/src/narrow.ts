@@ -39,18 +39,19 @@ import { isTerminatorKind } from "./typedir.js";
 import { builtinSpec } from "./builtins.js";
 import {
   type CondCtx, type PresentFact, type NoneDetector,
-  presentFact, leadingPresent, leadingIsArray, flattenOr, noneDetector,
+  optionalPresentFact, leadingPresent, leadingIsArray, flattenOr, noneDetector,
   bindPresentFact, freshPathBinder, binderHintForMapAccess, freshOcBinder,
   applyChain, restoreDiscriminantFlag, arrayBoundsCond, exprEqual,
   isArrayFact, typeofStringFact, variantFact, negVariantFact,
   presentMatchStmts, presentMatchExpr,
 } from "./condition-facts.js";
+import { insertCheckedUnwraps } from "./checked-reads.js";
 
 // ── Walkers ──────────────────────────────────────────────────
 
 function walkExpr(e: TExpr, ctx: CondCtx): TExpr {
   const r = recurseExpr(e, ctx);
-  return ruleNullish(r, ctx) ?? ruleNullishIndex(r) ?? ruleOptChainIndex(r) ?? ruleOptChain(r, ctx) ?? ruleImplOptional(r, ctx) ?? ruleImplArrayIsArray(r, ctx) ?? ruleConditionalArrayIsArray(r, ctx) ?? ruleConditionalAndArrayIsArray(r, ctx) ?? ruleConditionalAndOptional(r, ctx) ?? ruleConditionalOptionalSimple(r, ctx) ?? ruleConditionalInMap(r, ctx) ?? ruleConditionalOptionalTruthy(r, ctx) ?? r;
+  return ruleNullishIndex(r) ?? ruleNullish(r, ctx) ?? ruleOptChainIndex(r) ?? ruleOptChain(r, ctx) ?? ruleImplOptional(r, ctx) ?? ruleImplArrayIsArray(r, ctx) ?? ruleConditionalArrayIsArray(r, ctx) ?? ruleConditionalAndArrayIsArray(r, ctx) ?? ruleConditionalAndOptional(r, ctx) ?? ruleConditionalOptionalSimple(r, ctx) ?? ruleConditionalInMap(r, ctx) ?? ruleConditionalOptionalTruthy(r, ctx) ?? r;
 }
 
 function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
@@ -77,6 +78,7 @@ function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
     case "forall": return { ...e, body: re(e.body) };
     case "exists": return { ...e, body: re(e.body) };
     case "someMatch": return { ...e, someBody: re(e.someBody), noneBody: re(e.noneBody) };
+    case "checkedUnwrap": return { ...e, expr: re(e.expr) };
     case "tagMatch": return { ...e, scrutinee: re(e.scrutinee),
       cases: e.cases.map(c => ({ ...c, body: re(c.body) })),
       fallthrough: e.fallthrough ? re(e.fallthrough) : null };
@@ -165,16 +167,69 @@ function isTerminating(stmts: TStmt[]): boolean {
 
 // ── Presence drivers ────────────────────────────────────────
 
+/** Dotted path key for a pure variable/field expression, or null. */
+function exprPathStr(e: TExpr): string | null {
+  if (e.kind === "var") return e.name;
+  if (e.kind === "checkedUnwrap") return exprPathStr(e.expr);
+  if (e.kind === "field") {
+    const inner = exprPathStr(e.obj);
+    return inner === null ? null : `${inner}.${e.field}`;
+  }
+  return null;
+}
+
+/** True if `stmts` contains an assignment to `pathStr` (or any prefix of
+ *  `pathStr`, e.g. `box = ...` when narrowing `box.val`) that could clear it
+ *  to `undefined` or an arbitrary `Option<T>` (not a `Some(...)` wrapper),
+ *  meaning a `someMatch` binder would become stale (#342). */
+function stmtsMayClearPath(stmts: readonly TStmt[], pathStr: string): boolean {
+  for (const s of stmts) {
+    if (s.kind === "assign") {
+      if (s.target === pathStr) {
+        const isPresentWrap = s.value.kind === "call" && s.value.fn.kind === "var" &&
+          (s.value.fn.name === "Some" || s.value.fn.name === "NullishValue") && s.value.args.length === 1;
+        if (!isPresentWrap && (s.value.ty.kind === "optional" || s.value.ty.kind === "nullish" ||
+            s.value.ty.kind === "void" || s.value.ty.kind === "null" ||
+            (s.value.kind === "var" && (s.value.name === "undefined" || s.value.name === "null")))) {
+          return true;
+        }
+      } else if (pathStr.startsWith(`${s.target}.`)) {
+        // Reassigning a container prefix (e.g. `box = newBox`) can replace the
+        // narrowed field with None, making a binder on `box.val` stale.
+        return true;
+      }
+    } else if (s.kind === "if") {
+      if (stmtsMayClearPath(s.then, pathStr) || stmtsMayClearPath(s.else, pathStr)) return true;
+    } else if (s.kind === "while" || s.kind === "forof") {
+      if (stmtsMayClearPath(s.body, pathStr)) return true;
+    } else if (s.kind === "switch") {
+      if (s.cases.some(c => stmtsMayClearPath(c.body, pathStr)) || stmtsMayClearPath(s.defaultBody, pathStr)) return true;
+    } else if (s.kind === "someMatch") {
+      if (stmtsMayClearPath(s.someBody, pathStr) || stmtsMayClearPath(s.noneBody, pathStr)) return true;
+    } else if (s.kind === "tagMatch") {
+      if (s.cases.some(c => stmtsMayClearPath(c.body, pathStr)) || stmtsMayClearPath(s.fallthrough, pathStr)) return true;
+    }
+  }
+  return false;
+}
+
+function scrutineeMayBeCleared(scrutinee: TExpr, stmts: readonly TStmt[]): boolean {
+  const pathStr = exprPathStr(scrutinee);
+  return pathStr !== null && stmtsMayClearPath(stmts, pathStr);
+}
+
 /** Driver: `if (e !== undefined) then else` — presence fact in if position.
  *  → `someMatch e { Some(_e_val) => then, None => else }`. Requires a
- *  non-empty Some branch. */
+ *  non-empty Some branch, and defers to checked reads when `someBody` may
+ *  clear `e` (or a prefix of `e`) to `undefined`/optional (#342). */
 function ruleIfOptionalSimple(s: TStmt, ctx: CondCtx): TStmt | null {
   if (s.kind !== "if") return null;
-  const check = presentFact(s.cond);
+  const check = optionalPresentFact(s.cond);
   if (!check) return null;
   const someBody = check.negated ? s.else : s.then;
   const noneBody = check.negated ? s.then : s.else;
   if (someBody.length === 0) return null;
+  if (scrutineeMayBeCleared(check.scrutinee, someBody)) return null;
   return presentMatchStmts(check, someBody, noneBody, ctx);
 }
 
@@ -184,12 +239,13 @@ function ruleIfOptionalSimple(s: TStmt, ctx: CondCtx): TStmt | null {
 function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | null {
   if (s.kind !== "if") return null;
   if (rest.length === 0) return null;
-  const check = presentFact(s.cond);
+  const check = optionalPresentFact(s.cond);
   if (!check) return null;
   const someBranch = check.negated ? s.else : s.then;
   const noneBranch = check.negated ? s.then : s.else;
   if (someBranch.length !== 0) return null;
   if (!isTerminating(noneBranch)) return null;
+  if (scrutineeMayBeCleared(check.scrutinee, rest)) return null;
   return presentMatchStmts(check, rest, noneBranch, ctx);
 }
 
@@ -220,6 +276,7 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | 
     if (d.residual) residualLeaves.push(d.residual);
   }
   if (detectors.length === 0) return null;
+  if (detectors.some(d => scrutineeMayBeCleared(d.scrutinee, rest))) return null;
 
   let inner: TStmt[] = residualLeaves.length === 0
     ? rest
@@ -246,7 +303,8 @@ function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[], ctx: CondCtx): 
   const c = s.cond;
   if (c.kind !== "binop" || c.op !== "!==") return null;
   const oc = c.left.kind === "optChain" ? c.left : c.right.kind === "optChain" ? c.right : null;
-  if (!oc || oc.kind !== "optChain" || oc.obj.ty.kind !== "optional") return null;
+  if (!oc || oc.kind !== "optChain" || oc.obj.ty.kind !== "optional" || oc.obj.ty.fromNullish) return null;
+  if (scrutineeMayBeCleared(oc.obj, rest)) return null;
   const lit = c.left === oc ? c.right : c.left;
   const innerTy = oc.obj.ty.inner;
   const binder = freshPathBinder(oc.obj, ctx);
@@ -267,7 +325,7 @@ function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[], ctx: CondCtx): 
  *  ternary position. */
 function ruleConditionalOptionalSimple(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "conditional") return null;
-  const check = presentFact(e.cond);
+  const check = optionalPresentFact(e.cond);
   if (!check) return null;
   const someBody = check.negated ? e.else : e.then;
   const noneBody = check.negated ? e.then : e.else;
@@ -290,7 +348,7 @@ function ruleImplOptional(e: TExpr, ctx: CondCtx): TExpr | null {
     check = extracted.check;
     restCond = extracted.restCond;
   } else {
-    const c = presentFact(e.left);
+    const c = optionalPresentFact(e.left);
     if (!c || c.negated) return null;
     check = c;
   }
@@ -314,7 +372,14 @@ function ruleImplOptional(e: TExpr, ctx: CondCtx): TExpr | null {
  *  semantics (`??` tests null/undefined, not falsiness) — no falsy gate. */
 function ruleNullish(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "nullish") return null;
-  if (e.left.ty.kind !== "optional") return null;
+  // Nullish<T> (and partially narrowed fromNullish) lowers via a 3-arm match in transform.ts.
+  if (e.left.ty.kind === "nullish" || (e.left.ty.kind === "optional" && e.left.ty.fromNullish)) return null;
+  // Non-optional left operand (#352): `undefined ?? r` / `null ?? r` -> `r`; plain `x ?? r` -> `x`.
+  if (e.left.ty.kind !== "optional") {
+    if (e.left.kind === "var" && (e.left.name === "undefined" || e.left.name === "null")) return e.right;
+    if (e.left.ty.kind === "void" || e.left.ty.kind === "null") return e.right;
+    return e.left;
+  }
   const innerTy = e.left.ty.inner;
   const binder = freshOcBinder(ctx);
   return {
@@ -382,7 +447,16 @@ function ruleOptionalIndexBinding(s: TStmt): TStmt | null {
  *  so transform doesn't substitute. Scrutinee can be any expression. */
 function ruleOptChain(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "optChain") return null;
-  if (e.obj.ty.kind !== "optional") return null;
+  // Nullish<T> (and partially narrowed fromNullish) lowers via a 3-arm match in transform.ts.
+  if (e.obj.ty.kind === "nullish" || (e.obj.ty.kind === "optional" && e.obj.ty.fromNullish)) return null;
+  // Non-optional receiver (#352): `undefined?.foo` / `null?.foo` -> `undefined`; plain `s?.length` -> `s.length`.
+  if (e.obj.ty.kind !== "optional") {
+    if ((e.obj.kind === "var" && (e.obj.name === "undefined" || e.obj.name === "null")) ||
+        e.obj.ty.kind === "void" || e.obj.ty.kind === "null") {
+      return { kind: "var", name: "undefined", ty: { kind: "void" } };
+    }
+    return applyChain(e.obj, e.chain);
+  }
   const innerTy = e.obj.ty.inner;
   const binder = freshOcBinder(ctx);
   const body = applyChain({ kind: "var", name: binder, ty: innerTy }, e.chain);
@@ -430,7 +504,7 @@ function ruleConditionalInMap(e: TExpr, ctx: CondCtx): TExpr | null {
  *  no falsy gate on the bound value (unlike the other truthiness positions). */
 function ruleConditionalOptionalTruthy(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "conditional") return null;
-  if (e.cond.ty.kind !== "optional") return null;
+  if (e.cond.ty.kind !== "optional" || e.cond.ty.fromNullish) return null;
   const binder = freshPathBinder(e.cond, ctx);
   if (binder === null) return null;
   return {
@@ -452,6 +526,7 @@ function ruleIfAndOptional(s: TStmt, ctx: CondCtx): TStmt | null {
   const extracted = leadingPresent(s.cond);
   if (!extracted) return null;
   const { check, restCond } = extracted;
+  if (scrutineeMayBeCleared(check.scrutinee, s.then)) return null;
   const innerIf: TStmt = { kind: "if", cond: restCond, then: s.then, else: [] };
   return presentMatchStmts(check, [walkStmt(innerIf, ctx)], [], ctx);
 }
@@ -509,6 +584,7 @@ function containsMethodCall(e: TExpr): boolean {
       return false;
     case "binop": return containsMethodCall(e.left) || containsMethodCall(e.right);
     case "unop": return containsMethodCall(e.expr);
+    case "checkedUnwrap": return containsMethodCall(e.expr);
     case "call": return containsMethodCall(e.fn) || e.args.some(containsMethodCall);
     case "index": return containsMethodCall(e.obj) || containsMethodCall(e.idx);
     case "field": return containsMethodCall(e.obj);
@@ -728,7 +804,7 @@ function narrowFunction(fn: TFunction, ctx: CondCtx): TFunction {
 
 export function narrowModule(mod: TModule): TModule {
   const ctx: CondCtx = { decls: mod.typeDecls, oc: { n: 0 } };
-  return {
+  const narrowed: TModule = {
     ...mod,
     constants: mod.constants.map(c => ({ ...c, value: walkExpr(c.value, ctx) })),
     functions: mod.functions.map(fn => narrowFunction(fn, ctx)),
@@ -737,4 +813,5 @@ export function narrowModule(mod: TModule): TModule {
       methods: cls.methods.map(m => narrowFunction(m, ctx)),
     })),
   };
+  return insertCheckedUnwraps(narrowed);
 }

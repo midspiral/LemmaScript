@@ -40,7 +40,8 @@ Two things shape what you can verify:
 | `[T, T, ...]` (homogeneous tuple) | sequence | Same-typed elements model as a `seq` (more capable than a fixed tuple). |
 | `Map<K, V>` / `Record<K, V>` | map | |
 | `Set<T>` | set | |
-| `T \| undefined`, `T \| null` | optional | `undefined` and `null` model identically. |
+| `T \| undefined`, `T \| null` | optional (`Option<T>`) | Single-sentinel optional; strict `===` distinguishes the two sentinels (`null !== undefined`), while loose `== null` / `== undefined` matches either. |
+| `T \| null \| undefined` | nullish (`Nullish<T>`) | Three-case datatype (`Undefined \| Null \| Value(value: T)`) emitted on demand when both `null` and `undefined` are present. |
 | user `type` / `interface` | generated datatype | Records and unions — see [Modeling data](#modeling-data). |
 | `<T extends Base>` | generic | Type parameter erased to its bound; `.map`/`.filter` etc. work over it. |
 | `(a: T) => R` | function value | Used for higher-order params and lambdas. |
@@ -90,6 +91,12 @@ Arrays, strings, maps, and sets all carry a useful slice of their standard libra
 - **Set** — `.add`, `.delete`, `.has`, `.size`, `in`, iteration.
 
 Indexing into an array under `noUncheckedIndexedAccess` yields an optional element, matching TypeScript's own typing.
+
+### Narrowing and in-place mutation
+
+Flow-sensitive narrowing works across `if`, `else`, early returns (including `||` chains and `opt?.field !== lit`), `while` conditions, and definite assignment (`if (v === undefined) { v = 6; }`). In-place updates on narrowed optionals and union variants (`arr.push`, `arr[i] = v`, field writes) automatically write back to the underlying binding.
+
+Because Dafny and Lean model arrays, maps, sets, and records as immutable values, LemmaScript **rejects mutating a container through a live alias** — e.g. `const b = a; b.push(1); return a.length;` fails to compile with a diagnostic instead of proving a false postcondition. Read-only sharing (`const b = a; return a.length + b.length`), dead-source moves (`const b = a; b.push(1); return b.length`), and explicit clones (`const b = [...a]`, `a.slice()`, `{ ...obj }`) are allowed.
 
 ## Modeling data
 
