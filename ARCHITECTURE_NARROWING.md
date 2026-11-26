@@ -124,10 +124,11 @@ isolation than they did when scattered across resolve and transform:
   produces conditionals (no someMatch); transform consumes someMatch
   (lowers to match Some/None). Narrow sits in between, doing the conversion.
 
-New condition forms extend the shared fact analyzer; existing branch positions
-consume them automatically. A form that needs a new binding structure also
-needs a narrow rule and transform support. Narrow is the *structural* layer
-of a three-layer system, not a hermetic component.
+`condition-facts.ts` determines what we know about a value when a condition is
+true or false. The resolver uses that information in `if` statements, ternaries,
+loops, and other supported branches. When narrowing requires a match or local
+binding, `narrow.ts` introduces that structure and `transform.ts` translates it
+for Dafny and Lean.
 
 ---
 
