@@ -245,14 +245,22 @@ churn on existing proofs):
    read-only sharing, dead-source moves, and explicit clones. Its conflict
    kernel in `tools/src/alias-check.ts` is also self-verified in CI.
 4. **Precondition-preserving optional comparisons (`transform.ts`).**
-   When an executable optional comparison (`===`, `!==`, `<`, `<=`, `>`, `>=`)
+   When an executable optional/nullish comparison (`===`, `!==`, `<`, `<=`, `>`, `>=`)
    has a precondition-bearing non-optional operand (calls, indexing,
    checked reads, `/`, `%`), `transform.ts` binds it in `let _cmpN := ...`
-   before matching the `Option` so its preconditions are checked even on
-   `None`. Spec clauses (`requires`/`ensures`/`invariants`) skip this
-   hoisting.
+   before matching so its preconditions are checked even on absent values.
+   Spec clauses (`requires`/`ensures`/`invariants`) skip this hoisting.
+5. **Selective `Nullish<T>` (`types.ts`, `condition-facts.ts`, `resolve.ts`, `transform.ts`, `LemmaScript/Nullish.lean`).**
+   Single-sentinel `T | undefined` and `T | null` stay on `Option<T>` while
+   recording which absent sentinel `None` models (so strict `===` distinguishes
+   `null` from `undefined` and loose `==` matches either). Types that include
+   both `null` and `undefined` (`T | null | undefined`, `x?: T | null`) use a
+   three-case `Nullish<T>` datatype (`Undefined | Null | Value(value: T)` in
+   Dafny; on-demand `LemmaScript.Nullish` in Lean). Two-step strict narrowing
+   (`nullish` → `optional(fromNullish)` → `T`) stays off `someMatch` and uses
+   `checkedUnwrap` once both sentinels are ruled out.
 
 The formal core calculus for checked reads, `Place` write-back, and
 `Nullish<T>` lives in [formal/narrowing-model.dfy](formal/narrowing-model.dfy)
-(verified in CI), and the 3-way fuzzer scorecard lives in
+(verified in CI), and the 4-way fuzzer scorecard lives in
 [formal/narrowing-shootout.md](formal/narrowing-shootout.md).
