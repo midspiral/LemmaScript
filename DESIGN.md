@@ -63,25 +63,27 @@ Both backends share the same TypeScript source, `//@ ` annotations, and pipeline
        │
        ├──→ extract  (ts-morph → Raw IR)
        │         │
-       │         └──→ resolve   (types + callback bindings + type-narrowing)
+       │         └──→ resolve   (types, storageTy, callback bindings, flow narrowing)
        │                   │
-       │                   └──→ narrow  (structural narrowing → someMatch / tagMatch)
+       │                   └──→ narrow  (someMatch / tagMatch + checked-reads)
        │                             │
-       │                             └──→ transform (Typed IR → IR, including callback adaptation)
+       │                             └──→ alias-check (reject live-alias mutations)
        │                                       │
-       │                                       └──→ peephole (Some/None cleanup)
+       │                                       └──→ transform (Typed IR → IR, Place write-back, callbacks)
        │                                                 │
-       │                          ┌──────────────────────┴──────────────────────┐
-       │                          │                                             │
-       │                     lean-emit.ts                                  dafny-emit.ts
-       │                          │                                             │
-       │                  .types.lean + .def.lean                          .dfy.gen
-       │                     (generated)                                   (generated)
-       │                          │                                             │
-       │                  .spec.lean + .proof.lean                              .dfy
-       │                     (user / LLM)                              (gen + user additions)
-       │                          │                                             │
-       │                    lake build                                    dafny verify
+       │                                                 └──→ peephole (Some/None cleanup)
+       │                                                           │
+       │                          ┌────────────────────────────────┴──────────────────────┐
+       │                          │                                                       │
+       │                     lean-emit.ts                                            dafny-emit.ts
+       │                          │                                                       │
+       │                  .types.lean + .def.lean                                    .dfy.gen
+       │                     (generated)                                             (generated)
+       │                          │                                                       │
+       │                  .spec.lean + .proof.lean                                       .dfy
+       │                     (user / LLM)                                       (gen + user additions)
+       │                          │                                                       │
+       │                    lake build                                              dafny verify
        │
        └──→ TypeScript IS the production output. No erasure.
 ```
