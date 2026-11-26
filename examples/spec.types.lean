@@ -279,10 +279,10 @@ def area (s : Shape) : Int :=
 
 def describeIfCircle (s : Shape) (fallback : Int) : Int :=
   match s with
-  | .circle _s_radius =>
-    _s_radius * _s_radius
   | .square _s_side =>
     fallback
+  | .circle _s_radius =>
+    _s_radius * _s_radius
 
 def ternarySpecOpt (o : Option Inner) (fallback : Int) : Int :=
   match o with

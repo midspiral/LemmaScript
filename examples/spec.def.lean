@@ -260,8 +260,7 @@ method nullishMapGet (m : Std.HashMap String Int) (k : String) (fallback : Int) 
 
 method inCheckRecordGet (m : Std.HashMap String Int) (k : String) (fallback : Int) returns (res : Int)
   ensures ensures_1: (¬(m.contains k) → res = fallback : Prop)
-  ensures ensures_2: (m.contains k → if m.contains k then let _value := m[k]!
-_value == res else false : Prop)
+  ensures ensures_2: (m.contains k → res = m.get! k : Prop)
   do
     return Pure.inCheckRecordGet m k fallback
 
@@ -272,22 +271,19 @@ method requiresInMap (m : Std.HashMap String Int) (k : String) returns (res : In
     return Pure.requiresInMap m k
 
 method ifInMapBlock (m : Std.HashMap String Int) (k : String) (fallback : Int) returns (res : Int)
-  ensures ensures_1: (m.contains k → if m.contains k then let _value := m[k]!
-_value == res else false : Prop)
+  ensures ensures_1: (m.contains k → res = m.get! k : Prop)
   ensures ensures_2: (¬(m.contains k) → res = fallback : Prop)
   do
     return Pure.ifInMapBlock m k fallback
 
 method ifNotInMapEarlyReturn (m : Std.HashMap String Int) (k : String) (fallback : Int) returns (res : Int)
   ensures ensures_1: (¬(m.contains k) → res = fallback : Prop)
-  ensures ensures_2: (m.contains k → if m.contains k then let _value := m[k]!
-_value == res else false : Prop)
+  ensures ensures_2: (m.contains k → res = m.get! k : Prop)
   do
     return Pure.ifNotInMapEarlyReturn m k fallback
 
 method assertInMap (m : Std.HashMap String Int) (k : String) (fallback : Int) returns (res : Int)
-  ensures ensures_1: (m.contains k → if m.contains k then let _value := m[k]!
-_value == res else false : Prop)
+  ensures ensures_1: (m.contains k → res = m.get! k : Prop)
   ensures ensures_2: (¬(m.contains k) → res = fallback : Prop)
   do
     if !(m.contains k) then

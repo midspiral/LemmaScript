@@ -25,11 +25,26 @@ const bodies = {
   }`,
   ifElse: `if (bound.tag === "always") return false;
     else return bound.value.day < cutoff;`,
+  ifThen: `if (bound.tag === "until") return bound.value.day < cutoff;
+    return false;`,
+  negatedIf: `if (bound.tag !== "always") return bound.value.day < cutoff;
+    return false;`,
+  reversedCheck: `if ("until" === bound.tag) return bound.value.day < cutoff;
+    return false;`,
+  negatedCheck: `if (!(bound.tag !== "until")) return bound.value.day < cutoff;
+    return false;`,
   earlyReturn: `if (bound.tag === "always") return false;
     return bound.value.day < cutoff;`,
   negatedGuard: `if (bound.tag !== "until") return false;
     return bound.value.day < cutoff;`,
   conditional: `return bound.tag === "always" ? false : bound.value.day < cutoff;`,
+  andGuard: `return bound.tag === "until" && bound.value.day < cutoff;`,
+  orGuard: `return !(bound.tag === "always" || bound.value.day >= cutoff);`,
+  whileGuard: `while (bound.tag === "until") {
+      //@ done_with true
+      return bound.value.day < cutoff;
+    }
+    return false;`,
   methodDefault: `let result = false;
     switch (bound.tag) {
       case "always": break;
@@ -126,6 +141,23 @@ test("Lean binds the remaining variant's payload in pure and imperative defaults
   assert.match(output, /\.until _bound_value =>/);
   assert.match(output, /_bound_value\.day < cutoff/);
   assert.doesNotMatch(output, /\bbound\.value\b/);
+});
+
+test("array-union early returns preserve both outcomes of Array.isArray and typeof checks", () => {
+  const guards = ["Array.isArray(items)", "!Array.isArray(items)", 'typeof items === "string"'];
+  const text = guards.map((guard, i) => `
+export function classify${i}(items: number[] | string): number {
+  if (${guard}) return ${i === 0 ? 2 : 1};
+  return ${i === 0 ? 1 : 2};
+}
+export function check${i}(): boolean {
+  //@ ensures \\result
+  return classify${i}("text") === 1 && classify${i}([]) === 2;
+}`).join("\n");
+  const functions = runtime(text);
+  for (let i = 0; i < guards.length; i++) assert.equal(functions[`check${i}`](), true);
+  const result = verify(dafny(text));
+  assert.equal(result.status, 0, result.output);
 });
 
 test("a default covering multiple variants remains a catch-all", () => {

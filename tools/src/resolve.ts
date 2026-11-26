@@ -13,8 +13,8 @@ import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
 import { recognizeBuiltin, builtinSpec, callbackArgumentTypes, callbackBaseArity } from "./builtins.js";
-import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName, remainingVariant } from "./typedecls.js";
-import { presentFact, variantFact } from "./condition-facts.js";
+import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName } from "./typedecls.js";
+import { conditionFacts, discriminantBranchFact, type ConditionFact } from "./condition-facts.js";
 
 // ── Environment ──────────────────────────────────────────────
 
@@ -135,7 +135,7 @@ interface Ctx {
   externs: Map<string, ExternSignature>;  // qualified name → declared signature (from `//@ extern`)
   inSpec: boolean;
   inLambda: boolean;
-  narrowedPaths: NarrowedPath[];  // pure access path narrowing for conditional then-branches
+  narrowedPaths: NarrowedPath[];  // presence and variant facts for pure access paths
   narrowedIndices: NarrowedIndex[];  // `k in m` atoms known-true in this scope
   forofCounts: Map<string, number>;  // per-function for-of loops seen, by head name
 }
@@ -314,201 +314,54 @@ function coerceToTargetTy(value: TExpr, targetTy: Ty, typeDecls: TypeDeclInfo[])
   return value;
 }
 
-/** A negated presence check on a bare var (`v === undefined` / `!v`), via
- *  the shared condition analyzer (§4) on the *resolved* condition. Narrows
- *  the else-branch (or the rest of the block, after an early return). */
-function negatedVarPresence(cond: TExpr): { varName: string; innerTy: Ty } | null {
-  const f = presentFact(cond);
-  if (f && f.negated && f.scrutinee.kind === "var") {
-    return { varName: f.scrutinee.name, innerTy: f.innerTy };
-  }
-  return null;
-}
-
-/** Collect all optional narrowings from an early-return condition.
- *  Handles single checks (x === undefined) and compound || chains
- *  (x === undefined || y === undefined). */
-/** Extract field-path or optional-chain narrowings guaranteed after an early
- *  return (`if (d.b === undefined) return;` or `if (b?.tag !== 1) return;`, #354). */
-function collectEarlyReturnPathNarrowings(cond: TExpr): NarrowedPath[] {
-  if (cond.kind === "binop" && cond.op === "||") {
-    return [
-      ...collectEarlyReturnPathNarrowings(cond.left),
-      ...collectEarlyReturnPathNarrowings(cond.right),
-    ];
-  }
-  // Negated field-path presence: `d.b === undefined` or `!d.b`
-  const f = presentFact(cond);
-  if (f && f.negated && f.scrutinee.kind === "field") {
-    const path = asTExprAccessPath(f.scrutinee);
-    if (path) return [{ path, narrowedTy: f.innerTy }];
-  }
-  // Optional-chain comparison with non-undefined: `b?.tag !== 1` or `1 !== b?.tag`
-  // If `b` were undefined, `b?.tag` is undefined !== 1 (true -> returns early),
-  // so after the early return `b` is definitely present.
-  if (cond.kind === "binop" && cond.op === "!==") {
-    const [ocSide, otherSide] = cond.left.kind === "optChain"
-      ? [cond.left, cond.right]
-      : cond.right.kind === "optChain"
-        ? [cond.right, cond.left]
-        : [null, null];
-    if (ocSide && otherSide && !(otherSide.kind === "var" && otherSide.name === "undefined") &&
-        otherSide.ty.kind !== "optional" && otherSide.ty.kind !== "void" &&
-        ocSide.obj.ty.kind === "optional") {
-      const path = asTExprAccessPath(ocSide.obj);
-      if (path) return [{ path, narrowedTy: ocSide.obj.ty.inner }];
-    }
-  }
-  // Bare negated optional chain `!b?.flag` or `b?.tag === undefined`
-  if (cond.kind === "unop" && cond.op === "!" && cond.expr.kind === "optChain" && cond.expr.obj.ty.kind === "optional") {
-    const path = asTExprAccessPath(cond.expr.obj);
-    if (path) return [{ path, narrowedTy: cond.expr.obj.ty.inner }];
-  }
-  if (cond.kind === "binop" && cond.op === "===") {
-    const [ocSide, otherSide] = cond.left.kind === "optChain"
-      ? [cond.left, cond.right]
-      : cond.right.kind === "optChain"
-        ? [cond.right, cond.left]
-        : [null, null];
-    if (ocSide && otherSide && otherSide.kind === "var" && otherSide.name === "undefined" &&
-        ocSide.obj.ty.kind === "optional") {
-      const path = asTExprAccessPath(ocSide.obj);
-      if (path) return [{ path, narrowedTy: ocSide.obj.ty.inner }];
-    }
-  }
-  return [];
-}
-
-function collectEarlyReturnNarrowings(cond: TExpr): { varName: string; innerTy: Ty }[] {
-  if (cond.kind === "binop" && cond.op === "||") {
-    return [...collectEarlyReturnNarrowings(cond.left), ...collectEarlyReturnNarrowings(cond.right)];
-  }
-  const n = negatedVarPresence(cond);
-  return n ? [n] : [];
-}
-
-/** Variant known when a discriminant check is false: the named variant for
- *  `!==`, or the sole remaining variant for `===`. Used by else branches and
- *  continuations after an early return. */
-function falseVariantCheck(cond: TExpr, ctx: Ctx): NarrowedPath | null {
-  if (cond.kind === "binop" && (cond.op === "!==" || cond.op === "===") && cond.right.kind === "str" &&
-      cond.left.kind === "field" && cond.left.isDiscriminant && cond.left.obj.ty.kind === "user") {
-    const path = asTExprAccessPath(cond.left.obj);
-    const variant = cond.op === "!==" ? cond.right.value
-      : remainingVariant(findDecl(ctx, tyBaseName(cond.left.obj.ty.name)), [cond.right.value])?.name;
-    if (path && variant !== undefined) return { path, narrowedTy: cond.left.obj.ty, variant };
-  }
-  return null;
-}
-
-/** TExpr → AccessPath. Counterpart to `asRawAccessPath` for resolved trees.
- *  Used by `extractInAtoms` when pulling atoms out of typed spec expressions. */
+/** Resolved counterpart of `asRawAccessPath`. */
 function asTExprAccessPath(e: TExpr): AccessPath | null {
   if (e.kind === "var") return { rootVar: e.name, fields: [] };
   if (e.kind === "field") {
     const inner = asTExprAccessPath(e.obj);
-    if (!inner) return null;
-    return { rootVar: inner.rootVar, fields: [...inner.fields, e.field] };
+    if (inner) return { rootVar: inner.rootVar, fields: [...inner.fields, e.field] };
   }
   return null;
 }
 
-/** Walk `e` collecting top-level `k in m` atoms where both sides are pure
- *  access paths and the right side is map-typed. Descends through `&&` only.
- *  Does NOT descend into `==>`, `||`, negation, `forall`, or `exists` — in
- *  those positions an atom is only conditionally known (or a premise, not a
- *  conclusion), so treating it as always-true in the enclosing scope would
- *  be unsound. */
-function extractInAtoms(e: TExpr): NarrowedIndex[] {
-  if (e.kind === "binop" && e.op === "in" && e.right.ty.kind === "map") {
-    const obj = asTExprAccessPath(e.right);
-    const idx = asTExprAccessPath(e.left);
-    if (obj && idx) return [{ obj, idx }];
-    return [];
+/** Apply branch facts without knowing which syntax established them. Variable
+ *  presence refines the lexical binding; fields and variants refine paths;
+ *  membership facts justify direct map reads. Mutation invalidation remains
+ *  in resolveBlock and at loop entry. */
+function withConditionFacts(ctx: Ctx, facts: readonly ConditionFact[]): Ctx {
+  let { env, narrowedPaths, narrowedIndices } = ctx;
+  for (const fact of facts) {
+    if (fact.kind === "in") {
+      const obj = asTExprAccessPath(fact.map);
+      const idx = asTExprAccessPath(fact.key);
+      if (obj && idx && !narrowedIndices.some(a => accessPathsEqual(a.obj, obj) && accessPathsEqual(a.idx, idx))) {
+        narrowedIndices = [...narrowedIndices, { obj, idx }];
+      }
+      continue;
+    }
+    const path = asTExprAccessPath(fact.scrutinee);
+    if (!path) continue;
+    if (fact.kind === "present" && path.fields.length === 0) {
+      env = refine(env, path.rootVar, fact.innerTy);
+    } else {
+      const narrowing: NarrowedPath = fact.kind === "present"
+        ? { path, narrowedTy: fact.innerTy }
+        : { path, narrowedTy: fact.scrutinee.ty, variant: fact.variant };
+      narrowedPaths = [...narrowedPaths, narrowing];
+    }
   }
-  if (e.kind === "binop" && e.op === "&&") {
-    return [...extractInAtoms(e.left), ...extractInAtoms(e.right)];
-  }
-  return [];
+  return env === ctx.env && narrowedPaths === ctx.narrowedPaths && narrowedIndices === ctx.narrowedIndices
+    ? ctx : { ...ctx, env, narrowedPaths, narrowedIndices };
 }
 
-/** Extract `k in m` atoms that hold when `e` is *false*. Currently only
- *  strips an outer `!` and hands the inner to `extractInAtoms`; that covers
- *  `if (!(k in m)) ...` for the else-branch and early-return patterns.
- *  De Morgan over `||` / nested `!(a && b)` not handled yet. */
-function extractInAtomsNegated(e: TExpr): NarrowedIndex[] {
-  if (e.kind === "unop" && e.op === "!") return extractInAtoms(e.expr);
-  return [];
+function refineCondition(ctx: Ctx, cond: TExpr, truth: boolean): Ctx {
+  return withConditionFacts(ctx, conditionFacts(cond, truth, ctx.typeDecls));
 }
 
-/** Extend a Ctx with `k in m` atoms. Deduplicates against existing atoms. */
-function withInAtoms(ctx: Ctx, atoms: NarrowedIndex[]): Ctx {
-  if (atoms.length === 0) return ctx;
-  const existing = ctx.narrowedIndices;
-  const added: NarrowedIndex[] = [];
-  for (const a of atoms) {
-    if (!existing.some(e => accessPathsEqual(e.obj, a.obj) && accessPathsEqual(e.idx, a.idx))) {
-      added.push(a);
-    }
-  }
-  if (added.length === 0) return ctx;
-  return { ...ctx, narrowedIndices: [...existing, ...added] };
-}
-
-/** Walk an `&&` chain of `e !== undefined` checks on the *resolved*
- *  condition, returning a Ctx with all narrowings applied. Earlier checks
- *  are in scope for later checks (the right conjunct was already resolved
- *  under the left's narrowings by the `&&` case of resolveExpr). Consults
- *  the shared condition analyzer (§4): a positive presence fact on a bare
- *  var extends the env; on a pure field path it extends `narrowedPaths`. */
-function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
-  if (cond.kind === "binop" && cond.op === "&&") {
-    const leftCtx = collectAndChainNarrowings(cond.left, ctx);
-    return collectAndChainNarrowings(cond.right, leftCtx);
-  }
-  const f = presentFact(cond);
-  if (f && !f.negated) {
-    if (f.scrutinee.kind === "var") {
-      return withEnv(ctx, refine(ctx.env, f.scrutinee.name, f.innerTy));
-    }
-    const path = asTExprAccessPath(f.scrutinee);
-    if (path) {
-      return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: f.innerTy }] };
-    }
-    return ctx;
-  }
-  // Positive discriminant check (`x.kind === "bool"`): record the variant so
-  // field reads on the path resolve against that variant's field types.
-  const vf = variantFact(cond, { decls: ctx.typeDecls, oc: { n: 0 } });
-  if (vf) {
-    const path = asTExprAccessPath(vf.scrutinee);
-    if (path) {
-      return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: vf.scrutinee.ty, variant: vf.variant }] };
-    }
-  }
-  return ctx;
-}
-
-/** Walk an `||` chain of negated presence checks (`x === undefined || a.b === undefined || ...`)
- *  on the resolved left operand, returning a Ctx where those paths are narrowed
- *  for evaluating the right operand of `||` (since the RHS only runs when the
- *  LHS was false). Mirrors `collectAndChainNarrowings`. */
-function collectOrChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
-  if (cond.kind === "binop" && cond.op === "||") {
-    const leftCtx = collectOrChainNarrowings(cond.left, ctx);
-    return collectOrChainNarrowings(cond.right, leftCtx);
-  }
-  const f = presentFact(cond);
-  if (f && f.negated) {
-    if (f.scrutinee.kind === "var") {
-      return withEnv(ctx, refine(ctx.env, f.scrutinee.name, f.innerTy));
-    }
-    const path = asTExprAccessPath(f.scrutinee);
-    if (path) {
-      return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: f.innerTy }] };
-    }
-  }
-  return ctx;
+/** Requires, assertions and invariants currently seed map membership only;
+ *  control-flow branches consume every supported fact through refineCondition. */
+function membershipFacts(conditions: readonly TExpr[], ctx: Ctx): ConditionFact[] {
+  return conditions.flatMap(cond => conditionFacts(cond, true, ctx.typeDecls)).filter(f => f.kind === "in");
 }
 
 /** TS reference types that become value types in Dafny/Lean — const bindings need mutable var. */
@@ -1253,14 +1106,14 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       let rightCtx = ctx;
       let rawRight = e.right;
       if (e.op === "&&" || e.op === "==>") {
-        rightCtx = collectAndChainNarrowings(left, ctx);
+        rightCtx = refineCondition(ctx, left, true);
       } else if (e.op === "||") {
         // Preserve direct single-optional var comparisons (`opt === null || x < opt`,
         // `excludeTag === undefined || getTagId(t) !== excludeTag`) for transform's
         // native mirrored match lowering, as long as the non-optional side doesn't
         // also depend on a variable narrowed by `left` and neither side is `Nullish<T>`;
         // narrow all other RHS shapes via checked reads.
-        const orCtx = collectOrChainNarrowings(left, ctx);
+        const orCtx = refineCondition(ctx, left, false);
         const narrowedVars = new Set<string>();
         for (let cur = orCtx.env; cur && cur !== ctx.env; cur = cur.parent) {
           narrowedVars.add(cur.name);
@@ -1803,38 +1656,8 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
     case "conditional": {
       const cond = resolveExpr(e.cond, ctx);
 
-      // Type narrowing for the then/else branches. Following TS, we narrow
-      // simple vars and any pure access path (`a.b.c.d`) — but not expressions
-      // with method calls or index ops (bind-first required).
-      // For &&-chains, all positive checks narrow the then-branch; earlier
-      // checks are in scope when resolving later ones.
-      let thenCtx = collectAndChainNarrowings(cond, ctx);
-      let elseCtx = ctx;
-
-      // Truthiness — cond itself is optional/nullish (`opt ? a : b`), only for simple vars.
-      if ((cond.ty.kind === "optional" || cond.ty.kind === "nullish") && cond.kind === "var") {
-        thenCtx = withEnv(thenCtx, refine(thenCtx.env, cond.name, cond.ty.inner));
-      }
-
-      // Negated presence check (single or `||`-chain, var or field path) narrows else-branch.
-      const single = negatedVarPresence(cond);
-      if (single) {
-        elseCtx = withEnv(elseCtx, refine(elseCtx.env, single.varName, single.innerTy));
-      } else if (cond.kind === "binop" && cond.op === "||") {
-        for (const n of collectEarlyReturnNarrowings(cond)) {
-          elseCtx = withEnv(elseCtx, refine(elseCtx.env, n.varName, n.innerTy));
-        }
-      }
-      const negPaths = collectEarlyReturnPathNarrowings(cond);
-      if (negPaths.length > 0) {
-        elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, ...negPaths] };
-      }
-      const variant = falseVariantCheck(cond, ctx);
-      if (variant) elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, variant] };
-      // Map-index narrowing: `k in m` in the cond narrows the then-branch; `!(k in m)`
-      // narrows the else-branch. Parallel to the if-statement hook in resolveStmt.
-      thenCtx = withInAtoms(thenCtx, extractInAtoms(cond));
-      elseCtx = withInAtoms(elseCtx, extractInAtomsNegated(cond));
+      const thenCtx = refineCondition(ctx, cond, true);
+      const elseCtx = refineCondition(ctx, cond, false);
 
       let then_ = resolveExpr(e.then, thenCtx);
       let else_ = resolveExpr(e.else, elseCtx);
@@ -2038,50 +1861,25 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
       env = inv.env;
       narrowedPaths = inv.narrowedPaths;
     }
-    // Definite-assignment guard (#340): `if (v === undefined) { v = nonOpt; }`
-    // guarantees `v` is present after the `if` on both branches.
+    // If the guard's false branch proves a variable present and its true
+    // branch assigns a non-optional value, it is present on both exits.
     if (s.kind === "if" && typed.kind === "if" && s.else.length === 0) {
-      const neg = negatedVarPresence(typed.cond);
-      if (neg && definitelyAssignsNonOptional(s.then, neg.varName, currentCtx)) {
-        env = refine(env, neg.varName, neg.innerTy);
-      }
-    }
-    // Flow narrowing: if (x === undefined) { return } narrows x for rest of block.
-    // Also handles compound: if (x === undefined || y === undefined) { return }
-    // Any terminator counts (return/throw/break/continue — same set as narrow's
-    // isTerminating): each exits the current block, so the rest of the block
-    // only runs when the guard was false.
-    // Field chains are excluded — resolve can't substitute in statement lists;
-    // transform's emitOptionalMatch handles field chains in statement contexts.
-    if (s.kind === "if" && s.then.length > 0 && isTerminatorKind(s.then[s.then.length - 1].kind) && s.else.length === 0) {
-      if (typed.kind === "if") {
-        for (const n of collectEarlyReturnNarrowings(typed.cond)) {
-          env = refine(env, n.varName, n.innerTy);
-        }
-        for (const np of collectEarlyReturnPathNarrowings(typed.cond)) {
-          if (np.path.fields.length === 0) {
-            env = refine(env, np.path.rootVar, np.narrowedTy);
-          } else {
-            narrowedPaths = [...narrowedPaths, np];
-          }
-        }
-        const nv = falseVariantCheck(typed.cond, currentCtx);
-        if (nv) narrowedPaths = [...narrowedPaths, nv];
-      }
-      // Map-index narrowing: `if (!(k in m)) return;` means `k in m` holds in rest.
-      if (typed.kind === "if") {
-        const addedAtoms = extractInAtomsNegated(typed.cond);
-        if (addedAtoms.length > 0) {
-          narrowedIndices = withInAtoms({ ...ctx, narrowedIndices }, addedAtoms).narrowedIndices;
+      for (const fact of conditionFacts(typed.cond, false, ctx.typeDecls)) {
+        if (fact.kind === "present" && fact.scrutinee.kind === "var" &&
+            definitelyAssignsNonOptional(s.then, fact.scrutinee.name, currentCtx)) {
+          env = refine(env, fact.scrutinee.name, fact.innerTy);
         }
       }
     }
-    // Assert narrowing: `//@ assert k in m` adds atoms for the rest of the block.
+    // A terminating then-branch leaves exactly the guard's false facts in
+    // scope for the continuation, just as an explicit else branch does.
+    if (s.kind === "if" && typed.kind === "if" && s.then.length > 0 &&
+        isTerminatorKind(s.then[s.then.length - 1].kind) && s.else.length === 0) {
+      const next = refineCondition({ ...currentCtx, env, narrowedPaths, narrowedIndices }, typed.cond, false);
+      ({ env, narrowedPaths, narrowedIndices } = next);
+    }
     if (typed.kind === "assert") {
-      const addedAtoms = extractInAtoms(typed.expr);
-      if (addedAtoms.length > 0) {
-        narrowedIndices = withInAtoms({ ...ctx, narrowedIndices }, addedAtoms).narrowedIndices;
-      }
+      narrowedIndices = withConditionFacts({ ...currentCtx, narrowedIndices }, membershipFacts([typed.expr], currentCtx)).narrowedIndices;
     }
   }
   return result;
@@ -2181,32 +1979,9 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       return [{ kind: "expr", expr: resolveExpr(s.expr, ctx) }, ctx.env];
 
     case "if": {
-      // Narrow optional<T> → T when checking !== undefined or undefined !==.
-      // For &&-chains, all positive optional checks narrow the then-branch;
-      // earlier checks are in scope when resolving later ones.
-      // Single-check === undefined narrows the else-branch.
       const resolvedCond = resolveExpr(s.cond, ctx);
-      let thenCtx = collectAndChainNarrowings(resolvedCond, ctx);
-      let elseCtx = ctx;
-      const single = negatedVarPresence(resolvedCond);
-      if (single) {
-        elseCtx = withEnv(ctx, refine(ctx.env, single.varName, single.innerTy));
-      } else if (resolvedCond.kind === "binop" && resolvedCond.op === "||") {
-        for (const n of collectEarlyReturnNarrowings(resolvedCond)) {
-          elseCtx = withEnv(elseCtx, refine(elseCtx.env, n.varName, n.innerTy));
-        }
-      }
-      const negPaths = collectEarlyReturnPathNarrowings(resolvedCond);
-      if (negPaths.length > 0) {
-        elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, ...negPaths] };
-      }
-      const variant = falseVariantCheck(resolvedCond, ctx);
-      if (variant) elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, variant] };
-      // Narrow map index access across `k in m` / `!(k in m)` in the cond:
-      // positive atoms (from `k in m` or &&-chains containing it) → then-branch;
-      // negated atoms (from `!(k in m)`) → else-branch.
-      thenCtx = withInAtoms(thenCtx, extractInAtoms(resolvedCond));
-      elseCtx = withInAtoms(elseCtx, extractInAtomsNegated(resolvedCond));
+      const thenCtx = refineCondition(ctx, resolvedCond, true);
+      const elseCtx = refineCondition(ctx, resolvedCond, false);
       return [{ kind: "if", cond: resolvedCond, then: resolveBlock(s.then, thenCtx), else: resolveBlock(s.else, elseCtx) }, ctx.env];
     }
 
@@ -2222,9 +1997,8 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       const resolvedCond = resolveExpr(s.cond, loopCtx);
       // Invariants and presence checks in the `while` condition (#339) both hold
       // at the top of the loop body.
-      const bodyCtx = collectAndChainNarrowings(
-        resolvedCond,
-        withInAtoms(loopCtx, resolvedInvariants.flatMap(extractInAtoms)),
+      const bodyCtx = refineCondition(
+        withConditionFacts(loopCtx, membershipFacts(resolvedInvariants, loopCtx)), resolvedCond, true,
       );
       return [{
         kind: "while",
@@ -2285,16 +2059,13 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
 
     case "switch": {
       const expr = resolveExpr(s.expr, ctx);
-      const decl = expr.ty.kind === "user" ? findDecl(ctx, tyBaseName(expr.ty.name)) : undefined;
-      const path = decl?.kind === "discriminated-union" && decl.discriminant === s.discriminant
-        ? asTExprAccessPath(expr) : null;
-      const branchCtx = (variant: string): Ctx => path ? { ...ctx, narrowedPaths: [
-        ...ctx.narrowedPaths, { path, narrowedTy: expr.ty, variant },
-      ] } : ctx;
-      const cases = s.cases.map(c => ({ label: c.label, body: resolveBlock(c.body, branchCtx(c.label)) }));
-      const remaining = path ? remainingVariant(decl, s.cases.map(c => c.label)) : undefined;
+      const branchCtx = (labels: string[], matches: boolean): Ctx => {
+        const fact = discriminantBranchFact(expr, s.discriminant, labels, matches, ctx.typeDecls);
+        return fact ? withConditionFacts(ctx, [{ kind: "variant", ...fact }]) : ctx;
+      };
+      const cases = s.cases.map(c => ({ label: c.label, body: resolveBlock(c.body, branchCtx([c.label], true)) }));
       return [{ kind: "switch", expr, discriminant: s.discriminant, cases,
-        defaultBody: resolveBlock(s.defaultBody, remaining ? branchCtx(remaining.name) : ctx) }, ctx.env];
+        defaultBody: resolveBlock(s.defaultBody, branchCtx(s.cases.map(c => c.label), false)) }, ctx.env];
     }
 
     case "ghostLet": {
@@ -2516,9 +2287,9 @@ function resolveFunction(
   // body (pure fns) and for post-state references in the ensures (map params
   // aren't mutated through their binding in the Dafny translation).
   const resolvedRequires = resolveSpecs(fn.requires, requiresCtx);
-  const requiresAtoms = resolvedRequires.flatMap(extractInAtoms);
-  const bodyCtx = withInAtoms(baseCtx, requiresAtoms);
-  const ensuresCtxNarrowed = withInAtoms(ensuresCtx, requiresAtoms);
+  const requiresFacts = membershipFacts(resolvedRequires, baseCtx);
+  const bodyCtx = withConditionFacts(baseCtx, requiresFacts);
+  const ensuresCtxNarrowed = withConditionFacts(ensuresCtx, requiresFacts);
 
   return {
     name: fn.name, typeParams, params, returnTy,

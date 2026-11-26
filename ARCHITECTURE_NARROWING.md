@@ -39,10 +39,20 @@ unwrapped type. Following TS semantics, resolve only narrows simple shapes:
   type environment with `x: T` for the then-branch.
 - **`narrowedPaths`** for any pure access path (`obj.field`, `a.b.c.d`,
   any depth). Each entry pairs a path (root var + field chain) with the
-  unwrapped type. The field resolver computes the path of each access and
-  looks it up. `&&` chains accumulate narrowings so each premise is in
-  scope for later ones, matching TS narrowing through `&&`. The same
-  applies through `==>` in spec contexts (premise narrows conclusion).
+  unwrapped type or selected union variant. The field resolver computes each
+  access's path and looks it up. `&&` chains accumulate narrowings so each
+  premise is in scope for later ones, matching TS narrowing through `&&`.
+  The same applies through `==>` in specs (premise narrows conclusion).
+- **`narrowedIndices`** records map membership (`key in map`) for direct reads.
+
+`conditionFacts(cond, truth, decls)` supplies ordered facts for either outcome,
+and resolve's `withConditionFacts` applies them to these three stores. `if`,
+ternaries, short-circuit operators, early-return continuations, and loop bodies
+choose the relevant outcome without recognizing conditions themselves. Switch
+arms use the same discriminant facts: a case selects its variant; a default
+selects a variant only when exactly one remains. Negation swaps outcomes;
+true conjunctions and false disjunctions establish both sides in source order.
+Other Boolean combinations conservatively contribute no facts.
 
 Complex expressions (call results, index ops) are **not** narrowed —
 matching TS, which requires the user to bind first:
@@ -114,10 +124,10 @@ isolation than they did when scattered across resolve and transform:
   produces conditionals (no someMatch); transform consumes someMatch
   (lowers to match Some/None). Narrow sits in between, doing the conversion.
 
-Note: each new TS pattern still touches all three layers (resolve to type
-narrowed accesses, narrow to rewrite the shape, transform to substitute the
-binder). Narrow is the *structural* layer of a three-layer system, not a
-hermetic component.
+New condition forms extend the shared fact analyzer; existing branch positions
+consume them automatically. A form that needs a new binding structure also
+needs a narrow rule and transform support. Narrow is the *structural* layer
+of a three-layer system, not a hermetic component.
 
 ---
 

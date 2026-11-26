@@ -6,15 +6,13 @@
  * branches, `||`-chain None-detectors, in-bounds) and materializing them as
  * IR (`someMatch` / `tagMatch` / bounds conditionals). `narrow`'s rules are
  * positional drivers over these helpers; `resolve` consults the same
- * detection for branch typing.
+ * detection for branch typing through `conditionFacts(cond, truth, decls)`.
  *
- * Analysis shape: a condition yields ONE leading fact plus a residual
- * condition (`leadingPresent` on `&&`-chains); nesting comes from the
- * drivers re-walking the residual, so recursion order carries the
- * dependency between chained facts (`x !== undefined && x.f !== undefined`
- * reifies the second check inside the match introduced by the first). This
- * realizes §4's ordered-fact list iteratively rather than as a returned
- * list — same semantics, no intermediate structure.
+ * Branch typing returns ordered facts without binders; negation swaps the
+ * requested outcome. Structural rewriting consumes one leading fact plus
+ * a residual condition (`leadingPresent` on `&&`-chains), then re-walks the
+ * residual inside the new match. Both preserve dependencies between checks:
+ * `x !== undefined && x.f !== undefined` unwraps the root before its field.
  *
  * State is explicit (§6.1): detection that mints binders or consults type
  * declarations takes a `CondCtx`; nothing module-level.
@@ -24,7 +22,7 @@ import type { TExpr, TStmt, Ty } from "./typedir.js";
 import { isNullishStorageTy, optAbsent } from "./typedir.js";
 import { freshName, freshNameWhere, isUserName } from "./names.js";
 import type { TypeDecls } from "./typedecls.js";
-import { unionDeclOfTy, discriminantOf } from "./typedecls.js";
+import { unionDeclOfTy, discriminantOf, declOfDotted, tyBaseName, remainingVariant } from "./typedecls.js";
 
 /** Explicit context: declarations, optChain counter, and scope-local binders. */
 export interface CondCtx {
@@ -348,6 +346,8 @@ export interface VariantFact {
   variant: string;
 }
 
+type PathVariantFact = Omit<VariantFact, "scrutinee"> & { scrutinee: TExpr };
+
 export interface IsArrayFact {
   scrutinee: TExpr;
   typeName: string;
@@ -365,7 +365,7 @@ export function isNarrowablePath(e: TExpr): boolean {
 
 /** Detect `Array.isArray(<path>)` where `<path>` is a narrowable path whose
  *  type is a synthesized array-union (discriminant `"__isArray__"`). */
-export function isArrayFact(call: TExpr, ctx: CondCtx): (IsArrayFact & { variant: "ArrayBranch" }) | null {
+export function isArrayFact(call: TExpr, ctx: Pick<CondCtx, "decls">): (IsArrayFact & { variant: "ArrayBranch" }) | null {
   if (call.kind !== "call") return null;
   if (call.fn.kind !== "field" || call.fn.field !== "isArray") return null;
   if (call.fn.obj.kind !== "var" || call.fn.obj.name !== "Array") return null;
@@ -382,7 +382,7 @@ export function isArrayFact(call: TExpr, ctx: CondCtx): (IsArrayFact & { variant
  *  The runtime `=== "string"` test matches that branch only when `U` is string —
  *  for any other non-array payload (`number | T[]`, …) it never holds, so we must
  *  NOT narrow. Returns the `NonArrayBranch` variant; the dual of `Array.isArray`. */
-export function typeofStringFact(e: TExpr, ctx: CondCtx): (IsArrayFact & { variant: "NonArrayBranch" }) | null {
+export function typeofStringFact(e: TExpr, ctx: Pick<CondCtx, "decls">): (IsArrayFact & { variant: "NonArrayBranch" }) | null {
   if (e.kind !== "binop" || e.op !== "===") return null;
   const tof = e.left.kind === "unop" && e.left.op === "typeof" ? e.left.expr
     : e.right.kind === "unop" && e.right.op === "typeof" ? e.right.expr : null;
@@ -403,22 +403,39 @@ export function leadingIsArray(cond: TExpr, ctx: CondCtx) {
   return extractConjunct(cond, e => isArrayFact(e, ctx));
 }
 
-/** Detect `x.kind === "variant"`, `'key' in x`, or `Array.isArray(x)` (synth
- *  array-union) as a positive discriminant check on a bare-var scrutinee. */
-export function variantFact(cond: TExpr, ctx: CondCtx): VariantFact | null {
-  // Pattern: x.discriminant === "variant"
-  if (cond.kind === "binop" && cond.op === "===" && cond.right.kind === "str" &&
-      cond.left.kind === "field" && cond.left.isDiscriminant &&
-      cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
-    return { scrutinee: cond.left.obj, typeName: cond.left.obj.ty.name, variant: cond.right.value };
+/** A case selects its label; a default excludes the listed labels. The same
+ *  operation handles the true and false branches of a discriminant comparison. */
+export function discriminantBranchFact(
+  scrutinee: TExpr, discriminant: string, labels: readonly string[], matches: boolean, decls: TypeDecls,
+): PathVariantFact | null {
+  if (scrutinee.ty.kind !== "user" || !isNarrowablePath(scrutinee)) return null;
+  const decl = declOfDotted(decls, tyBaseName(scrutinee.ty.name));
+  if (decl?.kind !== "discriminated-union" || decl.discriminant !== discriminant) return null;
+  const variant = matches
+    ? labels.length === 1 ? decl.variants?.find(v => v.name === labels[0]) : undefined
+    : remainingVariant(decl, labels);
+  return variant ? { scrutinee, typeName: scrutinee.ty.name, variant: variant.name } : null;
+}
+
+/** Variant guaranteed by a condition's outcome, independent of its position.
+ *  Complements are usable only when one variant remains. */
+function variantWhen(cond: TExpr, truth: boolean, decls: TypeDecls): PathVariantFact | null {
+  if (cond.kind === "unop" && cond.op === "!") return variantWhen(cond.expr, !truth, decls);
+  if (cond.kind === "binop" && (cond.op === "===" || cond.op === "!==")) {
+    const field = cond.left.kind === "field" ? cond.left : cond.right.kind === "field" ? cond.right : null;
+    const label = cond.left.kind === "str" ? cond.left : cond.right.kind === "str" ? cond.right : null;
+    if (field?.isDiscriminant && label) {
+      return discriminantBranchFact(field.obj, field.field, [label.value], truth === (cond.op === "==="), decls);
+    }
   }
   // Pattern: 'key' in x — narrows x to the unique variant containing `key`.
-  if (cond.kind === "binop" && cond.op === "in" &&
+  // Its false branch cannot exclude that variant: the key may be optional.
+  if (truth && cond.kind === "binop" && cond.op === "in" &&
       cond.left.kind === "str" && cond.right.kind === "var" &&
       cond.right.ty.kind === "user") {
     const key = cond.left.value;
     const typeName = cond.right.ty.name;
-    const decl = unionDeclOfTy(ctx.decls, cond.right.ty);
+    const decl = unionDeclOfTy(decls, cond.right.ty);
     if (decl?.variants) {
       const matches = decl.variants.filter(v => v.fields.some(f => f.name === key));
       if (matches.length === 1) {
@@ -426,37 +443,72 @@ export function variantFact(cond: TExpr, ctx: CondCtx): VariantFact | null {
       }
     }
   }
-  // Pattern: Array.isArray(x) — narrows x to the ArrayBranch variant of a
-  // synthesized array-union (discriminant "__isArray__"). Statement-level
-  // discriminant chains (`if (Array.isArray(x)) {...} else if (...)`) still
-  // require a bare-var scrutinee since the existing var-name-keyed
-  // replacement machinery in transform.ts only handles that shape; path
-  // scrutinees (e.g. `m.content`) are handled exclusively by the
-  // conditional/expression tagMatch drivers.
-  const arrCheck = isArrayFact(cond, ctx);
-  if (arrCheck && arrCheck.scrutinee.kind === "var") {
-    return { scrutinee: arrCheck.scrutinee, typeName: arrCheck.typeName, variant: arrCheck.variant };
-  }
-  return null;
+  const array = isArrayFact(cond, { decls }) ?? typeofStringFact(cond, { decls });
+  return array ? discriminantBranchFact(array.scrutinee, "__isArray__", [array.variant], truth, decls) : null;
 }
 
-/** Detect `x.kind !== "variant"` (negative discriminant check) or
- *  `!Array.isArray(x)` (synth array-union, narrows to NonArrayBranch). */
+/** Statement match drivers require a variable scrutinee for binder substitution.
+ *  Branch typing can also use field paths, through conditionFacts below. */
+export function variantFact(cond: TExpr, ctx: CondCtx): VariantFact | null {
+  const fact = variantWhen(cond, true, ctx.decls);
+  return fact?.scrutinee.kind === "var" ? { ...fact, scrutinee: fact.scrutinee } : null;
+}
+
+/** The variant on the continuation after `if (cond) return`. */
 export function negVariantFact(cond: TExpr, ctx: CondCtx): VariantFact | null {
-  if (cond.kind === "binop" && cond.op === "!==" && cond.right.kind === "str" &&
-      cond.left.kind === "field" && cond.left.isDiscriminant &&
-      cond.left.obj.kind === "var" && cond.left.obj.ty.kind === "user") {
-    return { scrutinee: cond.left.obj, typeName: cond.left.obj.ty.name, variant: cond.right.value };
+  const fact = variantWhen(cond, false, ctx.decls);
+  return fact?.scrutinee.kind === "var" ? { ...fact, scrutinee: fact.scrutinee } : null;
+}
+
+// ── Branch typing facts ─────────────────────────────────────
+
+/** Facts carry no generated binders: the resolver applies them to its lexical
+ *  environment; structural narrowing introduces checked projections later. */
+export type ConditionFact =
+  | { kind: "present"; scrutinee: TExpr; innerTy: Ty }
+  | ({ kind: "variant" } & PathVariantFact)
+  | { kind: "in"; map: TExpr; key: TExpr };
+
+/** An optional chain yields undefined when its receiver is absent. A truthy
+ *  result, equality with a non-undefined value, or inequality with undefined
+ *  therefore proves the receiver present. */
+function optionalChainPresence(cond: TExpr, truth: boolean): ConditionFact | null {
+  let chain: Extract<TExpr, { kind: "optChain" }> | null = null;
+  if (truth && cond.kind === "optChain") chain = cond;
+  if (cond.kind === "binop" && (cond.op === "===" || cond.op === "!==")) {
+    const oc = cond.left.kind === "optChain" ? cond.left : cond.right.kind === "optChain" ? cond.right : null;
+    const other = cond.left === oc ? cond.right : cond.left;
+    const equal = truth === (cond.op === "===");
+    const undefinedValue = other.kind === "var" && other.name === "undefined";
+    const excludesUndefined = !["optional", "nullish", "void", "unknown"].includes(other.ty.kind);
+    if (oc && ((!equal && undefinedValue) || (equal && excludesUndefined))) chain = oc;
   }
-  // Pattern: !Array.isArray(x) — narrows x to the NonArrayBranch variant.
-  // Same var-scrutinee restriction as variantFact.
-  if (cond.kind === "unop" && cond.op === "!") {
-    const arrCheck = isArrayFact(cond.expr, ctx);
-    if (arrCheck && arrCheck.scrutinee.kind === "var") {
-      return { scrutinee: arrCheck.scrutinee, typeName: arrCheck.typeName, variant: "NonArrayBranch" };
-    }
+  if (!chain || chain.obj.ty.kind !== "optional" || !isNarrowablePath(chain.obj)) return null;
+  return { kind: "present", scrutinee: chain.obj, innerTy: chain.obj.ty.inner };
+}
+
+/** Facts guaranteed when `cond` evaluates to `truth`. Negation swaps outcomes;
+ *  true conjunctions and false disjunctions establish both sides in source
+ *  order. Other combinations are conservatively left without refinement.
+ *  Never descend into implication or quantifiers: their facts need not hold. */
+export function conditionFacts(cond: TExpr, truth: boolean, decls: TypeDecls): ConditionFact[] {
+  if (cond.kind === "unop" && cond.op === "!") return conditionFacts(cond.expr, !truth, decls);
+  if (cond.kind === "binop" && ((truth && cond.op === "&&") || (!truth && cond.op === "||"))) {
+    return [...conditionFacts(cond.left, truth, decls), ...conditionFacts(cond.right, truth, decls)];
   }
-  return null;
+  const present = presentFact(cond);
+  if (present && truth !== present.negated) {
+    return [{ kind: "present", scrutinee: present.scrutinee, innerTy: present.innerTy }];
+  }
+  const chain = optionalChainPresence(cond, truth);
+  if (chain) return [chain];
+  const variant = variantWhen(cond, truth, decls);
+  if (variant) return [{ kind: "variant", ...variant }];
+  if (truth && cond.kind === "binop" && cond.op === "in" && cond.right.ty.kind === "map" &&
+      isNarrowablePath(cond.left) && isNarrowablePath(cond.right)) {
+    return [{ kind: "in", map: cond.right, key: cond.left }];
+  }
+  return [];
 }
 
 // ── Materializers ───────────────────────────────────────────

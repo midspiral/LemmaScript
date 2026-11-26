@@ -426,7 +426,7 @@ function inCheckRecordGet(m: map<string, int>, k: string, fallback: int): int
 
 lemma inCheckRecordGet_ensures(m: map<string, int>, k: string, fallback: int)
   ensures (!((k in m)) ==> (inCheckRecordGet(m, k, fallback) == fallback))
-  ensures ((k in m) ==> ((k in m) && (var i_value := m[k]; (i_value == inCheckRecordGet(m, k, fallback)))))
+  ensures ((k in m) ==> (inCheckRecordGet(m, k, fallback) == m[k]))
 {
 }
 
@@ -451,7 +451,7 @@ function ifInMapBlock(m: map<string, int>, k: string, fallback: int): int
 }
 
 lemma ifInMapBlock_ensures(m: map<string, int>, k: string, fallback: int)
-  ensures ((k in m) ==> ((k in m) && (var i_value := m[k]; (i_value == ifInMapBlock(m, k, fallback)))))
+  ensures ((k in m) ==> (ifInMapBlock(m, k, fallback) == m[k]))
   ensures (!((k in m)) ==> (ifInMapBlock(m, k, fallback) == fallback))
 {
 }
@@ -466,7 +466,7 @@ function ifNotInMapEarlyReturn(m: map<string, int>, k: string, fallback: int): i
 
 lemma ifNotInMapEarlyReturn_ensures(m: map<string, int>, k: string, fallback: int)
   ensures (!((k in m)) ==> (ifNotInMapEarlyReturn(m, k, fallback) == fallback))
-  ensures ((k in m) ==> ((k in m) && (var i_value := m[k]; (i_value == ifNotInMapEarlyReturn(m, k, fallback)))))
+  ensures ((k in m) ==> (ifNotInMapEarlyReturn(m, k, fallback) == m[k]))
 {
 }
 
@@ -559,10 +559,10 @@ lemma area_ensures(s: Shape)
 function describeIfCircle(s: Shape, fallback: int): int
 {
   match s {
-    case circle(i_s_radius) =>
-      (i_s_radius * i_s_radius)
     case square(i_s_side) =>
       fallback
+    case circle(i_s_radius) =>
+      (i_s_radius * i_s_radius)
   }
 }
 
@@ -702,7 +702,7 @@ method clampedMidpoint(a: int, b: int) returns (res: int)
 }
 
 method assertInMap(m: map<string, int>, k: string, fallback: int) returns (res: int)
-  ensures ((k in m) ==> ((k in m) && (var i_value := m[k]; (i_value == res))))
+  ensures ((k in m) ==> (res == m[k]))
   ensures (!((k in m)) ==> (res == fallback))
 {
   if !((k in m)) {
