@@ -99,6 +99,8 @@ For `src/foo.ts`, `lsc gen` produces `src/foo.types.lean` and `src/foo.def.lean`
 
 `foo.types.lean` contains Lean type definitions derived from TS `type` declarations (string literal unions, discriminated unions, records), along with any pure mirrors or opaque extern declarations (§3.1). It is omitted when none of these declarations are needed.
 
+`T | undefined` and `T | null` use Lean's `Option`; `T | null | undefined` uses `Nullish` with constructors `.undefined`, `.null`, and `.value v`. The emitter adds `import LemmaScript.Nullish` only when needed. Its `get` accessor requires a proof of `isValue = true`, supported by `grind` lemmas. See [`examples/nullish.proof.lean`](examples/nullish.proof.lean) for proofs using case analysis.
+
 `foo.def.lean` contains the Velvet `method` definition:
 
 ```lean
