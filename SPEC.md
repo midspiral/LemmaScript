@@ -536,7 +536,7 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `arr.sort()` (no comparator) | — | `SeqSort(arr)` (preamble axiom: permutation + length-preserving only — JS default order is type-dependent) |
 | `arr.slice(start)` | `arr.extract start arr.size` | `arr[start..]` |
 | `arr.slice(start, end)` | `arr.extract start end` | `arr[start..end]` |
-| `expr!` (non-null) | unwrap Option | unwrap Option / direct map access |
+| `expr!` (non-null) | unwrap Option or Nullish | unwrap Option or Nullish / direct map access |
 | `expr \|\| default` (on optional) | match Some/None | `match { Some(v) => v, None => default }` |
 | `expr \|\| undefined` (on optional) | identity | identity (no-op) |
 | `expr \|\| default` (on string) | if non-empty | `if \|expr\| > 0 then expr else default` |
@@ -756,7 +756,7 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 - Loops and definite assignment: `while (cur !== undefined && ...)`, `if (v === undefined) { v = 6; }`, `v = 6;` (with control-flow narrowing invalidation across mutating `if`/`while`/`forof`/`switch`)
 - Spec implication: `path !== undefined && rest ==> B` and `x != null ==> B` (premise narrows conclusion)
 - Optional chaining: `obj?.field`, `obj?.foo()`, `obj?.[i]`, chained `obj?.a?.b?.c` and `obj?.a.b.c` (short-circuiting always produces `undefined`; `opt?.nullableField` where `nullableField: T | null` yields `Nullish<T>`)
-- Nullish coalescing: `x ?? default` (works on `Option<T>`, `Nullish<T>`, and non-nullable operands); array index `arr[i] ?? default` (undefined ⟺ out of bounds under `noUncheckedIndexedAccess`) → `(0 <= i && i < arr.length) ? arr[i] : default`
+- Nullish coalescing: `x ?? default` (works on `Option<T>`, `Nullish<T>`, and non-nullable operands; uses the fallback only for `null` or `undefined`, preserving `0`, `false`, and `""`); array index `arr[i] ?? default` (undefined ⟺ out of bounds under `noUncheckedIndexedAccess`) → `(0 <= i && i < arr.length) ? arr[i] : default`
 
 Safe `Option<T>` patterns rewrite in `narrow.ts` into a single `someMatch` IR node with a fresh binder (lowered to Dafny `match` Some/None or Lean `if h : x.isSome = true`). Patterns that bypass or outlive `someMatch` — `Nullish<T>`, `while` conditions, definite assignment, `||` chains, or branches that may clear the narrowed path — stay as explicit guards and use `checked-reads.ts` to wrap unwrapped reads in `checkedUnwrap` (Dafny `.value`; Lean `(x).get (by grind)` with non-shadowing dependent `if _hN :` / `∀ (_hN : ...)`). See [ARCHITECTURE_NARROWING.md](ARCHITECTURE_NARROWING.md).
 
@@ -1076,6 +1076,8 @@ Dafny then verifies that the `by method` block computes `tagNameExists_fun_spec`
 | `A \| B` (union param) | field intersection type | field intersection type |
 | Anything else | Pass through | Pass through |
 
+**Option and Nullish.** In both backends, `None` means `undefined` for `T | undefined`, or `null` for `T | null`; widening from `Option` to `Nullish` preserves which sentinel `None` represents. Nested and aliased unions containing both `null` and `undefined` also use `Nullish`.
+
 For the Dafny backend, `string` uses Unicode-scalar semantics by default.
 To use JavaScript's UTF-16 code-unit model, select
 `"string-semantics": "javascript-utf16"` and `"dafny-library": "local"`
@@ -1307,9 +1309,9 @@ return { res: true, done: true, rec: true };
 
 **Anonymous return types:** Functions returning inline object types (e.g., `(): { modules: Module[]; claims: Claim[] }`) get a synthetic return type (e.g., `ParseSpecYamlResult`). Named type aliases (e.g., `type Foo = { ... }`) are resolved by their alias name instead.
 
-**Record constructor padding (Dafny):** When an object literal has fewer fields than the target datatype (e.g., TS code omits optional fields), missing optional fields are filled with `None`. The emitter matches provided fields by name against the datatype declaration.
+**Record constructor padding (Dafny):** When an object literal has fewer fields than the target datatype (e.g., TS code omits optional fields), missing optional fields are filled with `None` for `Option` or `Nullish.Undefined` for `Nullish`. The emitter matches provided fields by name against the datatype declaration.
 
-**Optional field coercion:** When a non-optional value is assigned to an optional field in a record constructor (e.g., `createdAt: now` where `now: int` and the field type is `Option<int>`), the resolve phase wraps the value in `Some`. The coercion only fires when the value has a concrete non-optional type — `unknown` and `void` values are left as-is.
+**Optional field coercion:** When a concrete non-optional value is assigned to an `Option<T>` field in a record constructor (e.g., `createdAt: now` where `now: int`), resolve wraps it in `Some`; `unknown` and `void` values are left as-is. A `Nullish<T>` field instead wraps present values in `Value` and preserves `Null`/`Undefined` separately.
 
 ### 6.5 Type Mapping Implementation
 
