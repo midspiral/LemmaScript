@@ -50,7 +50,7 @@ Type names: `Expr`, `Stmt`, `Module`, `MatchArm`, `StmtMatchArm`, and `Decl` = `
 
 **Resolve** (`resolve.ts`): Raw IR → Typed IR. Resolves types from ts-morph type info and `//@ type` annotations. Classifies calls. Identifies discriminants. Rejects unsupported patterns. Parses `//@ ` annotations with the specparser. Carries narrowing context (env, `narrowedPaths`) so that the then-branch of `if (e !== undefined)` resolves with `e`'s unwrapped type — TS-faithful: simple vars and pure access paths (`a.b.c`, any depth) narrow. `&&` chains accumulate narrowings (each premise in scope for later ones); `==>` propagates premise narrowings into the conclusion. Narrowing here changes types; structural narrowing remains in `narrow.ts`. Resolve also binds inline callbacks to their actual arguments and simplifies symbolic rest observations; see [Callback binding and lowering](#callback-binding-and-lowering).
 
-**Narrow** (`narrow.ts` + `checked-reads.ts`): Typed IR → Typed IR. Owns all structural narrowing — both for optional checks and for discriminated unions. Optional patterns rewrite to `someMatch` (deferring when the narrowed path may be cleared to `undefined`/optional inside the branch); discriminant patterns (`x.kind === "v"`, `'k' in x`, `Array.isArray(x)` for synthesized array-unions, `x.kind !== "v") return; ...`) rewrite to `tagMatch`. Also handles `==>` premise narrowing in specs, `left ?? right` (nullish coalescing, including non-optional operands), `k in m ? m[k] : default` for map-typed `m`, and `obj?.<chain>` for any combination of `?.field`, `?.foo()`, `?.[i]`, and continuations (via the `optChain` IR node). At the end of `narrow`, `checked-reads.ts` wraps remaining narrowed reads of `Option<T>` storage (e.g. `while` conditions, definite assignment, `||` chains, or clearing branches) in `checkedUnwrap` nodes. `narrow-checks.ts` validates post-narrow IR invariants. The pass owns *where* a condition sits; *what* a condition establishes lives in `condition-facts.ts` (shared with resolve). See [Narrow rules](#narrow-rules) below and [ARCHITECTURE_NARROWING.md](ARCHITECTURE_NARROWING.md).
+**Narrow** (`narrow.ts` + `checked-reads.ts`): Typed IR → Typed IR. Owns all structural narrowing — both for optional checks and for discriminated unions. `Option` patterns rewrite to `someMatch` (deferring when the narrowed path may be cleared to `undefined`/optional inside the branch); discriminant patterns (`x.kind === "v"`, `'k' in x`, `Array.isArray(x)` for synthesized array-unions, `x.kind !== "v") return; ...`) rewrite to `tagMatch`. Also handles `==>` premise narrowing in specs, `left ?? right` (nullish coalescing, including non-optional operands), `k in m ? m[k] : default` for map-typed `m`, and `obj?.<chain>` for any combination of `?.field`, `?.foo()`, `?.[i]`, and continuations (via the `optChain` IR node). At the end of `narrow`, `checked-reads.ts` wraps remaining narrowed reads of `Option<T>` or `Nullish<T>` storage (e.g. `while` conditions, definite assignment, `||` chains, or clearing branches) in `checkedUnwrap` nodes. `narrow-checks.ts` validates post-narrow IR invariants. The pass owns *where* a condition sits; *what* a condition establishes lives in `condition-facts.ts` (shared with resolve). See [Narrow rules](#narrow-rules) below and [ARCHITECTURE_NARROWING.md](ARCHITECTURE_NARROWING.md).
 
 **Alias check** (`alias-check-pass.ts` + self-verified `alias-check.ts`): Typed IR validation pass run before transform. Combines backward liveness with forward alias tracking to reject in-place mutations (`push`, index assignment, `Map.set`, `Set.add`, field writes) on a binding while another alias to the same mutable container is still read afterward. Read-only sharing, dead-source moves, and explicit clones are allowed.
 
@@ -256,6 +256,8 @@ For the chain and neg-early-return rules, the `Array.isArray(x)` / `!Array.isArr
 | `optChain(obj, chain)` (from extract's `obj?.<chain>` — chain may be field/call/index steps) | `someMatch obj { Some(_oc{N}_val) => apply(chain, _oc{N}_val), None => undefined }` |
 | `k in m ? m[k] : default` (`m` map-typed; then-branch is exactly `m[k]`, `default` non-optional) | `someMatch m[k] { Some(_m_k_val) => _m_k_val, None => default }` |
 
+The `Some`/`None` rules describe `Option<T>`. `Nullish<T>` (for `T | null | undefined`) and partially narrowed values still stored as `Nullish` bypass `someMatch`: strict checks can exclude one sentinel at a time, and `checked-reads.ts` inserts `checkedUnwrap` for payload reads once both are excluded. Their `??` and `?.` lower directly to three-case matches in `transform.ts`. See [SPEC.md §6.1](SPEC.md#61-rules) for the type mapping.
+
 The `&&`-ternary rule skips when `rest` contains impure method calls (those would be lifted out of the match arm by transform, breaking binder scope) — the let-cond statement-level rule handles those. Both `&&`-ternary and `==>` rules walk their inner expression recursively so chained checks (`a !== undefined && a.b !== undefined ? ... : ...`, `... ==> ...`) become nested someMatches. The bare-statement `&&` rule (above) has no such restriction: its arm is a statement-level someMatch, which keeps a guarded call in statement position, so transform never ANF-lifts it out. It likewise walks `rest` as a statement, so chained checks nest.
 
 The `k in m` map rule mirrors the discriminant-`in` path but is gated on `map`; the existing Dafny `Map.get` peephole then collapses the result back to `if k in m then m[k] else default`.
@@ -331,12 +333,18 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 | `extract.ts` | Extract | ts-morph → Raw IR |
 | `lexical-names.ts` | Extract | Source and ghost binding names, annotation renaming, forward-capture checks |
 | `specparser.ts` | (parser) | Parses `//@ ` annotations → RawExpr |
-| `resolve.ts` | Resolve | Raw IR → Typed IR (types and type-narrowing) |
-| `typedir.ts` | Types | Typed IR type definitions (incl. `someMatch`/`tagMatch`) |
+| `resolve.ts` | Resolve | Raw IR → Typed IR (types, `storageTy`, callback binding, flow narrowing) |
+| `typedir.ts` | Types | Typed IR type definitions (incl. `someMatch`/`tagMatch`/`checkedUnwrap`/`nullish`) |
 | `narrow.ts` | Narrow | Typed IR → Typed IR (structural narrowing → `someMatch` / `tagMatch`) |
+| `checked-reads.ts` | Narrow | Post-narrow `checkedUnwrap` insertion for `Option`/`Nullish` reads without `someMatch` |
+| `narrow-checks.ts` | (check) | Post-narrow IR invariant checks (unwrapped optional/nullish and binder-collision checks) |
 | `condition-facts.ts` | (shared) | What a condition establishes — detection + materializers, used by narrow, resolve, transform |
+| `alias-check.ts` | Alias check | Self-verified pure live-alias conflict kernel (verified in CI via `LemmaScript-files.txt`) |
+| `alias-check-pass.ts` | Alias check | Backward liveness + forward alias tracking; rejects live-alias mutations |
+| `places.ts` | Transform | Self-verified pure `PlacePath` kernel (verified in CI via `LemmaScript-files.txt`) |
+| `place-lowering.ts` | Transform | Unified write-back through active `someMatch` and union-variant frames |
 | `ir.ts` | Types | Backend-neutral IR type definitions |
-| `transform.ts` | Transform | Typed IR → IR |
+| `transform.ts` | Transform | Typed IR → IR (`Place` write-back, callbacks, `#349` `let _cmpN`, `Nullish` lowering) |
 | `peephole.ts` | Peephole | IR → IR (Some/None ceremony elimination) |
 | `types.ts` | (shared) | TypeDeclInfo, parseTsType |
 | `typedecls.ts` | (shared) | Declaration lookup (exact / dotted / generic-base-sliced) |

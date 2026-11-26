@@ -105,8 +105,16 @@ export function bindPresentFact(f: PresentFact, ctx: CondCtx): PresentFact {
  *  `!e` and bare `e` are truthiness forms. `!!c` is the same check as `c`.
  *  Following TS, only pure access paths narrow; complex scrutinees return null. */
 export function presentFact(cond: TExpr): PresentFact | null {
-  if (cond.kind === "unop" && cond.op === "!" && cond.expr.kind === "unop" && cond.expr.op === "!")
-    return presentFact(cond.expr.expr);
+  if (cond.kind === "unop" && cond.op === "!") {
+    if (cond.expr.kind === "unop" && cond.expr.op === "!") return presentFact(cond.expr.expr);
+    // Negated explicit sentinel check: `!(x === undefined)`, `!(x !== undefined)`,
+    // `!(x === null)`, `!(x == null)`, etc. (#338). Non-truthiness facts invert
+    // cleanly by flipping `negated`.
+    const inner = presentFact(cond.expr);
+    if (inner && !inner.truthiness) {
+      return { ...inner, negated: !inner.negated };
+    }
+  }
   // `!e` where e is optional or nullish — a truthiness form: false iff e is
   // absent (None / Null / Undefined) OR its inner value is itself falsy.
   if (cond.kind === "unop" && cond.op === "!" && (cond.expr.ty.kind === "optional" || cond.expr.ty.kind === "nullish")) {
