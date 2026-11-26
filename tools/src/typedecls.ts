@@ -14,7 +14,7 @@
  */
 
 import type { Ty } from "./typedir.js";
-import type { TypeDeclInfo } from "./types.js";
+import type { TypeDeclInfo, VariantInfo } from "./types.js";
 
 export type TypeDecls = readonly TypeDeclInfo[];
 
@@ -61,6 +61,13 @@ export function unionDeclOfTy(decls: TypeDecls, ty: Ty): TypeDeclInfo | undefine
  *  discriminated union. */
 export function discriminantOf(decls: TypeDecls, ty: Ty): string | undefined {
   return unionDeclOfTy(decls, ty)?.discriminant;
+}
+
+/** The only union variant not covered by the given labels, if exactly one remains. */
+export function remainingVariant(decl: TypeDeclInfo | undefined, matched: readonly string[]): VariantInfo | undefined {
+  if (decl?.kind !== "discriminated-union" || !decl.variants) return undefined;
+  const remaining = decl.variants.filter(v => !matched.includes(v.name));
+  return remaining.length === 1 ? remaining[0] : undefined;
 }
 
 /** Reverse lookup: the union declaration owning a variant (discriminated

@@ -40,7 +40,7 @@ import { builtinSpec } from "./builtins.js";
 import {
   type CondCtx, type PresentFact, type NoneDetector,
   optionalPresentFact, leadingPresent, leadingIsArray, flattenOr, noneDetector,
-  bindPresentFact, freshPathBinder, binderHintForMapAccess, freshOcBinder,
+  excludesUndefined, bindPresentFact, freshPathBinder, binderHintForMapAccess, freshOcBinder,
   applyChain, restoreDiscriminantFlag, arrayBoundsCond, exprEqual,
   isArrayFact, typeofStringFact, variantFact, negVariantFact,
   presentMatchStmts, presentMatchExpr,
@@ -306,6 +306,7 @@ function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[], ctx: CondCtx): 
   if (!oc || oc.kind !== "optChain" || oc.obj.ty.kind !== "optional" || oc.obj.ty.fromNullish) return null;
   if (scrutineeMayBeCleared(oc.obj, rest)) return null;
   const lit = c.left === oc ? c.right : c.left;
+  if (!excludesUndefined(lit, ctx.decls, ctx.typeParams)) return null;
   const innerTy = oc.obj.ty.inner;
   const binder = freshPathBinder(oc.obj, ctx);
   if (binder === null) return null;
@@ -791,8 +792,9 @@ function narrowFunction(fn: TFunction, ctx: CondCtx): TFunction {
   // Contracts and the body bind their payloads in separate generated scopes.
   // Do not reserve a body's names because of a contract's \result (or another
   // function's paths). Keep the shared counter's traversal order unchanged.
-  const specCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc };
-  const bodyCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc };
+  const typeParams = new Set(fn.typeParams.map(tp => tp.replace(/\(.*\)$/, "")));
+  const specCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc, typeParams };
+  const bodyCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc, typeParams };
   return {
     ...fn,
     requires: fn.requires.map(e => walkExpr(e, specCtx)),

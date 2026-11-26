@@ -13,8 +13,8 @@ import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
 import { recognizeBuiltin, builtinSpec, callbackArgumentTypes, callbackBaseArity } from "./builtins.js";
-import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName } from "./typedecls.js";
-import { presentFact, variantFact } from "./condition-facts.js";
+import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName, remainingVariant } from "./typedecls.js";
+import { presentFact, variantFact, excludesUndefined } from "./condition-facts.js";
 
 // ── Environment ──────────────────────────────────────────────
 
@@ -126,6 +126,7 @@ interface ExternSignature {
 interface Ctx {
   env: Env | null;
   typeDecls: TypeDeclInfo[];
+  typeParams: ReadonlySet<string>;  // function/extern generic type parameter names in scope
   overrides: Map<string, string>;
   allowResult: boolean;
   returnTy: Ty;
@@ -330,11 +331,11 @@ function negatedVarPresence(cond: TExpr): { varName: string; innerTy: Ty } | nul
  *  (x === undefined || y === undefined). */
 /** Extract field-path or optional-chain narrowings guaranteed after an early
  *  return (`if (d.b === undefined) return;` or `if (b?.tag !== 1) return;`, #354). */
-function collectEarlyReturnPathNarrowings(cond: TExpr): NarrowedPath[] {
+function collectEarlyReturnPathNarrowings(cond: TExpr, ctx: Ctx): NarrowedPath[] {
   if (cond.kind === "binop" && cond.op === "||") {
     return [
-      ...collectEarlyReturnPathNarrowings(cond.left),
-      ...collectEarlyReturnPathNarrowings(cond.right),
+      ...collectEarlyReturnPathNarrowings(cond.left, ctx),
+      ...collectEarlyReturnPathNarrowings(cond.right, ctx),
     ];
   }
   // Negated field-path presence: `d.b === undefined` or `!d.b`
@@ -352,8 +353,7 @@ function collectEarlyReturnPathNarrowings(cond: TExpr): NarrowedPath[] {
       : cond.right.kind === "optChain"
         ? [cond.right, cond.left]
         : [null, null];
-    if (ocSide && otherSide && !(otherSide.kind === "var" && otherSide.name === "undefined") &&
-        otherSide.ty.kind !== "optional" && otherSide.ty.kind !== "void" &&
+    if (ocSide && otherSide && excludesUndefined(otherSide, ctx.typeDecls, ctx.typeParams) &&
         ocSide.obj.ty.kind === "optional") {
       const path = asTExprAccessPath(ocSide.obj);
       if (path) return [{ path, narrowedTy: ocSide.obj.ty.inner }];
@@ -387,16 +387,22 @@ function collectEarlyReturnNarrowings(cond: TExpr): { varName: string; innerTy: 
   return n ? [n] : [];
 }
 
-/** Negated discriminant check (`path.kind !== "lit"`) on a var or field path.
- *  After `if (path.kind !== "lit") return`, the rest of the block knows the
- *  path is that variant. */
-function negatedVariantCheck(cond: TExpr): NarrowedPath | null {
-  if (cond.kind === "binop" && cond.op === "!==" && cond.right.kind === "str" &&
-      cond.left.kind === "field" && cond.left.isDiscriminant && cond.left.obj.ty.kind === "user") {
-    const path = asTExprAccessPath(cond.left.obj);
-    if (path) return { path, narrowedTy: cond.left.obj.ty, variant: cond.right.value };
-  }
-  return null;
+/** Variant guaranteed by a discriminant comparison (`path.kind === "lit"` or
+ *  `!== "lit"`, either operand order, with optional `!`) when `cond` evaluates
+ *  to `truth`. Exclusions narrow only when exactly one union variant remains. */
+function discriminantVariantWhen(cond: TExpr, truth: boolean, ctx: Ctx): NarrowedPath | null {
+  if (cond.kind === "unop" && cond.op === "!") return discriminantVariantWhen(cond.expr, !truth, ctx);
+  if (cond.kind !== "binop" || (cond.op !== "===" && cond.op !== "!==")) return null;
+  const field = cond.left.kind === "field" ? cond.left : cond.right.kind === "field" ? cond.right : null;
+  const label = cond.left.kind === "str" ? cond.left : cond.right.kind === "str" ? cond.right : null;
+  if (!field?.isDiscriminant || !label || field.obj.ty.kind !== "user") return null;
+  const path = asTExprAccessPath(field.obj);
+  if (!path) return null;
+  const matches = truth === (cond.op === "===");
+  if (matches) return { path, narrowedTy: field.obj.ty, variant: label.value };
+  const decl = findDecl(ctx, tyBaseName(field.obj.ty.name));
+  const rem = decl?.discriminant === field.field ? remainingVariant(decl, [label.value]) : undefined;
+  return rem ? { path, narrowedTy: field.obj.ty, variant: rem.name } : null;
 }
 
 /** TExpr → AccessPath. Counterpart to `asRawAccessPath` for resolved trees.
@@ -475,8 +481,13 @@ function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
     }
     return ctx;
   }
-  // Positive discriminant check (`x.kind === "bool"`): record the variant so
-  // field reads on the path resolve against that variant's field types.
+  // Positive discriminant check (`x.kind === "bool"`, `"bool" === x.kind`, or
+  // `x.kind !== "other"` on a 2-variant union): record the variant so field
+  // reads on the path resolve against that variant's field types.
+  const dv = discriminantVariantWhen(cond, true, ctx);
+  if (dv) {
+    return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, dv] };
+  }
   const vf = variantFact(cond, { decls: ctx.typeDecls, oc: { n: 0 } });
   if (vf) {
     const path = asTExprAccessPath(vf.scrutinee);
@@ -505,6 +516,10 @@ function collectOrChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
     if (path) {
       return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: f.innerTy }] };
     }
+  }
+  const dv = discriminantVariantWhen(cond, false, ctx);
+  if (dv) {
+    return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, dv] };
   }
   return ctx;
 }
@@ -1823,9 +1838,13 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
           elseCtx = withEnv(elseCtx, refine(elseCtx.env, n.varName, n.innerTy));
         }
       }
-      const negPaths = collectEarlyReturnPathNarrowings(cond);
+      const negPaths = collectEarlyReturnPathNarrowings(cond, ctx);
       if (negPaths.length > 0) {
         elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, ...negPaths] };
+      }
+      const elseVariant = discriminantVariantWhen(cond, false, ctx);
+      if (elseVariant) {
+        elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, elseVariant] };
       }
       // Map-index narrowing: `k in m` in the cond narrows the then-branch; `!(k in m)`
       // narrows the else-branch. Parallel to the if-statement hook in resolveStmt.
@@ -2054,14 +2073,14 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
         for (const n of collectEarlyReturnNarrowings(typed.cond)) {
           env = refine(env, n.varName, n.innerTy);
         }
-        for (const np of collectEarlyReturnPathNarrowings(typed.cond)) {
+        for (const np of collectEarlyReturnPathNarrowings(typed.cond, currentCtx)) {
           if (np.path.fields.length === 0) {
             env = refine(env, np.path.rootVar, np.narrowedTy);
           } else {
             narrowedPaths = [...narrowedPaths, np];
           }
         }
-        const nv = negatedVariantCheck(typed.cond);
+        const nv = discriminantVariantWhen(typed.cond, false, currentCtx);
         if (nv) narrowedPaths = [...narrowedPaths, nv];
       }
       // Map-index narrowing: `if (!(k in m)) return;` means `k in m` holds in rest.
@@ -2192,9 +2211,13 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
           elseCtx = withEnv(elseCtx, refine(elseCtx.env, n.varName, n.innerTy));
         }
       }
-      const negPaths = collectEarlyReturnPathNarrowings(resolvedCond);
+      const negPaths = collectEarlyReturnPathNarrowings(resolvedCond, ctx);
       if (negPaths.length > 0) {
         elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, ...negPaths] };
+      }
+      const elseVariant = discriminantVariantWhen(resolvedCond, false, ctx);
+      if (elseVariant) {
+        elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, elseVariant] };
       }
       // Narrow map index access across `k in m` / `!(k in m)` in the cond:
       // positive atoms (from `k in m` or &&-chains containing it) → then-branch;
@@ -2282,14 +2305,14 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       const decl = expr.ty.kind === "user" ? findDecl(ctx, tyBaseName(expr.ty.name)) : undefined;
       const path = decl?.kind === "discriminated-union" && decl.discriminant === s.discriminant
         ? asTExprAccessPath(expr) : null;
-      const cases = s.cases.map(c => {
-        const branch = path ? { ...ctx, narrowedPaths: [
-          ...ctx.narrowedPaths, { path, narrowedTy: expr.ty, variant: c.label },
+      const withVariant = (variant: string | undefined): Ctx =>
+        path && variant ? { ...ctx, narrowedPaths: [
+          ...ctx.narrowedPaths, { path, narrowedTy: expr.ty, variant },
         ] } : ctx;
-        return { label: c.label, body: resolveBlock(c.body, branch) };
-      });
+      const cases = s.cases.map(c => ({ label: c.label, body: resolveBlock(c.body, withVariant(c.label)) }));
+      const defaultVariant = path && decl ? remainingVariant(decl, s.cases.map(c => c.label))?.name : undefined;
       return [{ kind: "switch", expr, discriminant: s.discriminant, cases,
-        defaultBody: resolveBlock(s.defaultBody, ctx) }, ctx.env];
+        defaultBody: resolveBlock(s.defaultBody, withVariant(defaultVariant)) }, ctx.env];
     }
 
     case "ghostLet": {
@@ -2496,7 +2519,7 @@ function resolveFunction(
   if (opts?.thisBinding) env = extend(env, opts.thisBinding.name, opts.thisBinding.ty);
   for (const p of params) env = extend(env, p.name, p.ty);
 
-  const baseCtx: Ctx = { env, typeDecls, overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [], forofCounts: new Map() };
+  const baseCtx: Ctx = { env, typeDecls, typeParams: new Set(fn.typeParams), overrides, allowResult: false, returnTy, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [], forofCounts: new Map() };
   const requiresCtx: Ctx = { ...baseCtx, inSpec: true };
   const ensuresCtx: Ctx = { ...baseCtx, env: extend(env, "\\result", returnTy), allowResult: true, inSpec: true };
 
@@ -2600,7 +2623,7 @@ export function resolveModule(raw: RawModule): TModule {
     for (let i = 0; i < ext.params.length; i++) {
       env = extend(env, ext.params[i].name, sig.params[i]);
     }
-    const baseCtx: Ctx = { env, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: sig.returnTy, pureFns, fnParams, fnReturns, externs, inSpec: true, inLambda: false, narrowedPaths: [], narrowedIndices: [], forofCounts: new Map() };
+    const baseCtx: Ctx = { env, typeDecls: raw.typeDecls, typeParams: new Set(ext.typeParams), overrides: new Map(), allowResult: false, returnTy: sig.returnTy, pureFns, fnParams, fnReturns, externs, inSpec: true, inLambda: false, narrowedPaths: [], narrowedIndices: [], forofCounts: new Map() };
     const ensuresCtx: Ctx = { ...baseCtx, env: extend(env, "\\result", sig.returnTy), allowResult: true };
     const resolveClauses = (kind: "requires" | "ensures", ctx: Ctx) => ext[kind].map(s => {
       try {
@@ -2621,7 +2644,7 @@ export function resolveModule(raw: RawModule): TModule {
       impure: ext.impure,
     };
   });
-  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [], forofCounts: new Map() };
+  const emptyCtx: Ctx = { env: null, typeDecls: raw.typeDecls, typeParams: new Set(), overrides: new Map(), allowResult: false, returnTy: { kind: "int" }, pureFns, fnParams, fnReturns, externs, inSpec: false, inLambda: false, narrowedPaths: [], narrowedIndices: [], forofCounts: new Map() };
   const constants = (raw.constants ?? []).map(c => {
     const declaredTy = expandAlias(parseTsType(c.tsType), raw.typeDecls);
     // Propagate the declared type into the value's resolution context so that
