@@ -205,7 +205,8 @@ The LemmaScript Lean library provides:
 
 1. **Velvet 2 and supporting Mathlib imports.** User artifacts import `LemmaScript` to access the method syntax, VC generator, and proof support.
 2. **Cross-file method specifications.** The Velvet fork persists method specifications so `prove_correct` works in a separate file from `method`.
-3. **Operation specifications and helper lemmas** in [ArrayM.lean](LemmaScript/ArrayM.lean), [HashSet.lean](LemmaScript/HashSet.lean), and [Range.lean](LemmaScript/Range.lean): monadic array specifications, hash-set size and array membership lemmas, and a range-to-list bridge.
+3. **Operation specifications and helper lemmas** in [ArrayM.lean](LemmaScript/ArrayM.lean), [HashSet.lean](LemmaScript/HashSet.lean), [Range.lean](LemmaScript/Range.lean), and [MinMax.lean](LemmaScript/MinMax.lean): monadic array specifications, hash-set size and array membership lemmas, a range-to-list bridge, and checked array extrema.
+4. **On-demand support modules** imported only when used: [JSString.lean](LemmaScript/JSString.lean) (scalar string indexing, `indexOf`, `slice`) and [Nullish.lean](LemmaScript/Nullish.lean) (three-case `Nullish α` datatype with `Inhabited`, `isNull`/`isUndefined`/`isValue`, `get`, and `@[grind =]` lemmas for `T | null | undefined`; see [`examples/nullish.ts`](examples/nullish.ts)).
 
 The library depends on:
 - Velvet 2 from the sibling `../velvet` checkout on `lemma2`.
@@ -251,6 +252,7 @@ Practical constraints for the current Velvet 2 backend.
 - `done_with` captures what is true when the loop exits (by condition or by break).
 - `prove_correct` works across files (with our fork's persistence fix).
 - `velvet_vcgen [methodName] with (expose_names; try finish)` exposes names and leaves unsolved goals for interactive proof.
+- For narrowed `Option`/`Nullish` reads lowered via `checkedUnwrap` (`(x).get (by grind)`), `lean-emit.ts` emits non-shadowing dependent guards (`if _hN : ...` in expressions and early-exit statements, and `∀ (_hN : ...), ...` in spec implications) so `grind` receives each guard hypothesis in local proof context.
 
 ### 6.4 Decreasing Clauses
 

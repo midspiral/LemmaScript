@@ -82,7 +82,8 @@ The Dafny emitter auto-injects helper functions when needed. Each is emitted at 
 
 | Helper | When | Purpose |
 |--------|------|---------|
-| `Option<T>` | `Map.get`, optional types | `datatype Option<T> = None \| Some(value: T)` |
+| `Option<T>` | `Map.get`, single-sentinel optional types (`T \| undefined` or `T \| null`) | `datatype Option<T> = None \| Some(value: T)` |
+| `Nullish<T>` | Three-state nullable types (`T \| null \| undefined`, `x?: T \| null`) | `datatype Nullish<T> = Undefined \| Null \| Value(value: T)` |
 | `SetToSeq` | `for (x of set)`, map/record iteration | Convert set to sequence for iteration |
 | `SetFromSeq` | `new Set(arr)` | Build a deduplicated set from a sequence (`set x \| x in s`) |
 
