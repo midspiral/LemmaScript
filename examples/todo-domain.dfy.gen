@@ -642,7 +642,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
         newTaskData := (map k | k in newTaskData && k != tid :: newTaskData[k]);
         i_tid_idx := i_tid_idx + 1;
       }
-      var newLists := Std.Collections.Seq.Filter((l: int) => (l != a.listId), m.lists);
+      var newLists := Std.Collections.Seq.Filter((l: int) => (l != i_a_listId), m.lists);
       var newListNames := m.listNames;
       newListNames := (map k | k in newListNames && k != i_a_listId :: newListNames[k]);
       var newTasks := m.tasks;
@@ -661,7 +661,7 @@ method apply(m: Model, a: Action) returns (res: Result<Model, Err>)
         var i_t23 := err(Err.BadAnchor);
         return i_t23;
       }
-      var without := Std.Collections.Seq.Filter((l: int) => (l != a.listId), m.lists);
+      var without := Std.Collections.Seq.Filter((l: int) => (l != i_a_listId), m.lists);
       var clamped := MathMin(pos, |without|);
       var i_t24 := insertAt(without, clamped, i_a_listId);
       var newLists := i_t24;
