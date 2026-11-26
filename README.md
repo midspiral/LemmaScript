@@ -63,6 +63,8 @@ From a sibling source checkout, the equivalent of `lsc` is `npx tsx ../LemmaScri
 
 The Dafny backend generates two files per TS source: `foo.dfy.gen` (always regeneratable) and `foo.dfy` (source of truth, with LLM/user proof additions). The diff between them must be additions-only.
 
+Keep standalone Dafny laws in the repository with `lsc check --backend=dafny --proof-file=proofs/search.dfy src/search.ts`. The option is repeatable and works on individual lines of `LemmaScript-files.txt`. Paths are relative to the working directory (the manifest directory for batch checks). LemmaScript checks the proof additions and passes the files to Dafny alongside the generated module.
+
 ### Lean backend
 
 ```sh

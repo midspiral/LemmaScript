@@ -14,12 +14,13 @@ const posixOnly = { skip: process.platform === "win32" };
 // Run the real CLI against a verifier that records arguments without proving.
 // The run log is off unless a test asks for it, so `calls` holds only the
 // arguments under test.
-function runCli(entries: string[], args: string[], runLog = false) {
+function runCli(entries: string[], args: string[], runLog = false, proofs: Record<string, string> = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "lsc-batch-options-")));
   try {
     const bin = join(dir, "bin");
     const log = join(dir, "argv.jsonl");
     mkdirSync(bin);
+    for (const [file, content] of Object.entries(proofs)) writeFileSync(join(dir, file), content);
     writeFileSync(log, "");
     writeFileSync(join(dir, "LemmaScript-files.txt"), entries.join("\n") + "\n");
     for (const entry of entries) {
@@ -188,3 +189,20 @@ for (const cmd of ["regen", "extract"]) {
     assert.deepEqual(result.calls, []);
   });
 }
+
+
+test("batch checks standalone proof files alongside the generated module", posixOnly, () => {
+  const proofs = { "shared.dfy": "lemma Shared() {}", "law.dfy": "lemma Law() {}" };
+  const result = runCli(["a.ts --proof-file=shared.dfy --proof-file=law.dfy", "b.ts"], ["check"], false, proofs);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.calls[0].slice(-3), ["a.dfy", "shared.dfy", "law.dfy"].map(file => join(result.dir, file)));
+  assert.equal(result.calls[1].at(-1), join(result.dir, "b.dfy"));
+});
+
+test("single-file checks validate standalone laws before invoking Dafny", posixOnly, () => {
+  const result = runCli(["a.ts"], ["check", "--proof-file=law.dfy", "a.ts"], false,
+    { "law.dfy": "lemma Law() { assume false; }" });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /assume/);
+  assert.deepEqual(result.calls, []);
+});

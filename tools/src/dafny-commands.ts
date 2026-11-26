@@ -161,17 +161,30 @@ export function dafnyVerifyArgs(content: string, timeLimit?: number, extraFlags?
   return { args };
 }
 
-export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number, extraFlags?: string, log?: RunLog): boolean {
+export function checkProofFiles(files: string[]): boolean {
+  for (const file of files) {
+    const proof = readFileSync(file, "utf-8");
+    const violations = proofAdditionViolations("", proof + "\n", file);
+    if (violations.length) {
+      console.error(violations.join("\n"));
+      return false;
+    }
+  }
+  return true;
+}
+
+export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number, extraFlags?: string, log?: RunLog, proofFiles: string[] = []): boolean {
   console.log("Running dafny verify...");
   try {
-    const { args, error } = dafnyVerifyArgs(readFileSync(dfyPath, "utf-8"), timeLimit, extraFlags);
+    const content = [dfyPath, ...proofFiles].map(file => readFileSync(file, "utf-8")).join("\n");
+    const { args, error } = dafnyVerifyArgs(content, timeLimit, extraFlags);
     if (error) {
       console.error(error);
       log?.finish({ stage: "resolve", exit: 1, dfyPath });
       return false;
     }
     if (log) args.push(...log.dafnyArgs());
-    args.push(dfyPath);
+    args.push(dfyPath, ...proofFiles);
     execFileSync("dafny", args, { cwd: dir, stdio: "inherit" });
     log?.finish({ stage: "ok", exit: 0, dfyPath, results: log.readResults() });
     return true;

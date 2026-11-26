@@ -19,7 +19,7 @@ import { transformModuleLean, transformModuleDafny } from "./transform.js";
 import { peepholeModule } from "./peephole.js";
 import { emitLeanFile, resetLeanModule } from "./lean-emit.js";
 import { emitDafnyFile, emittedNameMap } from "./dafny-emit.js";
-import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-commands.js";
+import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen, checkProofFiles } from "./dafny-commands.js";
 import { leanGen, leanCheck } from "./lean-commands.js";
 import { runInfo, runTypedInfo, type TypedInfoDafny } from "./info-command.js";
 import { RunLog, resolveLogDir, runLogEnabled, safely } from "./run-log.js";
@@ -174,6 +174,8 @@ function main() {
     args.splice(typedIdx, 1);
   }
 
+  const proofFiles = takeProofFiles(args);
+
   // Anything flag-shaped left over is a typo or a space-separated form
   // (`--backend lean`): reject it rather than let it become a positional arg
   // or be silently ignored (which would e.g. verify with the wrong backend).
@@ -205,20 +207,36 @@ function main() {
     console.error(`--typed is only valid with the info command (got: ${cmd})`);
     process.exit(1);
   }
+  if (proofFiles.length && (backend !== "dafny" || !["check", "gen-check"].includes(cmd))) {
+    console.error("--proof-file requires check or gen-check with the Dafny backend");
+    process.exit(1);
+  }
   if (cmd === "config") {
     runConfig(filePath, configPath);
     return;
   }
   if (!filePath) {
-    runBatch(cmd, backend, slow, timeLimit, extraFlags, configPath);
+    runBatch(cmd, backend, slow, timeLimit, extraFlags, configPath, proofFiles);
     return;
   }
-  runFile(cmd, filePath, backend, timeLimit, extraFlags, noVerify, typedInfo, configPath);
+  runFile(cmd, filePath, backend, timeLimit, extraFlags, noVerify, typedInfo, configPath, undefined, proofFiles);
+}
+
+function takeProofFiles(args: string[]): string[] {
+  const files: string[] = [];
+  for (let i = 0; i < args.length;) {
+    if (!args[i].startsWith("--proof-file=")) { i++; continue; }
+    const file = args[i].slice("--proof-file=".length);
+    if (!file.endsWith(".dfy")) throw new Error("--proof-file expects a .dfy path");
+    files.push(path.resolve(file));
+    args.splice(i, 1);
+  }
+  return files;
 }
 
 // LemmaScript-files.txt, parsed: `filepath [timeout_in_seconds] [extra dafny
 // flags…]` per line; no timeout = Dafny default. Exits if the file is absent.
-function readEntries(): { file: string; timeout?: number; flags?: string }[] {
+function readEntries(): { file: string; timeout?: number; flags?: string; proofFiles: string[] }[] {
   if (!existsSync("LemmaScript-files.txt")) {
     console.error("No file given and no LemmaScript-files.txt found.");
     process.exit(1);
@@ -228,8 +246,9 @@ function readEntries(): { file: string; timeout?: number; flags?: string }[] {
     .map(entry => {
       const [file, second, ...rest] = entry.split(/\s+/);
       const timeout = second && /^[1-9]\d*$/.test(second) ? parseInt(second) : undefined;
-      const flags = (timeout === undefined ? [second, ...rest] : rest).filter(Boolean).join(" ") || undefined;
-      return { file, timeout, flags };
+      const args = (timeout === undefined ? [second, ...rest] : rest).filter(Boolean);
+      const proofFiles = takeProofFiles(args);
+      return { file, timeout, flags: args.join(" ") || undefined, proofFiles };
     });
 }
 
@@ -297,6 +316,7 @@ function runBatch(
   timeLimit?: number,
   extraFlags?: string,
   configPath?: string,
+  proofFiles: string[] = [],
 ) {
   if (cmd !== "gen" && cmd !== "gen-check" && cmd !== "check") {
     console.error(`No file given, and batch mode supports gen|gen-check|check (not ${cmd}).`);
@@ -305,13 +325,14 @@ function runBatch(
   const verifySlow = slow || timeLimit !== undefined;
   const projects = new SourceProjects();
   for (const e of readEntries()) {
+    const companions = [...new Set([...proofFiles, ...e.proofFiles])];
     const timeout = timeLimit ?? e.timeout;
     const flags = extraFlags ?? e.flags;
     if (cmd === "check" && backend === "dafny" && !verifySlow && timeout !== undefined && timeout > 60) {
       console.log(`=== ${path.basename(e.file)} (timeout ${timeout}s > 60s, gen-check only) ===`);
-      runFile("gen-check", e.file, backend, undefined, undefined, false, false, configPath, projects);
+      runFile("gen-check", e.file, backend, undefined, undefined, false, false, configPath, projects, companions);
     } else {
-      runFile(cmd, e.file, backend, timeout, flags, false, false, configPath, projects);
+      runFile(cmd, e.file, backend, timeout, flags, false, false, configPath, projects, companions);
     }
   }
 }
@@ -347,6 +368,7 @@ function runFile(
   typedInfo = false,
   configPath?: string,
   projects = new SourceProjects(),
+  proofFiles: string[] = [],
 ) {
   const absPath = path.resolve(filePath);
   if (!existsSync(absPath)) {
@@ -451,6 +473,7 @@ function runFile(
       : undefined;
 
     if (cmd === "gen") { dafnyGen(genPath, dfyPath, text, basePath); return; }
+    if ((cmd === "check" || cmd === "gen-check") && !checkProofFiles(proofFiles)) process.exit(1);
     if (cmd === "gen-check") {
       dafnyGen(genPath, dfyPath, text, basePath);
       if (!dafnyCheckDiff(genPath, dfyPath, undefined, basePath)) process.exit(1);
@@ -459,7 +482,7 @@ function runFile(
     if (cmd === "check") {
       dafnyGen(genPath, dfyPath, text, basePath);
       if (!dafnyCheckDiff(genPath, dfyPath, log, basePath)) process.exit(1);
-      if (!dafnyVerify(dfyPath, artifactDir, timeLimit, extraFlags, log)) process.exit(1);
+      if (!dafnyVerify(dfyPath, artifactDir, timeLimit, extraFlags, log, proofFiles)) process.exit(1);
       return;
     }
     if (cmd === "regen") { dafnyRegen(genPath, dfyPath, basePath, text, artifactDir, timeLimit, extraFlags, noVerify, log); return; }
