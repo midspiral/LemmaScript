@@ -333,12 +333,18 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 | `extract.ts` | Extract | ts-morph → Raw IR |
 | `lexical-names.ts` | Extract | Source and ghost binding names, annotation renaming, forward-capture checks |
 | `specparser.ts` | (parser) | Parses `//@ ` annotations → RawExpr |
-| `resolve.ts` | Resolve | Raw IR → Typed IR (types and type-narrowing) |
-| `typedir.ts` | Types | Typed IR type definitions (incl. `someMatch`/`tagMatch`) |
+| `resolve.ts` | Resolve | Raw IR → Typed IR (types, `storageTy`, callback binding, flow narrowing) |
+| `typedir.ts` | Types | Typed IR type definitions (incl. `someMatch`/`tagMatch`/`checkedUnwrap`/`nullish`) |
 | `narrow.ts` | Narrow | Typed IR → Typed IR (structural narrowing → `someMatch` / `tagMatch`) |
+| `checked-reads.ts` | Narrow | Post-narrow `checkedUnwrap` insertion for `Option`/`Nullish` reads without `someMatch` |
+| `narrow-checks.ts` | (check) | Post-narrow IR invariant checks (unwrapped optional/nullish and binder-collision checks) |
 | `condition-facts.ts` | (shared) | What a condition establishes — detection + materializers, used by narrow, resolve, transform |
+| `alias-check.ts` | Alias check | Self-verified pure live-alias conflict kernel (verified in CI via `LemmaScript-files.txt`) |
+| `alias-check-pass.ts` | Alias check | Backward liveness + forward alias tracking; rejects live-alias mutations |
+| `places.ts` | Transform | Self-verified pure `PlacePath` kernel (verified in CI via `LemmaScript-files.txt`) |
+| `place-lowering.ts` | Transform | Unified write-back through active `someMatch` and union-variant frames |
 | `ir.ts` | Types | Backend-neutral IR type definitions |
-| `transform.ts` | Transform | Typed IR → IR |
+| `transform.ts` | Transform | Typed IR → IR (`Place` write-back, callbacks, `#349` `let _cmpN`, `Nullish` lowering) |
 | `peephole.ts` | Peephole | IR → IR (Some/None ceremony elimination) |
 | `types.ts` | (shared) | TypeDeclInfo, parseTsType |
 | `typedecls.ts` | (shared) | Declaration lookup (exact / dotted / generic-base-sliced) |

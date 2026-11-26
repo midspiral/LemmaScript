@@ -5,7 +5,7 @@ This document compares four versions of LemmaScript on a shared fixed-seed corpu
 - `v0.6.12` (`f991de5`, pre-rewrite `someMatch` pipeline)
 - `PR #379` (`261609a`, midspiral/LemmaScript#379 checked-reads prototype)
 - **PR #388 / Hybrid Milestones 0–4** (`0d96885`, measured on `4fb1af6`: self-verified `Place` write-back, live-alias mutation rejection, checked reads, and precondition-preserving optional comparisons; midspiral/LemmaScript#387)
-- **Milestone 5 (`Nullish<T>`)** (`3ddd9d9` / `3540adc`: selective three-case `Nullish<T>` datatype for `T | null | undefined`, preserving `null !== undefined` while keeping `Option<T>` for single-sentinel `T | undefined` and `T | null`; midspiral/LemmaScript#304)
+- **PR #391 / Milestone 5 (`Nullish<T>`)** (`57aaf21` / `v0.6.14` `59e3366`, measured on `3ddd9d9` and hardened in `3540adc`: selective three-case `Nullish<T>` datatype for `T | null | undefined`, preserving `null !== undefined` while keeping `Option<T>` for single-sentinel `T | undefined` and `T | null`; midspiral/LemmaScript#304, example in [`examples/nullish.ts`](../examples/nullish.ts))
 
 For each generated program and concrete input, the harness runs the TypeScript in Node to observe JavaScript's actual behavior, compiles the same program to Dafny, and asks Dafny two soundness checks:
 
@@ -26,7 +26,7 @@ Four findings stand out before the detailed tables below:
   - `v0.6.12-f991de5` (`f991de5`, pre-rewrite `someMatch` pipeline)
   - `pr379-261609a` (`261609a`, midspiral/LemmaScript#379 checked-reads prototype)
   - `pr388-0d96885` (merged as `0d96885`, measured on compiler head `4fb1af6`)
-  - `m5-3ddd9d9` (Milestone 5 `Nullish<T>`; `3540adc` adds review-hardening fixes with identical shootout behavior)
+  - `pr391-57aaf21` (merged as `57aaf21` / released in `v0.6.14` `59e3366`; shootout measured on `3ddd9d9`, review-hardened in `3540adc`)
 - **Harness revisions:** The `v0.6.12` and `PR #379` columns ran at `29d0636` (25 variants, single-sample `opt`-stage run). Subsequent hardening in `1201487` expanded the generator to 33 variants (adding empty-string/false/empty-array falsy traps, `!==`/`<=`/`||`/`?.`/call-arg guard positions, real nested-field reassignment, and post-branch reads on `nested-box-push` and `union-switch-mutate`), switched campaigns to stage-locked `fc.check` shrinking, and defaulted evaluation and `--case` replay to both `pre` and `opt` stages. The `PR #388` and `Milestone 5` columns ran on this hardened 33-variant `pre`+`opt` harness, and all 7 saved baseline artifacts under `formal/shootout-artifacts/{v0.6.12-f991de5,pr379-261609a}/` were replayed directly.
 - **Toolchain:** Node `v24.17.0`, Dafny `4.11.0+fcb2042d6d043a2634f0854338c08feeaaaf4ae2`.
 - **Exact CLI command (identical across all four runs):**
