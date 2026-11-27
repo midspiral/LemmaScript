@@ -393,7 +393,7 @@ test("#405: false postconditions after union scrutinee reassignment are rejected
   }
 });
 
-test("#405: tag-changing union spread rejects omitted target fields absent from source variant", () => {
+test("#405: unsupported tag-changing union spreads throw instead of falling through to field update", () => {
   const lossySpreadTs = `
 export type U = { kind: "a" } | { kind: "b"; n?: number };
 export function retag(input: U): U {
@@ -411,20 +411,46 @@ export function retag(input: U): U {
     () => compileDafny(lossySpreadTs, "lossy_spread.ts"),
     /cannot spread union 'U' into variant 'b': field 'n' is not declared with a matching type on source variant 'a'/,
   );
-
-  const project = new Project({
-    compilerOptions: { strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true },
-    useInMemoryFileSystem: true,
-  });
-  const sf = project.createSourceFile("lossy_spread_lean.ts", lossySpreadTs, { overwrite: true });
-  resetLeanModule();
   assert.throws(
-    () => transformModuleLean(narrowModule(resolveModule(extractModule(sf)))),
+    () => compileLean(lossySpreadTs, "lossy_spread_lean.ts"),
+    /cannot spread union 'U' into variant 'b': field 'n' is not declared with a matching type on source variant 'a'/,
+  );
+
+  // Discriminant named `value_a` collides with the renamed payload destructor of
+  // variant `a` (`value: string` vs `value: number`). Falling through to
+  // `sh.(value_a := "b")` would silently overwrite payload `value_a`, preserve
+  // constructor `a`, and verify a false `ensures res.a?` in Dafny.
+  const collidingDiscSpreadTs = `
+export type U =
+  | { value_a: "a"; value: string }
+  | { value_a: "b"; value: string; n?: number }
+  | { value_a: "c"; value: number };
+//@ requires input.value_a === "a"
+//@ ensures \\result.value_a === "a"
+export function retag(input: U): U {
+  let sh = input;
+  switch (sh.value_a) {
+    case "a":
+      sh = { ...sh, value_a: "b" };
+      return sh;
+    case "b":
+      return sh;
+    case "c":
+      return sh;
+  }
+}
+`;
+  assert.throws(
+    () => compileDafny(collidingDiscSpreadTs, "colliding_disc_spread.ts"),
+    /cannot spread union 'U' into variant 'b': field 'n' is not declared with a matching type on source variant 'a'/,
+  );
+  assert.throws(
+    () => compileLean(collidingDiscSpreadTs, "colliding_disc_spread_lean.ts"),
     /cannot spread union 'U' into variant 'b': field 'n' is not declared with a matching type on source variant 'a'/,
   );
 });
 
-test("#405: un-narrowed shared-field projection with incompatible variant types reports unsupported projection", () => {
+test("#405: un-narrowed shared-field projection with incompatible variant types falls through so backends reject it", () => {
   const mixedSharedFieldTs = `
 export type U = { kind: "a"; v: number } | { kind: "b"; v: string };
 export function readAfterReassign(input: U, next: U): boolean {
@@ -438,29 +464,10 @@ export function readAfterReassign(input: U, next: U): boolean {
   }
 }
 `;
-  assert.throws(
-    () => compileDafny(mixedSharedFieldTs, "mixed_shared_dafny.ts"),
-    /cannot project field 'v' from un-narrowed union 'U': variants declare incompatible types/,
-  );
-  assert.throws(
-    () => compileLean(mixedSharedFieldTs, "mixed_shared_lean.ts"),
-    /cannot project field 'v' from un-narrowed union 'U': variants declare incompatible types/,
-  );
-
-  // Reversed variant declaration order must produce the exact same diagnostic.
   const reversedSharedFieldTs = mixedSharedFieldTs.replace(
     '{ kind: "a"; v: number } | { kind: "b"; v: string }',
     '{ kind: "b"; v: string } | { kind: "a"; v: number }',
   );
-  assert.throws(
-    () => compileDafny(reversedSharedFieldTs, "mixed_shared_rev_dafny.ts"),
-    /cannot project field 'v' from un-narrowed union 'U': variants declare incompatible types/,
-  );
-  assert.throws(
-    () => compileLean(reversedSharedFieldTs, "mixed_shared_rev_lean.ts"),
-    /cannot project field 'v' from un-narrowed union 'U': variants declare incompatible types/,
-  );
-
   const mixedOptionalTs = `
 export type OptMix = { kind: "a"; v: number } | { kind: "b"; v?: number };
 export function readOptAfterReassign(input: OptMix, next: OptMix): boolean {
@@ -474,14 +481,22 @@ export function readOptAfterReassign(input: OptMix, next: OptMix): boolean {
   }
 }
 `;
-  assert.throws(
-    () => compileDafny(mixedOptionalTs, "mixed_opt_dafny.ts"),
-    /cannot project field 'v' from un-narrowed union 'OptMix': variants declare incompatible types/,
-  );
-  assert.throws(
-    () => compileLean(mixedOptionalTs, "mixed_opt_lean.ts"),
-    /cannot project field 'v' from un-narrowed union 'OptMix': variants declare incompatible types/,
-  );
+
+  for (const [label, src] of [
+    ["mixed-shared", mixedSharedFieldTs],
+    ["mixed-shared-rev", reversedSharedFieldTs],
+    ["mixed-opt", mixedOptionalTs],
+  ]) {
+    const dfy = compileDafny(src, `${label}.ts`);
+    const dafnyRes = verifyDafny(dfy);
+    assert.notEqual(dafnyRes.status, 0, `${label}: Dafny should reject un-narrowed mixed field:\n${dfy}\n${dafnyRes.output}`);
+
+    const { def: leanDef } = compileLean(src, `${label}_lean.ts`);
+    // Must NOT synthesize a single-constructor match returning `default : Int`;
+    // falls through to plain `sh.v` which Lean rejects on an inductive.
+    assert.doesNotMatch(leanDef, /default : Int/, `${label}:\n${leanDef}`);
+    assert.match(leanDef, /return \(sh\.v = 0\)|return sh\.v = 0/, `${label}:\n${leanDef}`);
+  }
 });
 
 function compileLean(tsText: string, fileName: string): { types: string; def: string } {

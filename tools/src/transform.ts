@@ -1195,21 +1195,16 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const owners = decl?.variants?.filter(v => v.fields.some(f => f.name === e.field)) ?? [];
         if (owners.length > 0) {
           // Shared field name with differing declared types: those destructors
-          // are renamed per-constructor, so projecting the field requires a
-          // known variant (`e.ofVariant`). An un-narrowed union read (e.g.
-          // `sh = next; return sh.v === 0` where `a.v: number` and `b.v: string`)
-          // cannot project a single backend type and must fail cleanly instead
-          // of silently picking one constructor.
+          // are renamed per-constructor, so union projection only applies when
+          // narrowed to a known variant (`e.ofVariant`). When un-narrowed, let
+          // ordinary lowering emit a plain `.field` so the backend rejects it.
           const ownerTy = (v: VariantInfo) => v.fields.find(f => f.name === e.field)?.type;
           const differ = owners.some(v => {
             const a = ownerTy(v), b = ownerTy(owners[0]);
             return a && b && !tyEqual(a, b);
           });
           if (differ && !e.ofVariant) {
-            throw new Error(
-              `cannot project field '${e.field}' from un-narrowed union '${baseName}': ` +
-              `variants declare incompatible types; narrow '${baseName}' to a variant first`,
-            );
+            return { kind: "field", obj: transformExpr(e.obj), field: e.field, datatypeField: true };
           }
           const ctor = e.ofVariant;
           return { kind: "field", obj: transformExpr(e.obj), field: e.field, fromUnion: baseName, ctor, datatypeField: true };
@@ -1543,11 +1538,10 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         // Also check discriminated-union variants for field types
         const unionDecl = baseName ? declOfKind(_typeDecls, baseName, "discriminated-union") : undefined;
         // Tag-overriding spread on a discriminated union (`{ ...sh, kind: "b", ... }`):
-        // construct the target variant directly instead of emitting a same-variant
-        // field update (which would be invalid in Dafny and silently keep the old
-        // constructor in Lean). Every non-overridden target field must be declared
-        // with a matching type on every possible source variant so we never fabricate
-        // `None` for excess properties erased by the nominal representation.
+        // once a spread explicitly overrides the discriminant, ordinary field update
+        // is the wrong operation (it can silently write a colliding renamed payload
+        // destructor such as `value_a` and preserve the old constructor). Either
+        // construct the target variant faithfully or reject with a diagnostic.
         if (unionDecl?.discriminant) {
           const discField = e.fields.find(f => f.name === unionDecl.discriminant);
           if (discField) {
@@ -1579,7 +1573,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
               if (explicit !== undefined) return explicit;
               for (const sv of possibleSources) {
                 const sf = sv.fields.find(f => f.name === vf.name);
-                if (!sf || !sf.type || !vf.type || !tyEqual(sf.type, vf.type)) {
+                if (!sf?.type || !vf.type || !tyEqual(sf.type, vf.type)) {
                   throw new Error(
                     `cannot spread union '${unionDecl.name}' into variant '${variantName}': ` +
                     `field '${vf.name}' is not declared with a matching type on source variant '${sv.name}' ` +

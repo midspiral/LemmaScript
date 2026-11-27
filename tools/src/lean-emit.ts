@@ -553,25 +553,19 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         if (owners && owners.length > 0 && ctors) {
           const firstIdx = owners[0].fields.findIndex(f => f.name === e.field);
           const fty = tyToLean(owners[0].fields[firstIdx].type);
-          if (!e.ctor) {
-            const incompatible = owners.some(c => {
-              const idx = c.fields.findIndex(f => f.name === e.field);
-              return idx < 0 || tyToLean(c.fields[idx].type) !== fty;
-            });
-            if (incompatible) {
-              throw new Error(
-                `cannot project field '${e.field}' from un-narrowed union '${e.fromUnion}': ` +
-                `constructors declare incompatible Lean types`,
-              );
-            }
-          }
-          const arms = owners.map(owner => {
-            const idx = owner.fields.findIndex(f => f.name === e.field);
-            const pats = owner.fields.map((_, i) => (i === idx ? "_v" : "_")).join(" ");
-            return `| .${leanCtorName(owner.name)} ${pats} => _v`;
+          const compatible = Boolean(e.ctor) || owners.every(c => {
+            const idx = c.fields.findIndex(f => f.name === e.field);
+            return idx >= 0 && tyToLean(c.fields[idx].type) === fty;
           });
-          const fallback = owners.length < ctors.length ? ` | _ => (default : ${fty})` : "";
-          return `(match ${emitExpr(e.obj)} with ${arms.join(" ")}${fallback})`;
+          if (compatible) {
+            const arms = owners.map(owner => {
+              const idx = owner.fields.findIndex(f => f.name === e.field);
+              const pats = owner.fields.map((_, i) => (i === idx ? "_v" : "_")).join(" ");
+              return `| .${leanCtorName(owner.name)} ${pats} => _v`;
+            });
+            const fallback = owners.length < ctors.length ? ` | _ => (default : ${fty})` : "";
+            return `(match ${emitExpr(e.obj)} with ${arms.join(" ")}${fallback})`;
+          }
         }
       }
       const obj = emitExpr(e.obj);
@@ -611,11 +605,10 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     case "record": {
       if (e.spread && e.ctorOf && _unionCtors.has(e.ctorOf)) {
         const ctors = _unionCtors.get(e.ctorOf)!;
-        const updatesByName = new Map(e.fields.map(f => [f.name, emitExpr(f.value)]));
-        const targetCtors = e.ctor
-          ? ctors.filter(c => c.name === e.ctor)
-          : ctors.filter(c => e.fields.every(f => c.fields.some(cf => cf.name === f.name)));
+        const hasAllFields = (c: CtorInfo) => e.fields.every(f => c.fields.some(cf => cf.name === f.name));
+        const targetCtors = (e.ctor ? ctors.filter(c => c.name === e.ctor) : ctors).filter(hasAllFields);
         if (targetCtors.length > 0) {
+          const updatesByName = new Map(e.fields.map(f => [f.name, emitExpr(f.value)]));
           const updText = [...updatesByName.values()].join(" ");
           const arms = targetCtors.map(c => {
             const pats: string[] = [];
