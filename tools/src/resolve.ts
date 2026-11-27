@@ -1812,20 +1812,21 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       // or from the narrowed variant of the spread path.
       let declFields = decl?.fields;
       let ofVariant: string | undefined;
+      let spreadOfVariant: string | undefined;
       if (!declFields && recordTy) {
         const udecl = declOfKind(ctx.typeDecls, tyBaseName(recordTy.name), "discriminated-union");
         if (udecl?.discriminant && udecl.variants) {
-          const tagRaw = e.fields.find(f => f.name === udecl.discriminant)?.value;
-          if (tagRaw?.kind === "str") {
-            ofVariant = tagRaw.value;
-            declFields = udecl.variants.find(v => v.name === tagRaw.value)?.fields;
-          } else if (spread && !tagRaw) {
+          if (spread) {
             const spPath = asTExprAccessPath(spread);
-            const narrowed = spPath ? lookupNarrowedVariant(spPath, ctx) : undefined;
-            if (narrowed) {
-              ofVariant = narrowed;
-              declFields = udecl.variants.find(v => v.name === narrowed)?.fields;
-            }
+            spreadOfVariant = spPath ? lookupNarrowedVariant(spPath, ctx) : undefined;
+          }
+          const tagRaw = e.fields.find(f => f.name === udecl.discriminant)?.value;
+          if (tagRaw?.kind === "str" || tagRaw?.kind === "bool") {
+            ofVariant = String(tagRaw.value);
+            declFields = udecl.variants.find(v => v.name === ofVariant)?.fields;
+          } else if (spread && !tagRaw && spreadOfVariant) {
+            ofVariant = spreadOfVariant;
+            declFields = udecl.variants.find(v => v.name === spreadOfVariant)?.fields;
           }
         }
       }
@@ -1857,7 +1858,14 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         }
         return { name: f.name, value };
       });
-      return { kind: "record", spread, fields, ty: recordTy ?? ty, ...(ofVariant ? { ofVariant } : {}) };
+      return {
+        kind: "record",
+        spread,
+        fields,
+        ty: recordTy ?? ty,
+        ...(ofVariant ? { ofVariant } : {}),
+        ...(spreadOfVariant ? { spreadOfVariant } : {}),
+      };
     }
 
     case "recordMerge":
@@ -2258,10 +2266,10 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
             const udecl = declOfKind(ctx.typeDecls, tyBaseName(storage.name), "discriminated-union");
             if (udecl?.discriminant && typed.kind === "assign" && typed.value.kind === "record") {
               let nextVariant: string | undefined;
-              if (!typed.value.spread) {
-                const tagF = typed.value.fields.find(f => f.name === udecl.discriminant);
-                if (tagF?.value.kind === "str") nextVariant = tagF.value.value;
-              } else if (typed.value.ofVariant && !typed.value.fields.some(f => f.name === udecl.discriminant)) {
+              const tagF = typed.value.fields.find(f => f.name === udecl.discriminant);
+              if (tagF?.value.kind === "str" || tagF?.value.kind === "bool") {
+                nextVariant = String(tagF.value.value);
+              } else if (typed.value.spread && typed.value.ofVariant && !tagF) {
                 nextVariant = typed.value.ofVariant;
               }
               if (nextVariant) {

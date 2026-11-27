@@ -1515,6 +1515,79 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const structDecl = baseName ? declOfKind(_typeDecls, baseName, "record") : undefined;
         // Also check discriminated-union variants for field types
         const unionDecl = baseName ? declOfKind(_typeDecls, baseName, "discriminated-union") : undefined;
+        // Tag-overriding spread on a discriminated union (`{ ...sh, kind: "b", ... }`):
+        // construct the target variant directly instead of emitting a same-variant
+        // field update (which would be invalid in Dafny and silently keep the old
+        // constructor in Lean). Every non-overridden target field must be declared
+        // with a matching type on every possible source variant so we never fabricate
+        // `None` for excess properties erased by the nominal representation.
+        if (unionDecl?.discriminant) {
+          const discField = e.fields.find(f => f.name === unionDecl.discriminant);
+          if (discField) {
+            if (discField.value.kind !== "str" && discField.value.kind !== "bool") {
+              throw new Error(
+                `union spread '${unionDecl.name}' cannot override discriminant '${unionDecl.discriminant}' with a non-literal expression`,
+              );
+            }
+            const variantName = String(discField.value.value);
+            const targetVariant = unionDecl.variants?.find(v => v.name === variantName);
+            if (!targetVariant) {
+              throw new Error(
+                `union spread '${unionDecl.name}' overrides discriminant '${unionDecl.discriminant}' with unknown variant '${variantName}'`,
+              );
+            }
+            const sourceVariant = e.spreadOfVariant
+              ? unionDecl.variants?.find(v => v.name === e.spreadOfVariant)
+              : undefined;
+            const possibleSources = sourceVariant ? [sourceVariant] : (unionDecl.variants ?? []);
+            const spreadExpr = lowerExpr(e.spread, binds);
+            const nonDiscFields = e.fields.filter(f => f.name !== unionDecl.discriminant);
+            const overriddenByName = new Map<string, Expr>();
+            for (const f of nonDiscFields) {
+              let fieldValue = f.value;
+              const declaredTy = targetVariant.fields.find(vf => vf.name === f.name)?.type;
+              if (declaredTy && fieldValue.ty.kind === "unknown") {
+                fieldValue = { ...fieldValue, ty: declaredTy } as TExpr;
+              }
+              let value = lowerExpr(fieldValue, binds);
+              if (declaredTy?.kind === "optional") {
+                const isUndef = f.value.kind === "var" && (f.value.name === "undefined" || f.value.name === "null");
+                if (f.value.ty.kind !== "optional" && !isUndef) {
+                  value = { kind: "app", fn: "Some", args: [value] };
+                }
+              } else if (declaredTy?.kind === "nullish") {
+                value = wrapNullishBranch(value, f.value);
+              }
+              overriddenByName.set(f.name, value);
+            }
+            if (targetVariant.fields.length === 0) {
+              return { kind: "constructor", name: variantName, type: structName!, args: [] };
+            }
+            const args = targetVariant.fields.map(vf => {
+              const explicit = overriddenByName.get(vf.name);
+              if (explicit !== undefined) return explicit;
+              for (const sv of possibleSources) {
+                const sf = sv.fields.find(f => f.name === vf.name);
+                if (!sf || !sf.type || !vf.type || !tyEqual(sf.type, vf.type)) {
+                  throw new Error(
+                    `cannot spread union '${unionDecl.name}' into variant '${variantName}': ` +
+                    `field '${vf.name}' is not declared with a matching type on source variant '${sv.name}' ` +
+                    `(runtime excess properties are erased by nominal union representation); specify '${vf.name}' explicitly`,
+                  );
+                }
+              }
+              return {
+                kind: "field" as const,
+                obj: spreadExpr,
+                field: vf.name,
+                fromUnion: baseName,
+                ctor: sourceVariant?.name,
+                datatypeField: true,
+              };
+            });
+            return { kind: "app", fn: variantName, args, ctorOf: baseName };
+          }
+        }
         const pinnedVariant = unionDecl && e.ofVariant
           ? unionDecl.variants?.find(v => v.name === e.ofVariant)
           : undefined;

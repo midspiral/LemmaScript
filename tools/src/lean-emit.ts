@@ -6,9 +6,9 @@
  */
 
 import type { Expr, Stmt, Decl, Module, MatchPattern } from "./ir.js";
-import { anyExpr, anyExprInStmts, decimalNumberLiteral, usesNameInDecl, patternBinders } from "./ir.js";
+import { anyExpr, anyExprInStmts, decimalNumberLiteral, usesName, usesNameInDecl, patternBinders } from "./ir.js";
 import type { Ty } from "./typedir.js";
-import { freshName, freshNameWhere } from "./names.js";
+import { freshName, freshNameWhere, isUserName } from "./names.js";
 
 // ── Ty → Lean type string ──────────────────────────────────
 
@@ -543,15 +543,29 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // access with a discriminator test, so that branch is never reached.
       if (e.fromUnion) {
         const ctors = _unionCtors.get(e.fromUnion);
-        // Pin the owning ctor when given (field names repeat across variants);
-        // otherwise fall back to the sole variant carrying this field name.
-        const owner = (e.ctor ? ctors?.find(c => c.name === e.ctor) : undefined)
-          ?? ctors?.find(c => c.fields.some(f => f.name === e.field));
-        if (owner) {
-          const idx = owner.fields.findIndex(f => f.name === e.field);
-          const pats = owner.fields.map((_, i) => (i === idx ? "_v" : "_")).join(" ");
-          const fty = tyToLean(owner.fields[idx].type);
-          return `(match ${emitExpr(e.obj)} with | .${leanCtorName(owner.name)} ${pats} => _v | _ => (default : ${fty}))`;
+        // Pin the owning ctor when given (field names repeat across variants
+        // with distinct types or narrowed provenance); otherwise project the
+        // field from every constructor carrying it with a common Lean type so
+        // reads after reassignment return the live variant's value rather than `default`.
+        let owners = e.ctor
+          ? ctors?.filter(c => c.name === e.ctor)
+          : ctors?.filter(c => c.fields.some(f => f.name === e.field));
+        if (owners && owners.length > 0 && ctors) {
+          const firstIdx = owners[0].fields.findIndex(f => f.name === e.field);
+          const fty = tyToLean(owners[0].fields[firstIdx].type);
+          if (!e.ctor) {
+            owners = owners.filter(c => {
+              const idx = c.fields.findIndex(f => f.name === e.field);
+              return idx >= 0 && tyToLean(c.fields[idx].type) === fty;
+            });
+          }
+          const arms = owners.map(owner => {
+            const idx = owner.fields.findIndex(f => f.name === e.field);
+            const pats = owner.fields.map((_, i) => (i === idx ? "_v" : "_")).join(" ");
+            return `| .${leanCtorName(owner.name)} ${pats} => _v`;
+          });
+          const fallback = owners.length < ctors.length ? ` | _ => (default : ${fty})` : "";
+          return `(match ${emitExpr(e.obj)} with ${arms.join(" ")}${fallback})`;
         }
       }
       const obj = emitExpr(e.obj);
@@ -596,16 +610,24 @@ function emitExpr(e: Expr, parentPrec?: number): string {
           ? ctors.filter(c => c.name === e.ctor)
           : ctors.filter(c => e.fields.every(f => c.fields.some(cf => cf.name === f.name)));
         if (targetCtors.length > 0) {
+          const updText = [...updatesByName.values()].join(" ");
           const arms = targetCtors.map(c => {
             const pats: string[] = [];
             const args: string[] = [];
+            const usedBinders = new Set<string>();
             c.fields.forEach((cf, i) => {
               const upd = updatesByName.get(cf.name);
               if (upd !== undefined) {
                 pats.push("_");
                 args.push(`(${upd})`);
               } else {
-                const bv = `_f${i}`;
+                const bv = freshNameWhere(`_f${i}`, name =>
+                  isUserName(name) ||
+                  usedBinders.has(name) ||
+                  e.fields.some(f => usesName(f.value, name)) ||
+                  updText.includes(name)
+                );
+                usedBinders.add(bv);
                 pats.push(bv);
                 args.push(bv);
               }
