@@ -69,7 +69,7 @@ function tyToLean(ty: Ty): string {
     }
     case "user": return ty.name;
     case "fn": {
-      const params = ty.params.map(p => {
+      const params = ty.params.length === 0 ? ["Unit"] : ty.params.map(p => {
         const s = tyToLean(p);
         return s.includes(" ") ? `(${s})` : s;
       });
@@ -404,7 +404,9 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "lambda": {
-      const params = e.params.map(p => e.typedParams ? `(${p.name} : ${tyToLean(p.type)})` : p.name).join(" ");
+      const params = e.params.length === 0
+        ? (e.typedParams ? "(_ : Unit)" : "()")
+        : e.params.map(p => e.typedParams ? `(${p.name} : ${tyToLean(p.type)})` : p.name).join(" ");
       // Single return statement → expression lambda
       if (e.body.length === 1 && e.body[0].kind === "return") {
         return `(fun ${params} => ${emitExpr(e.body[0].value)})`;

@@ -1814,9 +1814,9 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       const body = Array.isArray(e.body)
         ? resolveBlock(e.body, lambdaCtx)
         : [{ kind: "return" as const, value: resolveExpr(e.body, lambdaCtx) }];
-      // Carry the lambda's type as a fn type when its return is known, so chained
-      // array methods (`.map(...).filter(...)`) can infer downstream element types.
-      const lamTy: Ty = e.returnTsType
+      // Carry the lambda's type as a fn type when its return is known (or when
+      // zero-parameter, so Lean emits `Unit → T` and applies `()` at call sites).
+      const lamTy: Ty = e.returnTsType || params.length === 0
         ? { kind: "fn", params: params.map(p => p.ty), result: lambdaReturnTy }
         : { kind: "unknown" };
       return { kind: "lambda", params, body, ty: lamTy };
