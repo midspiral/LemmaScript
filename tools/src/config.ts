@@ -31,6 +31,12 @@ export const OPTION_SPECS = {
     fileOverride: false,
     description: "Directory for Dafny artifacts, relative to lemmascript.json.",
   },
+  "proof-files": {
+    type: "proof-files",
+    default: {},
+    fileOverride: false,
+    description: "Additional Dafny files to verify with each source, relative to lemmascript.json.",
+  },
   "string-semantics": {
     type: "enum",
     values: ["unicode-scalar", "javascript-utf16"],
@@ -65,6 +71,7 @@ type OptionValue<S> =
   S extends { type: "boolean" } ? boolean :
   S extends { type: "enum"; values: readonly (infer V extends string)[] } ? V :
   S extends { type: "path" } ? string | null :
+  S extends { type: "proof-files" } ? Readonly<Record<string, readonly string[]>> :
   never;
 
 export type LscOptions = {
@@ -88,24 +95,46 @@ function isKnownKey(key: string): key is keyof OptionSpecs {
   return Object.hasOwn(OPTION_SPECS, key);
 }
 
+function relativePath(raw: unknown, key: string, source: string): string {
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    fail(source, `option '${key}' must be a non-empty relative path`);
+  }
+  if (path.isAbsolute(raw)) fail(source, `option '${key}' must be relative to lemmascript.json`);
+  return raw;
+}
+
 /** Validate one option against the registry and return its typed value. */
-export function parseOptionValue<K extends keyof LscOptions>(key: K, raw: unknown, source: string): LscOptions[K] {
+export function parseOptionValue<K extends keyof LscOptions>(key: K, raw: unknown, source: string): LscOptions[K];
+export function parseOptionValue(key: keyof LscOptions, raw: unknown, source: string): LscOptions[keyof LscOptions] {
   const spec = OPTION_SPECS[key] as AnyOptionSpec;
   if (spec.type === "boolean") {
     if (typeof raw !== "boolean") fail(source, `option '${key}' must be true or false`);
-    return raw as LscOptions[K];
+    return raw;
   }
   if (spec.type === "enum") {
     if (typeof raw !== "string" || !(spec.values as readonly string[]).includes(raw)) {
       fail(source, `option '${key}' must be one of: ${spec.values.join(", ")}`);
     }
-    return raw as LscOptions[K];
+    return raw;
   }
-  if (typeof raw !== "string" || raw.trim().length === 0) {
-    fail(source, `option '${key}' must be a non-empty relative path`);
+  if (spec.type === "proof-files") {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      fail(source, "'proof-files' must map source paths to arrays of .dfy paths");
+    }
+    const files: Record<string, string[]> = Object.create(null);
+    for (const [name, paths] of Object.entries(raw)) {
+      const file = path.normalize(relativePath(name, key, source));
+      if (Object.hasOwn(files, file)) fail(source, `duplicate source '${name}' in proof-files`);
+      if (!Array.isArray(paths)) fail(source, `proof-files['${name}'] must be an array of .dfy paths`);
+      files[file] = [...new Set(paths.map(value => {
+        const proof = relativePath(value, key, source);
+        if (path.extname(proof) !== ".dfy") fail(source, `expected a .dfy file for '${name}', got '${proof}'`);
+        return path.normalize(proof);
+      }))];
+    }
+    return files;
   }
-  if (path.isAbsolute(raw)) fail(source, `option '${key}' must be relative to lemmascript.json`);
-  return raw as LscOptions[K];
+  return relativePath(raw, key, source);
 }
 
 /** Validate a parsed lemmascript.json object, returning only explicitly set keys. */
@@ -287,6 +316,14 @@ export function loadConfigOptions(
   const explicit = validateOptions(parsed, configFile);
   CONFIG_CACHE.set(configFile, explicit);
   return { explicit: { ...explicit }, configFile };
+}
+
+export function resolveDafnyProofFiles(sourcePath: string, configFile: string | null, options: LscOptions): string[] {
+  if (!configFile) return [];
+  const dir = path.dirname(configFile);
+  const source = path.relative(dir, sourcePath);
+  const files = options["proof-files"];
+  return Object.hasOwn(files, source) ? files[source].map(file => path.resolve(dir, file)) : [];
 }
 
 /** Resolve the directory containing one source file's Dafny companions. */

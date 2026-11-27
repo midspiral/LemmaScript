@@ -1469,6 +1469,7 @@ it; absent means current behavior. Unknown keys and bad values are errors.
 | `extern-default` | `pure` \| `impure` | `pure` | yes |
 | `safe-slice` | boolean | `false` | yes |
 | `proof-dir` | relative path | source directory | no (Dafny only) |
+| `proof-files` | source path → array of `.dfy` paths, relative to the config | `{}` | no (Dafny only) |
 | `string-semantics` | `unicode-scalar` \| `javascript-utf16` | `unicode-scalar` | yes (Dafny only) |
 | `dafny-library` | `stdlib` \| `local` | `stdlib` | yes (Dafny only) |
 | `run-log` | boolean | `true` | no (Dafny only) |
@@ -1512,8 +1513,10 @@ the source's git root, else the current directory), and stores the source as
 `.lemmascript/blobs/<hash>.ts`. The directory contains a
 `.gitignore` of `*`, so it never appears in `git status`. A record names the file, the command,
 the stage where the run stopped (`ok`, `verify`, `resolve`, `diff`, `conflict`), the members that
-passed and failed, hashes of the `.ts` and `.dfy`, and `partial: true` when the run did not
-report on every member. Logging never changes `lsc` output or exit codes.
+passed and failed, hashes of the `.ts` and Dafny proof inputs, and `partial: true` when the run
+did not report on every member. `dfyHash` covers the main `.dfy` plus the normalized relative
+paths and contents of its registered `proof-files`, independent of registration order; without
+extra files it retains the original single-file hash. Logging never changes `lsc` output or exit codes.
 
 ```json
 { "run-log": false }
@@ -1527,8 +1530,8 @@ turns it off for a project; `LSC_RUN_LOG=false` turns it off for one run.
 and reports **catches**: failures that a later run fixed, one per TypeScript function (a function
 fails while it or its `_ensures` lemma fails, and is fixed when both pass; lsc's generated helpers
 are left out). Each catch compares its
-first failing run with its passing run: a changed `.ts` is a `source-fix`, a changed `.dfy` alone
-is `proof`, and no change is `flaky`. A `source-fix` also carries the diff of the two `.ts`
+first failing run with its passing run: a changed `.ts` is a `source-fix`, a change to only the
+Dafny proof inputs is `proof`, and no change is `flaky`. A `source-fix` also carries the diff of the two `.ts`
 snapshots and a hint: `code` or `spec` (`requires`/`ensures`/`contract` lines) changed, both
 (`mixed`), or only proof scaffolding (`proof`). Failures still failing are listed as open; failures
 whose function disappeared are dropped. A member absent from a partial run is never dropped.

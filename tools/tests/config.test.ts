@@ -145,10 +145,11 @@ for (const [directive, message] of [
   ["option", "expected //@ option <key> <value>"],
   ["option safe-slice", "expected //@ option <key> <value>"],
   ["option safe-slice true extra", "expected //@ option <key> <value>"],
-  ["option missing true", "unknown option 'missing' (known options: extern-default, safe-slice, proof-dir, string-semantics, dafny-library, run-log, unread-annotations)"],
+  ["option missing true", "unknown option 'missing' (known options: extern-default, safe-slice, proof-dir, proof-files, string-semantics, dafny-library, run-log, unread-annotations)"],
   ["option safe-slice yes", "option 'safe-slice' must be true or false"],
   ["option extern-default invalid", "option 'extern-default' must be one of: pure, impure"],
   ["option proof-dir proofs", "option 'proof-dir' is config-only"],
+  ["option proof-files files", "option 'proof-files' is config-only"],
   ["option run-log false", "option 'run-log' is config-only"],
 ]) {
   test(`still rejects invalid directive: ${directive}`, () => {
@@ -158,6 +159,13 @@ for (const [directive, message] of [
     );
   });
 }
+
+test("proof-files requires relative paths to Dafny files for each source", () => {
+  for (const registration of [null, [], "law.dfy", { "a.ts": "law.dfy" }, { "/a.ts": [] },
+    { "a.ts": [3] }, { "a.ts": ["/law.dfy"] }, { "a.ts": ["law.txt"] }]) {
+    assert.throws(() => validateOptions({ "proof-files": registration }, "project.json"), /project\.json:/);
+  }
+});
 
 for (const directives of [
   "//@ option safe-slice true\n//@ option safe-slice false",

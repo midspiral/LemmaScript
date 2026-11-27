@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const cli = fileURLToPath(new URL("../src/lsc.ts", import.meta.url));
@@ -14,7 +14,7 @@ const posixOnly = { skip: process.platform === "win32" };
 // Run the real CLI against a verifier that records arguments without proving.
 // The run log is off unless a test asks for it, so `calls` holds only the
 // arguments under test.
-function runCli(entries: string[], args: string[], runLog = false) {
+function runCli(entries: string[], args: string[], runLog = false, files: Record<string, string> = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "lsc-batch-options-")));
   try {
     const bin = join(dir, "bin");
@@ -24,7 +24,12 @@ function runCli(entries: string[], args: string[], runLog = false) {
     writeFileSync(join(dir, "LemmaScript-files.txt"), entries.join("\n") + "\n");
     for (const entry of entries) {
       const file = entry.split(/\s+/)[0];
+      mkdirSync(dirname(join(dir, file)), { recursive: true });
       writeFileSync(join(dir, file), "export function identity(value: number): number { return value; }\n");
+    }
+    for (const [name, contents] of Object.entries(files)) {
+      mkdirSync(dirname(join(dir, name)), { recursive: true });
+      writeFileSync(join(dir, name), contents);
     }
     writeFileSync(join(bin, "dafny"), `#!/usr/bin/env node
 require("node:fs").appendFileSync(process.env.LSC_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
@@ -148,6 +153,38 @@ test("an explicit file keeps its existing CLI behavior", posixOnly, () => {
   const result = runCli(["a.ts 11 --isolate-assertions"], ["check", "a.ts", "--time-limit=120", "--extra-flags=--cores=2"]);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.calls, [["verify", "--verification-time-limit", "120", "--cores=2", "--unicode-char:true", join(result.dir, "a.dfy")]]);
+});
+
+for (const args of [["check", "project/a.ts"], ["check"], ["regen", "project/a.ts"]]) {
+  test(`${args.join(" ")} passes the source's registered proofs to Dafny`, posixOnly, () => {
+    const result = runCli(["project/a.ts 15 --isolate-assertions", "project/b.ts"], args, false, {
+      "project/lemmascript.json": JSON.stringify({
+        "proof-dir": "out", "proof-files": { "./a.ts": ["laws/a law.dfy", "shared.dfy"], "b.ts": ["shared.dfy"] },
+      }),
+      "project/laws/a law.dfy": "lemma A() {}",
+      "project/shared.dfy": "import opened Std.Collections.Seq\n",
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const project = join(result.dir, "project");
+    const batch = args.length === 1;
+    assert.deepEqual(result.calls[0], [
+      "verify", "--standard-libraries", ...(batch ? ["--verification-time-limit", "15", "--isolate-assertions"] : []),
+      "--unicode-char:true", join(project, "out", "a.dfy"), join(project, "laws", "a law.dfy"), join(project, "shared.dfy"),
+    ]);
+    assert.deepEqual(result.calls.slice(1), batch ? [[
+      "verify", "--standard-libraries", "--unicode-char:true", join(project, "out", "b.dfy"), join(project, "shared.dfy"),
+    ]] : []);
+  });
+}
+
+test("gen-check rejects a disallowed addition in a registered proof", posixOnly, () => {
+  const result = runCli(["a.ts"], ["gen-check"], false, {
+    "lemmascript.json": JSON.stringify({ "proof-files": { "a.ts": ["a.proof.dfy"] } }),
+    "a.proof.dfy": "lemma A() { assume false; }",
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /a\.proof\.dfy:1: assume statements/);
+  assert.deepEqual(result.calls, []);
 });
 
 for (const cmd of ["gen", "gen-check"]) {

@@ -63,6 +63,16 @@ From a sibling source checkout, the equivalent of `lsc` is `npx tsx ../LemmaScri
 
 The Dafny backend generates two files per TS source: `foo.dfy.gen` (always regeneratable) and `foo.dfy` (source of truth, with LLM/user proof additions). The diff between them must be additions-only.
 
+Register standalone Dafny laws under their TypeScript source in `lemmascript.json`.
+
+```json
+{
+  "proof-files": { "src/search.ts": ["proofs/search.dfy", "proofs/shared.dfy"] }
+}
+```
+
+Paths are relative to the config file. Both `lsc check src/search.ts` and a workspace `lsc check` that includes `src/search.ts` pass its registered files directly to Dafny, so errors point to the law you edit.
+
 ### Lean backend
 
 ```sh
