@@ -1174,10 +1174,13 @@ function lookupFieldTy(objTy: Ty, field: string, ctx: Ctx): { ty: Ty; isDiscrimi
       if (f) return { ty: f.type!, isDiscriminant };
     }
     if (decl?.kind === "discriminated-union" && decl.variants) {
-      for (const variant of decl.variants) {
-        const f = variant.fields.find(f => f.name === field);
-        if (f) return { ty: f.type!, isDiscriminant };
+      const matches = decl.variants
+        .map(v => v.fields.find(f => f.name === field)?.type)
+        .filter((t): t is Ty => t !== undefined);
+      if (matches.length > 0 && matches.every(t => tyEqual(t, matches[0]))) {
+        return { ty: matches[0], isDiscriminant };
       }
+      return { ty: { kind: "unknown" }, isDiscriminant };
     }
     return { ty: { kind: "unknown" }, isDiscriminant };
   }

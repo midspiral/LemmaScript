@@ -424,6 +424,66 @@ export function retag(input: U): U {
   );
 });
 
+test("#405: un-narrowed shared-field projection with incompatible variant types reports unsupported projection", () => {
+  const mixedSharedFieldTs = `
+export type U = { kind: "a"; v: number } | { kind: "b"; v: string };
+export function readAfterReassign(input: U, next: U): boolean {
+  let sh = input;
+  switch (sh.kind) {
+    case "a":
+      sh = next;
+      return sh.v === 0;
+    case "b":
+      return false;
+  }
+}
+`;
+  assert.throws(
+    () => compileDafny(mixedSharedFieldTs, "mixed_shared_dafny.ts"),
+    /cannot project field 'v' from un-narrowed union 'U': variants declare incompatible types/,
+  );
+  assert.throws(
+    () => compileLean(mixedSharedFieldTs, "mixed_shared_lean.ts"),
+    /cannot project field 'v' from un-narrowed union 'U': variants declare incompatible types/,
+  );
+
+  // Reversed variant declaration order must produce the exact same diagnostic.
+  const reversedSharedFieldTs = mixedSharedFieldTs.replace(
+    '{ kind: "a"; v: number } | { kind: "b"; v: string }',
+    '{ kind: "b"; v: string } | { kind: "a"; v: number }',
+  );
+  assert.throws(
+    () => compileDafny(reversedSharedFieldTs, "mixed_shared_rev_dafny.ts"),
+    /cannot project field 'v' from un-narrowed union 'U': variants declare incompatible types/,
+  );
+  assert.throws(
+    () => compileLean(reversedSharedFieldTs, "mixed_shared_rev_lean.ts"),
+    /cannot project field 'v' from un-narrowed union 'U': variants declare incompatible types/,
+  );
+
+  const mixedOptionalTs = `
+export type OptMix = { kind: "a"; v: number } | { kind: "b"; v?: number };
+export function readOptAfterReassign(input: OptMix, next: OptMix): boolean {
+  let sh = input;
+  switch (sh.kind) {
+    case "a":
+      sh = next;
+      return sh.v === 0;
+    case "b":
+      return false;
+  }
+}
+`;
+  assert.throws(
+    () => compileDafny(mixedOptionalTs, "mixed_opt_dafny.ts"),
+    /cannot project field 'v' from un-narrowed union 'OptMix': variants declare incompatible types/,
+  );
+  assert.throws(
+    () => compileLean(mixedOptionalTs, "mixed_opt_lean.ts"),
+    /cannot project field 'v' from un-narrowed union 'OptMix': variants declare incompatible types/,
+  );
+});
+
 function compileLean(tsText: string, fileName: string): { types: string; def: string } {
   const project = new Project({
     compilerOptions: { strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true },

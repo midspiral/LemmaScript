@@ -1195,16 +1195,23 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const owners = decl?.variants?.filter(v => v.fields.some(f => f.name === e.field)) ?? [];
         if (owners.length > 0) {
           // Shared field name with differing declared types: those destructors
-          // are renamed per-constructor, and the read's own resolved type
-          // identifies the owning variant (the types differ exactly when the
-          // rename happens). Pin it so emitters use the renamed destructor.
+          // are renamed per-constructor, so projecting the field requires a
+          // known variant (`e.ofVariant`). An un-narrowed union read (e.g.
+          // `sh = next; return sh.v === 0` where `a.v: number` and `b.v: string`)
+          // cannot project a single backend type and must fail cleanly instead
+          // of silently picking one constructor.
           const ownerTy = (v: VariantInfo) => v.fields.find(f => f.name === e.field)?.type;
           const differ = owners.some(v => {
             const a = ownerTy(v), b = ownerTy(owners[0]);
             return a && b && !tyEqual(a, b);
           });
-          const matching = differ ? owners.filter(v => { const t = ownerTy(v); return t && tyEqual(t, e.ty); }) : [];
-          const ctor = e.ofVariant ?? (matching.length === 1 ? matching[0].name : undefined);
+          if (differ && !e.ofVariant) {
+            throw new Error(
+              `cannot project field '${e.field}' from un-narrowed union '${baseName}': ` +
+              `variants declare incompatible types; narrow '${baseName}' to a variant first`,
+            );
+          }
+          const ctor = e.ofVariant;
           return { kind: "field", obj: transformExpr(e.obj), field: e.field, fromUnion: baseName, ctor, datatypeField: true };
         }
       }
@@ -1469,6 +1476,39 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     }
 
     case "record": {
+      const lowerTypedField = (rawVal: TExpr, declaredTy: Ty | undefined): Expr => {
+        const fieldValue = declaredTy && rawVal.ty.kind === "unknown"
+          ? ({ ...rawVal, ty: declaredTy } as TExpr)
+          : rawVal;
+        let value = lowerExpr(fieldValue, binds);
+        if (declaredTy?.kind === "optional") {
+          const isUndef = rawVal.kind === "var" && (rawVal.name === "undefined" || rawVal.name === "null");
+          if (rawVal.ty.kind !== "optional" && !isUndef) {
+            value = { kind: "app", fn: "Some", args: [value] };
+          }
+        } else if (declaredTy?.kind === "nullish") {
+          value = wrapNullishBranch(value, rawVal);
+        }
+        return value;
+      };
+      const buildVariantCtor = (
+        variantName: string,
+        tyName: string,
+        baseName: string,
+        variant: VariantInfo,
+        resolveArg: (vf: { name: string; type?: Ty }) => Expr,
+      ): Expr => {
+        // Bare-constructor shortcut only when the variant truly has no fields —
+        // a variant with only optional fields still needs its argument list.
+        if (variant.fields.length === 0) {
+          return { kind: "constructor", name: variantName, type: tyName, args: [] };
+        }
+        // Constructor with args: match variant field order. Emit a bare `app`
+        // (Dafny renders `variantName(args)`) tagged with `ctorOf` so Lean
+        // qualifies it as `BaseType.variantName args` (using the base name).
+        return { kind: "app", fn: variantName, args: variant.fields.map(resolveArg), ctorOf: baseName };
+      };
+
       // Discriminated union: { kind: 'NoOp' } → constructor NoOp
       if (e.ty.kind === "user" && !e.spread) {
         const tyName = e.ty.name;
@@ -1478,23 +1518,11 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         if (decl && decl.discriminant) {
           const discField = e.fields.find(f => f.name === decl.discriminant);
           if (discField && (discField.value.kind === "str" || discField.value.kind === "bool")) {
-            const variantName = String(discField.value.kind === "str" ? discField.value.value : discField.value.value);
+            const variantName = String(discField.value.value);
             const variant = decl.variants?.find(v => v.name === variantName);
             if (variant) {
               const nonDiscFields = e.fields.filter(f => f.name !== decl.discriminant);
-              // Bare-constructor shortcut only when the variant truly has no
-              // fields — a variant with only optional fields still needs its
-              // None-filled argument list (`int_(None)`, not `int_`).
-              if (variant.fields.length === 0) {
-                return { kind: "constructor", name: variantName, type: tyName, args: [] };
-              }
-              // Constructor with args: match variant field order. Emit a bare `app`
-              // (Dafny renders `variantName(args)`, a valid unqualified constructor
-              // call — unchanged output) tagged with `ctorOf` so the Lean emitter,
-              // which CANNOT take a bare constructor name, qualifies it as
-              // `BaseType.variantName args`. Use the BASE type name (no generic args):
-              // `Result.true_` is valid in Lean; `Result<Model,Err>.true_` is not.
-              const args = variant.fields.map(vf => {
+              return buildVariantCtor(variantName, tyName, baseName, variant, vf => {
                 const ef = nonDiscFields.find(f => f.name === vf.name);
                 if (ef) return lowerExpr(ef.value, binds);
                 if (vf.type?.kind === "nullish") {
@@ -1502,7 +1530,6 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
                 }
                 return { kind: "var" as const, name: "None" };
               });
-              return { kind: "app", fn: variantName, args, ctorOf: baseName };
             }
           }
         }
@@ -1541,29 +1568,13 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
               : undefined;
             const possibleSources = sourceVariant ? [sourceVariant] : (unionDecl.variants ?? []);
             const spreadExpr = lowerExpr(e.spread, binds);
-            const nonDiscFields = e.fields.filter(f => f.name !== unionDecl.discriminant);
             const overriddenByName = new Map<string, Expr>();
-            for (const f of nonDiscFields) {
-              let fieldValue = f.value;
+            for (const f of e.fields) {
+              if (f.name === unionDecl.discriminant) continue;
               const declaredTy = targetVariant.fields.find(vf => vf.name === f.name)?.type;
-              if (declaredTy && fieldValue.ty.kind === "unknown") {
-                fieldValue = { ...fieldValue, ty: declaredTy } as TExpr;
-              }
-              let value = lowerExpr(fieldValue, binds);
-              if (declaredTy?.kind === "optional") {
-                const isUndef = f.value.kind === "var" && (f.value.name === "undefined" || f.value.name === "null");
-                if (f.value.ty.kind !== "optional" && !isUndef) {
-                  value = { kind: "app", fn: "Some", args: [value] };
-                }
-              } else if (declaredTy?.kind === "nullish") {
-                value = wrapNullishBranch(value, f.value);
-              }
-              overriddenByName.set(f.name, value);
+              overriddenByName.set(f.name, lowerTypedField(f.value, declaredTy));
             }
-            if (targetVariant.fields.length === 0) {
-              return { kind: "constructor", name: variantName, type: structName!, args: [] };
-            }
-            const args = targetVariant.fields.map(vf => {
+            return buildVariantCtor(variantName, structName!, baseName!, targetVariant, vf => {
               const explicit = overriddenByName.get(vf.name);
               if (explicit !== undefined) return explicit;
               for (const sv of possibleSources) {
@@ -1585,15 +1596,12 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
                 datatypeField: true,
               };
             });
-            return { kind: "app", fn: variantName, args, ctorOf: baseName };
           }
         }
         const pinnedVariant = unionDecl && e.ofVariant
           ? unionDecl.variants?.find(v => v.name === e.ofVariant)
           : undefined;
         const loweredFields = e.fields.map(f => {
-          // Propagate declared field type onto value if it has unknown type
-          let fieldValue = f.value;
           const fieldDecl = structDecl?.fields?.find(sf => sf.name === f.name);
           let declaredTy: Ty | undefined;
           if (fieldDecl) {
@@ -1606,20 +1614,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
               if (vf) { declaredTy = vf.type; break; }
             }
           }
-          if (declaredTy && fieldValue.ty.kind === "unknown") {
-            fieldValue = { ...fieldValue, ty: declaredTy } as TExpr;
-          }
-          let value = lowerExpr(fieldValue, binds);
-          // Wrap non-optional/non-nullish values for optional/nullish fields
-          if (declaredTy?.kind === "optional") {
-            const isUndef = f.value.kind === "var" && (f.value.name === "undefined" || f.value.name === "null");
-            if (f.value.ty.kind !== "optional" && !isUndef) {
-              value = { kind: "app", fn: "Some", args: [value] };
-            }
-          } else if (declaredTy?.kind === "nullish") {
-            value = wrapNullishBranch(value, f.value);
-          }
-          return { name: f.name, value };
+          return { name: f.name, value: lowerTypedField(f.value, declaredTy) };
         });
         return {
           kind: "record",

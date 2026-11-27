@@ -554,10 +554,16 @@ function emitExpr(e: Expr, parentPrec?: number): string {
           const firstIdx = owners[0].fields.findIndex(f => f.name === e.field);
           const fty = tyToLean(owners[0].fields[firstIdx].type);
           if (!e.ctor) {
-            owners = owners.filter(c => {
+            const incompatible = owners.some(c => {
               const idx = c.fields.findIndex(f => f.name === e.field);
-              return idx >= 0 && tyToLean(c.fields[idx].type) === fty;
+              return idx < 0 || tyToLean(c.fields[idx].type) !== fty;
             });
+            if (incompatible) {
+              throw new Error(
+                `cannot project field '${e.field}' from un-narrowed union '${e.fromUnion}': ` +
+                `constructors declare incompatible Lean types`,
+              );
+            }
           }
           const arms = owners.map(owner => {
             const idx = owner.fields.findIndex(f => f.name === e.field);
