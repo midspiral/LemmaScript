@@ -1195,16 +1195,19 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const owners = decl?.variants?.filter(v => v.fields.some(f => f.name === e.field)) ?? [];
         if (owners.length > 0) {
           // Shared field name with differing declared types: those destructors
-          // are renamed per-constructor, so union projection only applies when
-          // narrowed to a known variant (`e.ofVariant`). When un-narrowed, let
-          // ordinary lowering emit a plain `.field` so the backend rejects it.
+          // are renamed per-constructor (e.g. `value` → `value_a`, `value_a` →
+          // `value_a_a`), so falling through to plain `sh.<field>` can resolve to
+          // a different renamed destructor and verify a false contract. Require a
+          // known variant (`e.ofVariant`) for mixed-type union projections.
           const ownerTy = (v: VariantInfo) => v.fields.find(f => f.name === e.field)?.type;
           const differ = owners.some(v => {
             const a = ownerTy(v), b = ownerTy(owners[0]);
             return a && b && !tyEqual(a, b);
           });
           if (differ && !e.ofVariant) {
-            return { kind: "field", obj: transformExpr(e.obj), field: e.field, datatypeField: true };
+            throw new Error(
+              `cannot read '${e.field}' on '${baseName}' without narrowing to a variant first (variants give '${e.field}' different types)`,
+            );
           }
           const ctor = e.ofVariant;
           return { kind: "field", obj: transformExpr(e.obj), field: e.field, fromUnion: baseName, ctor, datatypeField: true };
@@ -1547,14 +1550,14 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
           if (discField) {
             if (discField.value.kind !== "str" && discField.value.kind !== "bool") {
               throw new Error(
-                `union spread '${unionDecl.name}' cannot override discriminant '${unionDecl.discriminant}' with a non-literal expression`,
+                `spread on '${unionDecl.name}' must set '${unionDecl.discriminant}' to a literal tag`,
               );
             }
             const variantName = String(discField.value.value);
             const targetVariant = unionDecl.variants?.find(v => v.name === variantName);
             if (!targetVariant) {
               throw new Error(
-                `union spread '${unionDecl.name}' overrides discriminant '${unionDecl.discriminant}' with unknown variant '${variantName}'`,
+                `unknown '${unionDecl.name}' variant '${variantName}' in spread`,
               );
             }
             const sourceVariant = e.spreadOfVariant
@@ -1575,9 +1578,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
                 const sf = sv.fields.find(f => f.name === vf.name);
                 if (!sf?.type || !vf.type || !tyEqual(sf.type, vf.type)) {
                   throw new Error(
-                    `cannot spread union '${unionDecl.name}' into variant '${variantName}': ` +
-                    `field '${vf.name}' is not declared with a matching type on source variant '${sv.name}' ` +
-                    `(runtime excess properties are erased by nominal union representation); specify '${vf.name}' explicitly`,
+                    `cannot change '${unionDecl.name}' from '${sv.name}' to '${variantName}' via spread: pass '${vf.name}' explicitly`,
                   );
                 }
               }

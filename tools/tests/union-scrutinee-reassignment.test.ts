@@ -409,11 +409,11 @@ export function retag(input: U): U {
 `;
   assert.throws(
     () => compileDafny(lossySpreadTs, "lossy_spread.ts"),
-    /cannot spread union 'U' into variant 'b': field 'n' is not declared with a matching type on source variant 'a'/,
+    /cannot change 'U' from 'a' to 'b' via spread: pass 'n' explicitly/,
   );
   assert.throws(
     () => compileLean(lossySpreadTs, "lossy_spread_lean.ts"),
-    /cannot spread union 'U' into variant 'b': field 'n' is not declared with a matching type on source variant 'a'/,
+    /cannot change 'U' from 'a' to 'b' via spread: pass 'n' explicitly/,
   );
 
   // Discriminant named `value_a` collides with the renamed payload destructor of
@@ -442,15 +442,15 @@ export function retag(input: U): U {
 `;
   assert.throws(
     () => compileDafny(collidingDiscSpreadTs, "colliding_disc_spread.ts"),
-    /cannot spread union 'U' into variant 'b': field 'n' is not declared with a matching type on source variant 'a'/,
+    /cannot change 'U' from 'a' to 'b' via spread: pass 'n' explicitly/,
   );
   assert.throws(
     () => compileLean(collidingDiscSpreadTs, "colliding_disc_spread_lean.ts"),
-    /cannot spread union 'U' into variant 'b': field 'n' is not declared with a matching type on source variant 'a'/,
+    /cannot change 'U' from 'a' to 'b' via spread: pass 'n' explicitly/,
   );
 });
 
-test("#405: un-narrowed shared-field projection with incompatible variant types falls through so backends reject it", () => {
+test("#405: un-narrowed shared-field projection with incompatible variant types throws instead of falling through", () => {
   const mixedSharedFieldTs = `
 export type U = { kind: "a"; v: number } | { kind: "b"; v: string };
 export function readAfterReassign(input: U, next: U): boolean {
@@ -481,21 +481,37 @@ export function readOptAfterReassign(input: OptMix, next: OptMix): boolean {
   }
 }
 `;
+  // `value` renames to `value_a` and `value_a` renames to `value_a_a`; falling
+  // through to plain `sh.value_a` would read the renamed `value` field and
+  // verify a false `ensures res == true` on `{ kind: "a", value: 0, value_a: 7 }`.
+  const collidingReadTs = `
+export type CollideRead =
+  | { kind: "a"; value: number; value_a: number }
+  | { kind: "b"; value: string; value_a: string };
+//@ requires input.kind === "a"
+//@ requires next.kind === "a" && next.value === 0 && next.value_a === 7
+//@ ensures \\result === true
+export function readCollidingAfterReassign(input: CollideRead, next: CollideRead): boolean {
+  let sh = input;
+  switch (sh.kind) {
+    case "a":
+      sh = next;
+      return sh.value_a === 0;
+    case "b":
+      return false;
+  }
+}
+`;
 
-  for (const [label, src] of [
-    ["mixed-shared", mixedSharedFieldTs],
-    ["mixed-shared-rev", reversedSharedFieldTs],
-    ["mixed-opt", mixedOptionalTs],
-  ]) {
-    const dfy = compileDafny(src, `${label}.ts`);
-    const dafnyRes = verifyDafny(dfy);
-    assert.notEqual(dafnyRes.status, 0, `${label}: Dafny should reject un-narrowed mixed field:\n${dfy}\n${dafnyRes.output}`);
-
-    const { def: leanDef } = compileLean(src, `${label}_lean.ts`);
-    // Must NOT synthesize a single-constructor match returning `default : Int`;
-    // falls through to plain `sh.v` which Lean rejects on an inductive.
-    assert.doesNotMatch(leanDef, /default : Int/, `${label}:\n${leanDef}`);
-    assert.match(leanDef, /return \(sh\.v = 0\)|return sh\.v = 0/, `${label}:\n${leanDef}`);
+  for (const [label, src, field, unionName] of [
+    ["mixed-shared", mixedSharedFieldTs, "v", "U"],
+    ["mixed-shared-rev", reversedSharedFieldTs, "v", "U"],
+    ["mixed-opt", mixedOptionalTs, "v", "OptMix"],
+    ["colliding-read", collidingReadTs, "value_a", "CollideRead"],
+  ] as const) {
+    const pattern = new RegExp(`cannot read '${field}' on '${unionName}' without narrowing to a variant first`);
+    assert.throws(() => compileDafny(src, `${label}.ts`), pattern, `${label} (Dafny)`);
+    assert.throws(() => compileLean(src, `${label}_lean.ts`), pattern, `${label} (Lean)`);
   }
 });
 
