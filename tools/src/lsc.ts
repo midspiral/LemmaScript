@@ -19,7 +19,7 @@ import { transformModuleLean, transformModuleDafny } from "./transform.js";
 import { peepholeModule } from "./peephole.js";
 import { emitLeanFile, resetLeanModule } from "./lean-emit.js";
 import { emitDafnyFile, emittedNameMap } from "./dafny-emit.js";
-import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-commands.js";
+import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen, readDafnyProofFiles } from "./dafny-commands.js";
 import { leanGen, leanCheck } from "./lean-commands.js";
 import { runInfo, runTypedInfo, type TypedInfoDafny } from "./info-command.js";
 import { RunLog, resolveLogDir, runLogEnabled, safely } from "./run-log.js";
@@ -30,6 +30,7 @@ import {
   loadConfigOptions,
   parseFileOptions,
   resolveDafnyArtifactDir,
+  resolveDafnyProofFiles,
   resolveOptions,
   type LscOptions,
 } from "./config.js";
@@ -451,6 +452,7 @@ function runFile(
       : undefined;
 
     if (cmd === "gen") { dafnyGen(genPath, dfyPath, text, basePath); return; }
+    const proofs = readDafnyProofFiles(resolveDafnyProofFiles(absPath, configFile, options), dfyPath, log);
     if (cmd === "gen-check") {
       dafnyGen(genPath, dfyPath, text, basePath);
       if (!dafnyCheckDiff(genPath, dfyPath, undefined, basePath)) process.exit(1);
@@ -459,10 +461,10 @@ function runFile(
     if (cmd === "check") {
       dafnyGen(genPath, dfyPath, text, basePath);
       if (!dafnyCheckDiff(genPath, dfyPath, log, basePath)) process.exit(1);
-      if (!dafnyVerify(dfyPath, artifactDir, timeLimit, extraFlags, log)) process.exit(1);
+      if (!dafnyVerify(dfyPath, artifactDir, timeLimit, extraFlags, log, proofs)) process.exit(1);
       return;
     }
-    if (cmd === "regen") { dafnyRegen(genPath, dfyPath, basePath, text, artifactDir, timeLimit, extraFlags, noVerify, log); return; }
+    if (cmd === "regen") { dafnyRegen(genPath, dfyPath, basePath, text, artifactDir, timeLimit, extraFlags, noVerify, log, proofs); return; }
     console.error(`Unknown command: ${cmd}`);
     process.exit(1);
   }

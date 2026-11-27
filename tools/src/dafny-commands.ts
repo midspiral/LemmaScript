@@ -161,17 +161,34 @@ export function dafnyVerifyArgs(content: string, timeLimit?: number, extraFlags?
   return { args };
 }
 
-export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number, extraFlags?: string, log?: RunLog): boolean {
+type ProofFiles = readonly { file: string; text: string }[];
+
+export function readDafnyProofFiles(files: string[], dfyPath: string, log?: RunLog): ProofFiles {
+  try {
+    return files.map(file => {
+      const text = readFileSync(file, "utf8");
+      const violations = proofAdditionViolations("", text, file);
+      if (violations.length) throw new Error(violations.join("\n"));
+      return { file, text };
+    });
+  } catch (error) {
+    log?.finish({ stage: "diff", exit: 1, dfyPath });
+    throw error;
+  }
+}
+
+export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number, extraFlags?: string, log?: RunLog, proofs: ProofFiles = []): boolean {
   console.log("Running dafny verify...");
   try {
-    const { args, error } = dafnyVerifyArgs(readFileSync(dfyPath, "utf-8"), timeLimit, extraFlags);
+    const content = [readFileSync(dfyPath, "utf8"), ...proofs.map(p => p.text)].join("\n");
+    const { args, error } = dafnyVerifyArgs(content, timeLimit, extraFlags);
     if (error) {
       console.error(error);
       log?.finish({ stage: "resolve", exit: 1, dfyPath });
       return false;
     }
     if (log) args.push(...log.dafnyArgs());
-    args.push(dfyPath);
+    args.push(dfyPath, ...proofs.map(p => p.file));
     execFileSync("dafny", args, { cwd: dir, stdio: "inherit" });
     log?.finish({ stage: "ok", exit: 0, dfyPath, results: log.readResults() });
     return true;
@@ -188,7 +205,7 @@ export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number, ex
   }
 }
 
-export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, text: string, dir: string, timeLimit?: number, extraFlags?: string, noVerify = false, log?: RunLog) {
+export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, text: string, dir: string, timeLimit?: number, extraFlags?: string, noVerify = false, log?: RunLog, proofs: ProofFiles = []) {
   // 1. Read old gen before overwriting (needed for base seeding)
   const oldGen = existsSync(genPath) ? readFileSync(genPath, "utf-8") : "";
 
@@ -199,7 +216,7 @@ export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, t
   if (!existsSync(dfyPath)) {
     writeFileSync(dfyPath, text);
     console.log(`Created: ${path.basename(dfyPath)}`);
-    if (!noVerify && !dafnyVerify(dfyPath, dir, timeLimit, extraFlags, log)) {
+    if (!noVerify && !dafnyVerify(dfyPath, dir, timeLimit, extraFlags, log, proofs)) {
       console.error(`FAILED: ${path.basename(dfyPath)} verification failed on first run.`);
       process.exit(1);
     }
@@ -265,7 +282,7 @@ export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, t
   }
 
   // 7. Verify (skipped under --no-verify: caller verifies separately)
-  if (!noVerify && !dafnyVerify(dfyPath, dir, timeLimit, extraFlags, log)) {
+  if (!noVerify && !dafnyVerify(dfyPath, dir, timeLimit, extraFlags, log, proofs)) {
     // The clean merge already incorporated this generation into the proof
     // file. Keep that generation as the next merge anchor even though the
     // verifier rejected the current proof state; otherwise the next regen

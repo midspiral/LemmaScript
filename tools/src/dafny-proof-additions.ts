@@ -420,7 +420,7 @@ const OTHER_LINE_BREAK = /[\r\u2028\u2029]/;
  */
 export function proofAdditionViolations(generated: string, proof: string, proofName: string): string[] {
   const proofLines = proof.split("\n");
-  const genLines = generated.split("\n");
+  const genLines = generated === "" ? [] : generated.split("\n");
   const matched = matchGeneratedLines(genLines, proofLines);
   if (!matched) return [`${proofName}: generated lines are not contained in order in the proof`];
   const added = matched.map(g => g < 0);

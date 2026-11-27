@@ -1469,6 +1469,7 @@ it; absent means current behavior. Unknown keys and bad values are errors.
 | `extern-default` | `pure` \| `impure` | `pure` | yes |
 | `safe-slice` | boolean | `false` | yes |
 | `proof-dir` | relative path | source directory | no (Dafny only) |
+| `proof-files` | source path → array of `.dfy` paths, relative to the config | `{}` | no (Dafny only) |
 | `string-semantics` | `unicode-scalar` \| `javascript-utf16` | `unicode-scalar` | yes (Dafny only) |
 | `dafny-library` | `stdlib` \| `local` | `stdlib` | yes (Dafny only) |
 | `run-log` | boolean | `true` | no (Dafny only) |

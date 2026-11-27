@@ -23,6 +23,20 @@ function runCli(files: Record<string, string>, args: string[]) {
   }
 }
 
+test("a failed registered law points to its own source in single-file and workspace checks", () => {
+  const files = {
+    "source.ts": source,
+    "LemmaScript-files.txt": "source.ts\n",
+    "lemmascript.json": JSON.stringify({ "proof-files": { "source.ts": ["laws.dfy"] } }),
+    "laws.dfy": "lemma ItChangesTheValue(x: int)\n  ensures identity(x) != x\n{}\n",
+  };
+  for (const args of [["check", "source.ts"], ["check"]]) {
+    const result = runCli(files, args);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout + result.stderr, /laws\.dfy\(2,\d+\): Related location: this is the postcondition/);
+  }
+});
+
 const cases: { name: string; files: Record<string, string>; args: string[] }[] = [
   { name: "without a file", files: {}, args: [] },
   { name: "with a missing file", files: {}, args: ["missing.ts"] },
