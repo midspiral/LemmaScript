@@ -211,6 +211,8 @@ not implement routing themselves.
 - `lsc regen --backend=dafny foo.ts` — regenerate `.dfy.gen`, three-way merge, verify
 - `lsc check --backend=dafny foo.ts` — gen + additions-only check + `dafny verify`
 
+`lsc check` validates each `--proof-file` against the rules for proof additions and passes it to Dafny as a separate input, so errors in a handwritten proof point to its original file and line.
+
 `check` and `regen` pass an optional `RunLog` (`run-log.ts`) to these helpers, and each records the stage it detects: `dafnyCheckDiff` records `diff`, `dafnyVerify` records `ok`/`verify`/`resolve`, and `dafnyRegen` records `conflict` and `--no-verify` runs. Recording lives in the helpers only because they end runs with `process.exit`; if they ever return outcomes instead, it belongs in `lsc.ts`. Dafny keeps inherited stdio; member outcomes come from `--log-format text` written to a temp file.
 
 `lsc runs` (`runs-command.ts`) reads those records back and derives catches. It relies on names the emitter and extractor own: `DAFNY_HELPER_NAMES` (every function, predicate, lemma and method in the Dafny preambles, which are not counted as user code) and `ENSURES_LEMMA_SUFFIX` from `dafny-emit.ts`, and `AnnotKind` from `extract.ts`, whose every keyword it must classify as spec or proof scaffolding (the typecheck fails otherwise).
