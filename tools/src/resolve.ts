@@ -2035,21 +2035,33 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     // optional restores its declared optional storage type. Also drop stale
     // narrowedPaths rooted at any assigned target (including field writes).
     if (s.kind === "assign") {
-      const root = s.target.split(".")[0]!;
+      const parts = s.target.split(".");
+      const root = parts[0]!;
       narrowedPaths = narrowedPaths.filter(np => np.path.rootVar !== root);
-      if (!s.target.includes(".")) {
+      const isNullLit = s.value.kind === "var" && s.value.name === "null";
+      const isUndefLit = s.value.kind === "var" && s.value.name === "undefined";
+      const isDefinitelyPresent = (targetStorage: Ty): boolean => {
+        if (isUndefLit || isNullLit) return false;
+        const rhsCtx: Ctx = { ...currentCtx, returnTy: targetStorage };
+        const rawTy = resolveExpr(s.value, rhsCtx).ty;
+        return rawTy.kind !== "optional" && rawTy.kind !== "nullish" &&
+          rawTy.kind !== "void" && rawTy.kind !== "null" && rawTy.kind !== "unknown";
+      };
+      if (parts.length === 1) {
         const storage = storageLookup(env, s.target);
         if (storage?.kind === "optional" || storage?.kind === "nullish") {
-          const isNullLit = s.value.kind === "var" && s.value.name === "null";
-          const isUndefLit = s.value.kind === "var" && s.value.name === "undefined";
-          const rhsCtx: Ctx = { ...currentCtx, returnTy: storage };
-          const rawTy = isUndefLit ? { kind: "void" as const } : isNullLit ? { kind: "null" as const } : resolveExpr(s.value, rhsCtx).ty;
-          if (!isUndefLit && !isNullLit && rawTy.kind !== "optional" && rawTy.kind !== "nullish" &&
-              rawTy.kind !== "void" && rawTy.kind !== "null" && rawTy.kind !== "unknown") {
-            env = refine(env, s.target, storage.inner);
-          } else {
-            env = refine(env, s.target, storage);
-          }
+          env = refine(env, s.target, isDefinitelyPresent(storage) ? storage.inner : storage);
+        }
+      } else {
+        // Dotted assignment to an optional/nullish field (`box.val = 5`):
+        // re-narrow that path when the RHS is definitely present.
+        let fieldTy: Ty | undefined = storageLookup(env, root);
+        for (let i = 1; i < parts.length && fieldTy; i++) {
+          const cur = (fieldTy.kind === "optional" || fieldTy.kind === "nullish") ? fieldTy.inner : fieldTy;
+          fieldTy = lookupFieldTy(cur, parts[i]!, currentCtx).ty;
+        }
+        if ((fieldTy?.kind === "optional" || fieldTy?.kind === "nullish") && isDefinitelyPresent(fieldTy)) {
+          narrowedPaths = [...narrowedPaths, { path: { rootVar: root, fields: parts.slice(1) }, narrowedTy: fieldTy.inner }];
         }
       }
     }

@@ -179,43 +179,34 @@ function exprPathStr(e: TExpr): string | null {
 }
 
 /** True if `stmts` contains an assignment to `pathStr` (or any prefix of
- *  `pathStr`, e.g. `box = ...` when narrowing `box.val`) that could clear it
- *  to `undefined` or an arbitrary `Option<T>` (not a `Some(...)` wrapper),
- *  meaning a `someMatch` binder would become stale (#342). */
-function stmtsMayClearPath(stmts: readonly TStmt[], pathStr: string): boolean {
+ *  `pathStr`, e.g. `box = ...` when narrowing `box.val`). Direct reassignment
+ *  of a `someMatch` scrutinee (`x = 5`, `x = undefined`, `box = newBox`) would
+ *  either assign to an immutable Dafny match binder or leave the binder stale;
+ *  deferring to `if` + `checkedUnwrap` keeps all reads and writes on live storage. */
+function stmtsMayReassignPath(stmts: readonly TStmt[], pathStr: string): boolean {
   for (const s of stmts) {
     if (s.kind === "assign") {
-      if (s.target === pathStr) {
-        const isPresentWrap = s.value.kind === "call" && s.value.fn.kind === "var" &&
-          (s.value.fn.name === "Some" || s.value.fn.name === "NullishValue") && s.value.args.length === 1;
-        if (!isPresentWrap && (s.value.ty.kind === "optional" || s.value.ty.kind === "nullish" ||
-            s.value.ty.kind === "void" || s.value.ty.kind === "null" ||
-            (s.value.kind === "var" && (s.value.name === "undefined" || s.value.name === "null")))) {
-          return true;
-        }
-      } else if (pathStr.startsWith(`${s.target}.`)) {
-        // Reassigning a container prefix (e.g. `box = newBox`) can replace the
-        // narrowed field with None, making a binder on `box.val` stale.
+      if (s.target === pathStr || pathStr.startsWith(`${s.target}.`)) {
         return true;
       }
     } else if (s.kind === "if") {
-      if (stmtsMayClearPath(s.then, pathStr) || stmtsMayClearPath(s.else, pathStr)) return true;
+      if (stmtsMayReassignPath(s.then, pathStr) || stmtsMayReassignPath(s.else, pathStr)) return true;
     } else if (s.kind === "while" || s.kind === "forof") {
-      if (stmtsMayClearPath(s.body, pathStr)) return true;
+      if (stmtsMayReassignPath(s.body, pathStr)) return true;
     } else if (s.kind === "switch") {
-      if (s.cases.some(c => stmtsMayClearPath(c.body, pathStr)) || stmtsMayClearPath(s.defaultBody, pathStr)) return true;
+      if (s.cases.some(c => stmtsMayReassignPath(c.body, pathStr)) || stmtsMayReassignPath(s.defaultBody, pathStr)) return true;
     } else if (s.kind === "someMatch") {
-      if (stmtsMayClearPath(s.someBody, pathStr) || stmtsMayClearPath(s.noneBody, pathStr)) return true;
+      if (stmtsMayReassignPath(s.someBody, pathStr) || stmtsMayReassignPath(s.noneBody, pathStr)) return true;
     } else if (s.kind === "tagMatch") {
-      if (s.cases.some(c => stmtsMayClearPath(c.body, pathStr)) || stmtsMayClearPath(s.fallthrough, pathStr)) return true;
+      if (s.cases.some(c => stmtsMayReassignPath(c.body, pathStr)) || stmtsMayReassignPath(s.fallthrough, pathStr)) return true;
     }
   }
   return false;
 }
 
-function scrutineeMayBeCleared(scrutinee: TExpr, stmts: readonly TStmt[]): boolean {
+function scrutineeMayBeReassigned(scrutinee: TExpr, stmts: readonly TStmt[]): boolean {
   const pathStr = exprPathStr(scrutinee);
-  return pathStr !== null && stmtsMayClearPath(stmts, pathStr);
+  return pathStr !== null && stmtsMayReassignPath(stmts, pathStr);
 }
 
 /** Driver: `if (e !== undefined) then else` — presence fact in if position.
@@ -229,7 +220,7 @@ function ruleIfOptionalSimple(s: TStmt, ctx: CondCtx): TStmt | null {
   const someBody = check.negated ? s.else : s.then;
   const noneBody = check.negated ? s.then : s.else;
   if (someBody.length === 0) return null;
-  if (scrutineeMayBeCleared(check.scrutinee, someBody)) return null;
+  if (scrutineeMayBeReassigned(check.scrutinee, someBody)) return null;
   return presentMatchStmts(check, someBody, noneBody, ctx);
 }
 
@@ -245,7 +236,7 @@ function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | 
   const noneBranch = check.negated ? s.then : s.else;
   if (someBranch.length !== 0) return null;
   if (!isTerminating(noneBranch)) return null;
-  if (scrutineeMayBeCleared(check.scrutinee, rest)) return null;
+  if (scrutineeMayBeReassigned(check.scrutinee, rest)) return null;
   return presentMatchStmts(check, rest, noneBranch, ctx);
 }
 
@@ -276,7 +267,7 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | 
     if (d.residual) residualLeaves.push(d.residual);
   }
   if (detectors.length === 0) return null;
-  if (detectors.some(d => scrutineeMayBeCleared(d.scrutinee, rest))) return null;
+  if (detectors.some(d => scrutineeMayBeReassigned(d.scrutinee, rest))) return null;
 
   let inner: TStmt[] = residualLeaves.length === 0
     ? rest
@@ -304,7 +295,7 @@ function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[], ctx: CondCtx): 
   if (c.kind !== "binop" || c.op !== "!==") return null;
   const oc = c.left.kind === "optChain" ? c.left : c.right.kind === "optChain" ? c.right : null;
   if (!oc || oc.kind !== "optChain" || oc.obj.ty.kind !== "optional" || oc.obj.ty.fromNullish) return null;
-  if (scrutineeMayBeCleared(oc.obj, rest)) return null;
+  if (scrutineeMayBeReassigned(oc.obj, rest)) return null;
   const lit = c.left === oc ? c.right : c.left;
   if (!excludesUndefined(lit, ctx.decls, ctx.typeParams)) return null;
   const innerTy = oc.obj.ty.inner;
@@ -527,7 +518,7 @@ function ruleIfAndOptional(s: TStmt, ctx: CondCtx): TStmt | null {
   const extracted = leadingPresent(s.cond);
   if (!extracted) return null;
   const { check, restCond } = extracted;
-  if (scrutineeMayBeCleared(check.scrutinee, s.then)) return null;
+  if (scrutineeMayBeReassigned(check.scrutinee, s.then)) return null;
   const innerIf: TStmt = { kind: "if", cond: restCond, then: s.then, else: [] };
   return presentMatchStmts(check, [walkStmt(innerIf, ctx)], [], ctx);
 }
