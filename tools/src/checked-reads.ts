@@ -191,12 +191,22 @@ function rewriteExpr(e: TExpr, scope: Scope, mod: TModule): TExpr {
       if (e.op === "-" && isNullable(ty) && !isNullable(expr.ty)) ty = expr.ty;
       return { ...e, expr, ty };
     }
-    case "call":
-      return {
-        ...e,
-        fn: rewriteExpr(e.fn, scope, mod),
-        args: e.args.map(a => rewriteExpr(a, scope, mod)),
-      };
+    case "call": {
+      const fn = rewriteExpr(e.fn, scope, mod);
+      const args = e.args.map(a => rewriteExpr(a, scope, mod));
+      if (fn.kind === "var" && args.length === 1 && args[0].kind === "checkedUnwrap") {
+        const inner = args[0].expr;
+        // Re-wrapping a same-storage checkedUnwrap (`Some(x.value)` for Option<T>,
+        // `Nullish.Value(x.value)` for Nullish<T>) is a no-op; emit `x` directly.
+        if (fn.name === "Some" && inner.ty.kind === "optional" && !inner.ty.fromNullish) {
+          return inner;
+        }
+        if (fn.name === "NullishValue" && inner.ty.kind === "nullish") {
+          return inner;
+        }
+      }
+      return { ...e, fn, args };
+    }
     case "record":
       return {
         ...e,

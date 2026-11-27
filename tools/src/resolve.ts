@@ -1300,6 +1300,10 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         if (!ctx.inSpec && refEqHazard(left.ty, ctx.typeDecls) && refEqHazard(right.ty, ctx.typeDecls)) {
           warnRefEq(e.op, left.ty, right.ty);
         }
+      } else if (e.op === "in") {
+        const keySlot = right.ty.kind === "map" ? right.ty.key
+          : (right.ty.kind === "set" || right.ty.kind === "array") ? right.ty.elem : null;
+        if (keySlot) left = coerceToTargetTy(left, keySlot, ctx.typeDecls);
       }
       let ty: Ty = { kind: "unknown" };
       // <==> is bool like the comparisons; unlike ==>, neither side narrows
@@ -1400,36 +1404,33 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         }
       }
       const fn = resolveExpr(e.fn, ctx);
+      const builtinId = fn.kind === "field" ? recognizeBuiltin(fn.obj.ty, fn.field) : null;
+      const bSpec = builtinId ? builtinSpec(builtinId) : null;
       const rawArgs = inferLambdaParamTypes(fn, e.args, ctx);
-      // For .push() on a typed array, resolve args with element type context
-      let argCtx = ctx;
-      if (fn.kind === "field" && fn.obj.ty.kind === "array" && fn.field === "push" &&
-          fn.obj.ty.elem.kind === "user") {
-        argCtx = { ...ctx, returnTy: fn.obj.ty.elem };
-      }
-      // Propagate parameter types to arguments for record literal resolution
-      // (enables inline discriminated union construction in function arguments)
+      // Propagate parameter / builtin-slot types to arguments for record literal
+      // resolution and collection element/key/value coercion (e.g., narrowed `T`
+      // or literals passed into `Set<T | null>.has`, `Map<K | null, V>.set`, etc.).
       const paramTypes = fn.kind === "var" && !binding(ctx.env, fn.name) ? ctx.fnParams.get(fn.name) ?? null : null;
       const initial = fn.kind === "field" && fn.field === "reduce" && rawArgs.length >= 2
-        ? resolveExpr(rawArgs[1], argCtx) : undefined;
+        ? resolveExpr(rawArgs[1], ctx) : undefined;
       const callback = callbackContext(fn, initial);
       let args = coerceCallArgs(rawArgs.map((a, i) => {
-        let aCtx = argCtx;
-        if (paramTypes && i < paramTypes.length &&
-            (paramTypes[i].kind === "user" || paramTypes[i].kind === "array" || paramTypes[i].kind === "optional" || paramTypes[i].kind === "nullish")) {
-          aCtx = { ...aCtx, returnTy: paramTypes[i] };
+        const slotTy = (paramTypes && i < paramTypes.length ? paramTypes[i] : null)
+          ?? (bSpec?.argSlot && fn.kind === "field" ? bSpec.argSlot(fn.obj.ty, i) : null);
+        let aCtx = ctx;
+        if (slotTy &&
+            (slotTy.kind === "user" || slotTy.kind === "array" || slotTy.kind === "optional" || slotTy.kind === "nullish")) {
+          aCtx = { ...aCtx, returnTy: slotTy };
         }
         if (i === 0 && a.kind === "lambda" && callback)
           return resolveCallback(a, callback.actual, callback.baseArity, aCtx);
-        return i === 1 && initial ? initial : resolveExpr(a, aCtx);
+        const resolved = i === 1 && initial ? initial : resolveExpr(a, aCtx);
+        if (bSpec?.argSlot && fn.kind === "field") {
+          const bSlot = bSpec.argSlot(fn.obj.ty, i);
+          if (bSlot) return coerceToTargetTy(resolved, bSlot, ctx.typeDecls);
+        }
+        return resolved;
       }), fn, ctx);
-      // Array method `.with(i, v)`: coerce the value arg to the element type
-      // so `arr[i] = v` on `(T|null)[]` wraps `T` → `Some(T)` (and similarly
-      // for synth array-unions). Same shape as the record-field coercion
-      // below: assigning a narrower value into a wider slot.
-      if (fn.kind === "field" && fn.field === "with" && fn.obj.ty.kind === "array" && args.length === 2) {
-        args = [args[0], coerceToTargetTy(args[1], fn.obj.ty.elem, ctx.typeDecls)];
-      }
       let ty = inferMethodReturnTy(fn, args, ctx);
       // For same-file function calls, use the known return type
       if (ty.kind === "unknown" && fn.kind === "var" && !binding(ctx.env, fn.name) && ctx.fnReturns.has(fn.name)) {
@@ -1454,7 +1455,6 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
           && (filterSentinel === "both" || filterSentinel === optAbsent(fn.obj.ty.elem))) {
         return { kind: "call", fn: { ...fn, field: "filterSome" }, args: [], ty: { kind: "array", elem: fn.obj.ty.elem.inner }, callKind: "method" };
       }
-      const builtinId = fn.kind === "field" ? recognizeBuiltin(fn.obj.ty, fn.field) : null;
       return { kind: "call", fn, args, ty, callKind: classifyCall(e.fn, ctx),
         ...(builtinId ? { builtinId } : {}),
         ...(paramTypes ? { paramTys: paramTypes } : {}) };
@@ -1470,7 +1470,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         if (member) return member;
       }
       const obj = resolveExpr(e.obj, ctx);
-      const idx = resolveExpr(e.idx, ctx);
+      let idx = resolveExpr(e.idx, ctx);
       // Map bracket access: default to Option<V>. But if the enclosing scope has a
       // known `k in m` atom matching (obj, idx) — from requires, assert, an enclosing
       // `if (k in m)`, or a loop invariant — narrow to V. Parallels how `narrowedPaths`
@@ -1490,6 +1490,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         }
         idxTy = elems[idx.value];
       } else if (obj.ty.kind === "map") {
+        idx = coerceToTargetTy(idx, obj.ty.key, ctx.typeDecls);
         const objPath = asTExprAccessPath(obj);
         const idxPath = asTExprAccessPath(idx);
         const narrowed = objPath && idxPath && ctx.narrowedIndices.some(
@@ -1601,7 +1602,8 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
           chain.push({ kind: "field", name: step.name, ty: fieldTy });
           stepInTy = fieldTy;
         } else if (step.kind === "index") {
-          const idx = resolveExpr(step.idx, ctx);
+          let idx = resolveExpr(step.idx, ctx);
+          if (stepInTy.kind === "map") idx = coerceToTargetTy(idx, stepInTy.key, ctx.typeDecls);
           const idxTy: Ty = stepInTy.kind === "array" ? stepInTy.elem
             : stepInTy.kind === "string" ? { kind: "string" }
             : stepInTy.kind === "map" ? { kind: "optional", inner: stepInTy.value }
@@ -1624,15 +1626,22 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
               : ((obj.ty.kind === "optional" || obj.ty.kind === "nullish") ? obj.ty.inner : obj.ty);
             const fakeObj: TExpr = { kind: "var", name: "_chain_recv", ty: priorInTy };
             const fakeFn: TExpr = { kind: "field", obj: fakeObj, field: lastField.name, ty: lastField.ty };
+            const builtinId = recognizeBuiltin(priorInTy, lastField.name);
+            const bSpec = builtinId ? builtinSpec(builtinId) : null;
             rawArgs = inferLambdaParamTypes(fakeFn, rawArgs);
             const initial = lastField.name === "reduce" && rawArgs.length >= 2 ? resolveExpr(rawArgs[1], ctx) : undefined;
             const callback = callbackContext(fakeFn, initial);
-            const args = rawArgs.map((a, i) => i === 0 && a.kind === "lambda" && callback
-              ? resolveCallback(a, callback.actual, callback.baseArity, ctx)
-              : i === 1 && initial ? initial : resolveExpr(a, ctx));
+            const args = rawArgs.map((a, i) => {
+              const slotTy = bSpec?.argSlot ? bSpec.argSlot(priorInTy, i) : null;
+              const aCtx = slotTy && (slotTy.kind === "user" || slotTy.kind === "array" || slotTy.kind === "optional" || slotTy.kind === "nullish")
+                ? { ...ctx, returnTy: slotTy } : ctx;
+              const resolved = i === 0 && a.kind === "lambda" && callback
+                ? resolveCallback(a, callback.actual, callback.baseArity, aCtx)
+                : i === 1 && initial ? initial : resolveExpr(a, aCtx);
+              return slotTy ? coerceToTargetTy(resolved, slotTy, ctx.typeDecls) : resolved;
+            });
             callTy = inferMethodReturnTy(fakeFn, args, ctx);
             callKind = "method";
-            const builtinId = recognizeBuiltin(priorInTy, lastField.name);
             chain.push({ kind: "call", args, ty: callTy, callKind,
               ...(builtinId ? { builtinId } : {}) });
             stepInTy = callTy;

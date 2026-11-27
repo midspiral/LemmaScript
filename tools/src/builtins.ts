@@ -40,6 +40,9 @@ export interface BuiltinSpec {
   /** Arg 0 is a membership key/element of the receiver collection — drives
    *  quantifier-variable type inference (`forall k … m.has(k)`). */
   argIsKey?: boolean;
+  /** Expected slot type for argument `index` (used by `resolve` to coerce
+   *  narrowed/non-null/literal values to the collection's element/key/value type). */
+  argSlot?(objTy: Ty, index: number): Ty | null;
 }
 
 const UNKNOWN: Ty = { kind: "unknown" };
@@ -50,19 +53,31 @@ const self = (objTy: Ty): Ty => objTy;
 const elem = (objTy: Ty): Ty => objTy.kind === "array" ? objTy.elem : UNKNOWN;
 const optElem = (objTy: Ty): Ty =>
   objTy.kind === "array" ? { kind: "optional", inner: objTy.elem } : UNKNOWN;
+const arrElemAt0 = (objTy: Ty, i: number): Ty | null =>
+  i === 0 && objTy.kind === "array" ? objTy.elem : null;
+const arrElemAll = (objTy: Ty): Ty | null =>
+  objTy.kind === "array" ? objTy.elem : null;
+const arrElemAt1 = (objTy: Ty, i: number): Ty | null =>
+  i === 1 && objTy.kind === "array" ? objTy.elem : null;
+const mapKeyAt0 = (objTy: Ty, i: number): Ty | null =>
+  i === 0 && objTy.kind === "map" ? objTy.key : null;
+const mapKeyVal = (objTy: Ty, i: number): Ty | null =>
+  objTy.kind === "map" ? (i === 0 ? objTy.key : i === 1 ? objTy.value : null) : null;
+const setElemAt0 = (objTy: Ty, i: number): Ty | null =>
+  i === 0 && objTy.kind === "set" ? objTy.elem : null;
 
 /** The table is the single source: each key is `<RecvKind>.<method>`, which
  *  *is* the `BuiltinId`. */
 export const BUILTINS = {
   // ── array ─────────────────────────────────────────────────
   "array.includes": { ret: BOOL, pure: true,
-    intArgPositions: [1], argIsKey: true },
+    intArgPositions: [1], argIsKey: true, argSlot: arrElemAt0 },
   "array.indexOf": { ret: INT, pure: true,
-    intArgPositions: [1] },
+    intArgPositions: [1], argSlot: arrElemAt0 },
   "array.shift": { ret: elem, pure: false },
   "array.pop": { ret: optElem, pure: false },
-  "array.push": { ret: self, pure: false },
-  "array.unshift": { ret: self, pure: false },
+  "array.push": { ret: self, pure: false, argSlot: arrElemAll },
+  "array.unshift": { ret: self, pure: false, argSlot: arrElemAll },
   "array.concat": { ret: self, pure: true },
   "array.sort": { ret: self, pure: false,
     hof: { shape: "comparator" } },
@@ -104,7 +119,7 @@ export const BUILTINS = {
       return UNKNOWN;
     } },
   "array.with": { ret: (objTy) => objTy, pure: true,
-    intArgPositions: [0] },
+    intArgPositions: [0], argSlot: arrElemAt1 },
 
   // ── string ────────────────────────────────────────────────
   "string.trim": { ret: STRING, pure: true },
@@ -122,19 +137,19 @@ export const BUILTINS = {
   "string.endsWith": { ret: BOOL, pure: true },
 
   // ── map ───────────────────────────────────────────────────
-  "map.get": { pure: true, argIsKey: true,
+  "map.get": { pure: true, argIsKey: true, argSlot: mapKeyAt0,
     ret: (objTy, _args, c) => objTy.kind !== "map" ? UNKNOWN
       : c.inSpec ? objTy.value : { kind: "optional", inner: objTy.value } },
-  "map.has": { ret: BOOL, pure: true, argIsKey: true },
-  "map.set": { ret: self, pure: false },
-  "map.delete": { ret: self, pure: false },
+  "map.has": { ret: BOOL, pure: true, argIsKey: true, argSlot: mapKeyAt0 },
+  "map.set": { ret: self, pure: false, argSlot: mapKeyVal },
+  "map.delete": { ret: self, pure: false, argSlot: mapKeyAt0 },
   "map.keys": { ret: () => UNKNOWN, pure: true },
   "map.values": { ret: () => UNKNOWN, pure: true },
 
   // ── set ───────────────────────────────────────────────────
-  "set.has": { ret: BOOL, pure: true, argIsKey: true },
-  "set.add": { ret: self, pure: false },
-  "set.delete": { ret: self, pure: false },
+  "set.has": { ret: BOOL, pure: true, argIsKey: true, argSlot: setElemAt0 },
+  "set.add": { ret: self, pure: false, argSlot: setElemAt0 },
+  "set.delete": { ret: self, pure: false, argSlot: setElemAt0 },
 } satisfies Record<`${RecvKind}.${string}`, BuiltinSpec>;
 
 /** One id per table entry. */
