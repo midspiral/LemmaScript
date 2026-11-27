@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readRecords } from "../src/run-log.ts";
 
 const cli = fileURLToPath(new URL("../dist/lsc.js", import.meta.url));
 const source = "export function identity(value: number): number { return value; }\n";
@@ -36,6 +37,45 @@ test("a failed registered law points to its own source in single-file and worksp
     assert.match(result.stdout + result.stderr, /laws\.dfy\(2,\d+\): Related location: this is the postcondition/);
   }
 });
+
+for (const args of [["check", "source.ts"], ["check"], ["regen", "source.ts"]]) {
+  test(`${args.join(" ")} reports a registered proof fix as proof, not flaky`, () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "lsc-commands-proof-hash-")));
+    try {
+      writeFileSync(join(dir, "source.ts"), source);
+      writeFileSync(join(dir, "LemmaScript-files.txt"), "source.ts\n");
+      writeFileSync(join(dir, "lemmascript.json"), JSON.stringify({
+        "proof-dir": "generated", "proof-files": { "source.ts": ["laws.dfy"], "other.ts": ["unrelated.dfy"] },
+      }));
+      const run = (flags: string[]) => {
+        const result = spawnSync(process.execPath, [cli, ...flags], {
+          cwd: dir, env: { ...process.env, LSC_RUN_LOG: "true" }, encoding: "utf8", timeout: 30_000,
+        });
+        assert.ifError(result.error);
+        return result;
+      };
+      for (const op of ["!=", "=="]) {
+        writeFileSync(join(dir, "laws.dfy"), `lemma IdentityLaw(x: int)\n  ensures identity(x) ${op} x\n{}\n`);
+        const result = run(["--backend=dafny", ...args]);
+        assert.equal(result.status, op === "!=" ? 1 : 0, result.stdout + result.stderr);
+      }
+      const records = readRecords(dir);
+      assert.equal(records.length, 2);
+      const [failed, fixed] = records;
+      assert.equal(failed.stage, "verify");
+      assert.equal(fixed.stage, "ok");
+      assert.equal(failed.tsHash, fixed.tsHash);
+      assert.notEqual(failed.dfyHash, null);
+      assert.notEqual(fixed.dfyHash, null);
+      assert.notEqual(failed.dfyHash, fixed.dfyHash);
+      const report = run(["runs", "--json"]);
+      assert.equal(report.status, 0, report.stdout + report.stderr);
+      assert.deepEqual(JSON.parse(report.stdout).catches.map((c: { kind: string }) => c.kind), ["proof"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
 
 const cases: { name: string; files: Record<string, string>; args: string[] }[] = [
   { name: "without a file", files: {}, args: [] },

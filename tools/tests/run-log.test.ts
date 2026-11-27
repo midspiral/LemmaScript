@@ -22,6 +22,12 @@ function records(logDir: string): any[] {
     .trim().split("\n").map(line => JSON.parse(line));
 }
 
+function recordProofHash(root: string, proofFiles: string[] = []): string | null {
+  new RunLog({ logDir: root, cmd: "check", sourcePath: join(root, "a.ts"), proofFiles, lscVersion: "0" })
+    .finish({ stage: "ok", exit: 0, dfyPath: join(root, "a.dfy") });
+  return readRecords(root).at(-1)!.dfyHash;
+}
+
 /** A complete verify record as JSON, with `id` and any fields overridden (`undefined` removes one). */
 function recordLine(id: string, overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
@@ -289,6 +295,72 @@ test("finish appends one complete record and ignores later calls", () => {
     assert.equal(r.dfyHash, hashText("lemma L() {}\n"));
     assert.equal(r.lsc, "9.9.9");
     assert.ok(existsSync(join(root, ".lemmascript", "blobs", `${r.tsHash}.ts`)));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("proof hashes track registered contents, paths and membership", () => {
+  const root = tempDir();
+  try {
+    const main = "lemma L() {}\n";
+    const law = join(root, "law.dfy");
+    const shared = join(root, "shared.dfy");
+    const renamed = join(root, "renamed.dfy");
+    writeFileSync(join(root, "a.ts"), "");
+    writeFileSync(join(root, "a.dfy"), main);
+    writeFileSync(law, "lemma Law() {}\n");
+    writeFileSync(shared, "lemma Shared() {}\n");
+    const single = recordProofHash(root);
+    assert.equal(single, hashText(main));
+    const original = recordProofHash(root, [law]);
+    assert.notEqual(original, single);
+    assert.notEqual(recordProofHash(root, [law, shared]), original);
+    assert.equal(recordProofHash(root, [law]), original, "removing a registration restores its previous hash");
+    assert.equal(recordProofHash(root), single);
+
+    writeFileSync(law, "lemma Law() { assert true; }\n");
+    const edited = recordProofHash(root, [law]);
+    assert.notEqual(edited, original);
+    writeFileSync(renamed, readFileSync(law, "utf8"));
+    assert.notEqual(recordProofHash(root, [renamed]), edited, "paths distinguish identical contents");
+    writeFileSync(shared, "lemma Unregistered() {}\n");
+    assert.equal(recordProofHash(root, [law]), edited, "unregistered files do not affect the hash");
+    writeFileSync(join(root, "a.dfy"), main + "lemma Added() {}\n");
+    assert.notEqual(recordProofHash(root, [law]), edited, "the main companion still contributes");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("proof hashes ignore registration order, path aliases and checkout location", () => {
+  const roots = [tempDir(), tempDir()];
+  try {
+    const hashes = roots.map(root => {
+      writeFileSync(join(root, "a.ts"), "");
+      writeFileSync(join(root, "a.dfy"), "lemma L() {}\n");
+      writeFileSync(join(root, "law.dfy"), "lemma Law() {}\n");
+      writeFileSync(join(root, "shared.dfy"), "lemma Shared() {}\n");
+      const files = [join(root, "law.dfy"), join(root, "shared.dfy")];
+      const hash = recordProofHash(root, files);
+      assert.notEqual(hash, null);
+      assert.equal(recordProofHash(root, [...files].reverse()), hash);
+      assert.equal(recordProofHash(root, [files[1], `${root}/./law.dfy`, files[0]]), hash);
+      return hash;
+    });
+    assert.equal(hashes[0], hashes[1]);
+  } finally {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a missing registered proof leaves a record with a null proof hash", () => {
+  const root = tempDir();
+  try {
+    writeFileSync(join(root, "a.ts"), "");
+    writeFileSync(join(root, "a.dfy"), "lemma L() {}\n");
+    assert.equal(recordProofHash(root, [join(root, "missing.dfy")]), null);
+    assert.equal(readRecords(root).length, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

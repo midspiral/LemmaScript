@@ -41,6 +41,7 @@ export interface VerifyRecord {
   failed: string[];
   passed: string[];
   tsHash: string | null;
+  /** The main Dafny companion and any registered proof files. */
   dfyHash: string | null;
   lsc: string | null;
 }
@@ -49,6 +50,7 @@ export interface RunLogInit {
   logDir: string;
   cmd: "check" | "regen";
   sourcePath: string;
+  proofFiles?: readonly string[];
   extraFlags?: string;
   lscVersion: string | null;
 }
@@ -211,7 +213,7 @@ export class RunLog {
           failed: results?.failed ?? [],
           passed: results?.passed ?? [],
           tsHash: this.tsHash,
-          dfyHash: safely(() => hashText(readFileSync(outcome.dfyPath, "utf8"))),
+          dfyHash: safely(() => this.proofHash(outcome.dfyPath)),
           lsc: this.init.lscVersion,
         };
         appendFileSync(path.join(dir, "runs.jsonl"), JSON.stringify(record) + "\n");
@@ -225,6 +227,20 @@ export class RunLog {
     if (this.done) return;
     this.done = true;
     this.removeTextLogDir();
+  }
+
+  private proofHash(dfyPath: string): string {
+    const content = readFileSync(dfyPath, "utf8");
+    const files = [...new Set((this.init.proofFiles ?? []).map(file => path.resolve(file)))];
+    // Preserve historical comparisons for sources without registered proofs.
+    if (files.length === 0) return hashText(content);
+    const proofs = files.map(file => [
+      path.relative(this.init.logDir, file).split(path.sep).join("/"),
+      readFileSync(file, "utf8"),
+    ]);
+    proofs.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    // Include paths and file boundaries, independent of registration order or checkout location.
+    return hashText(JSON.stringify([content, proofs]));
   }
 
   private textLogPath(): string {

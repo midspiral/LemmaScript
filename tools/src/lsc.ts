@@ -446,13 +446,17 @@ function runFile(
 
     // Record check/regen runs in the run log. Created after the proof-dir guard
     // so an aborted run leaves no snapshot; each helper records the stage it detects.
+    const proofFiles = resolveDafnyProofFiles(absPath, configFile, options);
     const logCmd = cmd === "check" || cmd === "regen" ? cmd : null;
     const log = logCmd && runLogOn
-      ? new RunLog({ logDir: resolveLogDir(absPath, configFile), cmd: logCmd, sourcePath: absPath, extraFlags, lscVersion: safely(lscVersion) })
+      ? new RunLog({
+        logDir: resolveLogDir(absPath, configFile), cmd: logCmd, sourcePath: absPath,
+        proofFiles, extraFlags, lscVersion: safely(lscVersion),
+      })
       : undefined;
 
     if (cmd === "gen") { dafnyGen(genPath, dfyPath, text, basePath); return; }
-    const proofs = readDafnyProofFiles(resolveDafnyProofFiles(absPath, configFile, options), dfyPath, log);
+    const proofs = readDafnyProofFiles(proofFiles, dfyPath, log);
     if (cmd === "gen-check") {
       dafnyGen(genPath, dfyPath, text, basePath);
       if (!dafnyCheckDiff(genPath, dfyPath, undefined, basePath)) process.exit(1);
