@@ -126,3 +126,45 @@ export function crossVariantReassignment(input: Shape, xs: number[]): number[] {
       return [];
   }
 }
+
+//@ requires inA.kind === "a" && inA.n === 0
+//@ requires inB.kind === "a" && inB.n === 0
+//@ ensures \result === 0
+export function nestedIndependentSwitchReassign(inA: Shape, inB: Shape): number {
+  let a = inA;
+  let b = inB;
+  switch (a.kind) {
+    case "a":
+      switch (b.kind) {
+        case "a":
+          a = { ...a, n: 5 };
+          b.n = 10;
+          return b.n;
+        case "b":
+          return 0;
+      }
+    case "b":
+      return 0;
+  }
+}
+
+//@ requires inA.kind === "a" && inA.n === 0
+//@ requires inB.kind === "a" && inB.n === 0
+//@ ensures \result === 0
+export function nestedIndependentSwitchSwapped(inA: Shape, inB: Shape): number {
+  let a = inA;
+  let b = inB;
+  switch (b.kind) {
+    case "a":
+      switch (a.kind) {
+        case "a":
+          a = { ...a, n: 5 };
+          b.n = 10;
+          return b.n;
+        case "b":
+          return 0;
+      }
+    case "b":
+      return 0;
+  }
+}

@@ -69,6 +69,8 @@ test("JavaScript gives counterexamples to every false ensures in the reassignmen
   assert.equal(falseRuntime.whileLoopReassignment(a0), 5);
   assert.equal(falseRuntime.fieldWriteAfterReassignment(p0), 15);
   assert.deepEqual(falseRuntime.crossVariantReassignment(a0, [0]), [5]);
+  assert.equal(falseRuntime.nestedIndependentSwitchReassign(a0, a0), 10);
+  assert.equal(falseRuntime.nestedIndependentSwitchSwapped(a0, a0), 10);
 });
 
 test("JavaScript matches every valid ensures in the reassignment fixture", () => {
@@ -84,6 +86,8 @@ test("JavaScript matches every valid ensures in the reassignment fixture", () =>
   assert.deepEqual(validRuntime.crossVariantReassignmentOk(a0, [0]), [5]);
   assert.equal(validRuntime.synthArrayUnionReassigned([1, 2]), 42);
   assert.equal(validRuntime.pathSynthArrayUnionReassigned({ u: [1, 2] }), 42);
+  assert.equal(validRuntime.nestedIndependentSwitchReassignOk(a0, a0), 15);
+  assert.equal(validRuntime.nestedIndependentSwitchSwappedOk(a0, a0), 15);
 });
 
 test("Dafny refutes every false ensures after scrutinee reassignment", () => {
@@ -91,7 +95,7 @@ test("Dafny refutes every false ensures after scrutinee reassignment", () => {
   const result = verifyDafny("reassignment-false", output);
   assert.notEqual(result.status, 0, output + result.output);
   assert.doesNotMatch(result.output, /resolution|type errors/i, output + result.output);
-  assert.match(result.output, /\b8 errors?\b/, output + result.output);
+  assert.match(result.output, /\b10 errors?\b/, output + result.output);
 });
 
 test("Dafny verifies every valid contract after scrutinee reassignment", () => {

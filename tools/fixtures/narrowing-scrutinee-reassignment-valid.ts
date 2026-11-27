@@ -116,3 +116,45 @@ export function pathSynthArrayUnionReassigned(input: Msg): number[] | number {
   }
   return m.u;
 }
+
+//@ requires inA.kind === "a" && inA.n === 0
+//@ requires inB.kind === "a" && inB.n === 0
+//@ ensures \result === 15
+export function nestedIndependentSwitchReassignOk(inA: Shape, inB: Shape): number {
+  let a = inA;
+  let b = inB;
+  switch (a.kind) {
+    case "a":
+      switch (b.kind) {
+        case "a":
+          a = { ...a, n: 5 };
+          b.n = 10;
+          return a.n + b.n;
+        case "b":
+          return 0;
+      }
+    case "b":
+      return 0;
+  }
+}
+
+//@ requires inA.kind === "a" && inA.n === 0
+//@ requires inB.kind === "a" && inB.n === 0
+//@ ensures \result === 15
+export function nestedIndependentSwitchSwappedOk(inA: Shape, inB: Shape): number {
+  let a = inA;
+  let b = inB;
+  switch (b.kind) {
+    case "a":
+      switch (a.kind) {
+        case "a":
+          a = { ...a, n: 5 };
+          b.n = 10;
+          return a.n + b.n;
+        case "b":
+          return 0;
+      }
+    case "b":
+      return 0;
+  }
+}

@@ -2203,140 +2203,90 @@ function eliminateTopLevelContinue(stmts: Stmt[]): Stmt[] {
   return out;
 }
 
-/** Collect bare variable names (without `.`) directly assigned anywhere in `stmts`. */
-function collectWholeVarAssigns(stmts: readonly TStmt[], out = new Set<string>()): Set<string> {
-  for (const s of stmts) {
-    if (s.kind === "assign") {
-      if (!s.target.includes(".")) out.add(s.target);
-    } else if (s.kind === "if") {
-      collectWholeVarAssigns(s.then, out);
-      collectWholeVarAssigns(s.else, out);
-    } else if (s.kind === "while" || s.kind === "forof") {
-      collectWholeVarAssigns(s.body, out);
-    } else if (s.kind === "switch") {
-      for (const c of s.cases) collectWholeVarAssigns(c.body, out);
-      collectWholeVarAssigns(s.defaultBody, out);
-    } else if (s.kind === "someMatch") {
-      collectWholeVarAssigns(s.someBody, out);
-      collectWholeVarAssigns(s.noneBody, out);
-    } else if (s.kind === "tagMatch") {
-      for (const c of s.cases) collectWholeVarAssigns(c.body, out);
-      collectWholeVarAssigns(s.fallthrough, out);
-    }
-  }
-  return out;
-}
-
-/** Drop any active `variant` write-back frame whose `unionVar` was reassigned
- *  as a whole variable (plus any inner frames nested on top of it), so
- *  subsequent field writes update the live storage variable instead of
- *  reconstructing the union from stale match binders. */
-function dropInvalidatedVariantFrames(vars: ReadonlySet<string>): void {
-  if (vars.size === 0 || _writeBackFrames.length === 0) return;
-  const idx = _writeBackFrames.findIndex(f => f.kind === "variant" && vars.has(f.unionVar));
-  if (idx !== -1) {
-    _writeBackFrames = _writeBackFrames.slice(0, idx);
-  }
-}
-
 function transformStmts(stmts: TStmt[], typeDecls: TypeDeclInfo[]): Stmt[] {
-  const savedFrames = _writeBackFrames;
-  try {
-    const result: Stmt[] = [];
-    let i = 0;
-    while (i < stmts.length) {
-      const s = stmts[i];
-      // Transform for-of → for-in over range
-      if (s.kind === "forof") {
-        const headName = s.names[0];
-        const headTy = s.nameTypes[0] ?? { kind: "unknown" as const };
-        const iterExpr = transformExpr(s.iterable);
-        dropInvalidatedVariantFrames(collectWholeVarAssigns(s.body));
+  const result: Stmt[] = [];
+  let i = 0;
+  while (i < stmts.length) {
+    const s = stmts[i];
+    // Transform for-of → for-in over range
+    if (s.kind === "forof") {
+      const headName = s.names[0];
+      const headTy = s.nameTypes[0] ?? { kind: "unknown" as const };
+      const iterExpr = transformExpr(s.iterable);
 
-        // All for-of shapes lower to the same range loop `for idx in 0..seq.size`;
-        // they differ only in (a) which indexable `seq` is iterated and (b) the
-        // per-iteration `let`s that bind the loop names. The counter name was
-        // minted by resolve, where specs naming it are resolved; the suffix
-        // numbers this loop's helper names. Each shape fills in `seq` + `perIter`.
-        const count = _forofCounters.get(headName) ?? 0;
-        _forofCounters.set(headName, count + 1);
-        const suffix = count === 0 ? "" : `${count + 1}`;
-        const idxName = s.idx;
-        const idxVar: Expr = { kind: "var", name: idxName };
+      // All for-of shapes lower to the same range loop `for idx in 0..seq.size`;
+      // they differ only in (a) which indexable `seq` is iterated and (b) the
+      // per-iteration `let`s that bind the loop names. The counter name was
+      // minted by resolve, where specs naming it are resolved; the suffix
+      // numbers this loop's helper names. Each shape fills in `seq` + `perIter`.
+      const count = _forofCounters.get(headName) ?? 0;
+      _forofCounters.set(headName, count + 1);
+      const suffix = count === 0 ? "" : `${count + 1}`;
+      const idxName = s.idx;
+      const idxVar: Expr = { kind: "var", name: idxName };
 
-        let seq: Expr;
-        let perIter: Stmt[];
+      let seq: Expr;
+      let perIter: Stmt[];
 
-        if (s.iterable.ty.kind === "map") {
-          // for (const k of map) / for (const [k, v] of map): materialize the keys
-          // as a seq and index into it; a value name looks up via getDirect.
-          const keyTy = s.nameTypes[0] ?? s.iterable.ty.key ?? { kind: "unknown" as const };
-          const keysSeqName = freshName(`_${headName}_keys${suffix}`);
-          result.push({ kind: "let", name: keysSeqName, type: { kind: "array", elem: keyTy }, mutable: false,
-            value: { kind: "app", fn: "SetToSeq", args: [{ kind: "field", obj: iterExpr, field: "keys" }] } });
-          seq = { kind: "var", name: keysSeqName };
-          const letKey: Stmt = { kind: "let", name: headName, type: keyTy, mutable: false, value: { kind: "index", arr: seq, idx: idxVar } };
-          if (s.names.length >= 2) {
-            const valueTy = s.nameTypes[1] ?? { kind: "unknown" as const };
-            const letVal: Stmt = { kind: "let", name: s.names[1], type: valueTy, mutable: false,
-              value: { kind: "methodCall", obj: iterExpr, objTy: s.iterable.ty, method: "getDirect", args: [{ kind: "var", name: headName }], monadic: false } };
-            perIter = [letKey, letVal];
-          } else {
-            perIter = [letKey];
-          }
-        } else if (s.names.length >= 2 && s.iterable.ty.kind === "array" && s.iterable.ty.elem.kind === "tuple") {
-          // for (const [a, b] of tupleArr): bind the element once, then destructure
-          // it into each name via a tuple projection.
-          const tupleTy = s.iterable.ty.elem;
-          seq = iterExpr;
-          const elemName = freshName(`_${headName}_elem${suffix}`);
-          const letElem: Stmt = { kind: "let", name: elemName, type: tupleTy, mutable: false, value: { kind: "index", arr: seq, idx: idxVar } };
-          perIter = [letElem, ...s.names.map((n, k): Stmt => ({
-            kind: "let", name: n, type: tupleTy.elems[k] ?? { kind: "unknown" }, mutable: false,
-            value: { kind: "tupleProj", obj: { kind: "var", name: elemName }, index: k, arity: tupleTy.elems.length },
-          }))];
+      if (s.iterable.ty.kind === "map") {
+        // for (const k of map) / for (const [k, v] of map): materialize the keys
+        // as a seq and index into it; a value name looks up via getDirect.
+        const keyTy = s.nameTypes[0] ?? s.iterable.ty.key ?? { kind: "unknown" as const };
+        const keysSeqName = freshName(`_${headName}_keys${suffix}`);
+        result.push({ kind: "let", name: keysSeqName, type: { kind: "array", elem: keyTy }, mutable: false,
+          value: { kind: "app", fn: "SetToSeq", args: [{ kind: "field", obj: iterExpr, field: "keys" }] } });
+        seq = { kind: "var", name: keysSeqName };
+        const letKey: Stmt = { kind: "let", name: headName, type: keyTy, mutable: false, value: { kind: "index", arr: seq, idx: idxVar } };
+        if (s.names.length >= 2) {
+          const valueTy = s.nameTypes[1] ?? { kind: "unknown" as const };
+          const letVal: Stmt = { kind: "let", name: s.names[1], type: valueTy, mutable: false,
+            value: { kind: "methodCall", obj: iterExpr, objTy: s.iterable.ty, method: "getDirect", args: [{ kind: "var", name: headName }], monadic: false } };
+          perIter = [letKey, letVal];
         } else {
-          // Single element by index. Sets aren't indexable, so materialize first.
-          if (s.iterable.ty.kind === "set") {
-            const seqName = freshName(`_${headName}_seq${suffix}`);
-            const elemTy: Ty = headTy.kind !== "unknown" ? headTy : { kind: "string" };
-            result.push({ kind: "let", name: seqName, type: { kind: "array", elem: elemTy }, mutable: false,
-              value: { kind: "app", fn: "SetToSeq", args: [iterExpr] } });
-            seq = { kind: "var", name: seqName };
-          } else {
-            seq = iterExpr;
-          }
-          perIter = [{ kind: "let", name: headName, type: headTy, mutable: false, value: { kind: "index", arr: seq, idx: idxVar } }];
+          perIter = [letKey];
         }
+      } else if (s.names.length >= 2 && s.iterable.ty.kind === "array" && s.iterable.ty.elem.kind === "tuple") {
+        // for (const [a, b] of tupleArr): bind the element once, then destructure
+        // it into each name via a tuple projection.
+        const tupleTy = s.iterable.ty.elem;
+        seq = iterExpr;
+        const elemName = freshName(`_${headName}_elem${suffix}`);
+        const letElem: Stmt = { kind: "let", name: elemName, type: tupleTy, mutable: false, value: { kind: "index", arr: seq, idx: idxVar } };
+        perIter = [letElem, ...s.names.map((n, k): Stmt => ({
+          kind: "let", name: n, type: tupleTy.elems[k] ?? { kind: "unknown" }, mutable: false,
+          value: { kind: "tupleProj", obj: { kind: "var", name: elemName }, index: k, arity: tupleTy.elems.length },
+        }))];
+      } else {
+        // Single element by index. Sets aren't indexable, so materialize first.
+        if (s.iterable.ty.kind === "set") {
+          const seqName = freshName(`_${headName}_seq${suffix}`);
+          const elemTy: Ty = headTy.kind !== "unknown" ? headTy : { kind: "string" };
+          result.push({ kind: "let", name: seqName, type: { kind: "array", elem: elemTy }, mutable: false,
+            value: { kind: "app", fn: "SetToSeq", args: [iterExpr] } });
+          seq = { kind: "var", name: seqName };
+        } else {
+          seq = iterExpr;
+        }
+        perIter = [{ kind: "let", name: headName, type: headTy, mutable: false, value: { kind: "index", arr: seq, idx: idxVar } }];
+      }
 
-        const arrSize: Expr = { kind: "field", obj: seq, field: "size" };
-        // Auto-add bound invariant: idx ≤ bound (always true for range loops)
-        const boundInv: Expr = { kind: "binop", op: "≤", left: idxVar, right: arrSize };
-        const bodyStmts = insertIncrementBeforeContinue(
-          eliminateTopLevelContinue(transformStmts(s.body, typeDecls)), idxName);
-        result.push({
-          kind: "forin", idx: idxName, bound: arrSize,
-          invariants: [boundInv, ...s.invariants.map(transformSpecExpr)],
-          body: [...perIter, ...bodyStmts],
-        });
-        i++;
-        continue;
-      }
-      if (s.kind === "while") {
-        dropInvalidatedVariantFrames(collectWholeVarAssigns(s.body));
-      }
-      result.push(...transformStmt(s, typeDecls));
-      if (s.kind === "assign" && !s.target.includes(".")) {
-        dropInvalidatedVariantFrames(new Set([s.target]));
-      } else if (s.kind === "if" || s.kind === "switch" || s.kind === "someMatch" || s.kind === "tagMatch") {
-        dropInvalidatedVariantFrames(collectWholeVarAssigns([s]));
-      }
+      const arrSize: Expr = { kind: "field", obj: seq, field: "size" };
+      // Auto-add bound invariant: idx ≤ bound (always true for range loops)
+      const boundInv: Expr = { kind: "binop", op: "≤", left: idxVar, right: arrSize };
+      const bodyStmts = insertIncrementBeforeContinue(
+        eliminateTopLevelContinue(transformStmts(s.body, typeDecls)), idxName);
+      result.push({
+        kind: "forin", idx: idxName, bound: arrSize,
+        invariants: [boundInv, ...s.invariants.map(transformSpecExpr)],
+        body: [...perIter, ...bodyStmts],
+      });
       i++;
+      continue;
     }
-    return result;
-  } finally {
-    _writeBackFrames = savedFrames;
+    result.push(...transformStmt(s, typeDecls));
+    i++;
   }
+  return result;
 }
 
 let _liftCounter = 0;
@@ -2905,13 +2855,19 @@ function emitMatchStmt(
   const prefix = path ? [path.rootVar, ...path.fields].join("_") : "?";
   const baseUnionName = tyBaseName(typeName);
   function transformArmBody(body: TStmt[], fields: { name: string; tsType: string; type?: Ty }[], ctorName?: string): Stmt[] {
+    const reassignsScrutinee = !!path && stmtsInvalidatePath(body, path);
     let stmts: TStmt[];
-    if (isPath && path) {
+    if (reassignsScrutinee) {
+      // Whole-scrutinee (or path-prefix) reassignment inside the arm: keep live
+      // storage as the single source of truth instead of introducing match
+      // binders that would diverge from reassigned storage.
+      stmts = body;
+    } else if (isPath && path) {
       // Path scrutinee: the matched value is referred to by the bare path, so
       // substitute the whole path (only the synth single-field shape arises
       // here — discriminant chains require a var scrutinee).
       stmts = isSynthArrayUnion && fields.length === 1
-        ? replacePathInTStmtsUntilReassign(body, path, matchBinder(fields[0].name, prefix), fields[0].type ?? parseTsType(fields[0].tsType))
+        ? replacePathInTStmts(body, path, matchBinder(fields[0].name, prefix), fields[0].type ?? parseTsType(fields[0].tsType))
         : body;
     } else {
       stmts = replaceFieldAccessInTStmts(body, prefix, fields);
@@ -2920,7 +2876,7 @@ function emitMatchStmt(
         stmts = replaceVarInTStmts(stmts, prefix, matchBinder(f.name, prefix), f.type ?? parseTsType(f.tsType));
       }
     }
-    const pushVariant = !isPath && !!ctorName && fields.length > 0;
+    const pushVariant = !reassignsScrutinee && !isPath && !!ctorName && fields.length > 0;
     if (pushVariant) {
       for (const f of fields) {
         _varTypes.set(matchBinder(f.name, prefix), f.type ?? parseTsType(f.tsType));
@@ -2970,17 +2926,16 @@ function emitMatchStmt(
   return { kind: "match", scrutinee: (isPath || scrutinee.kind === "checkedUnwrap") ? transformExpr(scrutinee) : varE(prefix), arms };
 }
 
-/** Replace bare `var(oldName)` references → `var(newName)` with the given type
- *  until `oldName` is reassigned as a whole variable.
+/** Replace bare `var(oldName)` references → `var(newName)` with the given type.
  *  Used by emitMatchStmt for synth array-unions where the variant has a single
  *  payload field and the user code refers to the scrutinee by its bare name. */
 function replaceVarInTStmts(stmts: TStmt[], oldName: string, newName: string, newTy: Ty): TStmt[] {
-  return mapTStmtsUntilReassign(stmts, { rootVar: oldName, fields: [] }, e => {
+  return stmts.map(s => mapTStmt(s, e => {
     if (e.kind === "var" && e.name === oldName) {
       return { kind: "var", name: newName, ty: newTy } as TExpr;
     }
     return null;
-  }).stmts;
+  }));
 }
 
 /** `switch(obj.field)` is stripped at extraction to scrutinee `obj` + discriminant
@@ -3010,37 +2965,10 @@ function switchCtorDecl(typeDecls: TypeDeclInfo[], ty: Ty | undefined): TypeDecl
   return decl?.kind === "string-union" || decl?.kind === "discriminated-union" ? decl : undefined;
 }
 
-/** True if a lowered statement may reassign `varName` to a value that is not
- *  guaranteed to keep `ctorName` (i.e. anything other than a constructor call
- *  or spread-update already pinned to `ctorName`). */
-function stmtReassignsOtherCtor(s: Stmt, varName: string, ctorName: string): boolean {
-  if (s.kind === "assign" || s.kind === "bind") {
-    if (s.target !== varName) return false;
-    if (s.value.kind === "constructor" && s.value.name === ctorName) return false;
-    if (s.value.kind === "record" && (
-      s.value.ctor === ctorName ||
-      (!s.value.ctor && s.value.spread?.kind === "var" && s.value.spread.name === varName)
-    )) return false;
-    return true;
-  }
-  if (s.kind === "if") {
-    return s.then.some(t => stmtReassignsOtherCtor(t, varName, ctorName)) ||
-      s.else.some(t => stmtReassignsOtherCtor(t, varName, ctorName));
-  }
-  if (s.kind === "while" || s.kind === "forin") {
-    return s.body.some(t => stmtReassignsOtherCtor(t, varName, ctorName));
-  }
-  if (s.kind === "match") {
-    return s.arms.some(a => a.body.some(t => stmtReassignsOtherCtor(t, varName, ctorName)));
-  }
-  return false;
-}
-
 /** Stamp variant ctor info onto datatype updates of the match scrutinee in
  *  lowered arm bodies (`{ ...vn, f: v }`) — the statement-path twin of
  *  `replaceFieldAccess`'s stamping. Emitters need the pin to use
- *  per-constructor destructor names for collision-renamed fields. Stops
- *  stamping once `varName` may have been reassigned to another variant. */
+ *  per-constructor destructor names for collision-renamed fields. */
 function stampScrutineeUpdates(body: Stmt[], varName: string, ctorName: string, ctorOf: string): Stmt[] {
   const stamp = (x: Expr): Expr | null => {
     if (x.kind === "lambda") return mapLambdaBody(x, varName, stamp);
@@ -3051,57 +2979,7 @@ function stampScrutineeUpdates(body: Stmt[], varName: string, ctorName: string, 
     }
     return null;
   };
-  const walk = (stmts: Stmt[]): { stmts: Stmt[]; invalidated: boolean } => {
-    const out: Stmt[] = [];
-    let invalidated = false;
-    for (const s of stmts) {
-      if (invalidated) { out.push(s); continue; }
-      if (s.kind === "assign" || s.kind === "bind") {
-        const stamped: Stmt = { ...s, value: mapExpr(s.value, stamp) };
-        out.push(stamped);
-        if (stmtReassignsOtherCtor(stamped, varName, ctorName)) invalidated = true;
-      } else if (s.kind === "if") {
-        const cond = mapExpr(s.cond, stamp);
-        const t = walk(s.then);
-        const e = walk(s.else);
-        out.push({ ...s, cond, then: t.stmts, else: e.stmts });
-        if (t.invalidated || e.invalidated) invalidated = true;
-      } else if (s.kind === "while") {
-        if (s.body.some(t => stmtReassignsOtherCtor(t, varName, ctorName))) {
-          invalidated = true;
-          out.push(s);
-        } else {
-          const b = walk(s.body);
-          out.push({ ...s, cond: mapExpr(s.cond, stamp), invariants: s.invariants.map(e => mapExpr(e, stamp)),
-            decreasing: s.decreasing ? mapExpr(s.decreasing, stamp) : null,
-            doneWith: s.doneWith ? mapExpr(s.doneWith, stamp) : null, body: b.stmts });
-        }
-      } else if (s.kind === "forin") {
-        const bound = mapExpr(s.bound, stamp);
-        if (s.body.some(t => stmtReassignsOtherCtor(t, varName, ctorName))) {
-          invalidated = true;
-          out.push({ ...s, bound });
-        } else {
-          const b = walk(s.body);
-          out.push({ ...s, bound, invariants: s.invariants.map(e => mapExpr(e, stamp)), body: b.stmts });
-        }
-      } else if (s.kind === "match") {
-        const scrutinee = mapExpr(s.scrutinee, stamp);
-        let anyInv = false;
-        const arms = s.arms.map(a => {
-          const b = walk(a.body);
-          if (b.invalidated) anyInv = true;
-          return { ...a, body: b.stmts };
-        });
-        out.push({ ...s, scrutinee, arms });
-        if (anyInv) invalidated = true;
-      } else {
-        out.push(mapStmt(s, stamp));
-      }
-    }
-    return { stmts: out, invalidated };
-  };
-  return walk(body).stmts;
+  return body.map(st => mapStmt(st, stamp));
 }
 
 /** A default covering one union variant needs the same payload binders as an
@@ -3134,7 +3012,12 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
       ? buildMatchArms(cases, undefined, ctorDecl!.name, typeDecls, (body) => transformStmts(body, typeDecls))!
       : buildMatchArms(cases, switchVarName, ctorDecl!.name, typeDecls,
         (body, vn, fields, ctorName) => {
-          const pushVariant = !!ctorName && !!vn && vn !== "?" && !!baseName && fields.length > 0 && s.expr.kind !== "checkedUnwrap";
+          // If the arm reassigns the scrutinee as a whole variable (`sh = ...`),
+          // keep live `sh` as the single source of truth: skip binder
+          // substitution, variant write-back framing, and ctor stamping so
+          // reads, writes, and independent nested switches cannot desync.
+          const reassignsScrutinee = !!vn && vn !== "?" && stmtsInvalidatePath(body, { rootVar: vn, fields: [] });
+          const pushVariant = !reassignsScrutinee && !!ctorName && !!vn && vn !== "?" && !!baseName && fields.length > 0 && s.expr.kind !== "checkedUnwrap";
           const variantMeta = ctorName ? ctorDecl?.variants?.find(v => v.name === ctorName) : undefined;
           if (pushVariant) {
             for (const f of fields) {
@@ -3147,11 +3030,11 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
           }
           let out: Stmt[];
           try {
-            out = transformStmts(replaceFieldAccessInTStmts(body, vn!, fields), typeDecls);
+            out = transformStmts(reassignsScrutinee ? body : replaceFieldAccessInTStmts(body, vn!, fields), typeDecls);
           } finally {
             if (pushVariant) _writeBackFrames.pop();
           }
-          if (ctorName && vn && baseName) out = stampScrutineeUpdates(out, vn, ctorName, baseName);
+          if (!reassignsScrutinee && ctorName && vn && baseName) out = stampScrutineeUpdates(out, vn, ctorName, baseName);
           if (_opts.backend === "lean" && pushVariant) {
             const assigned = collectAssignedIrTargets(out);
             const mutShadows: Stmt[] = fields
@@ -3171,16 +3054,14 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
   return { kind: "match", scrutinee, arms };
 }
 
-/** Replace obj.field → replacement var in typed IR until `objName` is
- *  reassigned as a whole variable (sub-field writes like `obj.f = v` stay
- *  in sync through Place write-back).
+/** Replace obj.field → replacement var in typed IR.
  *  Uses the TExpr's resolved type when available, falling back to `fallbackTy`. */
 function replaceFieldsInTStmts(
   stmts: TStmt[], objName: string,
   replacements: { fieldName: string; newName: string; fallbackTy: Ty }[]
 ): TStmt[] {
   if (replacements.length === 0) return stmts;
-  return mapTStmtsUntilReassign(stmts, { rootVar: objName, fields: [] }, e => {
+  return stmts.map(s => mapTStmt(s, e => {
     const objMatches = e.kind === "field" && (
       (e.obj.kind === "var" && e.obj.name === objName) ||
       (e.obj.kind === "checkedUnwrap" && e.obj.expr.kind === "var" && e.obj.expr.name === objName)
@@ -3193,7 +3074,7 @@ function replaceFieldsInTStmts(
       }
     }
     return null;
-  }).stmts;
+  }));
 }
 
 /** Replace all variant fields of obj → match binder vars in typed IR.
@@ -3225,7 +3106,7 @@ function projectStructuralCallArgsInTStmts(
     resolvedTy: f.type ?? parseTsType(f.tsType),
   }));
 
-  return mapTStmtsUntilReassign(stmts, { rootVar: varName, fields: [] }, e => {
+  return stmts.map(s => mapTStmt(s, e => {
     if (e.kind !== "call" || !e.paramTys) return null;
     const paramTys = e.paramTys;
     let changed = false;
@@ -3259,7 +3140,7 @@ function projectStructuralCallArgsInTStmts(
       };
     });
     return changed ? { ...e, args } : null;
-  }).stmts;
+  }));
 }
 
 /** A pure access path — chain of field accesses rooted at a var. */
@@ -3276,122 +3157,44 @@ function assignInvalidatesPath(target: string, path: AccessPath): boolean {
   return target === full || full.startsWith(`${target}.`);
 }
 
+function exprInvalidatesPath(e: TExpr, path: AccessPath): boolean {
+  let found = false;
+  mapTExpr(e, x => {
+    if (found) return x;
+    if (x.kind === "lambda" && stmtsInvalidatePath(x.body, path)) {
+      found = true;
+      return x;
+    }
+    return null;
+  });
+  return found;
+}
+
 function stmtsInvalidatePath(stmts: readonly TStmt[], path: AccessPath): boolean {
   for (const s of stmts) {
     if (s.kind === "assign") {
-      if (assignInvalidatesPath(s.target, path)) return true;
+      if (assignInvalidatesPath(s.target, path) || exprInvalidatesPath(s.value, path)) return true;
+    } else if (s.kind === "let" || s.kind === "ghostLet") {
+      if (exprInvalidatesPath(s.init, path)) return true;
+    } else if (s.kind === "return" || s.kind === "ghostAssign") {
+      if (exprInvalidatesPath(s.value, path)) return true;
+    } else if (s.kind === "expr" || s.kind === "assert") {
+      if (exprInvalidatesPath(s.expr, path)) return true;
     } else if (s.kind === "if") {
-      if (stmtsInvalidatePath(s.then, path) || stmtsInvalidatePath(s.else, path)) return true;
-    } else if (s.kind === "while" || s.kind === "forof") {
-      if (stmtsInvalidatePath(s.body, path)) return true;
+      if (exprInvalidatesPath(s.cond, path) || stmtsInvalidatePath(s.then, path) || stmtsInvalidatePath(s.else, path)) return true;
+    } else if (s.kind === "while") {
+      if (exprInvalidatesPath(s.cond, path) || stmtsInvalidatePath(s.body, path)) return true;
+    } else if (s.kind === "forof") {
+      if (exprInvalidatesPath(s.iterable, path) || stmtsInvalidatePath(s.body, path)) return true;
     } else if (s.kind === "switch") {
-      if (s.cases.some(c => stmtsInvalidatePath(c.body, path)) || stmtsInvalidatePath(s.defaultBody, path)) return true;
+      if (exprInvalidatesPath(s.expr, path) || s.cases.some(c => stmtsInvalidatePath(c.body, path)) || stmtsInvalidatePath(s.defaultBody, path)) return true;
     } else if (s.kind === "someMatch") {
-      if (stmtsInvalidatePath(s.someBody, path) || stmtsInvalidatePath(s.noneBody, path)) return true;
+      if (exprInvalidatesPath(s.scrutinee, path) || stmtsInvalidatePath(s.someBody, path) || stmtsInvalidatePath(s.noneBody, path)) return true;
     } else if (s.kind === "tagMatch") {
-      if (s.cases.some(c => stmtsInvalidatePath(c.body, path)) || stmtsInvalidatePath(s.fallthrough, path)) return true;
+      if (exprInvalidatesPath(s.scrutinee, path) || s.cases.some(c => stmtsInvalidatePath(c.body, path)) || stmtsInvalidatePath(s.fallthrough, path)) return true;
     }
   }
   return false;
-}
-
-/** Flow-sensitive statement mapper for union match-binder substitution:
- *  applies `f` in execution order and stops once `path` (or a prefix) is
- *  reassigned. The RHS of an invalidating assignment is still mapped (it runs
- *  before the write); loops whose bodies reassign `path` are left unmapped in
- *  full (condition, specs, and body) because later iterations see the new value. */
-function mapTStmtsUntilReassign(
-  stmts: TStmt[], path: AccessPath, f: (e: TExpr) => TExpr | null,
-): { stmts: TStmt[]; invalidated: boolean } {
-  const r = (e: TExpr) => mapTExpr(e, f);
-  const out: TStmt[] = [];
-  let invalidated = false;
-  for (const s of stmts) {
-    if (invalidated) {
-      out.push(s);
-      continue;
-    }
-    switch (s.kind) {
-      case "assign": {
-        const value = r(s.value);
-        out.push({ ...s, value });
-        if (assignInvalidatesPath(s.target, path)) invalidated = true;
-        break;
-      }
-      case "if": {
-        const cond = r(s.cond);
-        const t = mapTStmtsUntilReassign(s.then, path, f);
-        const e = mapTStmtsUntilReassign(s.else, path, f);
-        out.push({ ...s, cond, then: t.stmts, else: e.stmts });
-        if (t.invalidated || e.invalidated) invalidated = true;
-        break;
-      }
-      case "while": {
-        if (stmtsInvalidatePath(s.body, path)) {
-          invalidated = true;
-          out.push(s);
-        } else {
-          const b = mapTStmtsUntilReassign(s.body, path, f);
-          out.push({ ...s, cond: r(s.cond), invariants: s.invariants.map(r),
-            decreases: s.decreases ? r(s.decreases) : null,
-            doneWith: s.doneWith ? r(s.doneWith) : null, body: b.stmts });
-        }
-        break;
-      }
-      case "forof": {
-        const iterable = r(s.iterable);
-        if (stmtsInvalidatePath(s.body, path)) {
-          invalidated = true;
-          out.push({ ...s, iterable });
-        } else {
-          const b = mapTStmtsUntilReassign(s.body, path, f);
-          out.push({ ...s, iterable, invariants: s.invariants.map(r),
-            doneWith: s.doneWith ? r(s.doneWith) : null, body: b.stmts });
-        }
-        break;
-      }
-      case "switch": {
-        const expr = r(s.expr);
-        let anyInv = false;
-        const cases = s.cases.map(c => {
-          const b = mapTStmtsUntilReassign(c.body, path, f);
-          if (b.invalidated) anyInv = true;
-          return { ...c, body: b.stmts };
-        });
-        const def = mapTStmtsUntilReassign(s.defaultBody, path, f);
-        if (def.invalidated) anyInv = true;
-        out.push({ ...s, expr, cases, defaultBody: def.stmts });
-        if (anyInv) invalidated = true;
-        break;
-      }
-      case "someMatch": {
-        const scrutinee = r(s.scrutinee);
-        const sb = mapTStmtsUntilReassign(s.someBody, path, f);
-        const nb = mapTStmtsUntilReassign(s.noneBody, path, f);
-        out.push({ ...s, scrutinee, someBody: sb.stmts, noneBody: nb.stmts });
-        if (sb.invalidated || nb.invalidated) invalidated = true;
-        break;
-      }
-      case "tagMatch": {
-        const scrutinee = r(s.scrutinee);
-        let anyInv = false;
-        const cases = s.cases.map(c => {
-          const b = mapTStmtsUntilReassign(c.body, path, f);
-          if (b.invalidated) anyInv = true;
-          return { ...c, body: b.stmts };
-        });
-        const ft = mapTStmtsUntilReassign(s.fallthrough, path, f);
-        if (ft.invalidated) anyInv = true;
-        out.push({ ...s, scrutinee, cases, fallthrough: ft.stmts });
-        if (anyInv) invalidated = true;
-        break;
-      }
-      default:
-        out.push(mapTStmt(s, f));
-        break;
-    }
-  }
-  return { stmts: out, invalidated };
 }
 
 function asTAccessPath(e: TExpr): AccessPath | null {
@@ -3429,11 +3232,6 @@ function replacePathInTExpr(expr: TExpr, path: AccessPath, binder: string, binde
 function replacePathInTStmts(stmts: TStmt[], path: AccessPath, binder: string, binderTy: Ty): TStmt[] {
   return stmts.map(s => mapTStmt(s, e =>
     matchesAccessPath(e, path) ? { kind: "var", name: binder, ty: binderTy } : null));
-}
-
-function replacePathInTStmtsUntilReassign(stmts: TStmt[], path: AccessPath, binder: string, binderTy: Ty): TStmt[] {
-  return mapTStmtsUntilReassign(stmts, path, e =>
-    matchesAccessPath(e, path) ? { kind: "var", name: binder, ty: binderTy } : null).stmts;
 }
 
 
