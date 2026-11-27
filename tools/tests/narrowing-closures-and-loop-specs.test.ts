@@ -80,9 +80,9 @@ test("the binder replaces narrowed reads in closures and decreases, but not a sh
   assert.match(body(output, "lambdaParamShadows("), /var p_2 := xs\[i_map\]; \(p_2 \+ 1\)/);
   assert.match(body(output, "whileDecreasesNarrowed("), /decreases \(i_o_val - i\)/);
   assert.match(body(output, "closureReadsSynthUnionPure("), /\(x \+ \|i_u_arr\|\)/);
-  assert.match(body(output, "closureReadsSynthUnionMethod("), /\(x \+ \|i_u_arr\|\)/);
+  assert.match(body(output, "closureReadsSynthUnionMethod("), /\(x \+ \|u\.arr\|\)/);
   assert.match(body(output, "closureReadsUnionFieldPure("), /\(x \+ i_sh_n\)/);
-  assert.match(body(output, "closureReadsUnionFieldMethod("), /\(x \+ i_sh_n\)/);
+  assert.match(body(output, "closureReadsUnionFieldMethod("), /\(x \+ sh\.n\)/);
 });
 
 test("Lean done_with uses the binder of a narrowed name", () => {

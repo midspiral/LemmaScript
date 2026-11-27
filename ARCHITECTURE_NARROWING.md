@@ -188,8 +188,16 @@ Recognized patterns:
   switch, not an if-chain).
 
 When the chain covers all variants but one, the fallthrough `_` arm is
-replaced with the remaining variant's destructured pattern (Lean requires
-this for variant-specific field access in the fallthrough).
+replaced with the remaining variant's pattern.
+
+Pure functions (`transformPureSwitch` / `transformPureMatch`) destructure
+each arm into per-field match binders (`case a(i_x_n) => ...`). Imperative
+methods (`emitSwitchStmt` / `emitMatchStmt`) always match union arms with
+wildcard patterns (`case a(_) => ...` / `| .a _ => ...`) and operate directly
+on live scrutinee storage — avoiding stale binders when a branch reassigns
+the scrutinee, mutates a field, or captures it in a callback (in Lean,
+spreads and field writes on multi-constructor inductives emit
+constructor-preserving `match` updates).
 
 ---
 
@@ -221,19 +229,21 @@ churn on existing proofs):
 
 1. **Checked reads (`checked-reads.ts`).** Runs at the end of `narrow` on
    any variable or field path whose declared `storageTy` is `Option<T>`
-   but whose flow type was narrowed without an enclosing `someMatch`
-   (such as `while (cur !== undefined)`, definite assignment `if (v === undefined) { v = 6; }`, `||` chains, or a branch that may clear the
-   variable). `checked-reads.ts` wraps those reads in a `checkedUnwrap`
-   node, which lowers to `.value` in Dafny and `.get (by grind)` in Lean
-   (with `lean-emit.ts` emitting dependent `if _h : ...` around `&&`/`||`/`if`
-   expressions that guard a `checkedUnwrap` so `grind` has the presence
-   hypothesis in scope). Direct operands of `=== undefined` / `!== undefined`
-   are never unwrapped.
+   (or `Nullish<T>`) but whose flow type was narrowed without an enclosing
+   `someMatch` (such as `while (cur !== undefined)`, definite assignment
+   `if (v === undefined) { v = 6; }`, `||` chains, or a branch that may
+   clear the variable), wrapping those reads in `checkedUnwrap` (`.value` in
+   Dafny; `.get (by grind)` in Lean, with dependent `if _h : ...` guards).
+   Direct operands of `=== undefined` / `!== undefined` are never unwrapped.
+   `checked-reads.ts` also projects flow-narrowed reads of synthesized
+   array-unions (`ArrayBranch` / `NonArrayBranch`) to `.arr` / `.val`
+   directly on live storage.
 2. **Unified `Place` write-back (`places.ts`, `place-lowering.ts`, `transform.ts`).**
    In-place mutations (`arr.push`, `arr[i] = v`, nested field writes,
-   optional `pop`/`shift`, `m.get(k)?.push`) inside a `someMatch` or
-   union-variant arm write back through the active narrowing frames so
-   storage and binder stay in sync (e.g. re-wrapping `Option.Some(...)`).
+   optional `pop`/`shift`, `m.get(k)?.push`) inside a `someMatch` arm write
+   back through the active `unwrap` frames so storage and binder stay in
+   sync (re-wrapping `Option.Some(...)`). Imperative union arms do not need
+   variant write-back frames because they operate directly on live storage.
    The pure `PlacePath` kernel in `tools/src/places.ts` is self-verified
    in CI (`LemmaScript-files.txt`).
 3. **Live-alias mutation rejection (`alias-check.ts`, `alias-check-pass.ts`).**

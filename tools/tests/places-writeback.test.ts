@@ -439,10 +439,12 @@ test("review regressions (#49): union variant field/index assign, optional field
       "}",
     ].join("\n");
     const sf = project.createSourceFile("lean_wb.ts", leanTs, { overwrite: true });
-    const leanDef = emitLeanFile(transformModuleLean(narrowModule(resolveModule(extractModule(sf)))).defFile);
+    const { typesFile, defFile } = transformModuleLean(narrowModule(resolveModule(extractModule(sf))));
+    if (typesFile) emitLeanFile(typesFile);
+    const leanDef = emitLeanFile(defFile);
     assert.match(leanDef, /let mut _arr_val/, "Lean should shadow mutated someMatch binder with let mut");
     assert.match(leanDef, /arr := Option\.some _arr_val/, "Lean should write back Option.some");
-    assert.match(leanDef, /let mut _u_items/, "Lean should shadow mutated union variant binder with let mut");
+    assert.match(leanDef, /u := \(match u with \| \.b _ => Item\.b/, "Lean should update union storage directly without variant binder shadows");
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }

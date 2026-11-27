@@ -760,11 +760,11 @@ enqueued.add(id);        // → Lean: enqueued := enqueued.insert id
 
 Safe `Option<T>` patterns rewrite in `narrow.ts` into a single `someMatch` IR node with a fresh binder (lowered to Dafny `match` Some/None or Lean `if h : x.isSome = true`). Patterns that bypass or outlive `someMatch` — `Nullish<T>`, `while` conditions, definite assignment, `||` chains, or branches that may clear the narrowed path — stay as explicit guards and use `checked-reads.ts` to wrap unwrapped reads in `checkedUnwrap` (Dafny `.value`; Lean `(x).get (by grind)` with non-shadowing dependent `if _hN :` / `∀ (_hN : ...)`). See [ARCHITECTURE_NARROWING.md](ARCHITECTURE_NARROWING.md).
 
-**In-place mutation write-back and live-alias rejection.** In-place updates (`arr.push`, `arr[i] = v`, `arr.pop`, `arr.shift`, `m.set`, `s.add`, dotted field assignments) on a narrowed optional, nullish, or union-variant binding write back through the enclosing `Place` frames (`places.ts`, `place-lowering.ts`) so storage and binder stay in sync. Because Dafny and Lean model arrays, maps, sets, and records as immutable values, `alias-check-pass.ts` rejects mutating a container through a live alias (`const b = a; b.push(1); return a.length;`) with a compile error while allowing read-only sharing, dead-source moves, and explicit clones (`[...a]`, `a.slice()`, `{ ...obj }`).
+**In-place mutation write-back and live-alias rejection.** In-place updates (`arr.push`, `arr[i] = v`, `arr.pop`, `arr.shift`, `m.set`, `s.add`, dotted field assignments) on a narrowed optional binding write back through the enclosing `Place` unwrap frames (`places.ts`, `place-lowering.ts`) so storage and binder stay in sync; imperative union arms match with wildcards and mutate live storage directly. Because Dafny and Lean model arrays, maps, sets, and records as immutable values, `alias-check-pass.ts` rejects mutating a container through a live alias (`const b = a; b.push(1); return a.length;`) with a compile error while allowing read-only sharing, dead-source moves, and explicit clones (`[...a]`, `a.slice()`, `{ ...obj }`).
 
 Following TS, the equality/truthiness/`&&`/`||`/`==>` patterns fire only for pure access paths (`x`, `obj.field`, `a.b.c.d`); method-call results must be bound first (`const v = m.get(k); if (v !== undefined) ...`). The `obj?.<chain>` and `x ?? d` forms are exceptions: extract emits dedicated single-evaluation IR nodes (`optChain`, `nullish`), so any expression on the left is allowed.
 
-**Discriminated-union narrowing.** `if (e.kind === "lit") use(e.val)`, `if ('field' in x) use(x.field)`, and `if (x.kind !== "v") return; rest` all lower to `match` constructs that destructure variant-specific fields. Switch on a discriminator works similarly. Detection lives in `narrow.ts` alongside optional-narrowing rules (rewrites to a `tagMatch` IR node); the lowering to backend `match` lives in `transform.ts`.
+**Discriminated-union narrowing.** `if (e.kind === "lit") use(e.val)`, `if ('field' in x) use(x.field)`, and `if (x.kind !== "v") return; rest` all lower to `match` constructs (destructuring variant fields in pure functions; wildcard-matching and reading/updating live storage directly in imperative methods so scrutinee reassignment stays sound). Switch on a discriminator works similarly. Detection lives in `narrow.ts` alongside optional-narrowing rules (rewrites to a `tagMatch` IR node); the lowering to backend `match` lives in `transform.ts`.
 
 **Synthesized array-union narrowing.** A plain union `U | T[]` (no shared discriminant) is synthesized at the boundary into a tagged datatype `ArrayBranch(arr: T[]) | NonArrayBranch(val: U)`. `Array.isArray(x)` narrows to the array branch (in `if` / `?:` / `==>`); when the non-array branch `U` is `string`, `typeof x === "string"` narrows to it in `?:` conditionals — the dual discriminator. Inside the matched branch, bare references to `x` use the variant's payload. The `typeof` form fires only when `U` is actually `string`; for any other `U` the runtime `"string"` test can't match that branch, so `lsc` does not narrow (and `typeof` stays unsupported).
 
@@ -973,14 +973,16 @@ function route(outcome: Outcome): number {
 }
 ```
 
-Dafny and Lean records are nominal, so the `rpc-error` arm lowers the call by
-constructing `RpcErrorView` from that arm's match-bound `code`, `message`, and
-`data` fields. The rule is deliberately narrower than general TypeScript
-structural subtyping: the argument must be the arm's scrutinee variable, the
+Dafny and Lean records are nominal, so `resolve.ts` lowers the call by
+constructing `RpcErrorView` from the narrowed variant's `code`, `message`, and
+`data` fields (referencing live fields in imperative methods and match binders
+in pure functions). The rule is deliberately narrower than general TypeScript
+structural subtyping: the argument must be a flow-narrowed union path, the
 callee must have resolved parameter types, the target must be a named record,
-and every target field must exist in the arm with the same resolved type. Extra
-arm fields (notably the discriminant) are ignored. The rule applies to pure and
-method bodies; arbitrary structural assignments and casts are not synthesized.
+and every target field must exist on the narrowed variant with the same resolved
+type. Extra variant fields (notably the discriminant) are ignored. The rule
+applies to pure and method bodies; arbitrary structural assignments and casts
+are not synthesized.
 
 **Switch fall-through:** a non-empty `case` must end in `break`/`return`/`throw` — C-style fall-through into the next case's body is rejected. Empty `case A: case B: body` stacking (leading labels sharing the next body) is supported.
 

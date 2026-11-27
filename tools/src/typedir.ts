@@ -122,7 +122,9 @@ export type TExpr =
       isDiscriminant?: boolean;             // true if this is a discriminant field access
       ofVariant?: string;                   // which union variant the field is read from, when narrowing determined it
       freshClone?: true }
-  | { kind: "record"; spread: TExpr | null; fields: { name: string; value: TExpr }[]; ty: Ty }
+  | { kind: "record"; spread: TExpr | null; fields: { name: string; value: TExpr }[]; ty: Ty;
+      ofVariant?: string;
+      spreadOfVariant?: string }
   | { kind: "arrayLiteral"; elems: TExpr[]; ty: Ty }
   | { kind: "lambda"; params: { name: string; ty: Ty; rest?: true; defaultValue?: TExpr }[]; body: TStmt[]; ty: Ty }
   | { kind: "conditional"; cond: TExpr; then: TExpr; else: TExpr; ty: Ty }
@@ -146,7 +148,7 @@ export type TExpr =
 
 export type TStmt =
   | { kind: "let"; name: string; ty: Ty; mutable: boolean; init: TExpr }
-  | { kind: "assign"; target: string; value: TExpr }
+  | { kind: "assign"; target: string; value: TExpr; ofVariant?: string }
   | { kind: "return"; value: TExpr }
   | { kind: "break" }
   | { kind: "continue" }
