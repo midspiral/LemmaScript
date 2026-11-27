@@ -59,9 +59,9 @@ function widenNullish(value: Option<int>, fallback: Option<int>, useValue: bool)
 }
 
 lemma widenNullish_ensures(value: Option<int>, fallback: Option<int>, useValue: bool)
-  ensures (useValue ==> (match value { case Some(i_) => false case None => true }) ==> (widenNullish(value, fallback, useValue)).Null?)
+  ensures (useValue ==> (match value { case Some(_) => false case None => true }) ==> (widenNullish(value, fallback, useValue)).Null?)
   ensures (match value { case Some(i_value_val) => (useValue ==> (match widenNullish(value, fallback, useValue) { case Value(i_value) => (i_value == i_value_val) case Null => false case Undefined => false })) case None => true })
-  ensures (!(useValue) ==> (match fallback { case Some(i_) => false case None => true }) ==> (widenNullish(value, fallback, useValue)).Undefined?)
+  ensures (!(useValue) ==> (match fallback { case Some(_) => false case None => true }) ==> (widenNullish(value, fallback, useValue)).Undefined?)
   ensures (match fallback { case Some(i_fallback_val) => (!(useValue) ==> (match widenNullish(value, fallback, useValue) { case Value(i_value) => (i_value == i_fallback_val) case Null => false case Undefined => false })) case None => true })
 {
 }

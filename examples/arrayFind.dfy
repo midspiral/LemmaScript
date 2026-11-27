@@ -32,7 +32,7 @@ function lookup(entries: seq<Entry>, key: string): int
 function hasEntry(entries: seq<Entry>, key: string): bool
 {
   match SeqFind(entries, (x: Entry) => (x.key == key)) {
-    case Some(i_) =>
+    case Some(_) =>
       true
     case None =>
       false

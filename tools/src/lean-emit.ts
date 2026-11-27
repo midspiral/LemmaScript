@@ -589,6 +589,35 @@ function emitExpr(e: Expr, parentPrec?: number): string {
     }
 
     case "record": {
+      if (e.spread && e.ctorOf && _unionCtors.has(e.ctorOf)) {
+        const ctors = _unionCtors.get(e.ctorOf)!;
+        const updatesByName = new Map(e.fields.map(f => [f.name, emitExpr(f.value)]));
+        const targetCtors = e.ctor
+          ? ctors.filter(c => c.name === e.ctor)
+          : ctors.filter(c => e.fields.every(f => c.fields.some(cf => cf.name === f.name)));
+        if (targetCtors.length > 0) {
+          const arms = targetCtors.map(c => {
+            const pats: string[] = [];
+            const args: string[] = [];
+            c.fields.forEach((cf, i) => {
+              const upd = updatesByName.get(cf.name);
+              if (upd !== undefined) {
+                pats.push("_");
+                args.push(`(${upd})`);
+              } else {
+                const bv = `_f${i}`;
+                pats.push(bv);
+                args.push(bv);
+              }
+            });
+            const patStr = pats.length > 0 ? `.${leanCtorName(c.name)} ${pats.join(" ")}` : `.${leanCtorName(c.name)}`;
+            const rhsStr = args.length > 0 ? `${e.ctorOf}.${leanCtorName(c.name)} ${args.join(" ")}` : `${e.ctorOf}.${leanCtorName(c.name)}`;
+            return `| ${patStr} => ${rhsStr}`;
+          });
+          const fallback = targetCtors.length < ctors.length ? " | _other => _other" : "";
+          return `(match ${emitExpr(e.spread)} with ${arms.join(" ")}${fallback})`;
+        }
+      }
       const fields = e.fields.map(f => `${escapeName(f.name)} := ${emitExpr(f.value)}`);
       if (e.spread) return `{ ${emitExpr(e.spread)} with ${fields.join(", ")} }`;
       return `{ ${fields.join(", ")} }`;

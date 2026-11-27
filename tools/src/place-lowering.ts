@@ -15,52 +15,27 @@ import type { TExpr, Ty } from "./typedir.js";
 import {
   extendFieldPlace,
   extendUnwrapPlace,
-  extendVariantPlace,
   makeVarPlace,
   type PlacePath,
 } from "./places.js";
 
-export type WriteBackFrame =
-  | {
-      kind: "unwrap";
-      /** Match binder introduced by `someMatch`, e.g. `_arr_val`. */
-      binder: string;
-      /** Root variable name of the `someMatch` scrutinee (may be an outer binder). */
-      rootVar: string;
-      /** Field chain on `rootVar` before unwrapping, e.g. `["items"]` for `_b_val.items`. */
-      fields: string[];
-      /** Self-verified PlacePath for this unwrap step. */
-      place: PlacePath;
-    }
-  | {
-      kind: "variant";
-      /** Enclosing union variable name, e.g. `u`. */
-      unionVar: string;
-      /** Union datatype base name, e.g. `Item`. */
-      typeName: string;
-      /** Matched variant constructor name, e.g. `b`. */
-      ctorName: string;
-      /** Ordered variant fields and their match binder names. */
-      fields: { fieldName: string; binder: string }[];
-      /** Self-verified PlacePath for this variant projection. */
-      place: PlacePath;
-    };
+export type WriteBackFrame = {
+  kind: "unwrap";
+  /** Match binder introduced by `someMatch`, e.g. `_arr_val`. */
+  binder: string;
+  /** Root variable name of the `someMatch` scrutinee (may be an outer binder). */
+  rootVar: string;
+  /** Field chain on `rootVar` before unwrapping, e.g. `["items"]` for `_b_val.items`. */
+  fields: string[];
+  /** Self-verified PlacePath for this unwrap step. */
+  place: PlacePath;
+};
 
 export function makeUnwrapFrame(binder: string, rootVar: string, fields: string[]): WriteBackFrame {
   let place: PlacePath = makeVarPlace(rootVar);
   for (const f of fields) place = extendFieldPlace(place, f);
   place = extendUnwrapPlace(place);
   return { kind: "unwrap", binder, rootVar, fields, place };
-}
-
-export function makeVariantFrame(
-  unionVar: string,
-  typeName: string,
-  ctorName: string,
-  fields: { fieldName: string; binder: string }[],
-): WriteBackFrame {
-  const place = extendVariantPlace(makeVarPlace(unionVar), ctorName);
-  return { kind: "variant", unionVar, typeName, ctorName, fields, place };
 }
 
 /** True for in-place mutating collection methods modeled by functional write-back. */
@@ -76,21 +51,35 @@ export function isMutatingCollectionMethod(recvTy: Ty, method: string): boolean 
 }
 
 /** Build a nested record-update expression rooted at `rootVar` for `fields`
- *  (length >= 1), setting the innermost field to `newVal`. */
-export function buildNestedFieldExpr(rootVar: string, fields: string[], newVal: Expr): Expr {
+ *  (length >= 1), setting the innermost field to `newVal`. Optional `outerUnion`
+ *  pins the union constructor/type on the outermost update (for collision-renamed
+ *  destructors in Dafny and match-updates in Lean). */
+export function buildNestedFieldExpr(
+  rootVar: string,
+  fields: string[],
+  newVal: Expr,
+  outerUnion?: { ctor?: string; ctorOf?: string },
+): Expr {
   const baseFor = (len: number): Expr => {
     let cur: Expr = { kind: "var", name: rootVar };
     for (let i = 0; i < len; i++) {
-      cur = { kind: "field", obj: cur, field: fields[i], datatypeField: true };
+      const unionTag = i === 0 && outerUnion?.ctorOf
+        ? { fromUnion: outerUnion.ctorOf, ctor: outerUnion.ctor }
+        : {};
+      cur = { kind: "field", obj: cur, field: fields[i], ...unionTag, datatypeField: true };
     }
     return cur;
   };
   let curVal = newVal;
   for (let i = fields.length - 1; i >= 0; i--) {
+    const unionTag = i === 0 && outerUnion?.ctorOf
+      ? { ctor: outerUnion.ctor, ctorOf: outerUnion.ctorOf }
+      : {};
     curVal = {
       kind: "record",
       spread: baseFor(i),
       fields: [{ name: fields[i], value: curVal }],
+      ...unionTag,
     };
   }
   return curVal;
@@ -103,7 +92,7 @@ function optionSome(value: Expr): Expr {
 /**
  * Given a variable `mutatedTarget` that was just assigned in the lowered IR,
  * walk `frames` from innermost to outermost and emit the cascading write-back
- * assignments that synchronize every enclosing narrowing binder and the owning
+ * assignments that synchronize every enclosing `someMatch` binder and the owning
  * lexical storage variable.
  */
 export function emitWriteBacksForTarget(mutatedTarget: string, frames: readonly WriteBackFrame[]): Stmt[] {
@@ -112,7 +101,7 @@ export function emitWriteBacksForTarget(mutatedTarget: string, frames: readonly 
 
   for (let i = frames.length - 1; i >= 0; i--) {
     const frame = frames[i];
-    if (frame.kind === "unwrap" && frame.binder === current) {
+    if (frame.binder === current) {
       const wrapped = optionSome({ kind: "var", name: frame.binder });
       if (frame.fields.length === 0) {
         out.push({ kind: "assign", target: frame.rootVar, value: wrapped });
@@ -124,18 +113,6 @@ export function emitWriteBacksForTarget(mutatedTarget: string, frames: readonly 
         });
       }
       current = frame.rootVar;
-      continue;
-    }
-
-    if (frame.kind === "variant" && frame.fields.some(f => f.binder === current)) {
-      const reconstructed: Expr = {
-        kind: "app",
-        fn: frame.ctorName,
-        ctorOf: frame.typeName,
-        args: frame.fields.map(f => ({ kind: "var", name: f.binder })),
-      };
-      out.push({ kind: "assign", target: frame.unionVar, value: reconstructed });
-      current = frame.unionVar;
     }
   }
 
@@ -147,11 +124,10 @@ export function findActiveUnwrapFrame(
   rootVar: string,
   fields: string[],
   frames: readonly WriteBackFrame[],
-): Extract<WriteBackFrame, { kind: "unwrap" }> | null {
+): WriteBackFrame | null {
   for (let i = frames.length - 1; i >= 0; i--) {
     const frame = frames[i];
     if (
-      frame.kind === "unwrap" &&
       frame.rootVar === rootVar &&
       frame.fields.length === fields.length &&
       frame.fields.every((f, idx) => f === fields[idx])
@@ -162,16 +138,8 @@ export function findActiveUnwrapFrame(
   return null;
 }
 
-/** Resolve a source dotted path like `["b", "count"]`, `["u", "v"]`, or
- *  `["u", "box", "count"]` through any enclosing `unwrap` and `variant` frames.
- *  Returns:
- *    - `currentRoot`: the deepest active binder/variable reached,
- *    - `remainingFields`: any field steps remaining below `currentRoot`,
- *    - `leafUnwrapFrame`: if the entire path ended at an active `unwrap` frame
- *      (so non-optional writes update `leafUnwrapFrame.binder` and cascade,
- *      while `undefined`/optional writes update `leafUnwrapFrame.rootVar`),
- *    - `leafVariantBinder`: if the entire path ended directly at a union
- *      variant field binder (e.g. `u.v` -> `i_u_v`). */
+/** Resolve a source dotted path like `["b", "count"]` through any enclosing
+ *  `someMatch` unwrap frames. */
 export function resolveWriteTargetThroughFrames(
   rootVar: string,
   fields: string[],
@@ -179,51 +147,26 @@ export function resolveWriteTargetThroughFrames(
 ): {
   currentRoot: string;
   remainingFields: string[];
-  leafUnwrapFrame: Extract<WriteBackFrame, { kind: "unwrap" }> | null;
-  leafVariantBinder: string | null;
+  leafUnwrapFrame: WriteBackFrame | null;
 } {
   let currentRoot = rootVar;
   let idx = 0;
-  let lastUnwrap: Extract<WriteBackFrame, { kind: "unwrap" }> | null = null;
-  let lastVariantBinder: string | null = null;
+  let lastUnwrap: WriteBackFrame | null = null;
 
-  // Iteratively step through active `unwrap` (0-field or prefix-field) and
-  // `variant` (1-field) frames until no more frames match.
   while (true) {
-    // 1. Bare unwrap on `currentRoot` (e.g. `b` -> `_b_val`, or `u` -> `_u_val`).
+    // 1. Bare unwrap on `currentRoot` (e.g. `b` -> `_b_val`).
     const bareUnwrap = findActiveUnwrapFrame(currentRoot, [], frames);
     if (bareUnwrap) {
       currentRoot = bareUnwrap.binder;
       lastUnwrap = bareUnwrap;
-      lastVariantBinder = null;
       continue;
     }
 
     if (idx >= fields.length) break;
 
-    // 2. Variant field projection on `currentRoot` (e.g. `u.v` -> `i_u_v`, `u.box` -> `i_u_box`).
-    let matchedVariant: string | null = null;
-    for (let i = frames.length - 1; i >= 0; i--) {
-      const frame = frames[i]!;
-      if (frame.kind === "variant" && frame.unionVar === currentRoot) {
-        const hit = frame.fields.find(f => f.fieldName === fields[idx]);
-        if (hit) {
-          matchedVariant = hit.binder;
-          break;
-        }
-      }
-    }
-    if (matchedVariant) {
-      currentRoot = matchedVariant;
-      idx += 1;
-      lastUnwrap = null;
-      lastVariantBinder = matchedVariant;
-      continue;
-    }
-
-    // 3. Field-prefix unwrap on `currentRoot` (e.g. `_b_val.items` -> `_b_val_items_val`).
+    // 2. Field-prefix unwrap on `currentRoot` (e.g. `_b_val.items` -> `_b_val_items_val`).
     let matchedLen = 0;
-    let matchedUnwrap: Extract<WriteBackFrame, { kind: "unwrap" }> | null = null;
+    let matchedUnwrap: WriteBackFrame | null = null;
     for (let len = fields.length - idx; len >= 1; len--) {
       const sub = fields.slice(idx, idx + len);
       const hit = findActiveUnwrapFrame(currentRoot, sub, frames);
@@ -237,7 +180,6 @@ export function resolveWriteTargetThroughFrames(
       currentRoot = matchedUnwrap.binder;
       idx += matchedLen;
       lastUnwrap = matchedUnwrap;
-      lastVariantBinder = null;
       continue;
     }
 
@@ -248,7 +190,6 @@ export function resolveWriteTargetThroughFrames(
     currentRoot,
     remainingFields: fields.slice(idx),
     leafUnwrapFrame: idx === fields.length ? lastUnwrap : null,
-    leafVariantBinder: idx === fields.length ? lastVariantBinder : null,
   };
 }
 

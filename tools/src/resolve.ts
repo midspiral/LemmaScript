@@ -14,7 +14,7 @@ import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
 import { recognizeBuiltin, builtinSpec, callbackArgumentTypes, callbackBaseArity } from "./builtins.js";
 import { declOf, declOfKind, declOfDotted, declOfTy, tyBaseName, remainingVariant } from "./typedecls.js";
-import { presentFact, variantFact, excludesUndefined } from "./condition-facts.js";
+import { presentFact, variantFact, isArrayFact, typeofStringFact, excludesUndefined } from "./condition-facts.js";
 
 // ── Environment ──────────────────────────────────────────────
 
@@ -387,6 +387,100 @@ function collectEarlyReturnNarrowings(cond: TExpr): { varName: string; innerTy: 
   return n ? [n] : [];
 }
 
+/** Return the payload type of `variant` on a synth array-union (`__isArray__`),
+ *  or null for non-synth types. */
+function synthVariantPayloadTy(ty: Ty, variant: string, ctx: Ctx): Ty | null {
+  if (ty.kind !== "user") return null;
+  const decl = findSynthArrayUnion(ty.name, ctx.typeDecls);
+  const f = decl?.variants?.find(v => v.name === variant)?.fields[0];
+  return f ? (f.type ?? parseTsType(f.tsType)) : null;
+}
+
+/** Narrow a pure access path to a union variant in `ctx`. For synth array-unions
+ *  (`__isArray__`), also narrows the path's flow type to the branch's payload
+ *  type so array/string methods and checked projections fire uniformly. */
+function applyVariantNarrowing(ctx: Ctx, path: AccessPath, unionTy: Ty, variant: string): Ctx {
+  const payload = synthVariantPayloadTy(unionTy, variant, ctx);
+  if (payload) {
+    const nextPaths = [...ctx.narrowedPaths, { path, narrowedTy: payload, variant }];
+    if (path.fields.length === 0) {
+      return { ...withEnv(ctx, refine(ctx.env, path.rootVar, payload)), narrowedPaths: nextPaths };
+    }
+    return { ...ctx, narrowedPaths: nextPaths };
+  }
+  return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: unionTy, variant }] };
+}
+
+/** Synth array-union branch guaranteed by `Array.isArray(path)`, `!Array.isArray(path)`,
+ *  or `typeof path === "string"` when `cond` evaluates to `truth`. */
+function synthVariantWhen(
+  cond: TExpr,
+  truth: boolean,
+  ctx: Ctx,
+): { path: AccessPath; unionTy: Ty; variant: "ArrayBranch" | "NonArrayBranch" } | null {
+  if (cond.kind === "unop" && cond.op === "!") return synthVariantWhen(cond.expr, !truth, ctx);
+  const condCtx = { decls: ctx.typeDecls, oc: { n: 0 } };
+  const arr = isArrayFact(cond, condCtx);
+  if (arr) {
+    const path = asTExprAccessPath(arr.scrutinee);
+    if (!path) return null;
+    return { path, unionTy: arr.scrutinee.ty, variant: truth ? "ArrayBranch" : "NonArrayBranch" };
+  }
+  const tof = typeofStringFact(cond, condCtx);
+  if (tof) {
+    const path = asTExprAccessPath(tof.scrutinee);
+    if (!path) return null;
+    return { path, unionTy: tof.scrutinee.ty, variant: truth ? "NonArrayBranch" : "ArrayBranch" };
+  }
+  return null;
+}
+
+/** Innermost narrowed union variant recorded for `path` in `ctx.narrowedPaths`. */
+function lookupNarrowedVariant(path: AccessPath, ctx: Ctx): string | undefined {
+  for (let i = ctx.narrowedPaths.length - 1; i >= 0; i--) {
+    const cand = ctx.narrowedPaths[i]!;
+    if (cand.variant && accessPathsEqual(cand.path, path)) return cand.variant;
+  }
+  return undefined;
+}
+
+/** Project narrowed union arguments to nominal records expected by a callee
+ *  (`helper(sh)` → `helper({ n: sh.n })`), using `ctx.narrowedPaths` so it works
+ *  uniformly on live storage and after reassignment. */
+function projectStructuralCallArgs(args: TExpr[], paramTypes: Ty[], ctx: Ctx): TExpr[] {
+  return args.map((arg, i) => {
+    if (i >= paramTypes.length || arg.ty.kind !== "user") return arg;
+    const targetTy = paramTypes[i];
+    if (targetTy.kind !== "user") return arg;
+    const targetDecl = declOfKind(ctx.typeDecls, targetTy.name, "record");
+    if (!targetDecl?.fields) return arg;
+    const argPath = asTExprAccessPath(arg);
+    if (!argPath) return arg;
+    const variantName = lookupNarrowedVariant(argPath, ctx);
+    if (!variantName) return arg;
+    const unionDecl = declOfKind(ctx.typeDecls, tyBaseName(arg.ty.name), "discriminated-union");
+    const variant = unionDecl?.variants?.find(v => v.name === variantName);
+    if (!variant) return arg;
+    const matched: { targetName: string; sourceName: string; ty: Ty }[] = [];
+    for (const tf of targetDecl.fields) {
+      const sf = variant.fields.find(f => f.name === tf.name);
+      const tfTy = tf.type ?? parseTsType(tf.tsType);
+      const sfTy = sf ? (sf.type ?? parseTsType(sf.tsType)) : undefined;
+      if (!sf || !sfTy || !tyEqual(sfTy, tfTy)) return arg;
+      matched.push({ targetName: tf.name, sourceName: sf.name, ty: sfTy });
+    }
+    return {
+      kind: "record" as const,
+      spread: null,
+      fields: matched.map(m => ({
+        name: m.targetName,
+        value: { kind: "field" as const, obj: arg, field: m.sourceName, ty: m.ty, ofVariant: variantName },
+      })),
+      ty: targetTy,
+    };
+  });
+}
+
 /** Variant guaranteed by a discriminant comparison (`path.kind === "lit"` or
  *  `!== "lit"`, either operand order, with optional `!`) when `cond` evaluates
  *  to `truth`. Exclusions narrow only when exactly one union variant remains. */
@@ -488,11 +582,15 @@ function collectAndChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
   if (dv) {
     return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, dv] };
   }
+  const sv = synthVariantWhen(cond, true, ctx);
+  if (sv) {
+    return applyVariantNarrowing(ctx, sv.path, sv.unionTy, sv.variant);
+  }
   const vf = variantFact(cond, { decls: ctx.typeDecls, oc: { n: 0 } });
   if (vf) {
     const path = asTExprAccessPath(vf.scrutinee);
     if (path) {
-      return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, { path, narrowedTy: vf.scrutinee.ty, variant: vf.variant }] };
+      return applyVariantNarrowing(ctx, path, vf.scrutinee.ty, vf.variant);
     }
   }
   return ctx;
@@ -520,6 +618,10 @@ function collectOrChainNarrowings(cond: TExpr, ctx: Ctx): Ctx {
   const dv = discriminantVariantWhen(cond, false, ctx);
   if (dv) {
     return { ...ctx, narrowedPaths: [...ctx.narrowedPaths, dv] };
+  }
+  const sv = synthVariantWhen(cond, false, ctx);
+  if (sv) {
+    return applyVariantNarrowing(ctx, sv.path, sv.unionTy, sv.variant);
   }
   return ctx;
 }
@@ -1340,7 +1442,13 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "unop": {
-      const expr = resolveExpr(e.expr, ctx);
+      let expr = resolveExpr(e.expr, ctx);
+      if (e.op === "typeof" && expr.kind === "var") {
+        const storage = storageLookup(ctx.env, expr.name);
+        if (storage?.kind === "user" && findSynthArrayUnion(storage.name, ctx.typeDecls)) {
+          expr = { ...expr, ty: storage };
+        }
+      }
       const ty: Ty = e.op === "!" ? { kind: "bool" } : e.op === "typeof" ? { kind: "string" }
         : e.op === "-" && expr.ty.kind === "nat" ? { ...expr.ty, kind: "int" } : expr.ty;
       return { kind: "unop", op: e.op, expr, ty };
@@ -1394,7 +1502,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
             throw new Error(`impure extern ${qualified} cannot be called from a specification`);
           if (ext.impure && ctx.inLambda)
             throw new Error(`impure extern ${qualified} cannot be called from a lambda`);
-          const args = e.args.map(a => resolveExpr(a, ctx));
+          const args = projectStructuralCallArgs(e.args.map(a => resolveExpr(a, ctx)), ext.params, ctx);
           const fn: TExpr = { kind: "var", name: ext.flat, ty: { kind: "unknown" } };
           return {
             kind: "call", fn, args, ty: ext.returnTy,
@@ -1431,6 +1539,16 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         }
         return resolved;
       }), fn, ctx);
+      if (paramTypes) args = projectStructuralCallArgs(args, paramTypes, ctx);
+      // Keep the underlying synth array-union storage type on `Array.isArray(x)`
+      // arguments even when `x` was already narrowed in flow typing.
+      if (fn.kind === "field" && fn.field === "isArray" &&
+          fn.obj.kind === "var" && fn.obj.name === "Array" && args.length === 1 && args[0].kind === "var") {
+        const storage = storageLookup(ctx.env, args[0].name);
+        if (storage?.kind === "user" && findSynthArrayUnion(storage.name, ctx.typeDecls)) {
+          args = [{ ...args[0], ty: storage }];
+        }
+      }
       let ty = inferMethodReturnTy(fn, args, ctx);
       // For same-file function calls, use the known return type
       if (ty.kind === "unknown" && fn.kind === "var" && !binding(ctx.env, fn.name) && ctx.fnReturns.has(fn.name)) {
@@ -1689,16 +1807,25 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       const returnTyUnwrapped = (ctx.returnTy.kind === "optional" || ctx.returnTy.kind === "nullish") ? ctx.returnTy.inner : ctx.returnTy;
       const recordTy = ty.kind === "user" ? ty : returnTyUnwrapped.kind === "user" ? returnTyUnwrapped : null;
       const decl = recordTy ? declOfKind(ctx.typeDecls, recordTy.name, "record") : undefined;
-      // Union-variant literal in union-typed context (a constructed IR node,
-      // `{ kind: "if", … }: TStmt`): contextual field types come from the
-      // variant the literal's discriminant field selects.
+      // Union-variant literal or spread in union-typed context: contextual field
+      // types come from the variant selected by the literal's discriminant field,
+      // or from the narrowed variant of the spread path.
       let declFields = decl?.fields;
+      let ofVariant: string | undefined;
       if (!declFields && recordTy) {
-        const udecl = declOfKind(ctx.typeDecls, recordTy.name, "discriminated-union");
+        const udecl = declOfKind(ctx.typeDecls, tyBaseName(recordTy.name), "discriminated-union");
         if (udecl?.discriminant && udecl.variants) {
           const tagRaw = e.fields.find(f => f.name === udecl.discriminant)?.value;
           if (tagRaw?.kind === "str") {
+            ofVariant = tagRaw.value;
             declFields = udecl.variants.find(v => v.name === tagRaw.value)?.fields;
+          } else if (spread && !tagRaw) {
+            const spPath = asTExprAccessPath(spread);
+            const narrowed = spPath ? lookupNarrowedVariant(spPath, ctx) : undefined;
+            if (narrowed) {
+              ofVariant = narrowed;
+              declFields = udecl.variants.find(v => v.name === narrowed)?.fields;
+            }
           }
         }
       }
@@ -1730,7 +1857,7 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         }
         return { name: f.name, value };
       });
-      return { kind: "record", spread, fields, ty: recordTy ?? ty };
+      return { kind: "record", spread, fields, ty: recordTy ?? ty, ...(ofVariant ? { ofVariant } : {}) };
     }
 
     case "recordMerge":
@@ -1855,6 +1982,10 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       if (elseVariant) {
         elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, elseVariant] };
       }
+      const elseSynth = synthVariantWhen(cond, false, ctx);
+      if (elseSynth) {
+        elseCtx = applyVariantNarrowing(elseCtx, elseSynth.path, elseSynth.unionTy, elseSynth.variant);
+      }
       // Map-index narrowing: `k in m` in the cond narrows the then-branch; `!(k in m)`
       // narrows the else-branch. Parallel to the if-statement hook in resolveStmt.
       thenCtx = withInAtoms(thenCtx, extractInAtoms(cond));
@@ -1885,11 +2016,14 @@ function resolveSpec(spec: string, ctx: Ctx): TExpr {
   return resolveExpr(parseExpr(spec), ctx);
 }
 
-function resolveSpecs(specs: string[], ctx: Ctx): TExpr[] {
+function resolveSpecs(specs: string[], ctx: Ctx, threadNarrowings = false): TExpr[] {
   const result: TExpr[] = [];
+  let curCtx = ctx;
   for (const spec of specs) {
     for (const clause of splitConj(parseExpr(spec))) {
-      result.push(resolveExpr(clause, ctx));
+      const resolved = resolveExpr(clause, curCtx);
+      result.push(resolved);
+      if (threadNarrowings) curCtx = collectAndChainNarrowings(resolved, curCtx);
     }
   }
   return result;
@@ -1946,25 +2080,70 @@ function collectAssignedRootsRaw(stmts: RawStmt[], out = new Set<string>()): Set
   return out;
 }
 
-/** Restore any narrowed optional variable in `roots` back to its declared
- *  `storageTy`, and drop `narrowedPaths` whose root is in `roots`. Used when
- *  entering a loop (`while`/`forof`) or exiting a control-flow statement that
- *  may reassign or clear a previously narrowed variable. */
+/** True when `npPath` is at or below dotted `target` (e.g. target `"b.count"`
+ *  invalidates `b.count` and `b.count.x`, but preserves `b` itself). */
+function pathAtOrBelowTarget(npPath: AccessPath, target: string): boolean {
+  const parts = target.split(".");
+  if (npPath.rootVar !== parts[0]) return false;
+  const targetFields = parts.slice(1);
+  if (npPath.fields.length < targetFields.length) return false;
+  return targetFields.every((f, i) => npPath.fields[i] === f);
+}
+
+/** Collect whole-variable assignment roots and dotted field-write targets
+ *  separately, so sub-field writes (`sh.y = 10`) do not drop the parent's
+ *  discriminated-union variant narrowing while whole-var writes (`sh = ...`) do. */
+function collectAssignedTargetsRaw(
+  stmts: RawStmt[],
+  wholeRoots = new Set<string>(),
+  dottedTargets = new Set<string>(),
+): { wholeRoots: Set<string>; dottedTargets: Set<string> } {
+  for (const s of stmts) {
+    if (s.kind === "assign") {
+      if (s.target.includes(".")) dottedTargets.add(s.target);
+      else wholeRoots.add(s.target);
+    } else if (s.kind === "if") {
+      collectAssignedTargetsRaw(s.then, wholeRoots, dottedTargets);
+      collectAssignedTargetsRaw(s.else, wholeRoots, dottedTargets);
+    } else if (s.kind === "while" || s.kind === "forof") {
+      collectAssignedTargetsRaw(s.body, wholeRoots, dottedTargets);
+    } else if (s.kind === "switch") {
+      for (const c of s.cases) collectAssignedTargetsRaw(c.body, wholeRoots, dottedTargets);
+      collectAssignedTargetsRaw(s.defaultBody, wholeRoots, dottedTargets);
+    }
+  }
+  return { wholeRoots, dottedTargets };
+}
+
+/** Restore any narrowed optional/nullish/synth-union variable in `wholeRoots`
+ *  back to its declared `storageTy`, drop `narrowedPaths` rooted at `wholeRoots`,
+ *  and drop `narrowedPaths` at or below any `dottedTargets` (preserving parent
+ *  discriminated-union variants on sub-field writes). */
 function invalidateNarrowings(
   env: Env | null,
   narrowedPaths: NarrowedPath[],
-  roots: Set<string>,
+  wholeRoots: Set<string>,
+  dottedTargets: Set<string>,
+  typeDecls: TypeDeclInfo[],
 ): { env: Env | null; narrowedPaths: NarrowedPath[] } {
-  if (roots.size === 0) return { env, narrowedPaths };
+  if (wholeRoots.size === 0 && dottedTargets.size === 0) return { env, narrowedPaths };
   let nextEnv = env;
-  for (const root of roots) {
+  for (const root of wholeRoots) {
     const cur = lookup(nextEnv, root);
     const storage = storageLookup(nextEnv, root);
-    if ((storage?.kind === "optional" || storage?.kind === "nullish") && cur && !tyEqual(cur, storage)) {
+    const isNarrowableStorage = storage?.kind === "optional" || storage?.kind === "nullish" ||
+      (storage?.kind === "user" && !!findSynthArrayUnion(storage.name, typeDecls));
+    if (isNarrowableStorage && cur && !tyEqual(cur, storage)) {
       nextEnv = refine(nextEnv, root, storage);
     }
   }
-  const nextPaths = narrowedPaths.filter(np => !roots.has(np.path.rootVar));
+  const nextPaths = narrowedPaths.filter(np => {
+    if (wholeRoots.has(np.path.rootVar)) return false;
+    for (const dt of dottedTargets) {
+      if (pathAtOrBelowTarget(np.path, dt)) return false;
+    }
+    return true;
+  });
   return { env: nextEnv, narrowedPaths: nextPaths };
 }
 
@@ -2030,14 +2209,24 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     const [typed, nextEnv] = resolveStmt(s, currentCtx);
     result.push(typed);
     env = nextEnv;
-    // Assignment narrowing (#340): assigning a non-optional value to an optional
-    // variable narrows it for subsequent statements; assigning `undefined` or an
-    // optional restores its declared optional storage type. Also drop stale
-    // narrowedPaths rooted at any assigned target (including field writes).
+    // Assignment narrowing (#340) & union reassignment tracking (#405):
+    // assigning a non-optional value to an optional variable narrows it;
+    // assigning a variant literal / same-variant spread / synth array-union
+    // updates its narrowed variant; dotted field writes only drop narrowings
+    // at or below the written path (keeping the parent's union variant intact).
     if (s.kind === "assign") {
-      const root = s.target.split(".")[0]!;
-      narrowedPaths = narrowedPaths.filter(np => np.path.rootVar !== root);
-      if (!s.target.includes(".")) {
+      if (s.target.includes(".")) {
+        const parts = s.target.split(".");
+        const root = parts[0]!;
+        const rootStorage = storageLookup(env, root);
+        const udecl = rootStorage?.kind === "user"
+          ? declOfKind(ctx.typeDecls, tyBaseName(rootStorage.name), "discriminated-union")
+          : undefined;
+        const writesDiscriminant = parts.length === 2 && udecl?.discriminant === parts[1];
+        narrowedPaths = narrowedPaths.filter(np =>
+          writesDiscriminant ? np.path.rootVar !== root : !pathAtOrBelowTarget(np.path, s.target));
+      } else {
+        narrowedPaths = narrowedPaths.filter(np => np.path.rootVar !== s.target);
         const storage = storageLookup(env, s.target);
         if (storage?.kind === "optional" || storage?.kind === "nullish") {
           const isNullLit = s.value.kind === "var" && s.value.name === "null";
@@ -2050,15 +2239,45 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
           } else {
             env = refine(env, s.target, storage);
           }
+        } else if (storage?.kind === "user") {
+          const synth = findSynthArrayUnion(storage.name, ctx.typeDecls);
+          if (synth && typed.kind === "assign") {
+            if (typed.value.kind === "call" && typed.value.fn.kind === "var" &&
+                (typed.value.fn.name === "ArrayBranch" || typed.value.fn.name === "NonArrayBranch")) {
+              const payload = synthVariantPayloadTy(storage, typed.value.fn.name, currentCtx);
+              if (payload) {
+                env = refine(env, s.target, payload);
+                narrowedPaths = [...narrowedPaths, { path: { rootVar: s.target, fields: [] }, narrowedTy: payload, variant: typed.value.fn.name }];
+              } else {
+                env = refine(env, s.target, storage);
+              }
+            } else {
+              env = refine(env, s.target, storage);
+            }
+          } else {
+            const udecl = declOfKind(ctx.typeDecls, tyBaseName(storage.name), "discriminated-union");
+            if (udecl?.discriminant && typed.kind === "assign" && typed.value.kind === "record") {
+              let nextVariant: string | undefined;
+              if (!typed.value.spread) {
+                const tagF = typed.value.fields.find(f => f.name === udecl.discriminant);
+                if (tagF?.value.kind === "str") nextVariant = tagF.value.value;
+              } else if (typed.value.ofVariant && !typed.value.fields.some(f => f.name === udecl.discriminant)) {
+                nextVariant = typed.value.ofVariant;
+              }
+              if (nextVariant) {
+                narrowedPaths = [...narrowedPaths, { path: { rootVar: s.target, fields: [] }, narrowedTy: storage, variant: nextVariant }];
+              }
+            }
+          }
         }
       }
     }
     // Control-flow invalidation: if an `if`/`while`/`forof`/`switch` may assign
-    // a narrowed variable or path, restore its declared optional storage type
-    // before subsequent statements (definite-assignment guards re-narrow below).
+    // a narrowed variable or path, restore its declared storage type before
+    // subsequent statements (definite-assignment guards re-narrow below).
     if (s.kind === "if" || s.kind === "while" || s.kind === "forof" || s.kind === "switch") {
-      const mutated = collectAssignedRootsRaw([s]);
-      const inv = invalidateNarrowings(env, narrowedPaths, mutated);
+      const { wholeRoots, dottedTargets } = collectAssignedTargetsRaw([s]);
+      const inv = invalidateNarrowings(env, narrowedPaths, wholeRoots, dottedTargets, ctx.typeDecls);
       env = inv.env;
       narrowedPaths = inv.narrowedPaths;
     }
@@ -2091,6 +2310,12 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
         }
         const nv = discriminantVariantWhen(typed.cond, false, currentCtx);
         if (nv) narrowedPaths = [...narrowedPaths, nv];
+        const nsv = synthVariantWhen(typed.cond, false, currentCtx);
+        if (nsv) {
+          const updated = applyVariantNarrowing({ ...currentCtx, env, narrowedPaths }, nsv.path, nsv.unionTy, nsv.variant);
+          env = updated.env;
+          narrowedPaths = updated.narrowedPaths;
+        }
       }
       // Map-index narrowing: `if (!(k in m)) return;` means `k in m` holds in rest.
       if (typed.kind === "if") {
@@ -2177,17 +2402,32 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         throw new Error(`assignment to callback binding '${s.target}' requires materializing its argument value`);
       }
       entry?.onRead?.();
+      // For dotted writes (`sh.value = ...`), record any narrowed union variant
+      // on the owner path so transform/emit use the right collision-renamed
+      // destructor and Lean inductive match-update.
+      let ofVariant: string | undefined;
+      let targetTy: Ty = storageLookup(ctx.env, s.target) ?? { kind: "unknown" as const };
+      if (s.target.includes(".") && !s.target.startsWith("this.")) {
+        const parts = s.target.split(".");
+        const root = parts[0]!;
+        ofVariant = lookupNarrowedVariant({ rootVar: root, fields: [] }, ctx);
+        const rootStorage = storageLookup(ctx.env, root);
+        if (parts.length === 2 && rootStorage?.kind === "user" && ofVariant) {
+          const udecl = declOfKind(ctx.typeDecls, tyBaseName(rootStorage.name), "discriminated-union");
+          const vf = udecl?.variants?.find(v => v.name === ofVariant)?.fields.find(f => f.name === parts[1]);
+          if (vf?.type) targetTy = vf.type;
+        }
+      }
       // Coerce RHS against the variable's declared storage type (not a narrowed
       // flow type) so reassignments like `v = 7` or `v = undefined` stay typed
       // as `Option<T>`.
-      const targetTy = storageLookup(ctx.env, s.target) ?? { kind: "unknown" as const };
       // Propagate the target's type as returnTy, mirroring the annotated-let
       // case, so record/union literals and array literals in the RHS resolve
       // to their named datatypes.
       const valueCtx = (targetTy.kind === "user" || targetTy.kind === "array" || targetTy.kind === "optional" || targetTy.kind === "nullish")
         ? { ...ctx, returnTy: targetTy } : ctx;
       const value = coerceToTargetTy(resolveExpr(s.value, valueCtx), targetTy, ctx.typeDecls);
-      return [{ kind: "assign", target: entry?.emittedName ?? s.target, value }, ctx.env];
+      return [{ kind: "assign", target: entry?.emittedName ?? s.target, value, ...(ofVariant ? { ofVariant } : {}) }, ctx.env];
     }
 
     case "return": {
@@ -2228,6 +2468,10 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       if (elseVariant) {
         elseCtx = { ...elseCtx, narrowedPaths: [...elseCtx.narrowedPaths, elseVariant] };
       }
+      const elseSynth = synthVariantWhen(resolvedCond, false, ctx);
+      if (elseSynth) {
+        elseCtx = applyVariantNarrowing(elseCtx, elseSynth.path, elseSynth.unionTy, elseSynth.variant);
+      }
       // Narrow map index access across `k in m` / `!(k in m)` in the cond:
       // positive atoms (from `k in m` or &&-chains containing it) → then-branch;
       // negated atoms (from `!(k in m)`) → else-branch.
@@ -2240,8 +2484,8 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // Any variable or path mutated inside the loop body cannot keep a pre-loop
       // narrowing across iterations (including inside the loop condition and
       // invariants on back-edges).
-      const loopMutated = collectAssignedRootsRaw(s.body);
-      const loopInv = invalidateNarrowings(ctx.env, ctx.narrowedPaths, loopMutated);
+      const { wholeRoots, dottedTargets } = collectAssignedTargetsRaw(s.body);
+      const loopInv = invalidateNarrowings(ctx.env, ctx.narrowedPaths, wholeRoots, dottedTargets, ctx.typeDecls);
       const loopCtx: Ctx = { ...ctx, env: loopInv.env, narrowedPaths: loopInv.narrowedPaths };
       const whileSpecCtx = { ...loopCtx, inSpec: true };
       const resolvedInvariants = resolveSpecs(s.invariants, whileSpecCtx);
@@ -2290,8 +2534,8 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       const count = ctx.forofCounts.get(s.names[0]) ?? 0;
       ctx.forofCounts.set(s.names[0], count + 1);
       const idxName = freshName(`_${s.names[0]}_idx${count === 0 ? "" : count + 1}`);
-      const loopMutated = collectAssignedRootsRaw(s.body);
-      const loopInv = invalidateNarrowings(ctx.env, ctx.narrowedPaths, loopMutated);
+      const { wholeRoots, dottedTargets } = collectAssignedTargetsRaw(s.body);
+      const loopInv = invalidateNarrowings(ctx.env, ctx.narrowedPaths, wholeRoots, dottedTargets, ctx.typeDecls);
       env = loopInv.env;
       env = extend(env, idxName, { kind: "nat" });
       for (let j = 0; j < s.names.length; j++) {
@@ -2542,7 +2786,7 @@ function resolveFunction(
   // into the body context and the ensures context — they hold for the whole
   // body (pure fns) and for post-state references in the ensures (map params
   // aren't mutated through their binding in the Dafny translation).
-  const resolvedRequires = resolveSpecs(fn.requires, requiresCtx);
+  const resolvedRequires = resolveSpecs(fn.requires, requiresCtx, true);
   const requiresAtoms = resolvedRequires.flatMap(extractInAtoms);
   const bodyCtx = withInAtoms(baseCtx, requiresAtoms);
   const ensuresCtxNarrowed = withInAtoms(ensuresCtx, requiresAtoms);
