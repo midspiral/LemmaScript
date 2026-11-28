@@ -527,6 +527,8 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       if (e.fn === "JSRem" && args.length === 2) return `Int.tmod ${args[0]} ${args[1]}`;
       // JSTruncDiv (JS truncated bigint division) → Lean's native `Int.tdiv`
       if (e.fn === "JSTruncDiv" && args.length === 2) return `Int.tdiv ${args[0]} ${args[1]}`;
+      // JSFloorDiv (JS Math.floor(a / b)) → Lean's native floored `Int.fdiv`
+      if (e.fn === "JSFloorDiv" && args.length === 2) return `Int.fdiv ${args[0]} ${args[1]}`;
       // perm(a, b) → `List.Perm` on the underlying lists. Dafny lowers it to
       // `multiset(a) == multiset(b)`; the Lean image is `a.toList ~ b.toList`,
       // which mathlib's `List.Perm` provides (reflexivity, symmetry,
