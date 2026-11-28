@@ -365,6 +365,19 @@ function unsupportedAssignmentExpr(node: Expression): never {
   throw new Error(`Unsupported ${kind} expression at ${source.getFilePath()}:${line}:${column}: ${node.getText().slice(0, 80)}. Use a separate assignment statement.`);
 }
 
+const SUPPORTED_BINARY_OPS = new Set([
+  "+", "-", "*", "/", "%",
+  "===", "!==", "==", "!=", "<", "<=", ">", ">=",
+  "&&", "||", "in",
+  "<<", ">>", "&", "|",
+]);
+
+function unsupportedBinaryOp(node: Expression, op: string): never {
+  const source = node.getSourceFile();
+  const { line, column } = source.getLineAndColumnAtPos(node.getStart());
+  throw new Error(`Unsupported binary operator '${op}' at ${source.getFilePath()}:${line}:${column}: ${node.getText().slice(0, 80)}`);
+}
+
 function extractExpr(node: Expression): RawExpr {
   // Havoc key matching: replace matching calls or new expressions with havoc expression
   if (_havocKey && (Node.isCallExpression(node) || Node.isNewExpression(node))) {
@@ -531,6 +544,9 @@ function extractExpr(node: Expression): RawExpr {
     // Nullish coalescing: a ?? b — single-eval, narrow rewrites to someMatch
     if (op === "??") {
       return { kind: "nullish", left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
+    }
+    if (!SUPPORTED_BINARY_OPS.has(op)) {
+      unsupportedBinaryOp(node, op);
     }
     return { kind: "binop", op, left: extractExpr(node.getLeft()), right: extractExpr(node.getRight()) };
   }
@@ -1378,8 +1394,10 @@ function markFreshClone(e: RawExpr): RawExpr {
 
 const COMPOUND_OPS: Record<string, string> = {
   "+=": "+", "-=": "-", "*=": "*", "/=": "/", "%=": "%",
-  "<<=": "<<", ">>=": ">>", "|=": "|", "&=": "&", "^=": "^", "**=": "**",
+  "<<=": "<<", ">>=": ">>", "|=": "|", "&=": "&",
 };
+
+const UNSUPPORTED_COMPOUND_BINARY_OPS = new Set(["**=", ">>>=", "^="]);
 
 /** Desugar a statement-position side-effecting expression — `x = e`, `x += e`,
  *  `i++`, `arr[i] = v`, etc. — into a `RawAssign`. Returns null when no shape
@@ -1402,6 +1420,9 @@ function desugarStmtExpr(expr: Expression, line: number): RawStmt | null {
     }
     if (opText === "=") {
       return { kind: "assign", target: sourceName(left), value: extractExpr(expr.getRight()), line };
+    }
+    if (UNSUPPORTED_COMPOUND_BINARY_OPS.has(opText)) {
+      unsupportedBinaryOp(expr, opText);
     }
     const compound = COMPOUND_OPS[opText];
     if (compound) {

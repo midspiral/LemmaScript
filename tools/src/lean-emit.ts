@@ -334,6 +334,13 @@ function wrapOperand(sub: Expr, parentPrec?: number): string {
     ? `(${inner})` : inner;
 }
 
+const SUPPORTED_LEAN_BINOPS = new Set([
+  "=", "≠", "≥", "≤", ">", "<",
+  "∧", "∨", "↔",
+  "==", "!=", "&&", "||",
+  "+", "-", "*", "/", "%", "arrayConcat",
+]);
+
 function emitExpr(e: Expr, parentPrec?: number): string {
   switch (e.kind) {
     // `undefined` is the IR's spelling of the absent optional (mirrors dafny-emit's None)
@@ -442,6 +449,9 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         const recv = emitExpr(e.right);
         const wrap = e.right.kind === "binop" || e.right.kind === "app" || e.right.kind === "methodCall";
         return `${wrap ? `(${recv})` : recv}.contains ${emitExpr(e.left)}`;
+      }
+      if (!SUPPORTED_LEAN_BINOPS.has(e.op)) {
+        throw new Error(`Unsupported Lean binary operator: ${e.op}`);
       }
       const op = e.op === "arrayConcat" ? "++"
         : _boolCtx && e.op === "∧" ? "&&"
