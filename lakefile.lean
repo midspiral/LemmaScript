@@ -55,5 +55,6 @@ lean_lib Examples where
     `«ctorName.types», `«ctorName.def»,
     `«switchEnumField.types», `«switchEnumField.def», `«switchEnumField.proof»,
     `«mathTruncRound.types», `«mathTruncRound.def», `«mathTruncRound.proof»,
-    `«optionReassign.types», `«optionReassign.def», `«optionReassign.proof»
+    `«optionReassign.types», `«optionReassign.def», `«optionReassign.proof»,
+    `«unionReassign.types», `«unionReassign.def», `«unionReassign.proof»
   ]

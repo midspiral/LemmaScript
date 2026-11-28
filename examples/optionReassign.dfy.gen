@@ -9,7 +9,7 @@ method reassignInIf(input: Option<int>) returns (res: int)
   ensures (res == 5)
 {
   var x := input;
-  if (match x { case Some(i_) => true case None => false }) {
+  if (match x { case Some(_) => true case None => false }) {
     x := Some(5);
     return x.value;
   }
@@ -21,7 +21,7 @@ method reassignAfterEarlyReturn(input: Option<int>) returns (res: int)
   ensures (res == 5)
 {
   var x := input;
-  if (match x { case Some(i_) => false case None => true }) {
+  if (match x { case Some(_) => false case None => true }) {
     return 0;
   }
   x := Some(5);
@@ -33,7 +33,7 @@ method reassignOptionalField(input: Box) returns (res: int)
   ensures (res == 5)
 {
   var box := input;
-  if (match box.val { case Some(i_) => true case None => false }) {
+  if (match box.val { case Some(_) => true case None => false }) {
     box := box.(val := Option.Some(5));
     return box.val.value;
   }
