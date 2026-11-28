@@ -82,6 +82,30 @@ export function collideParam(n: number, _loopRet: boolean, _loopRet_val: number)
   assert.match(lean, /else\n\s+if _loopRet then/, lean);
 });
 
+test("loop early-return proof binders avoid colliding with user parameters h__loopRet and _h0", () => {
+  const lean = compileLean(`
+export function collideProofBinders(n: number, h__loopRet: number, _h0: number): number {
+  //@ verify
+  //@ requires h__loopRet >= _h0
+  //@ ensures \\result >= _h0
+  let i = 0;
+  while (i < n) {
+    //@ invariant 0 <= i
+    //@ decreases n - i
+    //@ done_with true
+    if (i === 999) {
+      return _h0;
+    }
+    i = i + 1;
+  }
+  return h__loopRet;
+}
+`, "collide_proof_binders.ts");
+
+  assert.match(lean, /∀ \(_h0' : \(_loopRet\.isSome\) = true\), \(\(_loopRet\)\.get \(by grind\)\) ≥ _h0/, lean);
+  assert.match(lean, /if h__loopRet' : \(_loopRet\)\.isSome = true then\n\s+let _loopRet_val := \(_loopRet\)\.get h__loopRet'\n\s+return _loopRet_val\n\s+else\n\s+return h__loopRet/, lean);
+});
+
 test("generic return type with fallthrough emits Option T without default : T", () => {
   const lean = compileLean(`
 export function pickOrFallback<T>(n: number, x: T, fallback: T): T {

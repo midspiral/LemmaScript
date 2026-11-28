@@ -455,7 +455,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         const l = emitExpr(e.left);
         const r = emitExpr(e.right);
         const condProp = isPropValued(e.left) ? l : `(${l}) = true`;
-        const h = `_h${_depIfCounter++}`;
+        const h = freshName(`_h${_depIfCounter++}`);
         const tVal = _boolCtx ? "true" : "True";
         const fVal = _boolCtx ? "false" : "False";
         const rExpr = _boolCtx && isPropValued(e.right) ? `decide (${r})` : r;
@@ -493,7 +493,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
         if (tailHasCU(i)) {
           const pStr = emitExpr(p);
           const pProp = isPropValued(p) ? pStr : `(${pStr}) = true`;
-          const h = `_h${_depIfCounter++}`;
+          const h = freshName(`_h${_depIfCounter++}`);
           acc = `∀ (${h} : ${pProp}), ${acc}`;
         } else {
           acc = `${wrapOperand(p, prec("→"))} → ${acc}`;
@@ -649,7 +649,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       if (hasCU) {
         const c = emitExpr(e.cond);
         const condProp = isPropValued(e.cond) ? c : `(${c}) = true`;
-        const h = `_h${_depIfCounter++}`;
+        const h = freshName(`_h${_depIfCounter++}`);
         const t = emitExpr(e.then);
         const f = emitExpr(e.else);
         const tExpr = _boolCtx && isPropValued(e.then) ? `decide (${t})` : t;
@@ -715,7 +715,7 @@ function emitStmts(stmts: Stmt[], indent: number): string {
         anyExprInStmts(rest, x => x.kind === "checkedUnwrap")) {
       const c = emitExpr(s.cond);
       const condProp = isPropValued(s.cond) ? c : `(${c}) = true`;
-      const h = `_h${_depIfCounter++}`;
+      const h = freshName(`_h${_depIfCounter++}`);
       out.push(`${pad}if ${h} : ${condProp} then\n${emitStmts(s.then, indent + 1)}\n${pad}else\n${emitStmts(rest, indent + 1)}`);
       break;
     }
@@ -771,7 +771,7 @@ function emitStmt(s: Stmt, indent: number): string {
         ? (() => {
           const c = emitExpr(s.cond);
           const condProp = isPropValued(s.cond) ? c : `(${c}) = true`;
-          return `_h${_depIfCounter++} : ${condProp}`;
+          return `${freshName(`_h${_depIfCounter++}`)} : ${condProp}`;
         })()
         : emitExpr(s.cond);
       let out = `${pad}if ${condText} then\n${emitStmts(s.then, indent + 1)}`;
@@ -795,7 +795,7 @@ function emitStmt(s: Stmt, indent: number): string {
         const noneArm = s.arms.find(a => a.pattern.kind === "ctor" && a.pattern.ctor === "none");
         if (someArm && noneArm) {
           const boundVar = patternBinders(someArm.pattern)[0]; // ".some x" ⇒ "x"
-          const hName = `h_${scrut.replace(/[^a-zA-Z0-9_]/g, "_")}`;
+          const hName = freshName(`h_${scrut.replace(/[^a-zA-Z0-9_]/g, "_")}`);
           const lines = [
             `${pad}if ${hName} : (${scrut}).isSome = true then`,
             `${pad}  let ${boundVar} := (${scrut}).get ${hName}`,
@@ -1039,7 +1039,7 @@ function emitPureExpr(e: Expr, indent: number): string {
       if (hasCU) {
         const c = emitExpr(e.cond);
         const condProp = isPropValued(e.cond) ? c : `(${c}) = true`;
-        const h = `_h${_depIfCounter++}`;
+        const h = freshName(`_h${_depIfCounter++}`);
         return `${pad}if ${h} : ${condProp} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
       }
       return `${pad}if ${emitExpr(e.cond)} then\n${emitPureExpr(e.then, indent + 1)}\n${pad}else\n${emitPureExpr(e.else, indent + 1)}`;
