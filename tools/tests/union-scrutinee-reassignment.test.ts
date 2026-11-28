@@ -600,6 +600,7 @@ export type Outer = { kind: "a"; value: Inner } | { kind: "b"; value: string };
 export type Colliding = { kind: "a"; value: number } | { kind: "b"; value: string };
 export type Box = { sh: Colliding };
 export type MixedOpt = { kind: "a"; value: number } | { kind: "b"; value: number | undefined };
+export interface Tree { children: Tree[] }
 
 //@ requires input.kind === "list" && input.items.length === 2
 //@ ensures \\result === 1
@@ -690,10 +691,53 @@ export function writeNestedUnion(input: Box): number {
 export function bumpMixed(sh: MixedOpt): MixedOpt {
   return { ...sh, value: 5 };
 }
+
+//@ requires input.children.length === 1 && input.children[0].children.length === 2
+//@ ensures \\result === 2
+export function assignShiftSelfRoot(input: Tree): number {
+  let t = input;
+  t = t.children.shift()!;
+  return t.children.length;
+}
+
+//@ requires input.children.length === 1 && input.children[0].children.length === 2
+//@ ensures \\result === 2
+export function assignPopSelfRoot(input: Tree): number {
+  let t = input;
+  t = t.children.pop()!;
+  return t.children.length;
+}
+
+//@ requires input.kind === "list" && input.items.length === 0
+//@ ensures \\result === 0
+export function discardShiftEmpty(input: Bag): number {
+  let b = input;
+  if (b.kind === "list") {
+    b.items.shift();
+    return b.items.length;
+  }
+  return 0;
+}
 `;
   const dfy = compileDafny(valid409Ts, "valid_409.ts");
   const res = verifyDafny(dfy);
   assert.equal(res.status, 0, `${dfy}\n${res.output}`);
+
+  // False postcondition for `t = t.children.shift()!` must be rejected (cannot mutate shifted child).
+  const falseShiftSelfTs = `
+export interface Tree { children: Tree[] }
+//@ requires input.children.length === 1 && input.children[0].children.length === 2
+//@ ensures \\result === 1
+export function f(input: Tree): number {
+  let t = input;
+  t = t.children.shift()!;
+  return t.children.length;
+}
+`;
+  const falseShiftDfy = compileDafny(falseShiftSelfTs, "false_shift_self.ts");
+  const falseShiftRes = verifyDafny(falseShiftDfy);
+  assert.notEqual(falseShiftRes.status, 0, `falseShiftSelf should fail:\n${falseShiftDfy}\n${falseShiftRes.output}`);
+  assert.match(falseShiftRes.output, /postcondition could not be proved|might not hold/, falseShiftRes.output);
 
   // Lean emission checks for all #409 cases
   const { types: leanTypes, def: leanDef } = compileLean(valid409Ts, "lean_409.ts");

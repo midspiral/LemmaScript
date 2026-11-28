@@ -2113,22 +2113,63 @@ function negateExpr(e: Expr): Expr {
   return { kind: "unop", op: "¬", expr: e };
 }
 
-/** Build the two pieces of an `arr.pop()` lowering on a named array variable:
+/** Build the two pieces of an `arr.pop()` lowering on an array expression:
  *  - `optValue` is `(if |arr|>0 then Some(arr[|arr|-1]) else None)` (the popped element)
- *  - `guardedTrunc` is `(if |arr|>0 then arr[..|arr|-1] else arr)` (the array minus its last element)
- *  Callers wrap these in let/assign statements appropriate to their context. */
-function buildPopLoweringExpr(arrExpr: Expr, arrTy: Ty): { optValue: Expr; guardedTrunc: Expr } {
+ *  - `guardedTrunc` is `(if |arr|>0 then arr[..|arr|-1] else arr)` (the array minus its last element) */
+function buildPopLoweringExpr(arrExpr: Expr, arrTy: Ty): { elemValue: Expr; optValue: Expr; guardedTrunc: Expr } {
   const arrLen: Expr = { kind: "field", obj: arrExpr, field: "size" };
   const lastIdx: Expr = { kind: "binop", op: "-", left: arrLen, right: { kind: "num", value: 1 } };
-  const lastElem: Expr = { kind: "index", arr: arrExpr, idx: lastIdx };
+  const elemValue: Expr = { kind: "index", arr: arrExpr, idx: lastIdx };
   const isNonEmpty: Expr = { kind: "binop", op: ">", left: arrLen, right: { kind: "num", value: 0 } };
   const optValue: Expr = { kind: "if", cond: isNonEmpty,
-    then: { kind: "app", fn: "Some", args: [lastElem] },
+    then: { kind: "app", fn: "Some", args: [elemValue] },
     else: { kind: "var", name: "undefined" } };
   const truncated: Expr = { kind: "methodCall", obj: arrExpr, objTy: arrTy, method: "slice",
     args: [{ kind: "num", value: 0 }, lastIdx], monadic: false };
   const guardedTrunc: Expr = { kind: "if", cond: isNonEmpty, then: truncated, else: arrExpr };
-  return { optValue, guardedTrunc };
+  return { elemValue, optValue, guardedTrunc };
+}
+
+/** Lower an array `.pop()` or `.shift()` call on any writable Place receiver
+ *  into `{ method, result, writeStmts }`:
+ *  - `result` reads the removed element from the original receiver,
+ *  - `writeStmts` writes the shortened array (leaving an empty array empty)
+ *    back through the original receiver Place + enclosing `someMatch` frames.
+ *  Callers evaluate `result` before `writeStmts` and only assign to the
+ *  destination afterward so `t = t.children.shift()!` mutates the original `t`. */
+function lowerArrayPopOrShift(e: TExpr): { method: "pop" | "shift"; result: Expr; writeStmts: Stmt[] } | null {
+  if (e.kind !== "call" || e.fn.kind !== "field" || e.fn.obj.ty.kind !== "array") return null;
+  const method = e.fn.field;
+  if (method !== "pop" && method !== "shift") return null;
+  const obj = e.fn.obj;
+  const arrExpr = lowerExpr(obj, null);
+  const isOptResult = e.ty.kind === "optional" || e.ty.kind === "nullish";
+  let result: Expr;
+  let nextArr: Expr;
+  if (method === "pop") {
+    const { elemValue, optValue, guardedTrunc } = buildPopLoweringExpr(arrExpr, obj.ty);
+    result = isOptResult ? optValue : elemValue;
+    nextArr = guardedTrunc;
+  } else {
+    const arrLen: Expr = { kind: "field", obj: arrExpr, field: "size" };
+    const isNonEmpty: Expr = { kind: "binop", op: ">", left: arrLen, right: { kind: "num", value: 0 } };
+    const head: Expr = { kind: "index", arr: arrExpr, idx: { kind: "num", value: 0 } };
+    result = isOptResult
+      ? { kind: "if", cond: isNonEmpty, then: { kind: "app", fn: "Some", args: [head] }, else: { kind: "var", name: "undefined" } }
+      : head;
+    const sliced: Expr = { kind: "methodCall", obj: arrExpr, objTy: obj.ty, method: "slice", args: [{ kind: "num", value: 1 }], monadic: false };
+    nextArr = { kind: "if", cond: isNonEmpty, then: sliced, else: arrExpr };
+  }
+  const write = buildPlaceWrite(obj, nextArr);
+  if (!write) return null;
+  return {
+    method,
+    result,
+    writeStmts: [
+      { kind: "assign", target: write.target, value: write.value },
+      ...emitWriteBacksForTarget(write.target, _writeBackFrames),
+    ],
+  };
 }
 /**
  * Velvet (Lean backend) rejects `return` inside a loop. For a function shaped as
@@ -2575,35 +2616,15 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       if (s.init.kind === "havoc") {
         return [{ kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: { kind: "havoc", type: s.init.ty } }];
       }
-      // arr.shift()! → let x = arr[0]; arr = arr[1..] (supports var, dotted/union fields, and checkedUnwrap)
+      // let x = recv.shift() / recv.pop(): bind removed element from original receiver,
+      // then write shortened array back through the receiver Place.
       const init = s.init.kind === "call" ? s.init : undefined;
-      if (init && init.fn.kind === "field" && init.fn.field === "shift" && init.fn.obj.ty.kind === "array") {
-        const obj = init.fn.obj;
-        const arrExpr = lowerExpr(obj, null);
-        const sliced: Expr = { kind: "methodCall", obj: arrExpr, objTy: obj.ty, method: "slice", args: [{ kind: "num", value: 1 }], monadic: false };
-        const write = buildPlaceWrite(obj, sliced);
-        if (write) {
-          return [
-            { kind: "let", name: s.name, type: s.ty, mutable: s.mutable,
-              value: { kind: "index", arr: arrExpr, idx: { kind: "num", value: 0 } } },
-            { kind: "assign", target: write.target, value: write.value },
-            ...emitWriteBacksForTarget(write.target, _writeBackFrames),
-          ];
-        }
-      }
-      // let x = arr.pop() → let x: T? = (Option-expr); arr := (truncated-or-self)
-      if (init && init.fn.kind === "field" && init.fn.field === "pop" && init.fn.obj.ty.kind === "array") {
-        const obj = init.fn.obj;
-        const arrExpr = lowerExpr(obj, null);
-        const { optValue, guardedTrunc } = buildPopLoweringExpr(arrExpr, obj.ty);
-        const write = buildPlaceWrite(obj, guardedTrunc);
-        if (write) {
-          return [
-            { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: optValue },
-            { kind: "assign", target: write.target, value: write.value },
-            ...emitWriteBacksForTarget(write.target, _writeBackFrames),
-          ];
-        }
+      const popOrShiftLet = lowerArrayPopOrShift(s.init);
+      if (popOrShiftLet) {
+        return [
+          { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: popOrShiftLet.result },
+          ...popOrShiftLet.writeStmts,
+        ];
       }
       // new Map(arr.map(n => [n.field, n])) → let m = map[]; for (n of arr) m[n.field] := n
       if (init && init.fn.kind === "var" && init.fn.name === "__mapFromArray" &&
@@ -2657,32 +2678,19 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     }
 
     case "assign": {
-      // x = arr.shift()! / x = arr.pop() → update x + write truncated array back to receiver Place
-      if (s.value.kind === "call" && s.value.fn.kind === "field" &&
-          (s.value.fn.field === "pop" || s.value.fn.field === "shift") && s.value.fn.obj.ty.kind === "array") {
-        const obj = s.value.fn.obj;
-        const arrExpr = lowerExpr(obj, null);
-        if (s.value.fn.field === "shift") {
-          const sliced: Expr = { kind: "methodCall", obj: arrExpr, objTy: obj.ty, method: "slice", args: [{ kind: "num", value: 1 }], monadic: false };
-          const write = buildPlaceWrite(obj, sliced);
-          if (write) {
-            return [
-              { kind: "assign", target: s.target, value: { kind: "index", arr: arrExpr, idx: { kind: "num", value: 0 } } },
-              { kind: "assign", target: write.target, value: write.value },
-              ...emitWriteBacksForTarget(write.target, _writeBackFrames),
-            ];
-          }
-        } else {
-          const { optValue, guardedTrunc } = buildPopLoweringExpr(arrExpr, obj.ty);
-          const write = buildPlaceWrite(obj, guardedTrunc);
-          if (write) {
-            return [
-              { kind: "assign", target: s.target, value: optValue },
-              { kind: "assign", target: write.target, value: write.value },
-              ...emitWriteBacksForTarget(write.target, _writeBackFrames),
-            ];
-          }
-        }
+      // target = recv.shift() / recv.pop(): save the removed element first,
+      // write the shortened array back through the original receiver, and only
+      // then assign the saved result to `s.target` (so `t = t.children.shift()!`
+      // mutates the original `t`, not the shifted child).
+      const popOrShiftAssign = lowerArrayPopOrShift(s.value);
+      if (popOrShiftAssign) {
+        const tmp = freshName(`_${popOrShiftAssign.method}${_liftCounter++}`);
+        const assignTmp: TStmt = { ...s, value: { kind: "var", name: tmp, ty: s.value.ty } };
+        return [
+          { kind: "let", name: tmp, type: s.value.ty, mutable: false, value: popOrShiftAssign.result },
+          ...popOrShiftAssign.writeStmts,
+          ...transformStmt(assignTmp, typeDecls),
+        ];
       }
       // Non-`this.` dotted field assignment on a record, union variant, or narrowed
       // optional/nullish record (e.g. `b.count = 5`, `u.v = 99`, `u.items[0] = 10`, `u.box.count = 42`):
@@ -2809,22 +2817,11 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       // enclosing narrowing frames (`someMatch` unwrap or union variant arm).
       // Non-Place receivers (e.g. `getArr().push(1)`) fail closed instead of
       // silently discarding the updated collection.
+      const popOrShiftExpr = lowerArrayPopOrShift(s.expr);
+      if (popOrShiftExpr) return popOrShiftExpr.writeStmts;
       if (s.expr.kind === "call" && s.expr.fn.kind === "field") {
         const recv = s.expr.fn.obj;
         const f = s.expr.fn.field;
-        if ((f === "pop" || f === "shift") && recv.ty.kind === "array") {
-          const arrExpr = lowerExpr(recv, null);
-          const nextArr: Expr = f === "shift"
-            ? { kind: "methodCall", obj: arrExpr, objTy: recv.ty, method: "slice", args: [{ kind: "num", value: 1 }], monadic: false }
-            : buildPopLoweringExpr(arrExpr, recv.ty).guardedTrunc;
-          const write = buildPlaceWrite(recv, nextArr);
-          if (write) {
-            return [
-              { kind: "assign", target: write.target, value: write.value },
-              ...emitWriteBacksForTarget(write.target, _writeBackFrames),
-            ];
-          }
-        }
         if (isMutatingCollectionMethod(recv.ty, f)) {
           if (recv.kind === "var") {
             const { binds, expr } = liftMethodCalls(s.expr);
