@@ -765,6 +765,8 @@ function emitStmt(s: Stmt, indent: number): string {
     case "continue": return `${pad}continue`;
 
     case "if": {
+      const emitBlock = (stmts: Stmt[], ind: number): string =>
+        stmts.length === 0 ? `${"  ".repeat(ind)}pure ()` : emitStmts(stmts, ind);
       const hasCU = anyExprInStmts(s.then, x => x.kind === "checkedUnwrap") ||
         anyExprInStmts(s.else, x => x.kind === "checkedUnwrap");
       const condText = hasCU
@@ -774,14 +776,14 @@ function emitStmt(s: Stmt, indent: number): string {
           return `${freshName(`_h${_depIfCounter++}`)} : ${condProp}`;
         })()
         : emitExpr(s.cond);
-      let out = `${pad}if ${condText} then\n${emitStmts(s.then, indent + 1)}`;
+      let out = `${pad}if ${condText} then\n${emitBlock(s.then, indent + 1)}`;
       if (s.else.length > 0) {
         if (!hasCU && s.else.length === 1 && s.else[0].kind === "if") {
           const ei = s.else[0];
-          out += `\n${pad}else if ${emitExpr(ei.cond)} then\n${emitStmts(ei.then, indent + 1)}`;
-          if (ei.else.length > 0) out += `\n${pad}else\n${emitStmts(ei.else, indent + 1)}`;
+          out += `\n${pad}else if ${emitExpr(ei.cond)} then\n${emitBlock(ei.then, indent + 1)}`;
+          if (ei.else.length > 0) out += `\n${pad}else\n${emitBlock(ei.else, indent + 1)}`;
         } else {
-          out += `\n${pad}else\n${emitStmts(s.else, indent + 1)}`;
+          out += `\n${pad}else\n${emitBlock(s.else, indent + 1)}`;
         }
       }
       return out;

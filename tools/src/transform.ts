@@ -2309,7 +2309,9 @@ function matchToIfChains(stmts: Stmt[]): Stmt[] {
     let elseBranch: Stmt[] = defaultArm ? defaultArm.body : [];
     for (let k = ctorArms.length - 1; k >= 0; k--) {
       const armBody = ctorArms[k].body;
-      if (armBody.length === 0) continue; // empty arm (no-op) — let it fall through to `else`
+      // Only skip an empty arm when there is no fallback branch to fall into;
+      // otherwise skipping it would execute `elseBranch` instead of doing nothing.
+      if (armBody.length === 0 && elseBranch.length === 0) continue;
       const ctor = patternCtor(ctorArms[k].pattern) ?? "";
       const binders = patternBinders(ctorArms[k].pattern);
       const variant = decl.variants?.find(v => v.name === ctor);
