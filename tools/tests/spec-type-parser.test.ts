@@ -56,7 +56,7 @@ function mineSpecTypesFromDir(dir: string, found: Set<string>): void {
           const named = rest.match(/^(?:\\result|[A-Za-z_$][\w$]*)\s+(.+)$/);
           if (named) {
             const tyText = named[1].trim();
-            if (tyText !== "(==)" && !tyText.startsWith("(")) {
+            if (tyText !== "(==)") {
               found.add(tyText);
             }
           }
@@ -96,9 +96,21 @@ function mineSpecTypesFromDir(dir: string, found: Set<string>): void {
       }
 
       // Empty collection constructors in specs: new Set<T>(), new Map<K, V>()
-      for (const sm of body.matchAll(/\bnew\s+(?:Set|Map)<([^>]+)>\(\)/g)) {
-        for (const arg of sm[1].split(",")) {
-          if (arg.trim()) found.add(arg.trim());
+      // Scan balanced <...> so nested generics like Map<string, Set<number>> are not truncated.
+      for (const sm of body.matchAll(/\bnew\s+(Set|Map)</g)) {
+        const name = sm[1];
+        const openIdx = (sm.index ?? 0) + sm[0].length - 1;
+        let depth = 0;
+        let closeIdx = -1;
+        for (let i = openIdx; i < body.length; i++) {
+          if (body[i] === "<") depth++;
+          else if (body[i] === ">") {
+            depth--;
+            if (depth === 0) { closeIdx = i; break; }
+          }
+        }
+        if (closeIdx !== -1 && body.slice(closeIdx + 1).startsWith("()")) {
+          found.add(`${name}${body.slice(openIdx, closeIdx + 1)}`);
         }
       }
     }
@@ -149,7 +161,11 @@ test("differential: parseSpecType agrees with extractTyFromNode across comprehen
     "ReadonlyMap<string, Set<number[]>>",
     "Record<string, number>",
     "Record<string, Map<number, Set<string>>>",
-    // Tuples (empty, single, homogeneous, heterogeneous, readonly, trailing comma)
+    // Readonly<T> wrapper
+    "Readonly<Foo>",
+    "Readonly<number[]>",
+    "Readonly<Map<string, number>>",
+    // Tuples (empty, single, homogeneous, heterogeneous, readonly, trailing comma, optional elements)
     "[]",
     "[number]",
     "[number, number]",
@@ -159,6 +175,8 @@ test("differential: parseSpecType agrees with extractTyFromNode across comprehen
     "readonly [number, string]",
     "[number, string,]",
     "readonly [number, number]",
+    "[number, string?]",
+    "[a: number, b?: string]",
     // Unions & nullability normalization/flattening
     "number | undefined",
     "undefined | number",
@@ -173,6 +191,13 @@ test("differential: parseSpecType agrees with extractTyFromNode across comprehen
     "(number | null | undefined) | undefined",
     "null | undefined",
     "undefined | null",
+    "void | undefined",
+    "void | null",
+    "void | null | undefined",
+    "(null) | undefined",
+    "(undefined) | null",
+    "(null) | null",
+    "(undefined) | undefined",
     "true | false",
     "true | false | undefined",
     "true | false | null",
@@ -295,30 +320,35 @@ test("verified core invariants: nullability flattening and full token consumptio
 });
 
 test("types.ts, spec-type*, and downstream passes do not import ts-morph or parse TS type strings", () => {
-  const tsMorphFree = [
-    "tools/src/types.ts",
-    "tools/src/spec-type-parser.ts",
-    "tools/src/spec-type.ts",
-    "tools/src/specparser.ts",
-    "tools/src/resolve.ts",
-    "tools/src/narrow.ts",
+  // Exact allowlist of files under tools/src/ permitted to import ts-morph or typescript.
+  const tsMorphAllowlist = new Set([
+    "tools/src/config.ts",
+    "tools/src/extract.ts",
+    "tools/src/extract-types.ts",
+    "tools/src/lexical-names.ts",
+    "tools/src/lsc.ts",
+    "tools/src/source-projects.ts",
+  ]);
+  const postResolveNoSpecTypeParse = new Set([
     "tools/src/checked-reads.ts",
     "tools/src/narrow-checks.ts",
     "tools/src/transform.ts",
-    "tools/src/info-command.ts",
-  ];
-  for (const rel of tsMorphFree) {
-    const src = readFileSync(join(REPO_ROOT, rel), "utf8");
-    assert.doesNotMatch(src, /from\s+["']ts-morph["']/, `${rel} must not import ts-morph`);
-    assert.doesNotMatch(src, /from\s+["']typescript["']/, `${rel} must not import typescript`);
-  }
+  ]);
 
   for (const file of collectTsFiles(join(REPO_ROOT, "tools/src"))) {
+    const rel = file.slice(REPO_ROOT.length + 1).replace(/\\/g, "/");
     const src = readFileSync(file, "utf8");
-    assert.doesNotMatch(src, /\bparseTsType\b/, `${file} must not reference parseTsType`);
-    assert.doesNotMatch(src, /\binitTypeParser\b/, `${file} must not reference initTypeParser`);
-    assert.doesNotMatch(src, /\btyToTsStr\b/, `${file} must not reference tyToTsStr`);
-    assert.doesNotMatch(src, /__lsc_type_parse__\.ts/, `${file} must not create scratch __lsc_type_parse__.ts`);
+    if (!tsMorphAllowlist.has(rel)) {
+      assert.doesNotMatch(src, /from\s+["']ts-morph["']/, `${rel} must not import ts-morph`);
+      assert.doesNotMatch(src, /from\s+["']typescript["']/, `${rel} must not import typescript`);
+    }
+    if (postResolveNoSpecTypeParse.has(rel)) {
+      assert.doesNotMatch(src, /\bparseSpecType\b/, `${rel} must consume precomputed Ty rather than calling parseSpecType`);
+    }
+    assert.doesNotMatch(src, /\bparseTsType\b/, `${rel} must not reference parseTsType`);
+    assert.doesNotMatch(src, /\binitTypeParser\b/, `${rel} must not reference initTypeParser`);
+    assert.doesNotMatch(src, /\btyToTsStr\b/, `${rel} must not reference tyToTsStr`);
+    assert.doesNotMatch(src, /__lsc_type_parse__\.ts/, `${rel} must not create scratch __lsc_type_parse__.ts`);
   }
 });
 

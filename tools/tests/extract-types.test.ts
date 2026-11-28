@@ -457,3 +457,220 @@ test("module-level const resolves primitive type alias consistently with tsType"
   assert.ok(tc);
   assert.deepEqual(tc.ty, { kind: "string" });
 });
+
+test("nullability parity edge cases across checker Type and TypeNode", () => {
+  for (const useTypeNode of [false, true]) {
+    assert.deepEqual(getVarType("declare const x: void | undefined;", "x", { useTypeNode }).ty, { kind: "void" });
+    assert.deepEqual(getVarType("declare const x: void | null;", "x", { useTypeNode }).ty, {
+      kind: "nullish",
+      inner: { kind: "void" },
+    });
+    assert.deepEqual(getVarType("declare const x: void | null | undefined;", "x", { useTypeNode }).ty, {
+      kind: "nullish",
+      inner: { kind: "void" },
+    });
+    assert.deepEqual(getVarType("declare const x: (null) | undefined;", "x", { useTypeNode }).ty, {
+      kind: "nullish",
+      inner: { kind: "void" },
+    });
+    assert.deepEqual(getVarType("declare const x: (undefined) | null;", "x", { useTypeNode }).ty, {
+      kind: "nullish",
+      inner: { kind: "void" },
+    });
+    assert.deepEqual(getVarType("declare const x: (null) | null;", "x", { useTypeNode }).ty, { kind: "null" });
+    assert.deepEqual(getVarType("declare const x: (undefined) | undefined;", "x", { useTypeNode }).ty, { kind: "void" });
+  }
+});
+
+test("optional function params, optional tuple elements, and Readonly<T> across Type and TypeNode", () => {
+  for (const useTypeNode of [false, true]) {
+    assert.deepEqual(
+      getVarType("declare const x: (a: number, b?: string) => boolean;", "x", { useTypeNode }).ty,
+      {
+        kind: "fn",
+        params: [{ kind: "int" }, { kind: "optional", inner: { kind: "string" } }],
+        result: { kind: "bool" },
+      },
+    );
+    assert.deepEqual(
+      getVarType("declare const x: [a: number, b?: string];", "x", { useTypeNode }).ty,
+      {
+        kind: "tuple",
+        elems: [{ kind: "int" }, { kind: "optional", inner: { kind: "string" } }],
+      },
+    );
+    assert.deepEqual(
+      getVarType("declare const x: [number, string?];", "x", { useTypeNode }).ty,
+      {
+        kind: "tuple",
+        elems: [{ kind: "int" }, { kind: "optional", inner: { kind: "string" } }],
+      },
+    );
+    assert.deepEqual(
+      getVarType("interface Foo { a: number } declare const x: Readonly<Foo>;", "x", { useTypeNode }).ty,
+      { kind: "user", name: "Foo" },
+    );
+    assert.deepEqual(
+      getVarType("declare const x: Readonly<number[]>;", "x", { useTypeNode }).ty,
+      { kind: "array", elem: { kind: "int" } },
+    );
+  }
+});
+
+test("recursive callable interfaces and named callable interfaces preserve name without overflowing", () => {
+  for (const useTypeNode of [false, true]) {
+    assert.deepEqual(
+      getVarType("interface Fix { (x: Fix): void } declare const x: Fix;", "x", { useTypeNode }).ty,
+      { kind: "user", name: "Fix" },
+    );
+    assert.deepEqual(
+      getVarType("interface Comparator { (a: number, b: number): boolean } declare const x: Comparator;", "x", { useTypeNode }).ty,
+      { kind: "user", name: "Comparator" },
+    );
+    assert.deepEqual(
+      getVarType("type SelfArr = SelfArr[]; declare const x: SelfArr;", "x", { useTypeNode }).ty,
+      { kind: "user", name: "SelfArr" },
+    );
+  }
+  // Arrow functions and declared function values still lower to fn types (not "__function" or fn name)
+  assert.deepEqual(
+    getVarType("const x = (n: number) => n + 1;", "x").ty,
+    { kind: "fn", params: [{ kind: "int" }], result: { kind: "int" } },
+  );
+  assert.deepEqual(
+    getVarType("function helper(n: number): boolean { return n > 0; } const x = helper;", "x").ty,
+    { kind: "fn", params: [{ kind: "int" }], result: { kind: "bool" } },
+  );
+});
+
+test("extractModule populates structured Ty on discriminated unions, records, aliases, and classes", () => {
+  const code = `
+    type Scores = number[];
+    interface Box {
+      scores: Scores;
+      label?: string;
+    }
+    type Result = { kind: "ok"; value: Box } | { kind: "err"; code: number };
+    export class Counter {
+      value: number;
+      constructor(init: number) { this.value = init; }
+      //@ verify
+      inc(by: number): number {
+        this.value = this.value + by;
+        return this.value;
+      }
+    }
+    //@ verify
+    export function unwrap(r: Result, fallback: Scores): number {
+      if (r.kind === "ok") return r.value.scores.length;
+      return r.code + fallback.length;
+    }
+  `;
+  const project = makeProject(true);
+  const sf = project.createSourceFile("decls-test.ts", code, { overwrite: true });
+  const raw = extractModule(sf);
+  const scores = raw.typeDecls.find(d => d.name === "Scores");
+  assert.ok(scores);
+  assert.deepEqual(scores.aliasOfTy, { kind: "array", elem: { kind: "int" } });
+
+  const box = raw.typeDecls.find(d => d.name === "Box");
+  assert.ok(box && box.fields);
+  assert.deepEqual(box.fields.find(f => f.name === "scores")?.type, { kind: "user", name: "Scores" });
+  const labelField = box.fields.find(f => f.name === "label");
+  assert.ok(labelField);
+  assert.equal(labelField.optionalKey, true);
+  assert.deepEqual(labelField.type, { kind: "optional", inner: { kind: "string" } });
+
+  const res = raw.typeDecls.find(d => d.name === "Result");
+  assert.ok(res && res.kind === "discriminated-union" && res.variants);
+  assert.deepEqual(
+    res.variants.find(v => v.name === "ok")?.fields.find(f => f.name === "value")?.type,
+    { kind: "user", name: "Box" },
+  );
+
+  const cls = raw.classes.find(c => c.name === "Counter");
+  assert.ok(cls);
+  assert.deepEqual(cls.fields[0].type, { kind: "int" });
+  assert.deepEqual(cls.methods[0].params[0].type, { kind: "int" });
+  assert.deepEqual(cls.methods[0].returnTy, { kind: "int" });
+});
+
+test("brownfield pruning retains synthesized T[] | U declared on an annotated local", () => {
+  const code = `
+    interface Part { text: string }
+    //@ verify
+    export function check(p: Part[]): number {
+      const x: Part[] | string = p;
+      return Array.isArray(x) ? x.length : 0;
+    }
+  `;
+  const project = makeProject(true);
+  const sf = project.createSourceFile("brownfield-synth.ts", code, { overwrite: true });
+  const raw = extractModule(sf);
+  const synth = raw.typeDecls.find(d => d.name === "ArrayOf_Part_Or_string");
+  assert.ok(synth, "expected ArrayOf_Part_Or_string to be retained under brownfield pruning");
+  const fn = raw.functions.find(f => f.name === "check");
+  assert.ok(fn);
+  const letStmt = fn.body[0];
+  assert.equal(letStmt.kind, "let");
+  assert.equal(letStmt.tsType, "ArrayOf_Part_Or_string");
+  assert.deepEqual(letStmt.type, { kind: "user", name: "ArrayOf_Part_Or_string" });
+});
+
+test("bounded generic T[] | U erases T in synthesized datatype name and fields", () => {
+  const code = `
+    interface Base { id: number }
+    export function accept<T extends Base>(x: T[] | string): number {
+      return Array.isArray(x) ? x.length : 0;
+    }
+  `;
+  const project = makeProject(true);
+  const sf = project.createSourceFile("generic-synth.ts", code, { overwrite: true });
+  const raw = extractModule(sf);
+  const synth = raw.typeDecls.find(d => d.name === "ArrayOf_Base_Or_string");
+  assert.ok(synth, `expected ArrayOf_Base_Or_string, found: ${raw.typeDecls.map(d => d.name).join(", ")}`);
+  assert.equal(raw.typeDecls.some(d => d.name.includes("ArrayOf_T_")), false);
+  assert.deepEqual(synth.variants?.[0].fields[0].type, {
+    kind: "array",
+    elem: { kind: "user", name: "Base" },
+  });
+  const fn = raw.functions.find(f => f.name === "accept");
+  assert.ok(fn);
+  assert.deepEqual(fn.params[0].type, { kind: "user", name: "ArrayOf_Base_Or_string" });
+});
+
+test("uninitialized let declarations dispatch default initializers from structured Ty", () => {
+  const code = `
+    export function defaults(): number {
+      let a: number;
+      let b: string | undefined;
+      let c: number[];
+      let d: Map<string, number>;
+      let e: Set<string>;
+      let f: boolean;
+      let g: string;
+      a = 1;
+      b = undefined;
+      c = [];
+      d = new Map<string, number>();
+      e = new Set<string>();
+      f = true;
+      g = "";
+      return a + c.length + (b ? 1 : 0) + (f ? 1 : 0) + g.length + d.size + e.size;
+    }
+  `;
+  const project = makeProject(true);
+  const sf = project.createSourceFile("defaults.ts", code, { overwrite: true });
+  const raw = extractModule(sf);
+  const fn = raw.functions.find(f => f.name === "defaults");
+  assert.ok(fn);
+  const lets = fn.body.slice(0, 7);
+  assert.equal(lets[0].kind === "let" && lets[0].init.kind, "num");
+  assert.equal(lets[1].kind === "let" && lets[1].init.kind === "var" && lets[1].init.name, "undefined");
+  assert.equal(lets[2].kind === "let" && lets[2].init.kind, "arrayLiteral");
+  assert.equal(lets[3].kind === "let" && lets[3].init.kind === "emptyCollection" && lets[3].init.collectionType, "Map");
+  assert.equal(lets[4].kind === "let" && lets[4].init.kind === "emptyCollection" && lets[4].init.collectionType, "Set");
+  assert.equal(lets[5].kind === "let" && lets[5].init.kind, "bool");
+  assert.equal(lets[6].kind === "let" && lets[6].init.kind, "str");
+});
+

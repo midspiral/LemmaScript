@@ -47,7 +47,6 @@
 
 import type { TExpr, TStmt, TModule, TFunction, Ty } from "./typedir.js";
 import type { FieldInfo, TypeDeclInfo } from "./types.js";
-import { parseSpecType } from "./spec-type.js";
 
 export type NarrowCheck = "unwrapped-optional" | "binder-collision";
 
@@ -164,8 +163,8 @@ function declField(decl: TypeDeclInfo, field: string, ofVariant: string | undefi
 }
 
 function fieldInfoTy(f: FieldInfo | null): Ty | null {
-  if (!f) return null;
-  const ty = f.type ?? parseSpecType(f.tsType);
+  if (!f?.type) return null;
+  const ty = f.type;
   if (!f.optionalKey) return ty;
   if (ty.kind === "nullish") return ty;
   if (ty.kind === "optional") return ty.absent === "null" ? { kind: "nullish", inner: ty.inner } : ty;

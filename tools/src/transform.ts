@@ -10,7 +10,6 @@ import { isBigInt, optAbsent, tyEqual } from "./typedir.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
 import { anyExpr, anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
-import { parseSpecType } from "./spec-type.js";
 import { freshName, freshNameWhere, isUserName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
 import { lowerIndexedCallback } from "./callback-lowering.js";
@@ -2423,14 +2422,14 @@ function lookupFieldTy(rootTy: Ty | undefined, fields: string[], typeDecls: Type
     if (!decl) return null;
     if (decl.kind === "record" && decl.fields) {
       const f = decl.fields.find(fi => fi.name === field);
-      if (!f) return null;
-      cur = f.type ?? parseSpecType(f.tsType);
+      if (!f?.type) return null;
+      cur = f.type;
     } else if (decl.kind === "discriminated-union" && decl.variants) {
       const variant = (i === 0 && ofVariant ? decl.variants.find(v => v.name === ofVariant) : undefined)
         ?? decl.variants.find(v => v.fields.some(fi => fi.name === field));
       const f = variant?.fields.find(fi => fi.name === field);
-      if (!f) return null;
-      cur = f.type ?? parseSpecType(f.tsType);
+      if (!f?.type) return null;
+      cur = f.type;
     } else {
       return null;
     }
