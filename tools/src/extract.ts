@@ -1958,11 +1958,24 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
         }
         if (head.kind === "if") {
           if (hasSwitchBreak(head.then) || hasSwitchBreak(head.else)) {
+            const thenFalls = canFallThrough(head.then);
+            const elseFalls = canFallThrough(head.else);
+            // When at most one branch can fall through (e.g. `if (v === undefined) break;`),
+            // push `rest` directly into that branch: no duplication, and TypeScript narrowing
+            // from `head.cond` stays in scope over `rest`.
+            if (!thenFalls || !elseFalls) {
+              const rest = thenFalls || elseFalls
+                ? rewriteWithBreakFlag(tail, cont, flag, isTopLevel)
+                : [];
+              const thenBody = rewriteWithBreakFlag(head.then, thenFalls ? rest : [], flag, isTopLevel);
+              const elseBody = rewriteWithBreakFlag(head.else, elseFalls ? rest : [], flag, isTopLevel);
+              return [{ ...head, then: thenBody, else: elseBody }];
+            }
             const thenBody = rewriteWithBreakFlag(head.then, [], flag, false);
             const elseBody = rewriteWithBreakFlag(head.else, [], flag, false);
             const ifStmt: RawStmt = { ...head, then: thenBody, else: elseBody };
             const rest = rewriteWithBreakFlag(tail, cont, flag, isTopLevel);
-            if (rest.length === 0 || (!canFallThrough(head.then) && !canFallThrough(head.else))) {
+            if (rest.length === 0) {
               return [ifStmt];
             }
             return [

@@ -196,6 +196,96 @@ export function manyNestedGuards(t: Tag, p: boolean, q: boolean, _switchBroken: 
   assert.equal(leanAssignCount, 1, `expected x := x + 1 once in Lean, got ${leanAssignCount}\n${lean}`);
 });
 
+test("flag-based switch break lowering preserves TypeScript narrowing on single-branch guards", () => {
+  const reviewerRepro = `
+type Tag = "a" | "b";
+
+export function flagGuardPreservesNarrowing(t: Tag, p: boolean, q: boolean, v: number | undefined): number {
+  //@ verify
+  //@ ensures t === "a" && !(p && q) && v !== undefined ==> \\result === v + 1
+  //@ ensures t === "a" && ((p && q) || v === undefined) ==> \\result === 0
+  //@ ensures t === "b" ==> \\result === 0
+  let n = 0;
+  switch (t) {
+    case "a":
+      if (p) { if (q) break; }
+      if (v === undefined) break;
+      n = v + 1;
+      break;
+    case "b":
+      break;
+  }
+  return n;
+}
+`;
+  const dfy = compile(reviewerRepro, "flag_guard_narrowing.ts", "dafny");
+  assert.doesNotMatch(dfy, /\bbreak;/, dfy);
+  assert.match(dfy, /case Some\(i_v_val\) =>/, dfy);
+  const addCount = (dfy.match(/n := \(i_v_val \+ 1\);/g) ?? []).length;
+  assert.equal(addCount, 1, `expected n := (i_v_val + 1) once, got ${addCount}\n${dfy}`);
+  const res = verifyDafny(dfy);
+  assert.equal(res.status, 0, `${dfy}\n${res.output}`);
+
+  const lean = compile(reviewerRepro, "flag_guard_narrowing.ts", "lean");
+  assert.doesNotMatch(lean, /\bbreak\b/, lean);
+  assert.match(lean, /\(v\)\.isSome = true/, lean);
+  const leanAddCount = (lean.match(/n := _v_val \+ 1/g) ?? []).length;
+  assert.equal(leanAddCount, 1, `expected n := _v_val + 1 once in Lean, got ${leanAddCount}\n${lean}`);
+
+  const nestedAndLeading = `
+type Tag = "a" | "b";
+
+export function nestedNarrowingInsideFlagGuard(t: Tag, p: boolean, v: number | undefined): number {
+  //@ verify
+  //@ ensures t === "a" && p && v === undefined ==> \\result === 0
+  //@ ensures t === "a" && p && v !== undefined ==> \\result === v + 11
+  //@ ensures t === "a" && !p ==> \\result === 10
+  //@ ensures t === "b" ==> \\result === 0
+  let n = 0;
+  switch (t) {
+    case "a":
+      if (p) {
+        if (v === undefined) break;
+        n = v + 1;
+      }
+      n = n + 10;
+      break;
+    case "b":
+      break;
+  }
+  return n;
+}
+
+export function narrowingBeforeFlagGuard(t: Tag, p: boolean, q: boolean, v: number | undefined): number {
+  //@ verify
+  //@ ensures t === "a" && !(p && q) && v !== undefined ==> \\result === v + 1
+  //@ ensures t === "a" && ((p && q) || v === undefined) ==> \\result === 0
+  //@ ensures t === "b" ==> \\result === 0
+  let n = 0;
+  switch (t) {
+    case "a":
+      if (v === undefined) break;
+      if (p) { if (q) break; }
+      n = v + 1;
+      break;
+    case "b":
+      break;
+  }
+  return n;
+}
+`;
+  const dfy2 = compile(nestedAndLeading, "flag_guard_narrowing_nested.ts", "dafny");
+  assert.doesNotMatch(dfy2, /\bbreak;/, dfy2);
+  assert.match(dfy2, /case Some\(i_v_val\) =>/, dfy2);
+  const res2 = verifyDafny(dfy2);
+  assert.equal(res2.status, 0, `${dfy2}\n${res2.output}`);
+
+  const lean2 = compile(nestedAndLeading, "flag_guard_narrowing_nested.ts", "lean");
+  assert.doesNotMatch(lean2, /\bbreak\b/, lean2);
+  assert.match(lean2, /\(v\)\.isSome = true/, lean2);
+  assert.match(lean2, /n := _v_val \+ 1/, lean2);
+});
+
 test("guarded break inside switch emits structured if/else without break in Lean", () => {
   const lean = compile(guardedBreakInLoopSource, "switch_guarded_break.ts", "lean");
   assert.doesNotMatch(lean, /\bbreak\b/, lean);
