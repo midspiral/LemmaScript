@@ -34,7 +34,7 @@ method reassignOptionalField(input: Box) returns (res: int)
 {
   var box := input;
   if (match box.val { case Some(_) => true case None => false }) {
-    box := box.(val := Option.Some(5));
+    box := box.(val := Some(5));
     return box.val.value;
   }
   return 0;

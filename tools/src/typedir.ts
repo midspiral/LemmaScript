@@ -148,7 +148,7 @@ export type TExpr =
 
 export type TStmt =
   | { kind: "let"; name: string; ty: Ty; mutable: boolean; init: TExpr }
-  | { kind: "assign"; target: string; value: TExpr; ofVariant?: string }
+  | { kind: "assign"; target: string; value: TExpr; ofVariant?: string; ownerVariants?: (string | undefined)[] }
   | { kind: "return"; value: TExpr }
   | { kind: "break" }
   | { kind: "continue" }

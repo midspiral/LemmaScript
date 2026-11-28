@@ -51,30 +51,29 @@ export function isMutatingCollectionMethod(recvTy: Ty, method: string): boolean 
 }
 
 /** Build a nested record-update expression rooted at `rootVar` for `fields`
- *  (length >= 1), setting the innermost field to `newVal`. Optional `outerUnion`
- *  pins the union constructor/type on the outermost update (for collision-renamed
- *  destructors in Dafny and match-updates in Lean). */
+ *  (length >= 1), setting the innermost field to `newVal`. Optional
+ *  `unionsByDepth` pins the union constructor/type at each nesting depth `i`
+ *  whose owner is a discriminated union (for collision-renamed destructors in
+ *  Dafny and match-updates in Lean). */
 export function buildNestedFieldExpr(
   rootVar: string,
   fields: string[],
   newVal: Expr,
-  outerUnion?: { ctor?: string; ctorOf?: string },
+  unionsByDepth?: ({ ctor?: string; ctorOf: string } | undefined)[],
 ): Expr {
   const baseFor = (len: number): Expr => {
     let cur: Expr = { kind: "var", name: rootVar };
     for (let i = 0; i < len; i++) {
-      const unionTag = i === 0 && outerUnion?.ctorOf
-        ? { fromUnion: outerUnion.ctorOf, ctor: outerUnion.ctor }
-        : {};
+      const u = unionsByDepth?.[i];
+      const unionTag = u ? { fromUnion: u.ctorOf, ctor: u.ctor } : {};
       cur = { kind: "field", obj: cur, field: fields[i], ...unionTag, datatypeField: true };
     }
     return cur;
   };
   let curVal = newVal;
   for (let i = fields.length - 1; i >= 0; i--) {
-    const unionTag = i === 0 && outerUnion?.ctorOf
-      ? { ctor: outerUnion.ctor, ctorOf: outerUnion.ctorOf }
-      : {};
+    const u = unionsByDepth?.[i];
+    const unionTag = u ? { ctor: u.ctor, ctorOf: u.ctorOf } : {};
     curVal = {
       kind: "record",
       spread: baseFor(i),

@@ -591,3 +591,118 @@ export function binderNoCapture(input: Pair, _f1: number): Pair {
   assert.match(leanDef, /match sh with \| \.a _ _f1' => Pair\.a \(5\) _f1'/, leanDef);
   assert.match(leanDef, /match sh with \| \.a _f0 _ => Pair\.a _f0 \(10\)/, leanDef);
 });
+
+test("#409: pop/shift on narrowed union & synth arrays, nested ofVariant, ensures/invariant &&, nested union writes, and mixed-type unnarrowed spreads", () => {
+  const valid409Ts = `
+export type Bag = { kind: "empty" } | { kind: "list"; items: number[] };
+export type Inner = { tag: "x"; n: number } | { tag: "y"; s: string };
+export type Outer = { kind: "a"; value: Inner } | { kind: "b"; value: string };
+export type Colliding = { kind: "a"; value: number } | { kind: "b"; value: string };
+export type Box = { sh: Colliding };
+export type MixedOpt = { kind: "a"; value: number } | { kind: "b"; value: number | undefined };
+
+//@ requires input.kind === "list" && input.items.length === 2
+//@ ensures \\result === 1
+export function popUnionField(input: Bag): number {
+  let b = input;
+  if (b.kind === "list") {
+    const last = b.items.pop()!;
+    return b.items.length;
+  }
+  return 0;
+}
+
+//@ requires input.kind === "list" && input.items.length === 2 && input.items[0] === 9
+//@ ensures \\result === 10
+export function shiftUnionField(input: Bag): number {
+  let b = input;
+  if (b.kind === "list") {
+    const first = b.items.shift()!;
+    return first + b.items.length;
+  }
+  return 0;
+}
+
+//@ requires Array.isArray(input) && input.length === 2
+//@ ensures \\result === 1
+export function popSynth(input: number[] | number): number {
+  let u = input;
+  if (Array.isArray(u) && u.length > 0) {
+    const last = u.pop()!;
+    return u.length;
+  }
+  return 0;
+}
+
+//@ requires Array.isArray(input) && input.length === 2 && input[0] === 4
+//@ ensures \\result === 5
+export function shiftSynth(input: number[] | number): number {
+  let u = input;
+  if (Array.isArray(u) && u.length > 0) {
+    const first = u.shift()!;
+    return first + u.length;
+  }
+  return 0;
+}
+
+//@ requires o.kind === "a" && o.value.tag === "x" && o.value.n === 7
+//@ ensures \\result === 7
+export function readNested(o: Outer): number {
+  if (o.kind === "a" && o.value.tag === "x") {
+    return o.value.n;
+  }
+  return 0;
+}
+
+//@ ensures \\result.kind === "a" && \\result.value === 5
+export function makeA(): Colliding {
+  return { kind: "a", value: 5 };
+}
+
+//@ requires input.kind === "a" && input.value >= 0
+//@ ensures \\result >= 0
+export function loopColliding(input: Colliding): number {
+  let sh = input;
+  let i = 0;
+  while (i < 3) {
+    //@ invariant 0 <= i && i <= 3
+    //@ invariant sh.kind === "a" && sh.value >= 0
+    //@ decreases 3 - i
+    sh = { kind: "a", value: sh.kind === "a" ? sh.value + 1 : 0 };
+    i = i + 1;
+  }
+  return sh.kind === "a" ? sh.value : 0;
+}
+
+//@ requires input.sh.kind === "a"
+//@ ensures \\result === 5
+export function writeNestedUnion(input: Box): number {
+  let b = input;
+  if (b.sh.kind === "a") {
+    b.sh.value = 5;
+    return b.sh.value;
+  }
+  return 0;
+}
+
+//@ ensures sh.kind === "a" ==> (\\result.kind === "a" && \\result.value === 5)
+//@ ensures sh.kind === "b" ==> (\\result.kind === "b" && \\result.value === 5)
+export function bumpMixed(sh: MixedOpt): MixedOpt {
+  return { ...sh, value: 5 };
+}
+`;
+  const dfy = compileDafny(valid409Ts, "valid_409.ts");
+  const res = verifyDafny(dfy);
+  assert.equal(res.status, 0, `${dfy}\n${res.output}`);
+
+  // Lean emission checks for all #409 cases
+  const { types: leanTypes, def: leanDef } = compileLean(valid409Ts, "lean_409.ts");
+  // Item 1: pop/shift write back through union match updates (no raw `.pop`/`.shift`)
+  assert.doesNotMatch(leanDef, /\.pop\b|\.shift\b/, leanDef);
+  // Item 4: nested union write `b.sh.value = 5` emits match-update on `Colliding`, not `{ b.sh with ... }`
+  assert.doesNotMatch(leanDef, /\{ b\.sh with/, leanDef);
+  assert.match(leanDef, /b := \{ b with sh := \(match b\.sh with \| \.a _ => Colliding\.a \(5\)/, leanDef);
+  // Item 5: unnarrowed mixed-type spread coerces `.a` to `5` and `.b` to `some 5` (in Pure.bumpMixed)
+  assert.match(leanTypes, /\| \.a _ =>\s+MixedOpt\.a 5/, leanTypes);
+  assert.match(leanTypes, /\| \.b _ =>\s+MixedOpt\.b \(some 5\)/, leanTypes);
+});

@@ -84,6 +84,7 @@ interface AccessPath {
 
 function asRawAccessPath(e: RawExpr): AccessPath | null {
   if (e.kind === "var") return { rootVar: e.name, fields: [] };
+  if (e.kind === "result") return { rootVar: "\\result", fields: [] };
   if (e.kind === "field") {
     const inner = asRawAccessPath(e.obj);
     if (!inner) return null;
@@ -1650,10 +1651,11 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         }
       }
 
-      // A variant narrowing on the object picks the field's type from that
-      // variant (a shared field name can have a different type per variant).
+      // A variant narrowing on the object pins `ofVariant` (even when `myPath`
+      // itself was also narrowed in `narrowedPaths`, e.g. a nested union) and
+      // supplies the field's type when not already narrowed.
       let ofVariant: string | undefined;
-      if (ty.kind === "unknown" && ctx.narrowedPaths.length > 0 && obj.ty.kind === "user") {
+      if (ctx.narrowedPaths.length > 0 && obj.ty.kind === "user") {
         const objPath = asRawAccessPath(e.obj);
         let np: NarrowedPath | undefined;
         if (objPath) {
@@ -1665,7 +1667,10 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
         if (np?.variant) {
           const decl = findDecl(ctx, tyBaseName(obj.ty.name));
           const f = decl?.variants?.find(v => v.name === np.variant)?.fields.find(f => f.name === e.field);
-          if (f?.type) { ty = f.type; ofVariant = np.variant; }
+          if (f?.type) {
+            ofVariant = np.variant;
+            if (ty.kind === "unknown") ty = f.type;
+          }
         }
       }
 
@@ -2027,15 +2032,17 @@ function resolveSpec(spec: string, ctx: Ctx): TExpr {
   return resolveExpr(parseExpr(spec), ctx);
 }
 
-function resolveSpecs(specs: string[], ctx: Ctx, threadNarrowings = false): TExpr[] {
+function resolveSpecs(specs: string[], ctx: Ctx, threadAcrossSpecs = false): TExpr[] {
   const result: TExpr[] = [];
-  let curCtx = ctx;
+  let specCtx = ctx;
   for (const spec of specs) {
+    let clauseCtx = specCtx;
     for (const clause of splitConj(parseExpr(spec))) {
-      const resolved = resolveExpr(clause, curCtx);
+      const resolved = resolveExpr(clause, clauseCtx);
       result.push(resolved);
-      if (threadNarrowings) curCtx = collectAndChainNarrowings(resolved, curCtx);
+      clauseCtx = collectAndChainNarrowings(resolved, clauseCtx);
     }
+    if (threadAcrossSpecs) specCtx = clauseCtx;
   }
   return result;
 }
@@ -2423,21 +2430,43 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
         throw new Error(`assignment to callback binding '${s.target}' requires materializing its argument value`);
       }
       entry?.onRead?.();
-      // For dotted writes (`sh.value = ...`), record any narrowed union variant
-      // on the owner path so transform/emit use the right collision-renamed
-      // destructor and Lean inductive match-update.
+      // For dotted writes (`sh.value = ...`, `b.sh.value = ...`), record any
+      // narrowed union variant at each step along the owner chain so
+      // transform/emit use the right collision-renamed destructors and Lean
+      // inductive match-updates at arbitrary nesting depth.
       let ofVariant: string | undefined;
+      let ownerVariants: (string | undefined)[] | undefined;
       let targetTy: Ty = storageLookup(ctx.env, s.target) ?? { kind: "unknown" as const };
       if (s.target.includes(".") && !s.target.startsWith("this.")) {
         const parts = s.target.split(".");
         const root = parts[0]!;
-        ofVariant = lookupNarrowedVariant({ rootVar: root, fields: [] }, ctx);
-        const rootStorage = storageLookup(ctx.env, root);
-        if (parts.length === 2 && rootStorage?.kind === "user" && ofVariant) {
-          const udecl = declOfKind(ctx.typeDecls, tyBaseName(rootStorage.name), "discriminated-union");
-          const vf = udecl?.variants?.find(v => v.name === ofVariant)?.fields.find(f => f.name === parts[1]);
-          if (vf?.type) targetTy = vf.type;
+        const fields = parts.slice(1);
+        const variants: (string | undefined)[] = [];
+        let curTy: Ty | undefined = storageLookup(ctx.env, root);
+        for (let i = 0; i < fields.length; i++) {
+          const v = lookupNarrowedVariant({ rootVar: root, fields: fields.slice(0, i) }, ctx);
+          variants.push(v);
+          if (curTy) {
+            const unwrapped = (curTy.kind === "optional" || curTy.kind === "nullish") ? curTy.inner : curTy;
+            if (unwrapped.kind === "user") {
+              const decl = findDecl(ctx, tyBaseName(unwrapped.name));
+              if (decl?.kind === "discriminated-union" && decl.variants) {
+                const variant = (v ? decl.variants.find(vi => vi.name === v) : undefined)
+                  ?? decl.variants.find(vi => vi.fields.some(f => f.name === fields[i]));
+                curTy = variant?.fields.find(f => f.name === fields[i])?.type;
+              } else if (decl?.kind === "record" && decl.fields) {
+                curTy = decl.fields.find(f => f.name === fields[i])?.type;
+              } else {
+                curTy = undefined;
+              }
+            } else {
+              curTy = undefined;
+            }
+          }
         }
+        ofVariant = variants[0];
+        if (variants.some(v => v !== undefined)) ownerVariants = variants;
+        if (curTy) targetTy = curTy;
       }
       // Coerce RHS against the variable's declared storage type (not a narrowed
       // flow type) so reassignments like `v = 7` or `v = undefined` stay typed
@@ -2448,7 +2477,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       const valueCtx = (targetTy.kind === "user" || targetTy.kind === "array" || targetTy.kind === "optional" || targetTy.kind === "nullish")
         ? { ...ctx, returnTy: targetTy } : ctx;
       const value = coerceToTargetTy(resolveExpr(s.value, valueCtx), targetTy, ctx.typeDecls);
-      return [{ kind: "assign", target: entry?.emittedName ?? s.target, value, ...(ofVariant ? { ofVariant } : {}) }, ctx.env];
+      return [{ kind: "assign", target: entry?.emittedName ?? s.target, value, ...(ofVariant ? { ofVariant } : {}), ...(ownerVariants ? { ownerVariants } : {}) }, ctx.env];
     }
 
     case "return": {

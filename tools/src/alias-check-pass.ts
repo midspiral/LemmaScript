@@ -382,7 +382,8 @@ function mutationInfoOfStmt(s: TStmt): MutationInfo | null {
     const e = s.expr;
     if (e.kind === "call" && e.fn.kind === "field" && (
       isMutatingCollectionMethod(e.fn.obj.ty, e.fn.field) ||
-      (e.fn.obj.ty.kind === "unknown" && ["push", "unshift", "sort", "set", "add", "delete"].includes(e.fn.field))
+      ((e.fn.field === "pop" || e.fn.field === "shift") && e.fn.obj.ty.kind === "array") ||
+      (e.fn.obj.ty.kind === "unknown" && ["push", "unshift", "sort", "pop", "shift", "set", "add", "delete"].includes(e.fn.field))
     )) {
       const root = accessPathRoot(e.fn.obj);
       if (!root) return null;

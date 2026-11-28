@@ -13,3 +13,14 @@ prove_correct tagChangingSpread by
 prove_correct binderNoCapture by
   intro input _f1
   cases input <;> velvet_vcgen [binderNoCapture] with finish
+
+prove_correct popUnionField by
+  intro input
+  cases input <;> velvet_vcgen [popUnionField] with finish
+
+prove_correct makeA by
+  velvet_vcgen [makeA] with finish [Pure.makeA]
+
+prove_correct bumpMixed by
+  intro sh nextVal
+  cases sh <;> velvet_vcgen [bumpMixed] with finish [Pure.bumpMixed]

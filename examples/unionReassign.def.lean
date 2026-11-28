@@ -24,7 +24,7 @@ method tagChangingSpread (input : Shape) returns (res : Shape)
   requires require_1: ((match input with | .a .. => true | _ => false) : Prop)
   requires require_2: ((match input with | .a _v => _v | _ => (default : Int)) = 7 : Prop)
   ensures ensures_1: ((match res with | .b .. => true | _ => false) : Prop)
-  ensures ensures_2: ((match res with | .a _v => _v | .b _v => _v) = 7 : Prop)
+  ensures ensures_2: ((match res with | .b _v => _v | _ => (default : Int)) = 7 : Prop)
   do
     let mut sh : Shape := input
     if (match sh with | .a .. => true | _ => false) then
@@ -48,3 +48,28 @@ method binderNoCapture (input : Pair) (_f1 : Int) returns (res : Pair)
       return sh
     else
       return sh
+
+method popUnionField (input : Bag) returns (res : Int)
+  requires require_1: ((match input with | .list .. => true | _ => false) : Prop)
+  requires require_2: (((match input with | .list _v => _v | _ => (default : Array Int))).size = 2 : Prop)
+  ensures ensures_1: (res = 1 : Prop)
+  do
+    let mut b : Bag := input
+    if (match b with | .list .. => true | _ => false) then
+      let last := if ((match b with | .list _v => _v | _ => (default : Array Int))).size > 0 then some (match b with | .list _v => _v | _ => (default : Array Int))[((match b with | .list _v => _v | _ => (default : Array Int))).size - 1]! else none
+      b := (match b with | .list _ => Bag.list (if ((match b with | .list _v => _v | _ => (default : Array Int))).size > 0 then (match b with | .list _v => _v | _ => (default : Array Int)).extract 0 (((match b with | .list _v => _v | _ => (default : Array Int))).size - 1) else (match b with | .list _v => _v | _ => (default : Array Int))) | _other => _other)
+      return ((match b with | .list _v => _v | _ => (default : Array Int))).size
+    else
+      return 0
+
+method makeA  returns (res : Colliding)
+  ensures ensures_1: ((match res with | .a .. => true | _ => false) : Prop)
+  ensures ensures_2: ((match res with | .a _v => _v | _ => (default : Int)) = 5 : Prop)
+  do
+    return Pure.makeA
+
+method bumpMixed (sh : MixedOpt) (nextVal : Int) returns (res : MixedOpt)
+  ensures ensures_1: ((match sh with | .a _sh_value => (match res with | .a .. => true | _ => false) ∧ (match res with | .a _v => _v | _ => (default : Int)) = nextVal | _ => true) : Prop)
+  ensures ensures_2: ((match sh with | .b _sh_value => (match res with | .b .. => true | _ => false) ∧ (match (match res with | .b _v => _v | _ => (default : Option Int)) with | .some _value => _value == nextVal | .none => false) | _ => true) : Prop)
+  do
+    return Pure.bumpMixed sh nextVal
