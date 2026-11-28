@@ -2720,7 +2720,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           if (frame.fields.length > 0) {
             return [
               ...binds,
-              { kind: "assign", target: frame.rootVar, value: buildNestedFieldExpr(frame.rootVar, frame.fields, optExpr) },
+              { kind: "assign", target: frame.rootVar, value: buildNestedFieldExpr({ kind: "var", name: frame.rootVar }, frame.fields, optExpr) },
               ...emitWriteBacksForTarget(frame.rootVar, _writeBackFrames),
             ];
           }
@@ -2733,39 +2733,21 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
         if (resolved.remainingFields.length > 0) {
           const rootTy = _varTypes.get(resolved.currentRoot);
           const skippedDepth = fields.length - resolved.remainingFields.length;
-          const remOwnerVariants = s.ownerVariants
-            ? s.ownerVariants.slice(skippedDepth)
-            : (skippedDepth === 0 && s.ofVariant ? [s.ofVariant] : undefined);
+          const remOwnerVariants = s.ownerVariants?.slice(skippedDepth);
           const { fieldTy, unionsByDepth } = lookupFieldPathInfo(rootTy, resolved.remainingFields, typeDecls, remOwnerVariants);
           const rhsExpr = fieldTy?.kind === "nullish"
             ? wrapNullishBranch(expr, s.value)
             : fieldTy?.kind === "optional"
               ? wrapOptionalBranch(expr, s.value)
               : expr;
-          // If the root variable itself has Nullish<Record> or Option<Record> storage
-          // (narrowed without a someMatch frame), update `root.value` and re-wrap.
-          if (rootTy?.kind === "nullish" || rootTy?.kind === "optional") {
-            const unwrappedRoot: Expr = { kind: "checkedUnwrap", expr: { kind: "var", name: resolved.currentRoot } };
-            const buildNestedFromExpr = (base: Expr, fs: string[], val: Expr, depth: number): Expr => {
-              const u = unionsByDepth[depth];
-              const recTag = u ? { ctor: u.ctor, ctorOf: u.ctorOf } : {};
-              if (fs.length === 1) return { kind: "record", spread: base, fields: [{ name: fs[0]!, value: val }], ...recTag };
-              const fieldTag = u ? { fromUnion: u.ctorOf, ctor: u.ctor } : {};
-              const nextBase: Expr = { kind: "field", obj: base, field: fs[0]!, ...fieldTag, datatypeField: true };
-              return { kind: "record", spread: base, fields: [{ name: fs[0]!, value: buildNestedFromExpr(nextBase, fs.slice(1), val, depth + 1) }], ...recTag };
-            };
-            const updatedRecord = buildNestedFromExpr(unwrappedRoot, resolved.remainingFields, rhsExpr, 0);
-            const wrappedRoot = wrapCheckedUnwrapValue(updatedRecord, rootTy);
-            return [
-              ...binds,
-              { kind: "assign", target: resolved.currentRoot, value: wrappedRoot },
-              ...emitWriteBacksForTarget(resolved.currentRoot, _writeBackFrames),
-            ];
-          }
+          const rootExpr: Expr = { kind: "var", name: resolved.currentRoot };
+          const isOptRoot = rootTy?.kind === "nullish" || rootTy?.kind === "optional";
+          const baseExpr: Expr = isOptRoot ? { kind: "checkedUnwrap", expr: rootExpr } : rootExpr;
           const hasAnyUnion = unionsByDepth.some(u => u !== undefined);
+          const updated = buildNestedFieldExpr(baseExpr, resolved.remainingFields, rhsExpr, hasAnyUnion ? unionsByDepth : undefined);
           return [
             ...binds,
-            { kind: "assign", target: resolved.currentRoot, value: buildNestedFieldExpr(resolved.currentRoot, resolved.remainingFields, rhsExpr, hasAnyUnion ? unionsByDepth : undefined) },
+            { kind: "assign", target: resolved.currentRoot, value: isOptRoot ? wrapCheckedUnwrapValue(updated, rootTy) : updated },
             ...emitWriteBacksForTarget(resolved.currentRoot, _writeBackFrames),
           ];
         }

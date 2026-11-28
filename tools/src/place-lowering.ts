@@ -50,19 +50,19 @@ export function isMutatingCollectionMethod(recvTy: Ty, method: string): boolean 
   return false;
 }
 
-/** Build a nested record-update expression rooted at `rootVar` for `fields`
+/** Build a nested record-update expression rooted at `base` for `fields`
  *  (length >= 1), setting the innermost field to `newVal`. Optional
  *  `unionsByDepth` pins the union constructor/type at each nesting depth `i`
  *  whose owner is a discriminated union (for collision-renamed destructors in
  *  Dafny and match-updates in Lean). */
 export function buildNestedFieldExpr(
-  rootVar: string,
+  base: Expr,
   fields: string[],
   newVal: Expr,
   unionsByDepth?: ({ ctor?: string; ctorOf: string } | undefined)[],
 ): Expr {
   const baseFor = (len: number): Expr => {
-    let cur: Expr = { kind: "var", name: rootVar };
+    let cur: Expr = base;
     for (let i = 0; i < len; i++) {
       const u = unionsByDepth?.[i];
       const unionTag = u ? { fromUnion: u.ctorOf, ctor: u.ctor } : {};
@@ -108,7 +108,7 @@ export function emitWriteBacksForTarget(mutatedTarget: string, frames: readonly 
         out.push({
           kind: "assign",
           target: frame.rootVar,
-          value: buildNestedFieldExpr(frame.rootVar, frame.fields, wrapped),
+          value: buildNestedFieldExpr({ kind: "var", name: frame.rootVar }, frame.fields, wrapped),
         });
       }
       current = frame.rootVar;

@@ -2434,7 +2434,6 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // narrowed union variant at each step along the owner chain so
       // transform/emit use the right collision-renamed destructors and Lean
       // inductive match-updates at arbitrary nesting depth.
-      let ofVariant: string | undefined;
       let ownerVariants: (string | undefined)[] | undefined;
       let targetTy: Ty = storageLookup(ctx.env, s.target) ?? { kind: "unknown" as const };
       if (s.target.includes(".") && !s.target.startsWith("this.")) {
@@ -2464,7 +2463,6 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
             }
           }
         }
-        ofVariant = variants[0];
         if (variants.some(v => v !== undefined)) ownerVariants = variants;
         if (curTy) targetTy = curTy;
       }
@@ -2477,7 +2475,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       const valueCtx = (targetTy.kind === "user" || targetTy.kind === "array" || targetTy.kind === "optional" || targetTy.kind === "nullish")
         ? { ...ctx, returnTy: targetTy } : ctx;
       const value = coerceToTargetTy(resolveExpr(s.value, valueCtx), targetTy, ctx.typeDecls);
-      return [{ kind: "assign", target: entry?.emittedName ?? s.target, value, ...(ofVariant ? { ofVariant } : {}), ...(ownerVariants ? { ownerVariants } : {}) }, ctx.env];
+      return [{ kind: "assign", target: entry?.emittedName ?? s.target, value, ...(ownerVariants ? { ownerVariants } : {}) }, ctx.env];
     }
 
     case "return": {
