@@ -12,7 +12,7 @@ import { initTypeParser } from "./types.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
 import { normalizeBigIntLiteral } from "./rawir.js";
 import { setUserNames, freshName } from "./names.js";
-import { LexicalNames, rejectForwardLocalCaptures } from "./lexical-names.js";
+import { LexicalNames, rejectForwardLocalCaptures, rejectMutableCaptures } from "./lexical-names.js";
 import { DEFAULT_OPTIONS, fileCommentLines, isOptionDirective, type LscOptions } from "./config.js";
 
 // ── Expression extraction ────────────────────────────────────
@@ -660,13 +660,16 @@ function extractExpr(node: Expression): RawExpr {
     const body = node.getBody();
     if (Node.isExpression(body)) {
       const expr = extractExpr(body);
+      rejectMutableCaptures(node);
       const loweredBody = destructureBindings.length === 0
         ? expr
         : [...destructureBindings, { kind: "return" as const, value: expr, line: body.getStartLineNumber() }];
       return { kind: "lambda", params, body: loweredBody, returnTsType };
     }
     if (Node.isBlock(body)) {
-      return { kind: "lambda", params, body: [...destructureBindings, ...extractStmts(body.getStatements())], returnTsType };
+      const stmts = extractStmts(body.getStatements());
+      rejectMutableCaptures(node);
+      return { kind: "lambda", params, body: [...destructureBindings, ...stmts], returnTsType };
     }
     throw new Error(`Unsupported arrow function body: ${node.getText().slice(0, 80)}`);
   }

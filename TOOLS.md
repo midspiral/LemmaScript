@@ -140,6 +140,8 @@ When extending extraction:
 
 `rejectForwardLocalCaptures` checks arrow bodies before extraction: a closure over a local `let`/`const` declared later cannot be constructed in the current backend model. Callback parameter defaults use their separate initialization rules in resolve.
 
+`rejectMutableCaptures` checks arrow bodies after expression/statement extraction (so value-position assignment errors report first): closures that mutate captured outer bindings or `this`, or non-immediate closures that capture bindings or `this` mutated in the enclosing scope (including via aliases or mutating calls), are rejected before backend emission.
+
 The resolve pass uses linked environments (Scheme-style). Each binding is a frame with one name, one type, and a pointer to the parent:
 
 ```ts
