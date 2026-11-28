@@ -64,6 +64,7 @@ let _validateDependency: (source: SourceFile) => void = () => {};
 /** Counter for synthetic names used by let-statement array destructuring
  *  when the initializer isn't a bare variable (single-eval temp). */
 let _destrCounter = 0;
+let _switchBreakCounter = 0;
 let _lexicalNames: LexicalNames | null = null;
 const sourceName = (node: Node): string => _lexicalNames?.name(node) ?? node.getText();
 
@@ -1880,14 +1881,46 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
       //      continue into the following clause's statements.
       //  (2) `break` is the switch exit, not a loop break. A top-level `break`
       //      terminates the clause, and a guarded `if (c) break;` inside a clause
-      //      must exit only the switch (rewritten to `if (c) {} else { rest }`),
-      //      never surviving into `match` where it would escape to an enclosing
-      //      `while`/`for` loop. Nested loops and nested switches own their own
-      //      `break`s and are not descended into.
+      //      must exit only the switch, never surviving into `match` where it
+      //      would escape to an enclosing `while`/`for` loop. Nested loops and
+      //      nested switches own their own `break`s and are not descended into.
+      //      When at most one branch of each breaking `if` can fall through
+      //      (e.g. `if (flag) break; rest`), rewrite directly to `if/else`.
+      //      When both branches of an `if` can reach a non-empty continuation
+      //      (e.g. `if (p) { if (q) break; } rest`), hoist a fresh switch-exit
+      //      flag so the continuation is emitted once rather than copied per path.
       const hasSwitchBreak = (stmts: RawStmt[]): boolean =>
         stmts.some(st =>
           st.kind === "break" ||
           (st.kind === "if" && (hasSwitchBreak(st.then) || hasSwitchBreak(st.else))));
+      const canFallThrough = (stmts: RawStmt[]): boolean => {
+        for (const st of stmts) {
+          if (st.kind === "break" || st.kind === "return" || st.kind === "throw" || st.kind === "continue") {
+            return false;
+          }
+          if (st.kind === "if" && !canFallThrough(st.then) && !canFallThrough(st.else)) {
+            return false;
+          }
+        }
+        return true;
+      };
+      const needsBreakFlag = (stmts: RawStmt[], hasCont: boolean): boolean => {
+        for (let idx = 0; idx < stmts.length; idx++) {
+          const st = stmts[idx]!;
+          if (st.kind === "break" || st.kind === "return" || st.kind === "throw" || st.kind === "continue") {
+            return false;
+          }
+          if (st.kind === "if") {
+            const hasAfter = hasCont || stmts.slice(idx + 1).some(x => x.kind !== "break");
+            if (hasSwitchBreak(st.then) || hasSwitchBreak(st.else)) {
+              if (hasAfter && canFallThrough(st.then) && canFallThrough(st.else)) return true;
+              if (needsBreakFlag(st.then, hasAfter) || needsBreakFlag(st.else, hasAfter)) return true;
+            }
+            if (!canFallThrough(st.then) && !canFallThrough(st.else)) return false;
+          }
+        }
+        return false;
+      };
       const eliminateSwitchBreaks = (stmts: RawStmt[], cont: RawStmt[]): { body: RawStmt[]; fallsThrough: boolean } => {
         if (stmts.length === 0) return { body: cont, fallsThrough: true };
         const [head, ...tail] = stmts;
@@ -1905,14 +1938,49 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
               fallsThrough: (thenRes.fallsThrough || elseRes.fallsThrough) && after.fallsThrough,
             };
           }
-          const thenCheck = eliminateSwitchBreaks(head.then, []);
-          const elseCheck = eliminateSwitchBreaks(head.else, []);
-          if (!thenCheck.fallsThrough && !elseCheck.fallsThrough) {
+          if (!canFallThrough(head.then) && !canFallThrough(head.else)) {
             return { body: [head], fallsThrough: false };
           }
         }
         const rest = eliminateSwitchBreaks(tail, cont);
         return { body: [head, ...rest.body], fallsThrough: rest.fallsThrough };
+      };
+      const rewriteWithBreakFlag = (stmts: RawStmt[], cont: RawStmt[], flag: string, isTopLevel: boolean): RawStmt[] => {
+        if (stmts.length === 0) return cont;
+        const [head, ...tail] = stmts;
+        if (head.kind === "break") {
+          return isTopLevel
+            ? []
+            : [{ kind: "assign", target: flag, value: { kind: "bool", value: true }, line: head.line }];
+        }
+        if (head.kind === "return" || head.kind === "throw" || head.kind === "continue") {
+          return [head];
+        }
+        if (head.kind === "if") {
+          if (hasSwitchBreak(head.then) || hasSwitchBreak(head.else)) {
+            const thenBody = rewriteWithBreakFlag(head.then, [], flag, false);
+            const elseBody = rewriteWithBreakFlag(head.else, [], flag, false);
+            const ifStmt: RawStmt = { ...head, then: thenBody, else: elseBody };
+            const rest = rewriteWithBreakFlag(tail, cont, flag, isTopLevel);
+            if (rest.length === 0 || (!canFallThrough(head.then) && !canFallThrough(head.else))) {
+              return [ifStmt];
+            }
+            return [
+              ifStmt,
+              {
+                kind: "if",
+                cond: { kind: "unop", op: "!", expr: { kind: "var", name: flag } },
+                then: rest,
+                else: [],
+                line: head.line,
+              },
+            ];
+          }
+          if (!canFallThrough(head.then) && !canFallThrough(head.else)) {
+            return [head];
+          }
+        }
+        return [head, ...rewriteWithBreakFlag(tail, cont, flag, isTopLevel)];
       };
       const clauseInfos = s.getClauses().map(clause => {
         const stmts = extractStmts(clause.getStatements());
@@ -1927,14 +1995,39 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
         return { label, stmts };
       });
       const fallThroughBody = (start: number): RawStmt[] => {
-        const step = (idx: number): RawStmt[] => {
-          if (idx >= clauseInfos.length) return [];
-          const cur = clauseInfos[idx]!.stmts;
-          const dry = eliminateSwitchBreaks(cur, []);
-          if (!dry.fallsThrough) return dry.body;
-          return eliminateSwitchBreaks(cur, step(idx + 1)).body;
+        const chain: RawStmt[][] = [];
+        for (let j = start; j < clauseInfos.length; j++) {
+          const stmts = clauseInfos[j]!.stmts;
+          chain.push(stmts);
+          if (!canFallThrough(stmts)) break;
+        }
+        const useFlag = chain.some((stmts, idx) => {
+          const hasLater = chain.slice(idx + 1).some(later => later.some(x => x.kind !== "break"));
+          return needsBreakFlag(stmts, hasLater);
+        });
+        if (!useFlag) {
+          let cont: RawStmt[] = [];
+          for (let idx = chain.length - 1; idx >= 0; idx--) {
+            cont = eliminateSwitchBreaks(chain[idx]!, cont).body;
+          }
+          return cont;
+        }
+        const suffix = _switchBreakCounter === 0 ? "" : String(_switchBreakCounter);
+        _switchBreakCounter += 1;
+        const flag = freshName(`_switchBroken${suffix}`);
+        const decl: RawStmt = {
+          kind: "let",
+          name: flag,
+          mutable: true,
+          tsType: "boolean",
+          init: { kind: "bool", value: false },
+          line,
         };
-        return step(start);
+        let cont: RawStmt[] = [];
+        for (let idx = chain.length - 1; idx >= 0; idx--) {
+          cont = rewriteWithBreakFlag(chain[idx]!, cont, flag, true);
+        }
+        return [decl, ...cont];
       };
       for (let i = 0; i < clauseInfos.length; i++) {
         const c = clauseInfos[i]!;
@@ -2184,6 +2277,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   // tests) must not leak a havoc key, temp-name counter, or function-local maps.
   _havocKey = null;
   _destrCounter = 0;
+  _switchBreakCounter = 0;
   _lexicalNames = null;
   _typeParamMap = new Map();
   // Seed the fresh-name check (names.ts) before anything mints: every

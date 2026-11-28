@@ -128,35 +128,72 @@ test("guarded break inside switch does not escape to enclosing loop in Dafny", (
   assert.equal(res.status, 0, `${dfy}\n${res.output}`);
 });
 
-test("Dafny rejects false loop-exit postcondition for guarded break inside switch", () => {
+test("Dafny rejects false loop-exit postcondition on one-iteration loop (passes on buggy base)", () => {
   const falseSource = `
 type Tag = "a" | "b";
 
 export function switchGuardedBreakFalse(t: Tag, flag: boolean): number {
   //@ verify
   //@ ensures t === "a" && flag ==> \\result === 0
-  let count = 0;
+  let x = 0;
   let i = 0;
-  while (i < 2) {
-    //@ invariant 0 <= i && i <= 2
-    //@ decreases 2 - i
+  while (i < 1) {
+    //@ invariant 0 <= i && i <= 1
+    //@ invariant t === "a" && flag ==> x === 0
+    //@ decreases 1 - i
     switch (t) {
       case "a":
         if (flag) break;
-        count = count + 10;
         break;
       case "b":
         break;
     }
-    count = count + 1;
+    x = 1;
     i = i + 1;
   }
-  return count;
+  return x;
 }
 `;
   const dfy = compile(falseSource, "switch_guarded_break_false.ts", "dafny");
   const res = verifyDafny(dfy);
   assert.notEqual(res.status, 0, `${dfy}\n${res.output}`);
+});
+
+test("sequential nested break guards stay linear via a fresh switch-exit flag", () => {
+  const guards = Array.from({ length: 10 }, () => "if (p) { if (q) break; }").join("\n        ");
+  const src = `
+type Tag = "a" | "b";
+
+export function manyNestedGuards(t: Tag, p: boolean, q: boolean, _switchBroken: number): number {
+  //@ verify
+  //@ ensures t === "a" && !(p && q) ==> \\result === _switchBroken + 1
+  //@ ensures t === "a" && p && q ==> \\result === _switchBroken
+  //@ ensures t === "b" ==> \\result === _switchBroken
+  let x = _switchBroken;
+  switch (t) {
+    case "a":
+        ${guards}
+        x = x + 1;
+        break;
+    case "b":
+        break;
+  }
+  return x;
+}
+`;
+  const dfy = compile(src, "many_nested_guards.ts", "dafny");
+  assert.doesNotMatch(dfy, /\bbreak;/, dfy);
+  assert.match(dfy, /var i_switchBroken' := false;/, dfy);
+  const assignCount = (dfy.match(/x := \(x \+ 1\);/g) ?? []).length;
+  assert.equal(assignCount, 1, `expected x := (x + 1) once, got ${assignCount}\n${dfy}`);
+  const res = verifyDafny(dfy);
+  assert.equal(res.status, 0, `${dfy}\n${res.output}`);
+
+  const lean = compile(src, "many_nested_guards.ts", "lean");
+  assert.doesNotMatch(lean, /\bbreak\b/, lean);
+  assert.match(lean, /let mut _switchBroken' : Bool := false/, lean);
+  const leanAssignCount = (lean.match(/x := x \+ 1/g) ?? []).length;
+  assert.equal(leanAssignCount, 1, `expected x := x + 1 once in Lean, got ${leanAssignCount}\n${lean}`);
 });
 
 test("guarded break inside switch emits structured if/else without break in Lean", () => {
