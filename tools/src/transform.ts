@@ -2157,13 +2157,13 @@ function lowerArrayPopOrShift(e: TExpr, usage: "value" | "discard"): { method: "
 }
 /**
  * Velvet (Lean backend) rejects `return` inside a loop. For a loop containing
- * early `return`s, hoist a mutable flag `_loopReturned : Bool := false` and
- * result variable `_loopRet : T := default`: each in-loop `return e` becomes
- * `_loopRet := e; _loopReturned := true; break`. After the loop, guard the
- * remaining statements with `if _loopReturned then return _loopRet else …`,
- * so normal loop exits (and regular `break`s) evaluate any fallthrough
- * statements/return using the post-loop state rather than a stale pre-loop
- * snapshot. Dafny is untouched — it keeps the native early returns.
+ * early `return`s, hoist a mutable `Option T` result variable `_loopRet := none`:
+ * each in-loop `return e` becomes `_loopRet := some e; break`. After the loop,
+ * match on `_loopRet` so an early return returns its saved value, while a normal
+ * exit (or regular `break`) runs the remaining statements with the post-loop
+ * state rather than a stale pre-loop snapshot. Using `Option T` avoids needing
+ * an `Inhabited T` default value whenever fallthrough statements follow the loop.
+ * Dafny is untouched — it keeps the native early returns.
  */
 function stmtsContainReturn(stmts: Stmt[]): boolean {
   for (const s of stmts) {
@@ -2175,28 +2175,28 @@ function stmtsContainReturn(stmts: Stmt[]): boolean {
   return false;
 }
 
-function replaceReturnsWithBreak(stmts: Stmt[], retVar: string, retFlag: string): Stmt[] {
+function replaceReturnsWithBreak(stmts: Stmt[], retVar: string): Stmt[] {
   return stmts.flatMap((s): Stmt[] => {
     if (s.kind === "return") {
       return [
-        { kind: "assign", target: retVar, value: s.value },
-        { kind: "assign", target: retFlag, value: { kind: "bool", value: true } },
+        { kind: "assign", target: retVar, value: { kind: "app", fn: "Some", args: [s.value] } },
         { kind: "break" },
       ];
     }
     if (s.kind === "if") {
-      return [{ ...s, then: replaceReturnsWithBreak(s.then, retVar, retFlag), else: replaceReturnsWithBreak(s.else, retVar, retFlag) }];
+      return [{ ...s, then: replaceReturnsWithBreak(s.then, retVar), else: replaceReturnsWithBreak(s.else, retVar) }];
     }
     if (s.kind === "match") {
-      return [{ ...s, arms: s.arms.map(a => ({ ...a, body: replaceReturnsWithBreak(a.body, retVar, retFlag) })) }];
+      return [{ ...s, arms: s.arms.map(a => ({ ...a, body: replaceReturnsWithBreak(a.body, retVar) })) }];
     }
     return [s];
   });
 }
 
-// Seed value for `_loopRet` (never observed unless `_loopReturned` is set to
-// `true` by an in-loop `return`). Readable literals for primitives; everything
-// else gets a typed `default : T`.
+// Fallback value only when a non-void return-in-loop has no statements after
+// the loop (e.g. `while (true) { ... return e; }`) so the unreachable `none`
+// branch still type-checks. Readable literals for primitives; everything else
+// gets a typed `default : T`.
 function defaultExprForTy(ty: Ty): Expr {
   switch (ty.kind) {
     case "bool": return { kind: "bool", value: false };
@@ -2218,34 +2218,45 @@ function eliminateReturnInLoops(
     if (s.kind === "while" && stmtsContainReturn(s.body)) {
       const suffix = counter.n === 0 ? "" : String(counter.n);
       counter.n += 1;
-      const retFlag = `_loopReturned${suffix}`;
-      const retVar = `_loopRet${suffix}`;
+      const retVar = freshName(`_loopRet${suffix}`);
+      const retVal = freshName(`_loopRet${suffix}_val`);
+      const retRef: Expr = { kind: "var", name: retVar };
+      const retIsSome: Expr = { kind: "field", obj: retRef, field: "isSome" };
+      const retUnwrap: Expr = { kind: "checkedUnwrap", expr: retRef };
       const resultInvariants: Expr[] = ensuresExprs.map(e => ({
         kind: "implies",
-        premises: [{ kind: "var", name: retFlag }],
-        conclusion: replaceVar(e, "\\result", { kind: "var", name: retVar }),
+        premises: [retIsSome],
+        conclusion: replaceVar(e, "\\result", retUnwrap),
       }));
-      out.push({ kind: "let", name: retFlag, type: { kind: "bool" }, mutable: true, value: { kind: "bool", value: false } });
-      out.push({ kind: "let", name: retVar, type: retTy, mutable: true, value: defaultExprForTy(retTy) });
-      // Guard each postcondition invariant with `_loopReturned → P[_loopRet / \result]`:
-      // it holds vacuously before any early return (even if `default` does not
-      // satisfy `P`), and Velvet checks `P[e / \result]` at each `_loopRet := e; _loopReturned := true; break`.
+      out.push({
+        kind: "let",
+        name: retVar,
+        type: { kind: "optional", inner: retTy },
+        mutable: true,
+        value: { kind: "app", fn: "None", args: [] },
+      });
+      // Guard each postcondition invariant with `_loopRet.isSome → P[_loopRet.get / \result]`:
+      // it holds vacuously while `_loopRet = none`, and Velvet checks `P[e / \result]`
+      // at each `_loopRet := some e; break`.
       out.push({
         ...s,
         invariants: [...s.invariants, ...resultInvariants],
-        body: replaceReturnsWithBreak(s.body, retVar, retFlag),
+        body: replaceReturnsWithBreak(s.body, retVar),
       });
       const rest = stmts.slice(i + 1);
-      if (rest.length === 0) {
-        out.push({ kind: "return", value: { kind: "var", name: retVar } });
-      } else {
-        out.push({
-          kind: "if",
-          cond: { kind: "var", name: retFlag },
-          then: [{ kind: "return", value: { kind: "var", name: retVar } }],
-          else: eliminateReturnInLoops(rest, retTy, ensuresExprs, counter),
-        });
-      }
+      const noneBody: Stmt[] = rest.length > 0
+        ? eliminateReturnInLoops(rest, retTy, ensuresExprs, counter)
+        : retTy.kind === "void"
+          ? []
+          : [{ kind: "return", value: defaultExprForTy(retTy) }];
+      out.push({
+        kind: "match",
+        scrutinee: retRef,
+        arms: [
+          { pattern: pCtor("some", retVal), body: [{ kind: "return", value: { kind: "var", name: retVal } }] },
+          { pattern: pCtor("none"), body: noneBody },
+        ],
+      });
       break;
     } else {
       out.push(s);
