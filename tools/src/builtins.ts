@@ -14,11 +14,6 @@
  * The registry holds classification only — no lowerings. Namespace builtins
  * (`Math.*`, `Array.isArray`) are recognized syntactically in resolve and
  * are not registry entries: they are not methods on receiver values.
- *
- * Classification values mirror the historical per-pass lists exactly
- * (byte-for-byte gauntlet compatibility), including their quirks — e.g.
- * `array.shift` returns the element type un-wrapped and `array.with` types
- * as `unknown`. Widen such bits deliberately, with tests.
  */
 
 import type { Ty, TExpr } from "./typedir.js";
@@ -50,7 +45,6 @@ const BOOL = (): Ty => ({ kind: "bool" });
 const INT = (): Ty => ({ kind: "int" });
 const STRING = (): Ty => ({ kind: "string" });
 const self = (objTy: Ty): Ty => objTy;
-const elem = (objTy: Ty): Ty => objTy.kind === "array" ? objTy.elem : UNKNOWN;
 const optElem = (objTy: Ty): Ty =>
   objTy.kind === "array" ? { kind: "optional", inner: objTy.elem } : UNKNOWN;
 const arrElemAt0 = (objTy: Ty, i: number): Ty | null =>
@@ -74,7 +68,7 @@ export const BUILTINS = {
     intArgPositions: [1], argIsKey: true, argSlot: arrElemAt0 },
   "array.indexOf": { ret: INT, pure: true,
     intArgPositions: [1], argSlot: arrElemAt0 },
-  "array.shift": { ret: elem, pure: false },
+  "array.shift": { ret: optElem, pure: false },
   "array.pop": { ret: optElem, pure: false },
   "array.push": { ret: self, pure: false, argSlot: arrElemAll },
   "array.unshift": { ret: self, pure: false, argSlot: arrElemAll },

@@ -57,7 +57,7 @@ method popUnionField (input : Bag) returns (res : Int)
     let mut b : Bag := input
     if (match b with | .list .. => true | _ => false) then
       let last := (match b with | .list _v => _v | _ => (default : Array Int))[((match b with | .list _v => _v | _ => (default : Array Int))).size - 1]!
-      b := (match b with | .list _ => Bag.list (if ((match b with | .list _v => _v | _ => (default : Array Int))).size > 0 then (match b with | .list _v => _v | _ => (default : Array Int)).extract 0 (((match b with | .list _v => _v | _ => (default : Array Int))).size - 1) else (match b with | .list _v => _v | _ => (default : Array Int))) | _other => _other)
+      b := (match b with | .list _ => Bag.list ((match b with | .list _v => _v | _ => (default : Array Int)).extract 0 (((match b with | .list _v => _v | _ => (default : Array Int))).size - 1)) | _other => _other)
       return ((match b with | .list _v => _v | _ => (default : Array Int))).size
     else
       return 0

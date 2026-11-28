@@ -100,7 +100,7 @@ method popUnionField(input: Bag) returns (res: int)
   match b {
     case list(_) =>
       var last := b.items[(|b.items| - 1)];
-      b := b.(items := (if (|b.items| > 0) then b.items[0..(|b.items| - 1)] else b.items));
+      b := b.(items := b.items[0..(|b.items| - 1)]);
       return |b.items|;
     case empty =>
       return 0;

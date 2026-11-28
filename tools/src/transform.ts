@@ -2113,53 +2113,37 @@ function negateExpr(e: Expr): Expr {
   return { kind: "unop", op: "¬", expr: e };
 }
 
-/** Build the two pieces of an `arr.pop()` lowering on an array expression:
- *  - `optValue` is `(if |arr|>0 then Some(arr[|arr|-1]) else None)` (the popped element)
- *  - `guardedTrunc` is `(if |arr|>0 then arr[..|arr|-1] else arr)` (the array minus its last element) */
-function buildPopLoweringExpr(arrExpr: Expr, arrTy: Ty): { elemValue: Expr; optValue: Expr; guardedTrunc: Expr } {
-  const arrLen: Expr = { kind: "field", obj: arrExpr, field: "size" };
-  const lastIdx: Expr = { kind: "binop", op: "-", left: arrLen, right: { kind: "num", value: 1 } };
-  const elemValue: Expr = { kind: "index", arr: arrExpr, idx: lastIdx };
-  const isNonEmpty: Expr = { kind: "binop", op: ">", left: arrLen, right: { kind: "num", value: 0 } };
-  const optValue: Expr = { kind: "if", cond: isNonEmpty,
-    then: { kind: "app", fn: "Some", args: [elemValue] },
-    else: { kind: "var", name: "undefined" } };
-  const truncated: Expr = { kind: "methodCall", obj: arrExpr, objTy: arrTy, method: "slice",
-    args: [{ kind: "num", value: 0 }, lastIdx], monadic: false };
-  const guardedTrunc: Expr = { kind: "if", cond: isNonEmpty, then: truncated, else: arrExpr };
-  return { elemValue, optValue, guardedTrunc };
-}
-
 /** Lower an array `.pop()` or `.shift()` call on any writable Place receiver
  *  into `{ method, result, writeStmts }`:
  *  - `result` reads the removed element from the original receiver,
- *  - `writeStmts` writes the shortened array (leaving an empty array empty)
+ *  - `writeStmts` writes the shortened array
  *    back through the original receiver Place + enclosing `someMatch` frames.
- *  Callers evaluate `result` before `writeStmts` and only assign to the
+ *  A consumed nonoptional result reads an element directly, already requiring
+ *  nonemptiness. Optional or discarded results still need an empty-array guard.
+ *  Value callers evaluate `result` before `writeStmts` and only assign to the
  *  destination afterward so `t = t.children.shift()!` mutates the original `t`. */
-function lowerArrayPopOrShift(e: TExpr): { method: "pop" | "shift"; result: Expr; writeStmts: Stmt[] } | null {
+function lowerArrayPopOrShift(e: TExpr, usage: "value" | "discard"): { method: "pop" | "shift"; result: Expr; writeStmts: Stmt[] } | null {
   if (e.kind !== "call" || e.fn.kind !== "field" || e.fn.obj.ty.kind !== "array") return null;
   const method = e.fn.field;
   if (method !== "pop" && method !== "shift") return null;
   const obj = e.fn.obj;
   const arrExpr = lowerExpr(obj, null);
+  const arrLen: Expr = { kind: "field", obj: arrExpr, field: "size" };
+  const isNonEmpty: Expr = { kind: "binop", op: ">", left: arrLen, right: { kind: "num", value: 0 } };
+  const index: Expr = method === "pop"
+    ? { kind: "binop", op: "-", left: arrLen, right: { kind: "num", value: 1 } }
+    : { kind: "num", value: 0 };
+  const elemValue: Expr = { kind: "index", arr: arrExpr, idx: index };
   const isOptResult = e.ty.kind === "optional" || e.ty.kind === "nullish";
-  let result: Expr;
-  let nextArr: Expr;
-  if (method === "pop") {
-    const { elemValue, optValue, guardedTrunc } = buildPopLoweringExpr(arrExpr, obj.ty);
-    result = isOptResult ? optValue : elemValue;
-    nextArr = guardedTrunc;
-  } else {
-    const arrLen: Expr = { kind: "field", obj: arrExpr, field: "size" };
-    const isNonEmpty: Expr = { kind: "binop", op: ">", left: arrLen, right: { kind: "num", value: 0 } };
-    const head: Expr = { kind: "index", arr: arrExpr, idx: { kind: "num", value: 0 } };
-    result = isOptResult
-      ? { kind: "if", cond: isNonEmpty, then: { kind: "app", fn: "Some", args: [head] }, else: { kind: "var", name: "undefined" } }
-      : head;
-    const sliced: Expr = { kind: "methodCall", obj: arrExpr, objTy: obj.ty, method: "slice", args: [{ kind: "num", value: 1 }], monadic: false };
-    nextArr = { kind: "if", cond: isNonEmpty, then: sliced, else: arrExpr };
-  }
+  const result: Expr = isOptResult
+    ? { kind: "if", cond: isNonEmpty, then: { kind: "app", fn: "Some", args: [elemValue] }, else: { kind: "var", name: "undefined" } }
+    : elemValue;
+  const truncated: Expr = { kind: "methodCall", obj: arrExpr, objTy: obj.ty, method: "slice",
+    args: method === "pop" ? [{ kind: "num", value: 0 }, index] : [{ kind: "num", value: 1 }], monadic: false };
+  const needsEmptyGuard = usage === "discard" || isOptResult;
+  const nextArr: Expr = needsEmptyGuard
+    ? { kind: "if", cond: isNonEmpty, then: truncated, else: arrExpr }
+    : truncated;
   const write = buildPlaceWrite(obj, nextArr);
   if (!write) return null;
   return {
@@ -2619,7 +2603,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       // let x = recv.shift() / recv.pop(): bind removed element from original receiver,
       // then write shortened array back through the receiver Place.
       const init = s.init.kind === "call" ? s.init : undefined;
-      const popOrShiftLet = lowerArrayPopOrShift(s.init);
+      const popOrShiftLet = lowerArrayPopOrShift(s.init, "value");
       if (popOrShiftLet) {
         return [
           { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: popOrShiftLet.result },
@@ -2682,7 +2666,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       // write the shortened array back through the original receiver, and only
       // then assign the saved result to `s.target` (so `t = t.children.shift()!`
       // mutates the original `t`, not the shifted child).
-      const popOrShiftAssign = lowerArrayPopOrShift(s.value);
+      const popOrShiftAssign = lowerArrayPopOrShift(s.value, "value");
       if (popOrShiftAssign) {
         const tmp = freshName(`_${popOrShiftAssign.method}${_liftCounter++}`);
         const assignTmp: TStmt = { ...s, value: { kind: "var", name: tmp, ty: s.value.ty } };
@@ -2799,7 +2783,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       // enclosing narrowing frames (`someMatch` unwrap or union variant arm).
       // Non-Place receivers (e.g. `getArr().push(1)`) fail closed instead of
       // silently discarding the updated collection.
-      const popOrShiftExpr = lowerArrayPopOrShift(s.expr);
+      const popOrShiftExpr = lowerArrayPopOrShift(s.expr, "discard");
       if (popOrShiftExpr) return popOrShiftExpr.writeStmts;
       if (s.expr.kind === "call" && s.expr.fn.kind === "field") {
         const recv = s.expr.fn.obj;

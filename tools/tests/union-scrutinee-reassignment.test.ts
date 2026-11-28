@@ -592,6 +592,86 @@ export function binderNoCapture(input: Pair, _f1: number): Pair {
   assert.match(leanDef, /match sh with \| \.a _f0 _ => Pair\.a _f0 \(10\)/, leanDef);
 });
 
+for (const method of ["pop", "shift"] as const) {
+  test(`${method}: omit empty guards only for consumed nonoptional results`, () => {
+    const consumedTs = `
+//@ requires input.length === 2 && input[0] === 4 && input[1] === 9
+//@ ensures \\result === ${method === "pop" ? 91 : 41}
+export function consumeLet(input: number[]): number {
+  let xs = input;
+  const value = xs.${method}()!;
+  return value * 10 + xs.length;
+}
+
+//@ requires input.length === 2 && input[0] === 4 && input[1] === 9
+//@ ensures \\result === ${method === "pop" ? 91 : 41}
+export function consumeAssignment(input: number[]): number {
+  let xs = input;
+  let value = 0;
+  value = xs.${method}()!;
+  return value * 10 + xs.length;
+}
+`;
+    const consumedDfy = compileDafny(consumedTs);
+    assert.doesNotMatch(consumedDfy, /xs := \(if/, consumedDfy);
+    assert.match(consumedDfy, /xs := xs\[/, consumedDfy);
+    const { def: consumedLean } = compileLean(consumedTs, `consumed_${method}.ts`);
+    assert.doesNotMatch(consumedLean, /xs := \(?if\b/, consumedLean);
+    assert.match(consumedLean, /xs := xs\.extract/, consumedLean);
+
+    const optionalContract = `
+//@ ensures \\result.length === 2
+//@ ensures \\result[0] === (input.length === 0 ? -1 : input[${method === "pop" ? "input.length - 1" : "0"}])
+//@ ensures \\result[1] === (input.length === 0 ? 0 : input.length - 1)
+`;
+    const safeOnEmptyTs = `
+${optionalContract}
+export function optionalLet(input: number[]): number[] {
+  let xs = input;
+  const value = xs.${method}();
+  return [value ?? -1, xs.length];
+}
+
+${optionalContract}
+export function optionalAssignment(input: number[]): number[] {
+  let xs = input;
+  let value: number | undefined = undefined;
+  value = xs.${method}();
+  return [value ?? -1, xs.length];
+}
+
+//@ ensures \\result === (input.length === 0 ? 0 : input.length - 1)
+export function discard(input: number[]): number {
+  let xs = input;
+  xs.${method}();
+  return xs.length;
+}
+
+//@ ensures \\result === (input.length === 0 ? 0 : input.length - 1)
+export function discardAsserted(input: number[]): number {
+  let xs = input;
+  xs.${method}()!;
+  return xs.length;
+}
+`;
+    const dfy = compileDafny(consumedTs + safeOnEmptyTs);
+    const res = verifyDafny(dfy);
+    assert.equal(res.status, 0, `${dfy}\n${res.output}`);
+
+    // A consumed `!` must still require a nonempty array; discarding it above does not.
+    const unsafeDfy = compileDafny(`
+export function consumeEmpty(): number {
+  let xs: number[] = [];
+  const value = xs.${method}()!;
+  return value;
+}
+`);
+    const unsafe = verifyDafny(unsafeDfy);
+    assert.notEqual(unsafe.status, 0, `${unsafeDfy}\n${unsafe.output}`);
+    assert.match(unsafe.output, /index out of range/, unsafe.output);
+  });
+}
+
 test("#409: pop/shift on narrowed union & synth arrays, nested ofVariant, ensures/invariant &&, nested union writes, and mixed-type unnarrowed spreads", () => {
   const valid409Ts = `
 export type Bag = { kind: "empty" } | { kind: "list"; items: number[] };
