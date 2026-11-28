@@ -64,6 +64,7 @@ let _validateDependency: (source: SourceFile) => void = () => {};
 /** Counter for synthetic names used by let-statement array destructuring
  *  when the initializer isn't a bare variable (single-eval temp). */
 let _destrCounter = 0;
+let _switchBreakCounter = 0;
 let _lexicalNames: LexicalNames | null = null;
 const sourceName = (node: Node): string => _lexicalNames?.name(node) ?? node.getText();
 
@@ -1875,23 +1876,94 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
 
       const cases: { label: string; body: RawStmt[] }[] = [];
       let defaultBody: RawStmt[] = [];
-      // Two JS-`switch` faithfulness concerns the Dafny `match` doesn't share:
-      //  (1) Fall-through: stacked `case A: case B: body` is several clauses
-      //      where the leading ones have no statements; those labels share the
-      //      next clause's body (we duplicate it per label).
-      //  (2) `break` is the switch exit, not a loop break. We extract the full
-      //      body (extractStmts flattens `{ }` blocks but keeps loop bodies
-      //      nested) and strip the *top-level* breaks — so a `break` written
-      //      inside a `{ }` case block is stripped, while a `break` inside a
-      //      nested loop stays put.
-      const stripExitBreaks = (b: RawStmt[]) => b.filter(st => st.kind !== "break");
-      const isExit = (st: RawStmt | undefined) => !!st && ["break", "return", "throw", "continue"].includes(st.kind);
-      // Resolve JS fall-through positionally: a clause's effective body is its
-      // own statements concatenated with each following clause's statements up
-      // to and including the first clause that ends in break/return/throw (or
-      // the switch end). This covers both empty stacked labels (`case A: case
-      // B: body`) and a *non-empty* case that falls through (`case A: sA; case
-      // B: ...`) — the stripped breaks are the switch exits.
+      // Two JS-`switch` faithfulness concerns Dafny `match` / Lean `if`-chains don't share:
+      //  (1) Fall-through: stacked `case A: case B: body` or non-exiting clauses
+      //      continue into the following clause's statements.
+      //  (2) `break` is the switch exit, not a loop break. A top-level `break`
+      //      terminates the clause, and a guarded `if (c) break;` inside a clause
+      //      must exit only the switch, never surviving into `match` where it
+      //      would escape to an enclosing `while`/`for` loop. Nested loops and
+      //      nested switches own their own `break`s and are not descended into.
+      const hasSwitchBreak = (stmts: RawStmt[]): boolean =>
+        stmts.some(st =>
+          st.kind === "break" ||
+          (st.kind === "if" && (hasSwitchBreak(st.then) || hasSwitchBreak(st.else))));
+      const canFallThrough = (stmts: RawStmt[]): boolean => {
+        for (const st of stmts) {
+          if (st.kind === "break" || st.kind === "return" || st.kind === "throw" || st.kind === "continue") {
+            return false;
+          }
+          if (st.kind === "if" && !canFallThrough(st.then) && !canFallThrough(st.else)) {
+            return false;
+          }
+        }
+        return true;
+      };
+      // Single-pass switch-break lowering organized around which branches of each
+      // `if` can reach the following statements (`rest`):
+      //  - Neither branch reaches `rest`: omit `rest`.
+      //  - Neither branch contains a switch break: keep the ordinary `if` and continue.
+      //  - Exactly one branch reaches `rest`: place `rest` directly in that branch
+      //    (emitted once, preserving TypeScript narrowing from `head.cond`).
+      //  - Both branches can reach `rest` and an inner path can also break: guard
+      //    `rest` once after the `if` with a lazily allocated switch-exit flag.
+      const eliminateSwitchBreaks = (
+        stmts: RawStmt[],
+        cont: RawStmt[],
+        exitFlag: string | null,
+        ensureFlag: () => string,
+      ): RawStmt[] => {
+        if (stmts.length === 0) return cont;
+        const [head, ...tail] = stmts;
+        if (head.kind === "break") {
+          return exitFlag === null
+            ? []
+            : [{ kind: "assign", target: exitFlag, value: { kind: "bool", value: true }, line: head.line }];
+        }
+        if (head.kind === "return" || head.kind === "throw" || head.kind === "continue") {
+          return [head];
+        }
+        if (head.kind === "if") {
+          const thenFalls = canFallThrough(head.then);
+          const elseFalls = canFallThrough(head.else);
+          if (!thenFalls && !elseFalls) {
+            return [{
+              ...head,
+              then: eliminateSwitchBreaks(head.then, [], exitFlag, ensureFlag),
+              else: eliminateSwitchBreaks(head.else, [], exitFlag, ensureFlag),
+            }];
+          }
+          if (!hasSwitchBreak(head.then) && !hasSwitchBreak(head.else)) {
+            return [head, ...eliminateSwitchBreaks(tail, cont, exitFlag, ensureFlag)];
+          }
+          const rest = eliminateSwitchBreaks(tail, cont, exitFlag, ensureFlag);
+          if (!thenFalls || !elseFalls) {
+            return [{
+              ...head,
+              then: eliminateSwitchBreaks(head.then, thenFalls ? rest : [], exitFlag, ensureFlag),
+              else: eliminateSwitchBreaks(head.else, elseFalls ? rest : [], exitFlag, ensureFlag),
+            }];
+          }
+          const flag = rest.length > 0 ? (exitFlag ?? ensureFlag()) : exitFlag;
+          const ifStmt: RawStmt = {
+            ...head,
+            then: eliminateSwitchBreaks(head.then, [], flag, ensureFlag),
+            else: eliminateSwitchBreaks(head.else, [], flag, ensureFlag),
+          };
+          if (rest.length === 0) return [ifStmt];
+          return [
+            ifStmt,
+            {
+              kind: "if",
+              cond: { kind: "unop", op: "!", expr: { kind: "var", name: flag! } },
+              then: rest,
+              else: [],
+              line: head.line,
+            },
+          ];
+        }
+        return [head, ...eliminateSwitchBreaks(tail, cont, exitFlag, ensureFlag)];
+      };
       const clauseInfos = s.getClauses().map(clause => {
         const stmts = extractStmts(clause.getStatements());
         let label: string | null = null;
@@ -1902,19 +1974,35 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
           }
           label = labelExpr.value;
         }
-        return {
-          label,
-          stmts,
-          exits: isExit(stmts[stmts.length - 1]),
-        };
+        return { label, stmts };
       });
       const fallThroughBody = (start: number): RawStmt[] => {
-        let body: RawStmt[] = [];
+        const stmts: RawStmt[] = [];
         for (let j = start; j < clauseInfos.length; j++) {
-          body = body.concat(clauseInfos[j]!.stmts);
-          if (clauseInfos[j]!.exits) break;
+          const clauseStmts = clauseInfos[j]!.stmts;
+          stmts.push(...clauseStmts);
+          if (!canFallThrough(clauseStmts)) break;
         }
-        return stripExitBreaks(body);
+        let flag: string | null = null;
+        const ensureFlag = (): string => {
+          if (flag === null) {
+            const suffix = _switchBreakCounter === 0 ? "" : String(_switchBreakCounter);
+            _switchBreakCounter += 1;
+            flag = freshName(`_switchBroken${suffix}`);
+          }
+          return flag;
+        };
+        const body = eliminateSwitchBreaks(stmts, [], null, ensureFlag);
+        if (flag === null) return body;
+        const decl: RawStmt = {
+          kind: "let",
+          name: flag,
+          mutable: true,
+          tsType: "boolean",
+          init: { kind: "bool", value: false },
+          line,
+        };
+        return [decl, ...body];
       };
       for (let i = 0; i < clauseInfos.length; i++) {
         const c = clauseInfos[i]!;
@@ -2164,6 +2252,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   // tests) must not leak a havoc key, temp-name counter, or function-local maps.
   _havocKey = null;
   _destrCounter = 0;
+  _switchBreakCounter = 0;
   _lexicalNames = null;
   _typeParamMap = new Map();
   // Seed the fresh-name check (names.ts) before anything mints: every
