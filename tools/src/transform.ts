@@ -2296,7 +2296,9 @@ function matchToIfChains(stmts: Stmt[]): Stmt[] {
     if (arms.some(a => a.pattern.kind === "literal")) return [{ ...s, arms }];
     const ctorArms = arms.filter(a => a.pattern.kind === "ctor");
     const firstCtor = ctorArms[0] ? patternCtor(ctorArms[0].pattern) : undefined;
-    const decl = firstCtor ? declWithVariant(_typeDecls, firstCtor) : undefined;
+    const decl = s.unionType
+      ? declOf(_typeDecls, tyBaseName(s.unionType))
+      : (firstCtor ? declWithVariant(_typeDecls, firstCtor) : undefined);
     if (!decl) return [{ ...s, arms }]; // not a user union (e.g. Option) — leave as match
 
     const scrutExpr: Expr = s.scrutinee;
@@ -3062,7 +3064,7 @@ function emitMatchStmt(
       arms.push({ pattern: pWild(), body: transformStmts(fallthrough, typeDecls) });
     }
   }
-  return { kind: "match", scrutinee: transformExpr(scrutinee), arms };
+  return { kind: "match", scrutinee: transformExpr(scrutinee), arms, unionType: typeName };
 }
 
 /** `switch(obj.field)` is stripped at extraction to scrutinee `obj` + discriminant
@@ -3119,7 +3121,7 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
       (body) => transformStmts(body, typeDecls), /* wildcard */ true)!;
   if (s.defaultBody.length > 0) arms.push({ pattern: pWild(), body: transformStmts(s.defaultBody, typeDecls) });
   const scrutinee: Expr = ef ? ef.scrutinee : transformExpr(s.expr);
-  return { kind: "match", scrutinee, arms };
+  return { kind: "match", scrutinee, arms, ...(ctorDecl ? { unionType: ctorDecl.name } : {}) };
 }
 
 /** A pure access path — chain of field accesses rooted at a var. */
