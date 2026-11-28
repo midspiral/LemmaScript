@@ -3,11 +3,22 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
+import { Project } from "ts-morph";
 import { parseSpecType } from "../src/spec-type.ts";
 import { parseSpecTypeKernel, tokenizeSpecType, isOptionalSpecTy } from "../src/spec-type-parser.ts";
-import { parseTsType } from "../src/types.ts";
+import { extractTyFromNode } from "../src/extract-types.ts";
+import type { Ty } from "../src/typedir.ts";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
+
+const oracleProject = new Project({ useInMemoryFileSystem: true });
+const oracleFile = oracleProject.createSourceFile("__oracle__.ts", "");
+
+function oracleParseTypeNode(text: string): Ty {
+  oracleFile.replaceWithText(`type __t = ${text};`);
+  const alias = oracleFile.getTypeAliasOrThrow("__t");
+  return extractTyFromNode(alias.getTypeNodeOrThrow());
+}
 
 function collectTsFiles(dir: string): string[] {
   const out: string[] = [];
@@ -94,7 +105,7 @@ function mineSpecTypesFromDir(dir: string, found: Set<string>): void {
   }
 }
 
-test("differential: parseSpecType agrees with parseTsType across all //@ type annotations in examples/ and tools/fixtures/", () => {
+test("differential: parseSpecType agrees with extractTyFromNode across all //@ type annotations in examples/ and tools/fixtures/", () => {
   const mined = new Set<string>();
   mineSpecTypesFromDir(join(REPO_ROOT, "examples"), mined);
   mineSpecTypesFromDir(join(REPO_ROOT, "tools/fixtures"), mined);
@@ -102,13 +113,13 @@ test("differential: parseSpecType agrees with parseTsType across all //@ type an
   for (const text of mined) {
     assert.deepStrictEqual(
       parseSpecType(text),
-      parseTsType(text),
+      oracleParseTypeNode(text),
       `mismatch on mined spec type: ${JSON.stringify(text)}`,
     );
   }
 });
 
-test("differential: parseSpecType agrees with parseTsType across comprehensive synthetic grammar matrix", () => {
+test("differential: parseSpecType agrees with extractTyFromNode across comprehensive synthetic grammar matrix", () => {
   const cases = [
     // Primitives & LemmaScript spec keywords
     "number",
@@ -207,7 +218,7 @@ test("differential: parseSpecType agrees with parseTsType across comprehensive s
   for (const text of cases) {
     assert.deepStrictEqual(
       parseSpecType(text),
-      parseTsType(text),
+      oracleParseTypeNode(text),
       `mismatch on synthetic spec type: ${JSON.stringify(text)}`,
     );
   }
@@ -283,11 +294,31 @@ test("verified core invariants: nullability flattening and full token consumptio
   assert.equal(nested.nextPos, toks.tokens.length);
 });
 
-test("spec-type-parser.ts and spec-type.ts do not import ts-morph or typescript", () => {
-  for (const rel of ["tools/src/spec-type-parser.ts", "tools/src/spec-type.ts"]) {
+test("types.ts, spec-type*, and downstream passes do not import ts-morph or parse TS type strings", () => {
+  const tsMorphFree = [
+    "tools/src/types.ts",
+    "tools/src/spec-type-parser.ts",
+    "tools/src/spec-type.ts",
+    "tools/src/specparser.ts",
+    "tools/src/resolve.ts",
+    "tools/src/narrow.ts",
+    "tools/src/checked-reads.ts",
+    "tools/src/narrow-checks.ts",
+    "tools/src/transform.ts",
+    "tools/src/info-command.ts",
+  ];
+  for (const rel of tsMorphFree) {
     const src = readFileSync(join(REPO_ROOT, rel), "utf8");
     assert.doesNotMatch(src, /from\s+["']ts-morph["']/, `${rel} must not import ts-morph`);
     assert.doesNotMatch(src, /from\s+["']typescript["']/, `${rel} must not import typescript`);
+  }
+
+  for (const file of collectTsFiles(join(REPO_ROOT, "tools/src"))) {
+    const src = readFileSync(file, "utf8");
+    assert.doesNotMatch(src, /\bparseTsType\b/, `${file} must not reference parseTsType`);
+    assert.doesNotMatch(src, /\binitTypeParser\b/, `${file} must not reference initTypeParser`);
+    assert.doesNotMatch(src, /\btyToTsStr\b/, `${file} must not reference tyToTsStr`);
+    assert.doesNotMatch(src, /__lsc_type_parse__\.ts/, `${file} must not create scratch __lsc_type_parse__.ts`);
   }
 });
 

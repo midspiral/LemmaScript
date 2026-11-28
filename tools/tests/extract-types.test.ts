@@ -386,3 +386,74 @@ test("extractModule populates structured Ty while lsc info --typed preserves Map
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("inferLambdaParamTypes propagates complex Ty directly without string round-trip", () => {
+  const code = `
+    type Handler = (
+      m: Map<string, number>,
+      pair: [string, number],
+      optNull: number | null,
+      both: number | null | undefined,
+    ) => number;
+    function applyHandler(
+      h: Handler,
+      m: Map<string, number>,
+      pair: [string, number],
+      optNull: number | null,
+      both: number | null | undefined,
+    ): number {
+      return h(m, pair, optNull, both);
+    }
+    export function caller(
+      m: Map<string, number>,
+      pair: [string, number],
+      optNull: number | null,
+      both: number | null | undefined,
+    ): number {
+      return applyHandler((a, b, c, d) => {
+        const v = a.get(b[0]) ?? 0;
+        const cVal = c ?? 0;
+        const dVal = d ?? 0;
+        return v + b[1] + cVal + dVal;
+      }, m, pair, optNull, both);
+    }
+  `;
+  const project = makeProject(true);
+  const sf = project.createSourceFile("lambda-infer.ts", code, { overwrite: true });
+  const raw = extractModule(sf);
+  const typed = resolveModule(raw);
+  const callerFn = typed.functions.find(f => f.name === "caller");
+  assert.ok(callerFn);
+  const ret = callerFn.body[0];
+  assert.equal(ret.kind, "return");
+  assert.equal(ret.value?.kind, "call");
+  const lam = ret.value.args[0];
+  assert.equal(lam.kind, "lambda");
+  assert.deepEqual(lam.params.map(p => p.ty), [
+    { kind: "map", key: { kind: "string" }, value: { kind: "int" } },
+    { kind: "tuple", elems: [{ kind: "string" }, { kind: "int" }] },
+    { kind: "optional", inner: { kind: "int" }, absent: "null" },
+    { kind: "nullish", inner: { kind: "int" } },
+  ]);
+});
+
+test("module-level const resolves primitive type alias consistently with tsType", () => {
+  const code = `
+    type UserId = string;
+    const INITIAL_OWNER: UserId = "__initial__";
+    export function getOwner(): string {
+      return INITIAL_OWNER;
+    }
+  `;
+  const project = makeProject(true);
+  const sf = project.createSourceFile("const-alias.ts", code, { overwrite: true });
+  const raw = extractModule(sf);
+  const c = raw.constants.find(x => x.name === "INITIAL_OWNER");
+  assert.ok(c);
+  assert.equal(c.tsType, "string");
+  assert.deepEqual(c.type, { kind: "string" });
+  const typed = resolveModule(raw);
+  const tc = typed.constants.find(x => x.name === "INITIAL_OWNER");
+  assert.ok(tc);
+  assert.deepEqual(tc.ty, { kind: "string" });
+});

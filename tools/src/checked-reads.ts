@@ -16,7 +16,7 @@
 
 import type { TExpr, TFunction, TModule, TStmt, Ty } from "./typedir.js";
 import type { FieldInfo, TypeDeclInfo } from "./types.js";
-import { parseTsType } from "./types.js";
+import { parseSpecType } from "./spec-type.js";
 
 const ARITH = new Set(["+", "-", "*", "/", "%", "**"]);
 
@@ -41,7 +41,7 @@ function isNullable(ty: Ty | null): ty is Extract<Ty, { kind: "optional" | "null
 
 function fieldInfoTy(f: FieldInfo | null): Ty | null {
   if (!f) return null;
-  const ty = f.type ?? parseTsType(f.tsType);
+  const ty = f.type ?? parseSpecType(f.tsType);
   if (!f.optionalKey) return ty;
   if (ty.kind === "nullish") return ty;
   if (ty.kind === "optional") {

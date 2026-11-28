@@ -9,7 +9,6 @@ import path from "path";
 import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ScriptTarget, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import type { Ty } from "./typedir.js";
-import { initTypeParser } from "./types.js";
 import { parseSpecType } from "./spec-type.js";
 import {
   extractTy,
@@ -1195,7 +1194,7 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   // Primitive type alias: type TaskId = number → alias
   const tsType = typeToString(type);
   if (tsType !== name) {
-    return { name, kind: "alias", aliasOf: tsType, aliasOfTy: extractTy(type, decl.getTypeNode(), ctx) };
+    return { name, kind: "alias", aliasOf: tsType, aliasOfTy: extractTy(type, undefined, ctx) };
   }
   return null;
 }
@@ -2215,11 +2214,6 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     return node.getLeadingCommentRanges().some(r => hasLineDirective(r.getText(), kw));
   }
 
-  // Share the module's ts-morph Project with parseTsType (scratch source file
-  // for type-string parsing). Done before declare-type parsing so any
-  // parseTsType call downstream uses the same Project.
-  initTypeParser(sourceFile.getProject());
-
   // Activate the synthesized-array-union accumulator. typeToString registers
   // a discriminated-union TypeDeclInfo for any `T[] | U` shape it encounters,
   // pushing into `typeDecls` so resolve sees the synth as a regular user type.
@@ -2359,7 +2353,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
               constants.push({
                 name: decl.getName(),
                 tsType: declTsType,
-                type: extractTy(decl.getType(), decl.getTypeNode(), currentTypeCtx()),
+                type: extractTy(decl.getType(), undefined, currentTypeCtx()),
                 value: extractExpr(init as Expression),
               });
             } catch (e) {
@@ -2570,11 +2564,10 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
         return { name: prop.getName(), tsType: override, type: parseSpecType(override) };
       }
       const pt = prop.getType();
-      const baseTy = extractTy(pt, prop.getTypeNode(), currentTypeCtx());
       return {
         name: prop.getName(),
         tsType: typeToString(pt),
-        type: prop.hasQuestionToken() ? wrapNullability(baseTy, false, true) : baseTy,
+        type: extractTy(pt, undefined, currentTypeCtx()),
       };
     });
     classes.push({ name, fields, methods });
