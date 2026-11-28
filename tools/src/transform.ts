@@ -15,7 +15,7 @@ import { freshName, freshNameWhere, isUserName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
 import { lowerIndexedCallback } from "./callback-lowering.js";
 import { isFalsyCapableTy } from "./condition-facts.js";
-import { declOf, declOfKind, declOfTy, unionDeclOfTy, declWithVariant, tyBaseName, remainingVariant } from "./typedecls.js";
+import { declOf, declOfKind, declOfTy, unionDeclOfTy, tyBaseName, remainingVariant } from "./typedecls.js";
 import {
   buildNestedFieldExpr,
   collectAssignedIrTargets,
@@ -2305,9 +2305,11 @@ function matchToIfChains(stmts: Stmt[]): Stmt[] {
     // accidentally drop an earlier literal arm from a malformed mixed match.
     if (arms.some(a => a.pattern.kind === "literal")) return [{ ...s, arms }];
     const ctorArms = arms.filter(a => a.pattern.kind === "ctor");
-    const firstCtor = ctorArms[0] ? patternCtor(ctorArms[0].pattern) : undefined;
-    const decl = firstCtor ? declWithVariant(_typeDecls, firstCtor) : undefined;
-    if (!decl) return [{ ...s, arms }]; // not a user union (e.g. Option) — leave as match
+    // Only user-union matches carry `unionType` (from `emitMatchStmt` / `emitSwitchStmt`);
+    // leave `Option` matches and other non-union matches alone even if a user union
+    // happens to define `"some"` / `"none"` variants.
+    const decl = s.unionType ? declOf(_typeDecls, tyBaseName(s.unionType)) : undefined;
+    if (!decl) return [{ ...s, arms }];
 
     const scrutExpr: Expr = s.scrutinee;
     const defaultArm = arms.find(a => a.pattern.kind === "wild");
@@ -3072,7 +3074,7 @@ function emitMatchStmt(
       arms.push({ pattern: pWild(), body: transformStmts(fallthrough, typeDecls) });
     }
   }
-  return { kind: "match", scrutinee: transformExpr(scrutinee), arms };
+  return { kind: "match", scrutinee: transformExpr(scrutinee), arms, unionType: typeName };
 }
 
 /** `switch(obj.field)` is stripped at extraction to scrutinee `obj` + discriminant
@@ -3129,7 +3131,7 @@ function emitSwitchStmt(s: TStmt & { kind: "switch" }, typeDecls: TypeDeclInfo[]
       (body) => transformStmts(body, typeDecls), /* wildcard */ true)!;
   if (s.defaultBody.length > 0) arms.push({ pattern: pWild(), body: transformStmts(s.defaultBody, typeDecls) });
   const scrutinee: Expr = ef ? ef.scrutinee : transformExpr(s.expr);
-  return { kind: "match", scrutinee, arms };
+  return { kind: "match", scrutinee, arms, ...(ctorDecl ? { unionType: ctorDecl.name } : {}) };
 }
 
 /** A pure access path — chain of field accesses rooted at a var. */
