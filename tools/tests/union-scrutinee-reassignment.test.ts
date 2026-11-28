@@ -591,3 +591,242 @@ export function binderNoCapture(input: Pair, _f1: number): Pair {
   assert.match(leanDef, /match sh with \| \.a _ _f1' => Pair\.a \(5\) _f1'/, leanDef);
   assert.match(leanDef, /match sh with \| \.a _f0 _ => Pair\.a _f0 \(10\)/, leanDef);
 });
+
+for (const method of ["pop", "shift"] as const) {
+  test(`${method}: omit empty guards only for consumed nonoptional results`, () => {
+    const consumedTs = `
+//@ requires input.length === 2 && input[0] === 4 && input[1] === 9
+//@ ensures \\result === ${method === "pop" ? 91 : 41}
+export function consumeLet(input: number[]): number {
+  let xs = input;
+  const value = xs.${method}()!;
+  return value * 10 + xs.length;
+}
+
+//@ requires input.length === 2 && input[0] === 4 && input[1] === 9
+//@ ensures \\result === ${method === "pop" ? 91 : 41}
+export function consumeAssignment(input: number[]): number {
+  let xs = input;
+  let value = 0;
+  value = xs.${method}()!;
+  return value * 10 + xs.length;
+}
+`;
+    const consumedDfy = compileDafny(consumedTs);
+    assert.doesNotMatch(consumedDfy, /xs := \(if/, consumedDfy);
+    assert.match(consumedDfy, /xs := xs\[/, consumedDfy);
+    const { def: consumedLean } = compileLean(consumedTs, `consumed_${method}.ts`);
+    assert.doesNotMatch(consumedLean, /xs := \(?if\b/, consumedLean);
+    assert.match(consumedLean, /xs := xs\.extract/, consumedLean);
+
+    const optionalContract = `
+//@ ensures \\result.length === 2
+//@ ensures \\result[0] === (input.length === 0 ? -1 : input[${method === "pop" ? "input.length - 1" : "0"}])
+//@ ensures \\result[1] === (input.length === 0 ? 0 : input.length - 1)
+`;
+    const safeOnEmptyTs = `
+${optionalContract}
+export function optionalLet(input: number[]): number[] {
+  let xs = input;
+  const value = xs.${method}();
+  return [value ?? -1, xs.length];
+}
+
+${optionalContract}
+export function optionalAssignment(input: number[]): number[] {
+  let xs = input;
+  let value: number | undefined = undefined;
+  value = xs.${method}();
+  return [value ?? -1, xs.length];
+}
+
+//@ ensures \\result === (input.length === 0 ? 0 : input.length - 1)
+export function discard(input: number[]): number {
+  let xs = input;
+  xs.${method}();
+  return xs.length;
+}
+
+//@ ensures \\result === (input.length === 0 ? 0 : input.length - 1)
+export function discardAsserted(input: number[]): number {
+  let xs = input;
+  xs.${method}()!;
+  return xs.length;
+}
+`;
+    const dfy = compileDafny(consumedTs + safeOnEmptyTs);
+    const res = verifyDafny(dfy);
+    assert.equal(res.status, 0, `${dfy}\n${res.output}`);
+
+    // A consumed `!` must still require a nonempty array; discarding it above does not.
+    const unsafeDfy = compileDafny(`
+export function consumeEmpty(): number {
+  let xs: number[] = [];
+  const value = xs.${method}()!;
+  return value;
+}
+`);
+    const unsafe = verifyDafny(unsafeDfy);
+    assert.notEqual(unsafe.status, 0, `${unsafeDfy}\n${unsafe.output}`);
+    assert.match(unsafe.output, /index out of range/, unsafe.output);
+  });
+}
+
+test("#409: pop/shift on narrowed union & synth arrays, nested ofVariant, ensures/invariant &&, nested union writes, and mixed-type unnarrowed spreads", () => {
+  const valid409Ts = `
+export type Bag = { kind: "empty" } | { kind: "list"; items: number[] };
+export type Inner = { tag: "x"; n: number } | { tag: "y"; s: string };
+export type Outer = { kind: "a"; value: Inner } | { kind: "b"; value: string };
+export type Colliding = { kind: "a"; value: number } | { kind: "b"; value: string };
+export type Box = { sh: Colliding };
+export type MixedOpt = { kind: "a"; value: number } | { kind: "b"; value: number | undefined };
+export interface Tree { children: Tree[] }
+
+//@ requires input.kind === "list" && input.items.length === 2
+//@ ensures \\result === 1
+export function popUnionField(input: Bag): number {
+  let b = input;
+  if (b.kind === "list") {
+    const last = b.items.pop()!;
+    return b.items.length;
+  }
+  return 0;
+}
+
+//@ requires input.kind === "list" && input.items.length === 2 && input.items[0] === 9
+//@ ensures \\result === 10
+export function shiftUnionField(input: Bag): number {
+  let b = input;
+  if (b.kind === "list") {
+    const first = b.items.shift()!;
+    return first + b.items.length;
+  }
+  return 0;
+}
+
+//@ requires Array.isArray(input) && input.length === 2
+//@ ensures \\result === 1
+export function popSynth(input: number[] | number): number {
+  let u = input;
+  if (Array.isArray(u) && u.length > 0) {
+    const last = u.pop()!;
+    return u.length;
+  }
+  return 0;
+}
+
+//@ requires Array.isArray(input) && input.length === 2 && input[0] === 4
+//@ ensures \\result === 5
+export function shiftSynth(input: number[] | number): number {
+  let u = input;
+  if (Array.isArray(u) && u.length > 0) {
+    const first = u.shift()!;
+    return first + u.length;
+  }
+  return 0;
+}
+
+//@ requires o.kind === "a" && o.value.tag === "x" && o.value.n === 7
+//@ ensures \\result === 7
+export function readNested(o: Outer): number {
+  if (o.kind === "a" && o.value.tag === "x") {
+    return o.value.n;
+  }
+  return 0;
+}
+
+//@ ensures \\result.kind === "a" && \\result.value === 5
+export function makeA(): Colliding {
+  return { kind: "a", value: 5 };
+}
+
+//@ requires input.kind === "a" && input.value >= 0
+//@ ensures \\result >= 0
+export function loopColliding(input: Colliding): number {
+  let sh = input;
+  let i = 0;
+  while (i < 3) {
+    //@ invariant 0 <= i && i <= 3
+    //@ invariant sh.kind === "a" && sh.value >= 0
+    //@ decreases 3 - i
+    sh = { kind: "a", value: sh.kind === "a" ? sh.value + 1 : 0 };
+    i = i + 1;
+  }
+  return sh.kind === "a" ? sh.value : 0;
+}
+
+//@ requires input.sh.kind === "a"
+//@ ensures \\result === 5
+export function writeNestedUnion(input: Box): number {
+  let b = input;
+  if (b.sh.kind === "a") {
+    b.sh.value = 5;
+    return b.sh.value;
+  }
+  return 0;
+}
+
+//@ ensures sh.kind === "a" ==> (\\result.kind === "a" && \\result.value === 5)
+//@ ensures sh.kind === "b" ==> (\\result.kind === "b" && \\result.value === 5)
+export function bumpMixed(sh: MixedOpt): MixedOpt {
+  return { ...sh, value: 5 };
+}
+
+//@ requires input.children.length === 1 && input.children[0].children.length === 2
+//@ ensures \\result === 2
+export function assignShiftSelfRoot(input: Tree): number {
+  let t = input;
+  t = t.children.shift()!;
+  return t.children.length;
+}
+
+//@ requires input.children.length === 1 && input.children[0].children.length === 2
+//@ ensures \\result === 2
+export function assignPopSelfRoot(input: Tree): number {
+  let t = input;
+  t = t.children.pop()!;
+  return t.children.length;
+}
+
+//@ requires input.kind === "list" && input.items.length === 0
+//@ ensures \\result === 0
+export function discardShiftEmpty(input: Bag): number {
+  let b = input;
+  if (b.kind === "list") {
+    b.items.shift();
+    return b.items.length;
+  }
+  return 0;
+}
+`;
+  const dfy = compileDafny(valid409Ts, "valid_409.ts");
+  const res = verifyDafny(dfy);
+  assert.equal(res.status, 0, `${dfy}\n${res.output}`);
+
+  // False postcondition for `t = t.children.shift()!` must be rejected (cannot mutate shifted child).
+  const falseShiftSelfTs = `
+export interface Tree { children: Tree[] }
+//@ requires input.children.length === 1 && input.children[0].children.length === 2
+//@ ensures \\result === 1
+export function f(input: Tree): number {
+  let t = input;
+  t = t.children.shift()!;
+  return t.children.length;
+}
+`;
+  const falseShiftDfy = compileDafny(falseShiftSelfTs, "false_shift_self.ts");
+  const falseShiftRes = verifyDafny(falseShiftDfy);
+  assert.notEqual(falseShiftRes.status, 0, `falseShiftSelf should fail:\n${falseShiftDfy}\n${falseShiftRes.output}`);
+  assert.match(falseShiftRes.output, /postcondition could not be proved|might not hold/, falseShiftRes.output);
+
+  // Lean emission checks for all #409 cases
+  const { types: leanTypes, def: leanDef } = compileLean(valid409Ts, "lean_409.ts");
+  // Item 1: pop/shift write back through union match updates (no raw `.pop`/`.shift`)
+  assert.doesNotMatch(leanDef, /\.pop\b|\.shift\b/, leanDef);
+  // Item 4: nested union write `b.sh.value = 5` emits match-update on `Colliding`, not `{ b.sh with ... }`
+  assert.doesNotMatch(leanDef, /\{ b\.sh with/, leanDef);
+  assert.match(leanDef, /b := \{ b with sh := \(match b\.sh with \| \.a _ => Colliding\.a \(5\)/, leanDef);
+  // Item 5: unnarrowed mixed-type spread coerces `.a` to `5` and `.b` to `some 5` (in Pure.bumpMixed)
+  assert.match(leanTypes, /\| \.a _ =>\s+MixedOpt\.a 5/, leanTypes);
+  assert.match(leanTypes, /\| \.b _ =>\s+MixedOpt\.b \(some 5\)/, leanTypes);
+});

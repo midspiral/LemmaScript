@@ -1,5 +1,8 @@
 export type Shape = { kind: "a"; n: number } | { kind: "b"; n: number };
 export type Pair = { kind: "a"; x: number; y: number } | { kind: "b"; z: number };
+export type Bag = { kind: "empty" } | { kind: "list"; items: number[] };
+export type Colliding = { kind: "a"; value: number } | { kind: "b"; value: string };
+export type MixedOpt = { kind: "a"; value: number } | { kind: "b"; value: number | undefined };
 
 //@ requires input.kind === "a" && input.n === 0
 //@ requires next.kind === "b" && next.n === 7
@@ -40,4 +43,26 @@ export function binderNoCapture(input: Pair, _f1: number): Pair {
     case "b":
       return sh;
   }
+}
+
+//@ requires input.kind === "list" && input.items.length === 2
+//@ ensures \result === 1
+export function popUnionField(input: Bag): number {
+  let b = input;
+  if (b.kind === "list") {
+    const last = b.items.pop()!;
+    return b.items.length;
+  }
+  return 0;
+}
+
+//@ ensures \result.kind === "a" && \result.value === 5
+export function makeA(): Colliding {
+  return { kind: "a", value: 5 };
+}
+
+//@ ensures sh.kind === "a" ==> (\result.kind === "a" && \result.value === nextVal)
+//@ ensures sh.kind === "b" ==> (\result.kind === "b" && \result.value === nextVal)
+export function bumpMixed(sh: MixedOpt, nextVal: number): MixedOpt {
+  return { ...sh, value: nextVal };
 }

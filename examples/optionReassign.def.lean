@@ -33,6 +33,6 @@ method reassignOptionalField (input : Box) returns (res : Int)
   do
     let mut box : Box := input
     if _h2 : ((match box.val with | .some _ => true | .none => false)) = true then
-      box := { box with val := Option.some 5 }
+      box := { box with val := some 5 }
       return ((box.val).get (by grind))
     return 0

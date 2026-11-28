@@ -12,3 +12,32 @@ inductive Pair where
   | a (x : Int) (y : Int) : Pair
   | b (z : Int) : Pair
 deriving Repr, Inhabited
+
+inductive Bag where
+  | empty : Bag
+  | list (items : Array Int) : Bag
+deriving Repr, Inhabited
+
+inductive Colliding where
+  | a (value : Int) : Colliding
+  | b (value : String) : Colliding
+deriving Repr, Inhabited
+
+inductive MixedOpt where
+  | a (value : Int) : MixedOpt
+  | b (value : Option Int) : MixedOpt
+deriving Repr, Inhabited
+
+namespace Pure
+
+def makeA  : Colliding :=
+  Colliding.a 5
+
+def bumpMixed (sh : MixedOpt) (nextVal : Int) : MixedOpt :=
+  match sh with
+  | .a _ =>
+    MixedOpt.a nextVal
+  | .b _ =>
+    MixedOpt.b (some nextVal)
+
+end Pure
