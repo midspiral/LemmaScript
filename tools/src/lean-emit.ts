@@ -506,7 +506,7 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       // A bare negative literal argument (`f -7 2`) parses as subtraction in Lean.
       const args = e.args.map(a => {
         const s = emitExpr(a);
-        return (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall" || s.startsWith("-")) ? `(${s})` : s;
+        return (a.kind === "binop" || a.kind === "unop" || a.kind === "implies" || a.kind === "app" || a.kind === "methodCall" || a.kind === "if" || a.kind === "let" || a.kind === "match" || s.startsWith("-")) ? `(${s})` : s;
       });
       // Datatype constructor (tagged by transform): Lean needs the qualified name
       // `BaseType.variant`; a bare `variant` is an unknown identifier. (Dafny keeps
@@ -527,8 +527,6 @@ function emitExpr(e: Expr, parentPrec?: number): string {
       if (e.fn === "JSRem" && args.length === 2) return `Int.tmod ${args[0]} ${args[1]}`;
       // JSTruncDiv (JS truncated bigint division) → Lean's native `Int.tdiv`
       if (e.fn === "JSTruncDiv" && args.length === 2) return `Int.tdiv ${args[0]} ${args[1]}`;
-      // JSFloorDiv (JS Math.floor(a / b)) → Lean's native floored `Int.fdiv`
-      if (e.fn === "JSFloorDiv" && args.length === 2) return `Int.fdiv ${args[0]} ${args[1]}`;
       // perm(a, b) → `List.Perm` on the underlying lists. Dafny lowers it to
       // `multiset(a) == multiset(b)`; the Lean image is `a.toList ~ b.toList`,
       // which mathlib's `List.Perm` provides (reflexivity, symmetry,

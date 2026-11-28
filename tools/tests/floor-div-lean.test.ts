@@ -41,6 +41,34 @@ export function floorDivNegLit(a: number): number {
   assert.match(lean, /Int\.fdiv a \(-2\)/, lean);
 });
 
+test("Math.floor with ternary operand parenthesizes the conditional argument to Int.fdiv", () => {
+  const lean = compileLean(`
+export function floorDivTernary(flag: boolean, a: number, b: number): number {
+  //@ verify
+  //@ requires b !== 0
+  return Math.floor((flag ? a : 0) / b);
+}
+`, "floor_div_ternary.ts");
+
+  assert.match(lean, /Int\.fdiv \(if flag then a else 0\) b/, lean);
+});
+
+test("user-defined JSFloorDiv function is not rewritten to Int.fdiv on Lean", () => {
+  const lean = compileLean(`
+export function JSFloorDiv(a: number, b: number): number {
+  return a + b;
+}
+
+export function callUserJSFloorDiv(a: number, b: number): number {
+  //@ verify
+  return JSFloorDiv(a, b);
+}
+`, "user_jsfloordiv.ts");
+
+  assert.match(lean, /JSFloorDiv a b/, lean);
+  assert.doesNotMatch(lean, /Int\.fdiv/, lean);
+});
+
 test("Math.floor(a / b) with Nat or positive literal divisor keeps native / on Lean", () => {
   const lean = compileLean(`
 export function midpoint(lo: number, hi: number): number {
