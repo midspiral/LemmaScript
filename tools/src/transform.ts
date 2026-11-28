@@ -1353,18 +1353,28 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       }
       // Math.floor(x):
       //   - a / b on integral operands → integer floor division, kept in
-      //     integer arithmetic (JSFloorDiv on Dafny; native Int/Nat `/` floors
-      //     on Lean). Checked first: after resolve, `a / b` is typed `real`, so
-      //     the real branch below would otherwise drag it into real arithmetic.
+      //     integer arithmetic (JSFloorDiv on Dafny; on Lean, native `/` is
+      //     Euclidean `Int.ediv` which matches floor division only when the
+      //     divisor is non-negative, so signed/negative divisors emit
+      //     qualified `Int.fdiv` directly to avoid colliding with a user
+      //     function named `JSFloorDiv`). Checked first: after resolve, `a / b`
+      //     is typed `real`, so the real branch below would otherwise drag it
+      //     into real arithmetic.
       //   - real arg → FloorReal (Dafny's .Floor)
       //   - int arg → identity
       if (e.fn.kind === "field" && e.fn.field === "floor" && e.fn.obj.kind === "var" && e.fn.obj.name === "Math" && e.args.length === 1) {
         const arg = e.args[0];
         if (arg.kind === "binop" && arg.op === "/" && isIntegral(arg.left.ty) && isIntegral(arg.right.ty)) {
           const l = lowerExpr(arg.left, binds), r = lowerExpr(arg.right, binds);
-          return _opts.backend === "dafny"
-            ? { kind: "app", fn: "JSFloorDiv", args: [l, r] }
-            : { kind: "binop", op: "/", left: l, right: r };
+          if (_opts.backend === "dafny") {
+            return { kind: "app", fn: "JSFloorDiv", args: [l, r] };
+          }
+          const nonnegDivisor = isNat(arg.right.ty) ||
+            (arg.right.kind === "num" && arg.right.value > 0) ||
+            (arg.right.kind === "bigint" && BigInt(arg.right.value) > 0n);
+          return nonnegDivisor
+            ? { kind: "binop", op: "/", left: l, right: r }
+            : { kind: "app", fn: "Int.fdiv", args: [l, r] };
         }
         if (arg.ty.kind === "real")
           return { kind: "app", fn: "FloorReal", args: [lowerExpr(arg, binds)] };
