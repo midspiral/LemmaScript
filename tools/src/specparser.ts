@@ -5,6 +5,7 @@
 
 import type { RawExpr } from "./rawir.js";
 import { normalizeBigIntLiteral } from "./rawir.js";
+import { parseSpecType } from "./spec-type.js";
 
 export type Expr = RawExpr;
 
@@ -288,7 +289,7 @@ class Parser {
         }
         this.expect("punc", "(");
         this.expect("punc", ")");
-        return { kind: "emptyCollection", collectionType: name as "Set" | "Map", tsType };
+        return { kind: "emptyCollection", collectionType: name as "Set" | "Map", tsType, type: parseSpecType(tsType), fromSpec: true };
       }
       if (t.value === "forall" || t.value === "exists") {
         const q = t.value as "forall" | "exists";

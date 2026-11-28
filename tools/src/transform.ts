@@ -10,7 +10,6 @@ import { isBigInt, optAbsent, tyEqual } from "./typedir.js";
 import type { Expr, Stmt, Decl, Module, FnDef, FnDefByMethod, FnMethod, MatchArm, ConstDecl, MatchPattern } from "./ir.js";
 import { anyExpr, anyExprInStmts, pWild, pCtor, pLiteral, patternBinders, patternCtor } from "./ir.js";
 import type { TypeDeclInfo, VariantInfo } from "./types.js";
-import { parseTsType } from "./types.js";
 import { freshName, freshNameWhere, isUserName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
 import { lowerIndexedCallback } from "./callback-lowering.js";
@@ -2570,16 +2569,16 @@ function lookupFieldPathInfo(
     if (decl.kind === "record" && decl.fields) {
       unionsByDepth.push(undefined);
       const f = decl.fields.find(fi => fi.name === field);
-      if (!f) return { fieldTy: null, unionsByDepth };
-      cur = f.type ?? parseTsType(f.tsType);
+      if (!f?.type) return { fieldTy: null, unionsByDepth };
+      cur = f.type;
     } else if (decl.kind === "discriminated-union" && decl.variants) {
       const ov = ownerVariants?.[i];
       unionsByDepth.push({ ctor: ov, ctorOf: decl.name });
       const variant = (ov ? decl.variants.find(v => v.name === ov) : undefined)
         ?? decl.variants.find(v => v.fields.some(fi => fi.name === field));
       const f = variant?.fields.find(fi => fi.name === field);
-      if (!f) return { fieldTy: null, unionsByDepth };
-      cur = f.type ?? parseTsType(f.tsType);
+      if (!f?.type) return { fieldTy: null, unionsByDepth };
+      cur = f.type;
     } else {
       return { fieldTy: null, unionsByDepth };
     }

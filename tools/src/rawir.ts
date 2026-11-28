@@ -8,6 +8,8 @@
  * Layer 2 (planned): add Ty to each node
  */
 
+import type { Ty } from "./typedir.js";
+
 // ── Expressions ──────────────────────────────────────────────
 
 /** Source text of a BigInt literal → the canonical decimal string stored in a
@@ -45,21 +47,21 @@ export type RawExpr =
   | { kind: "call"; fn: RawExpr; args: RawExpr[]; freshClone?: true }
   | { kind: "index"; obj: RawExpr; idx: RawExpr; freshClone?: true }
   | { kind: "field"; obj: RawExpr; field: string; freshClone?: true }
-  | { kind: "record"; spread: RawExpr | null; fields: { name: string; value: RawExpr }[]; assertedTsType?: string }
+  | { kind: "record"; spread: RawExpr | null; fields: { name: string; value: RawExpr }[]; assertedTsType?: string; assertedType?: Ty }
   | { kind: "recordMerge"; base: RawExpr; override: RawExpr }   // { ...base, ...override } — field-wise merge; resolve expands to a record using the result type's fields
   | { kind: "arrayLiteral"; elems: RawExpr[] }
-  | { kind: "lambda"; params: RawLambdaParam[]; body: RawExpr | RawStmt[]; returnTsType?: string }
+  | { kind: "lambda"; params: RawLambdaParam[]; body: RawExpr | RawStmt[]; returnTsType?: string; returnTy?: Ty }
   | { kind: "conditional"; cond: RawExpr; then: RawExpr; else: RawExpr }  // ternary ? :
   | { kind: "optChain"; obj: RawExpr; chain: RawChainStep[] }   // obj?.field, obj?.foo(), obj?.[i], obj?.foo.bar — single-eval
   | { kind: "nullish"; left: RawExpr; right: RawExpr }   // a ?? b — single-eval; narrow rewrites to someMatch
-  | { kind: "emptyCollection"; collectionType: "Map" | "Set"; tsType: string; initElems?: RawExpr[] }  // new Map<K,V>() / new Set<T>()
+  | { kind: "emptyCollection"; collectionType: "Map" | "Set"; tsType: string; type?: Ty; initElems?: RawExpr[]; fromSpec?: true }  // new Map<K,V>() / new Set<T>()
   | { kind: "nonNull"; expr: RawExpr }   // expr! (non-null assertion)
   // Spec-only (from //@ annotations, produced by specparser):
   | { kind: "result" }                                    // \result
   | { kind: "forall"; var: string; varType: string; body: RawExpr }
   | { kind: "exists"; var: string; varType: string; body: RawExpr }
   // Havoc — nondeterministic value (from //@ havoc annotation):
-  | { kind: "havoc"; tsType: string }
+  | { kind: "havoc"; tsType: string; type?: Ty }
 
 // ── Statements ───────────────────────────────────────────────
 
@@ -67,8 +69,10 @@ export type RawExpr =
 export interface RawLambdaParam {
   name: string;
   tsType?: string;
+  type?: Ty;
   /** Parameter-scope type, available before default initializers are resolved. */
   inferredTsType?: string;
+  inferredType?: Ty;
   rest?: true;
   defaultValue?: RawExpr;
 }
@@ -83,6 +87,7 @@ export interface RawLet {
   name: string;
   mutable: boolean;
   tsType: string | null;
+  type?: Ty;
   init: RawExpr;
   line: number;
 }
@@ -186,6 +191,7 @@ export type RawStmt = RawLet | RawAssign | RawReturn | RawBreak | RawContinue | 
 export interface RawParam {
   name: string;
   tsType: string;
+  type?: Ty;
 }
 
 /** One original TS parameter, before `params` flattens it for the provers
@@ -204,6 +210,7 @@ export interface RawFunction {
   tsParams: RawTsParam[]; // original TS signature grouping (params = flatten of this); see RawTsParam
 
   returnType: string;
+  returnTy?: Ty;
   requires: string[];     // //@ annotation strings
   ensures: string[];
   contract: string[];     // //@ contract — natural-language description of intent (NOT a spec; provers ignore it)
@@ -217,13 +224,14 @@ export interface RawFunction {
 
 export interface RawClass {
   name: string;
-  fields: { name: string; tsType: string }[];
+  fields: { name: string; tsType: string; type?: Ty }[];
   methods: RawFunction[];
 }
 
 export interface RawConst {
   name: string;
   tsType: string;
+  type?: Ty;
   value: RawExpr;
 }
 
@@ -241,6 +249,7 @@ export interface RawExtern {
   typeParams: string[];    // generic type parameters, e.g. ["S", "A"] (referenced by params/returnType)
   params: RawParam[];      // typed parameter list (names + TS type strings)
   returnType: string;      // TS type string
+  returnTy?: Ty;
   requires: string[];      // copied `//@ requires` annotation strings
   ensures: string[];       // copied `//@ ensures` annotation strings
   impure: boolean;         // effective call-by-call nondeterminism (Dafny method)

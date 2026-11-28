@@ -1,2 +1,3 @@
 tools/src/alias-check.ts
 tools/src/places.ts
+tools/src/spec-type-parser.ts
