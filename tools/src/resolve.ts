@@ -9,6 +9,7 @@ import type { RawExpr, RawStmt, RawFunction, RawModule } from "./rawir.js";
 import type { Ty, TExpr, TStmt, TFunction, TModule, TParam, CallKind } from "./typedir.js";
 import { isBigInt, optAbsent, tyEqual, isTerminatorKind } from "./typedir.js";
 import { parseTsType, tyToCanonical } from "./types.js";
+import { parseSpecType } from "./spec-type.js";
 import type { TypeDeclInfo } from "./types.js";
 import { parseExpr } from "./specparser.js";
 import { freshName } from "./names.js";
@@ -150,7 +151,7 @@ function withEnv(ctx: Ctx, env: Env | null): Ctx {
 function resolveTsType(tsType: string, overrides: Map<string, string>, varName?: string): Ty {
   if (varName) {
     const o = overrides.get(varName);
-    if (o) return parseTsType(o);
+    if (o) return parseSpecType(o);
   }
   return parseTsType(tsType);
 }
@@ -1882,14 +1883,14 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
       return { kind: "var", name: "\\result", ty: lookup(ctx.env, "\\result") ?? ctx.returnTy };
 
     case "forall": {
-      const varTy: Ty = e.varType !== "int" ? parseTsType(e.varType)
+      const varTy: Ty = e.varType !== "int" ? parseSpecType(e.varType)
         : inferQuantVarType(e.var, e.body, ctx) ?? { kind: "int" };
       const bound = quantified(ctx.env, e.var, varTy);
       return { kind: "forall", var: bound.emittedName ?? e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, bound)), ty: { kind: "bool" } };
     }
 
     case "exists": {
-      const varTy: Ty = e.varType !== "int" ? parseTsType(e.varType)
+      const varTy: Ty = e.varType !== "int" ? parseSpecType(e.varType)
         : inferQuantVarType(e.var, e.body, ctx) ?? { kind: "int" };
       const bound = quantified(ctx.env, e.var, varTy);
       return { kind: "exists", var: bound.emittedName ?? e.var, varTy, body: resolveExpr(e.body, withEnv(ctx, bound)), ty: { kind: "bool" } };
@@ -2011,13 +2012,13 @@ function resolveExprInner(e: RawExpr, ctx: Ctx): TExpr {
     }
 
     case "emptyCollection": {
-      const ty = parseTsType(e.tsType);
+      const ty = e.fromSpec ? parseSpecType(e.tsType) : parseTsType(e.tsType);
       const elems = e.initElems ? e.initElems.map(el => resolveExpr(el, ctx)) : [];
       return { kind: "arrayLiteral", elems, ty };
     }
 
     case "havoc":
-      return { kind: "havoc", ty: resolveTsType(e.tsType, ctx.overrides) };
+      return { kind: "havoc", ty: e.type ?? resolveTsType(e.tsType, ctx.overrides) };
   }
 }
 
@@ -2370,7 +2371,12 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // expandAlias unwraps an array/collection alias (`type Board = number[]`)
       // to its underlying type, so array methods / index-assignment on the
       // local dispatch correctly (params get the same treatment, see makeParams).
-      const declTy = expandAlias(resolveTsType(s.tsType, ctx.overrides, s.name), ctx.typeDecls);
+      const declTy = expandAlias(
+        ctx.overrides.has(s.name)
+          ? parseSpecType(ctx.overrides.get(s.name)!)
+          : (s.type ?? parseTsType(s.tsType)),
+        ctx.typeDecls,
+      );
       // Propagate declared type as returnTy so nested record expressions resolve
       // union variants correctly (e.g., EffectState → mode: EffectMode → { kind:
       // 'Idle' }). Arrays too, so `const xs: Foo[] = [{...}]` threads the element
@@ -2594,9 +2600,9 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
       // Handle new Set<T>() / new Map<K,V>() constructors
       const collMatch = s.init.match(/^new\s+(Set|Map)<(.+)>\(\)$/);
       const init = collMatch
-        ? resolveExpr({ kind: "emptyCollection", collectionType: collMatch[1] as "Set" | "Map", tsType: `${collMatch[1]}<${collMatch[2]}>` }, specCtx)
+        ? resolveExpr({ kind: "emptyCollection", collectionType: collMatch[1] as "Set" | "Map", tsType: `${collMatch[1]}<${collMatch[2]}>`, fromSpec: true }, specCtx)
         : resolveExpr(parseExpr(s.init), specCtx);
-      const ty = s.tsType ? parseTsType(s.tsType) : init.ty;
+      const ty = s.tsType ? parseSpecType(s.tsType) : init.ty;
       return [{ kind: "ghostLet", name: s.name, ty, init }, extend(ctx.env, s.name, ty)];
     }
 
@@ -2825,7 +2831,7 @@ function resolveFunction(
 }
 
 function resolveClass(cls: import("./rawir.js").RawClass, typeDecls: TypeDeclInfo[], pureFns: Set<string>, fnParams: Map<string, Ty[]> = new Map(), fnReturns: Map<string, Ty> = new Map(), externs: Map<string, ExternSignature> = new Map(), moduleConstants: Map<string, Ty> = new Map()): import("./typedir.js").TClass {
-  const fields = cls.fields.map(f => ({ name: f.name, ty: expandAlias(parseTsType(f.tsType), typeDecls) }));
+  const fields = cls.fields.map(f => ({ name: f.name, ty: expandAlias(f.type ?? parseTsType(f.tsType), typeDecls) }));
   // Create a synthetic record type for 'this' so field access resolves
   const thisType: Ty = { kind: "user", name: cls.name };
   const thisDecl: TypeDeclInfo = { name: cls.name, kind: "record", fields: cls.fields.map((f, i) => ({ name: f.name, tsType: f.tsType, type: fields[i].ty })) };
@@ -2855,8 +2861,8 @@ function precomputeFieldTypes(typeDecls: TypeDeclInfo[]) {
 
 function precomputeFieldTypesInner(typeDecls: TypeDeclInfo[]) {
   for (const d of typeDecls) {
-    if (d.fields) for (const f of d.fields) f.type = parseTsType(f.tsType);
-    if (d.variants) for (const v of d.variants) for (const f of v.fields) f.type = parseTsType(f.tsType);
+    if (d.fields) for (const f of d.fields) if (!f.type) f.type = parseTsType(f.tsType);
+    if (d.variants) for (const v of d.variants) for (const f of v.fields) if (!f.type) f.type = parseTsType(f.tsType);
     if (d.aliasOf && !d.aliasOfTy) d.aliasOfTy = parseTsType(d.aliasOf);
   }
 }

@@ -9,6 +9,7 @@ import path from "path";
 import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ScriptTarget, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import { initTypeParser } from "./types.js";
+import { parseSpecType } from "./spec-type.js";
 import type { RawExpr, RawStmt, RawFunction, RawModule, RawClass, RawConst, RawGhostLet, RawGhostAssign } from "./rawir.js";
 import { normalizeBigIntLiteral } from "./rawir.js";
 import { setUserNames, freshName } from "./names.js";
@@ -285,8 +286,8 @@ function _synthFromTsTypeString(ts: string): string | null {
       kind: "discriminated-union",
       discriminant: "__isArray__",
       variants: [
-        { name: "ArrayBranch", fields: [{ name: "arr", tsType: `${elem}[]` }] },
-        { name: "NonArrayBranch", fields: [{ name: "val", tsType: other }] },
+        { name: "ArrayBranch", fields: [{ name: "arr", tsType: `${elem}[]`, type: parseSpecType(`${elem}[]`) }] },
+        { name: "NonArrayBranch", fields: [{ name: "val", tsType: other, type: parseSpecType(other) }] },
       ],
     });
   }
@@ -1053,7 +1054,7 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   // replaced by the annotated backend type. Used to coerce literal unions
   // (`5 | 15 | 30` → `nat`) and other types LS can't model precisely.
   const override = firstAnnotExpr(parseAnnotations(decl), "type");
-  if (override) return { name, typeParams: tpField, kind: "alias", aliasOf: override };
+  if (override) return { name, typeParams: tpField, kind: "alias", aliasOf: override, aliasOfTy: parseSpecType(override) };
 
   const enumInfo = constEnumInfo(type);
   if (enumInfo) {
@@ -1181,7 +1182,7 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
     const propDecl = prop.getDeclarations()[0];
     const optionalKey = propDecl && (propDecl as any).hasQuestionToken?.() ? { optionalKey: true } : {};
     const override = overrides?.get(prop.getName());
-    if (override) { fields.push({ name: prop.getName(), tsType: override, ...optionalKey }); continue; }
+    if (override) { fields.push({ name: prop.getName(), tsType: override, type: parseSpecType(override), ...optionalKey }); continue; }
 
     const propType = prop.getTypeAtLocation(locationNode);
     let tsType = typeToString(propType);
@@ -1513,10 +1514,13 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
             const el = elements[ei];
             const name = sourceName(el.getNameNode());
             const propType = rhsType.getProperty(el.getPropertyNameNode()?.getText() ?? el.getName())?.getTypeAtLocation(d);
-            const tsType = havocTypes[ei] ?? (propType ? _eraseGenerics(typeToString(propType)) : "unknown");
+            const havocElemType = havocTypes[ei];
+            const parsedHavoc = havocElemType ? parseSpecType(havocElemType) : undefined;
+            const tsType = havocElemType ?? (propType ? _eraseGenerics(typeToString(propType)) : "unknown");
             result.push({
               kind: "let", name, mutable: s.getDeclarationKind() === "let",
-              tsType, init: { kind: "havoc", tsType }, line,
+              tsType, ...(parsedHavoc ? { type: parsedHavoc } : {}),
+              init: { kind: "havoc", tsType, ...(parsedHavoc ? { type: parsedHavoc } : {}) }, line,
             });
           }
           continue;
@@ -1639,7 +1643,8 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
         if (isHavoc && !havocKey) {
           // Use explicit type from //@ havoc : Type, or initializer type (pre-cast), or declared type
           const initType = d.getInitializer()?.getType();
-          init = { kind: "havoc", tsType: havocType ?? typeToString(initType ?? declType) };
+          const parsedHavoc = havocType ? parseSpecType(havocType) : undefined;
+          init = { kind: "havoc", tsType: havocType ?? typeToString(initType ?? declType), ...(parsedHavoc ? { type: parsedHavoc } : {}) };
         } else {
           const initializer = d.getInitializer();
           _havocKey = havocKey;
@@ -1683,11 +1688,13 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
         const inferred = annotatedText ? null : _eraseGenerics(typeToString(declType));
         const tsType: string | null = havocType
           ?? (annotatedText ? _eraseGenerics(annotatedText) : (inferred === "any" ? null : inferred));
+        const parsedHavoc = havocType ? parseSpecType(havocType) : undefined;
         result.push({
           kind: "let",
           name: sourceName(d.getNameNode()),
           mutable: s.getDeclarationKind() === "let",
           tsType,
+          ...(parsedHavoc ? { type: parsedHavoc } : {}),
           init,
           line,
         });
@@ -1962,8 +1969,9 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
           && expr.getOperatorToken().getText() === "="
           && left && Node.isIdentifier(left)) {
         const target = sourceName(left);
+        const parsedHavoc = havoc.type ? parseSpecType(havoc.type) : undefined;
         const tsType = havoc.type ?? _eraseGenerics(typeToString(left.getType()));
-        result.push({ kind: "assign", target, value: { kind: "havoc", tsType }, line });
+        result.push({ kind: "assign", target, value: { kind: "havoc", tsType, ...(parsedHavoc ? { type: parsedHavoc } : {}) }, line });
         continue;
       }
       const asAssign = desugarStmtExpr(expr, line);
@@ -2214,9 +2222,11 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       const typeParams = recordMatch[2]?.split(",").map(s => s.trim().split(/\s+extends\s+/)[0].trim()).filter(Boolean);
       // Split on `,` OR `;` — TS object types allow both.
       const fields = recordMatch[3].split(/[,;]/).map(f => f.trim()).filter(Boolean).map(f => {
-        const [fname, ftype] = f.split(":").map(s => s.trim());
+        const colonIdx = f.indexOf(":");
+        const fname = (colonIdx === -1 ? f : f.slice(0, colonIdx)).trim();
+        const ftype = (colonIdx === -1 ? "" : f.slice(colonIdx + 1)).trim();
         const synth = _synthFromTsTypeString(ftype);
-        return { name: fname, tsType: synth ?? ftype };
+        return { name: fname, tsType: synth ?? ftype, type: synth ? ({ kind: "user", name: synth } as const) : parseSpecType(ftype) };
       });
       typeDecls.push({ name, kind: "record", fields, ...(typeParams?.length ? { typeParams } : {}) });
       return;
@@ -2233,7 +2243,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
       if (parts.length >= 2 && lits.every(m => m !== null)) {
         typeDecls.push({ name: aliasMatch[1], kind: "string-union", values: lits.map(m => m![1]) });
       } else {
-        typeDecls.push({ name: aliasMatch[1], kind: "alias", aliasOf: rhs });
+        typeDecls.push({ name: aliasMatch[1], kind: "alias", aliasOf: rhs, aliasOfTy: parseSpecType(rhs) });
       }
     }
   }
@@ -2533,7 +2543,10 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     });
     const fields = cls.getProperties().map(prop => {
       classFields.push(prop);
-      return { name: prop.getName(), tsType: fieldTypeOverride(prop) ?? typeToString(prop.getType()) };
+      const override = fieldTypeOverride(prop);
+      return override
+        ? { name: prop.getName(), tsType: override, type: parseSpecType(override) }
+        : { name: prop.getName(), tsType: typeToString(prop.getType()) };
     });
     classes.push({ name, fields, methods });
   }

@@ -135,8 +135,8 @@ export interface Complex { epoch: string; other: Hidden }
 ` };
   const raw = extract(source, dependencies);
   assert.deepEqual(raw.classes[0].fields, [
-    { name: "background", tsType: "unknown" },
-    { name: "runner", tsType: "RunnerView" },
+    { name: "background", tsType: "unknown", type: { kind: "unknown" } },
+    { name: "runner", tsType: "RunnerView", type: { kind: "user", name: "RunnerView" } },
   ]);
   assert.deepEqual(raw.typeDecls.map(d => d.name), ["RunnerView"]);
   const dafny = emit(source, dependencies);

@@ -8,6 +8,8 @@
  * Layer 2 (planned): add Ty to each node
  */
 
+import type { Ty } from "./typedir.js";
+
 // ── Expressions ──────────────────────────────────────────────
 
 /** Source text of a BigInt literal → the canonical decimal string stored in a
@@ -52,14 +54,14 @@ export type RawExpr =
   | { kind: "conditional"; cond: RawExpr; then: RawExpr; else: RawExpr }  // ternary ? :
   | { kind: "optChain"; obj: RawExpr; chain: RawChainStep[] }   // obj?.field, obj?.foo(), obj?.[i], obj?.foo.bar — single-eval
   | { kind: "nullish"; left: RawExpr; right: RawExpr }   // a ?? b — single-eval; narrow rewrites to someMatch
-  | { kind: "emptyCollection"; collectionType: "Map" | "Set"; tsType: string; initElems?: RawExpr[] }  // new Map<K,V>() / new Set<T>()
+  | { kind: "emptyCollection"; collectionType: "Map" | "Set"; tsType: string; initElems?: RawExpr[]; fromSpec?: true }  // new Map<K,V>() / new Set<T>()
   | { kind: "nonNull"; expr: RawExpr }   // expr! (non-null assertion)
   // Spec-only (from //@ annotations, produced by specparser):
   | { kind: "result" }                                    // \result
   | { kind: "forall"; var: string; varType: string; body: RawExpr }
   | { kind: "exists"; var: string; varType: string; body: RawExpr }
   // Havoc — nondeterministic value (from //@ havoc annotation):
-  | { kind: "havoc"; tsType: string }
+  | { kind: "havoc"; tsType: string; type?: Ty }
 
 // ── Statements ───────────────────────────────────────────────
 
@@ -83,6 +85,7 @@ export interface RawLet {
   name: string;
   mutable: boolean;
   tsType: string | null;
+  type?: Ty;
   init: RawExpr;
   line: number;
 }
@@ -217,7 +220,7 @@ export interface RawFunction {
 
 export interface RawClass {
   name: string;
-  fields: { name: string; tsType: string }[];
+  fields: { name: string; tsType: string; type?: Ty }[];
   methods: RawFunction[];
 }
 
