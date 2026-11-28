@@ -1875,23 +1875,45 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
 
       const cases: { label: string; body: RawStmt[] }[] = [];
       let defaultBody: RawStmt[] = [];
-      // Two JS-`switch` faithfulness concerns the Dafny `match` doesn't share:
-      //  (1) Fall-through: stacked `case A: case B: body` is several clauses
-      //      where the leading ones have no statements; those labels share the
-      //      next clause's body (we duplicate it per label).
-      //  (2) `break` is the switch exit, not a loop break. We extract the full
-      //      body (extractStmts flattens `{ }` blocks but keeps loop bodies
-      //      nested) and strip the *top-level* breaks — so a `break` written
-      //      inside a `{ }` case block is stripped, while a `break` inside a
-      //      nested loop stays put.
-      const stripExitBreaks = (b: RawStmt[]) => b.filter(st => st.kind !== "break");
-      const isExit = (st: RawStmt | undefined) => !!st && ["break", "return", "throw", "continue"].includes(st.kind);
-      // Resolve JS fall-through positionally: a clause's effective body is its
-      // own statements concatenated with each following clause's statements up
-      // to and including the first clause that ends in break/return/throw (or
-      // the switch end). This covers both empty stacked labels (`case A: case
-      // B: body`) and a *non-empty* case that falls through (`case A: sA; case
-      // B: ...`) — the stripped breaks are the switch exits.
+      // Two JS-`switch` faithfulness concerns Dafny `match` / Lean `if`-chains don't share:
+      //  (1) Fall-through: stacked `case A: case B: body` or non-exiting clauses
+      //      continue into the following clause's statements.
+      //  (2) `break` is the switch exit, not a loop break. A top-level `break`
+      //      terminates the clause, and a guarded `if (c) break;` inside a clause
+      //      must exit only the switch (rewritten to `if (c) {} else { rest }`),
+      //      never surviving into `match` where it would escape to an enclosing
+      //      `while`/`for` loop. Nested loops and nested switches own their own
+      //      `break`s and are not descended into.
+      const hasSwitchBreak = (stmts: RawStmt[]): boolean =>
+        stmts.some(st =>
+          st.kind === "break" ||
+          (st.kind === "if" && (hasSwitchBreak(st.then) || hasSwitchBreak(st.else))));
+      const eliminateSwitchBreaks = (stmts: RawStmt[], cont: RawStmt[]): { body: RawStmt[]; fallsThrough: boolean } => {
+        if (stmts.length === 0) return { body: cont, fallsThrough: true };
+        const [head, ...tail] = stmts;
+        if (head.kind === "break") return { body: [], fallsThrough: false };
+        if (head.kind === "return" || head.kind === "throw" || head.kind === "continue") {
+          return { body: [head], fallsThrough: false };
+        }
+        if (head.kind === "if") {
+          if (hasSwitchBreak(head.then) || hasSwitchBreak(head.else)) {
+            const after = eliminateSwitchBreaks(tail, cont);
+            const thenRes = eliminateSwitchBreaks(head.then, after.body);
+            const elseRes = eliminateSwitchBreaks(head.else, after.body);
+            return {
+              body: [{ ...head, then: thenRes.body, else: elseRes.body }],
+              fallsThrough: (thenRes.fallsThrough || elseRes.fallsThrough) && after.fallsThrough,
+            };
+          }
+          const thenCheck = eliminateSwitchBreaks(head.then, []);
+          const elseCheck = eliminateSwitchBreaks(head.else, []);
+          if (!thenCheck.fallsThrough && !elseCheck.fallsThrough) {
+            return { body: [head], fallsThrough: false };
+          }
+        }
+        const rest = eliminateSwitchBreaks(tail, cont);
+        return { body: [head, ...rest.body], fallsThrough: rest.fallsThrough };
+      };
       const clauseInfos = s.getClauses().map(clause => {
         const stmts = extractStmts(clause.getStatements());
         let label: string | null = null;
@@ -1902,19 +1924,17 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
           }
           label = labelExpr.value;
         }
-        return {
-          label,
-          stmts,
-          exits: isExit(stmts[stmts.length - 1]),
-        };
+        return { label, stmts };
       });
       const fallThroughBody = (start: number): RawStmt[] => {
-        let body: RawStmt[] = [];
-        for (let j = start; j < clauseInfos.length; j++) {
-          body = body.concat(clauseInfos[j]!.stmts);
-          if (clauseInfos[j]!.exits) break;
-        }
-        return stripExitBreaks(body);
+        const step = (idx: number): RawStmt[] => {
+          if (idx >= clauseInfos.length) return [];
+          const cur = clauseInfos[idx]!.stmts;
+          const dry = eliminateSwitchBreaks(cur, []);
+          if (!dry.fallsThrough) return dry.body;
+          return eliminateSwitchBreaks(cur, step(idx + 1)).body;
+        };
+        return step(start);
       };
       for (let i = 0; i < clauseInfos.length; i++) {
         const c = clauseInfos[i]!;
