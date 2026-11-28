@@ -2221,14 +2221,23 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
     result.push(typed);
     env = nextEnv;
     // Assignment narrowing (#340) & union reassignment tracking (#405):
-    // assigning a non-optional value to an optional variable narrows it;
+    // assigning a non-optional value to an optional variable or field narrows it;
     // assigning a variant literal / same-variant spread / synth array-union
     // updates its narrowed variant; dotted field writes only drop narrowings
     // at or below the written path (keeping the parent's union variant intact).
     if (s.kind === "assign") {
-      if (s.target.includes(".")) {
-        const parts = s.target.split(".");
-        const root = parts[0]!;
+      const parts = s.target.split(".");
+      const root = parts[0]!;
+      const isNullLit = s.value.kind === "var" && s.value.name === "null";
+      const isUndefLit = s.value.kind === "var" && s.value.name === "undefined";
+      const isDefinitelyPresent = (targetStorage: Ty): boolean => {
+        if (isUndefLit || isNullLit) return false;
+        const rhsCtx: Ctx = { ...currentCtx, returnTy: targetStorage };
+        const rawTy = resolveExpr(s.value, rhsCtx).ty;
+        return rawTy.kind !== "optional" && rawTy.kind !== "nullish" &&
+          rawTy.kind !== "void" && rawTy.kind !== "null" && rawTy.kind !== "unknown";
+      };
+      if (parts.length > 1) {
         const rootStorage = storageLookup(env, root);
         const udecl = rootStorage?.kind === "user"
           ? declOfKind(ctx.typeDecls, tyBaseName(rootStorage.name), "discriminated-union")
@@ -2236,20 +2245,21 @@ function resolveBlock(stmts: RawStmt[], ctx: Ctx): TStmt[] {
         const writesDiscriminant = parts.length === 2 && udecl?.discriminant === parts[1];
         narrowedPaths = narrowedPaths.filter(np =>
           writesDiscriminant ? np.path.rootVar !== root : !pathAtOrBelowTarget(np.path, s.target));
+        // Dotted assignment to an optional/nullish field (`box.val = 5`):
+        // re-narrow that path when the RHS is definitely present.
+        let fieldTy: Ty | undefined = rootStorage;
+        for (let i = 1; i < parts.length && fieldTy; i++) {
+          const cur = (fieldTy.kind === "optional" || fieldTy.kind === "nullish") ? fieldTy.inner : fieldTy;
+          fieldTy = lookupFieldTy(cur, parts[i]!, currentCtx).ty;
+        }
+        if ((fieldTy?.kind === "optional" || fieldTy?.kind === "nullish") && isDefinitelyPresent(fieldTy)) {
+          narrowedPaths = [...narrowedPaths, { path: { rootVar: root, fields: parts.slice(1) }, narrowedTy: fieldTy.inner }];
+        }
       } else {
         narrowedPaths = narrowedPaths.filter(np => np.path.rootVar !== s.target);
         const storage = storageLookup(env, s.target);
         if (storage?.kind === "optional" || storage?.kind === "nullish") {
-          const isNullLit = s.value.kind === "var" && s.value.name === "null";
-          const isUndefLit = s.value.kind === "var" && s.value.name === "undefined";
-          const rhsCtx: Ctx = { ...currentCtx, returnTy: storage };
-          const rawTy = isUndefLit ? { kind: "void" as const } : isNullLit ? { kind: "null" as const } : resolveExpr(s.value, rhsCtx).ty;
-          if (!isUndefLit && !isNullLit && rawTy.kind !== "optional" && rawTy.kind !== "nullish" &&
-              rawTy.kind !== "void" && rawTy.kind !== "null" && rawTy.kind !== "unknown") {
-            env = refine(env, s.target, storage.inner);
-          } else {
-            env = refine(env, s.target, storage);
-          }
+          env = refine(env, s.target, isDefinitelyPresent(storage) ? storage.inner : storage);
         } else if (storage?.kind === "user") {
           const synth = findSynthArrayUnion(storage.name, ctx.typeDecls);
           if (synth && typed.kind === "assign") {

@@ -222,7 +222,7 @@ constructor-preserving `match` updates).
 ## Hybrid Checked Reads, `Place` Write-Back, and Live-Alias Rejection
 
 `someMatch` alone breaks down when a narrowed value is mutated in place,
-cleared to `undefined` inside a branch, or narrowed across a `while`
+reassigned inside a branch, or narrowed across a `while`
 condition, definite assignment, or `||` chain. Three additions extend the
 pipeline while keeping `someMatch` for safe cases (preserving zero diff
 churn on existing proofs):
@@ -232,7 +232,7 @@ churn on existing proofs):
    (or `Nullish<T>`) but whose flow type was narrowed without an enclosing
    `someMatch` (such as `while (cur !== undefined)`, definite assignment
    `if (v === undefined) { v = 6; }`, `||` chains, or a branch that may
-   clear the variable), wrapping those reads in `checkedUnwrap` (`.value` in
+   reassign the variable), wrapping those reads in `checkedUnwrap` (`.value` in
    Dafny; `.get (by grind)` in Lean, with dependent `if _h : ...` guards).
    Direct operands of `=== undefined` / `!== undefined` are never unwrapped.
    `checked-reads.ts` also projects flow-narrowed reads of synthesized
