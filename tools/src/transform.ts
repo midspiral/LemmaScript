@@ -531,6 +531,29 @@ function promoteAssignedLets(stmts: Stmt[]): Stmt[] {
   return fix(stmts);
 }
 
+/** Lower an in-place write assigning `newVal` to any writable Place receiver
+ *  (`var`, `field` chain, or `checkedUnwrap` around either). */
+function buildPlaceWrite(recv: TExpr, newVal: Expr): { target: string; value: Expr } | null {
+  if (recv.kind === "var") return { target: recv.name, value: newVal };
+  if (recv.kind === "field") {
+    const upd = buildNestedFieldUpdate(recv, newVal);
+    return upd ? { target: upd.root, value: upd.value } : null;
+  }
+  if (recv.kind === "checkedUnwrap") {
+    const wrapped = wrapCheckedUnwrapValue(newVal, recv.expr.ty);
+    return buildPlaceWrite(recv.expr, wrapped);
+  }
+  return null;
+}
+
+/** Root variable of a writable Place receiver (`var`, `field` chain, or `checkedUnwrap`). */
+function placeRootVar(recv: TExpr): string | null {
+  if (recv.kind === "var") return recv.name;
+  if (recv.kind === "field") return placeRootVar(recv.obj);
+  if (recv.kind === "checkedUnwrap") return placeRootVar(recv.expr);
+  return null;
+}
+
 /** Build a nested record-update assigning `newVal` to a field-path receiver
  *  rooted at a var: `b.a.items` → `b := b.(a := b.a.(items := newVal))`.
  *  Handles `checkedUnwrap` hops along the path by wrapping the updated record
@@ -1595,6 +1618,50 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         const pinnedVariant = unionDecl && e.ofVariant
           ? unionDecl.variants?.find(v => v.name === e.ofVariant)
           : undefined;
+        // Un-narrowed union spread where an overridden field has differing types
+        // across variants (e.g. `a.value: number` vs `b.value: number | undefined`):
+        // expand to a per-variant `match` so each constructor receives the right
+        // coercion (`5` vs `Some(5)`) and destructor in both Dafny and Lean.
+        if (unionDecl?.variants && !pinnedVariant) {
+          const hasMixedField = e.fields.some(f => {
+            const tys = unionDecl.variants!
+              .map(v => v.fields.find(vf => vf.name === f.name)?.type)
+              .filter((t): t is Ty => t !== undefined);
+            return tys.length > 1 && tys.some(t => !tyEqual(t, tys[0]!));
+          });
+          if (hasMixedField) {
+            const spreadExpr = lowerExpr(e.spread, binds);
+            const baseFieldExprs = new Map(e.fields.map(f => [f.name, lowerExpr(f.value, binds)]));
+            const rawFieldByName = new Map(e.fields.map(f => [f.name, f.value]));
+            const arms = unionDecl.variants.map(v => {
+              const binders: string[] = [];
+              const fieldExprs = new Map<string, Expr>();
+              v.fields.forEach((vf, idx) => {
+                const rawVal = rawFieldByName.get(vf.name);
+                if (rawVal !== undefined) {
+                  binders.push("_");
+                  let val = baseFieldExprs.get(vf.name)!;
+                  if (vf.type?.kind === "optional") {
+                    const isUndef = rawVal.kind === "var" && (rawVal.name === "undefined" || rawVal.name === "null");
+                    if (rawVal.ty.kind !== "optional" && !isUndef) {
+                      val = { kind: "app", fn: "Some", args: [val] };
+                    }
+                  } else if (vf.type?.kind === "nullish") {
+                    val = wrapNullishBranch(val, rawVal);
+                  }
+                  fieldExprs.set(vf.name, val);
+                } else {
+                  const bv = freshName(`_sp${idx}`);
+                  binders.push(bv);
+                  fieldExprs.set(vf.name, { kind: "var", name: bv });
+                }
+              });
+              const body = buildVariantCtor(v.name, structName!, baseName!, v, vf => fieldExprs.get(vf.name)!);
+              return { pattern: { kind: "ctor" as const, ctor: v.name, binders }, body };
+            });
+            return { kind: "match", scrutinee: spreadExpr, arms };
+          }
+        }
         const loweredFields = e.fields.map(f => {
           const fieldDecl = structDecl?.fields?.find(sf => sf.name === f.name);
           let declaredTy: Ty | undefined;
@@ -2045,22 +2112,47 @@ function negateExpr(e: Expr): Expr {
   return { kind: "unop", op: "¬", expr: e };
 }
 
-/** Build the two pieces of an `arr.pop()` lowering on a named array variable:
- *  - `optValue` is `(if |arr|>0 then Some(arr[|arr|-1]) else None)` (the popped element)
- *  - `guardedTrunc` is `(if |arr|>0 then arr[..|arr|-1] else arr)` (the array minus its last element)
- *  Callers wrap these in let/assign statements appropriate to their context. */
-function buildPopLoweringExpr(arrExpr: Expr, arrTy: Ty): { optValue: Expr; guardedTrunc: Expr } {
+/** Lower an array `.pop()` or `.shift()` call on any writable Place receiver
+ *  into `{ method, result, writeStmts }`:
+ *  - `result` reads the removed element from the original receiver,
+ *  - `writeStmts` writes the shortened array
+ *    back through the original receiver Place + enclosing `someMatch` frames.
+ *  A consumed nonoptional result reads an element directly, already requiring
+ *  nonemptiness. Optional or discarded results still need an empty-array guard.
+ *  Value callers evaluate `result` before `writeStmts` and only assign to the
+ *  destination afterward so `t = t.children.shift()!` mutates the original `t`. */
+function lowerArrayPopOrShift(e: TExpr, usage: "value" | "discard"): { method: "pop" | "shift"; result: Expr; writeStmts: Stmt[] } | null {
+  if (e.kind !== "call" || e.fn.kind !== "field" || e.fn.obj.ty.kind !== "array") return null;
+  const method = e.fn.field;
+  if (method !== "pop" && method !== "shift") return null;
+  const obj = e.fn.obj;
+  const arrExpr = lowerExpr(obj, null);
   const arrLen: Expr = { kind: "field", obj: arrExpr, field: "size" };
-  const lastIdx: Expr = { kind: "binop", op: "-", left: arrLen, right: { kind: "num", value: 1 } };
-  const lastElem: Expr = { kind: "index", arr: arrExpr, idx: lastIdx };
   const isNonEmpty: Expr = { kind: "binop", op: ">", left: arrLen, right: { kind: "num", value: 0 } };
-  const optValue: Expr = { kind: "if", cond: isNonEmpty,
-    then: { kind: "app", fn: "Some", args: [lastElem] },
-    else: { kind: "var", name: "undefined" } };
-  const truncated: Expr = { kind: "methodCall", obj: arrExpr, objTy: arrTy, method: "slice",
-    args: [{ kind: "num", value: 0 }, lastIdx], monadic: false };
-  const guardedTrunc: Expr = { kind: "if", cond: isNonEmpty, then: truncated, else: arrExpr };
-  return { optValue, guardedTrunc };
+  const index: Expr = method === "pop"
+    ? { kind: "binop", op: "-", left: arrLen, right: { kind: "num", value: 1 } }
+    : { kind: "num", value: 0 };
+  const elemValue: Expr = { kind: "index", arr: arrExpr, idx: index };
+  const isOptResult = e.ty.kind === "optional" || e.ty.kind === "nullish";
+  const result: Expr = isOptResult
+    ? { kind: "if", cond: isNonEmpty, then: { kind: "app", fn: "Some", args: [elemValue] }, else: { kind: "var", name: "undefined" } }
+    : elemValue;
+  const truncated: Expr = { kind: "methodCall", obj: arrExpr, objTy: obj.ty, method: "slice",
+    args: method === "pop" ? [{ kind: "num", value: 0 }, index] : [{ kind: "num", value: 1 }], monadic: false };
+  const needsEmptyGuard = usage === "discard" || isOptResult;
+  const nextArr: Expr = needsEmptyGuard
+    ? { kind: "if", cond: isNonEmpty, then: truncated, else: arrExpr }
+    : truncated;
+  const write = buildPlaceWrite(obj, nextArr);
+  if (!write) return null;
+  return {
+    method,
+    result,
+    writeStmts: [
+      { kind: "assign", target: write.target, value: write.value },
+      ...emitWriteBacksForTarget(write.target, _writeBackFrames),
+    ],
+  };
 }
 /**
  * Velvet (Lean backend) rejects `return` inside a loop. For a function shaped as
@@ -2410,31 +2502,41 @@ let _writeBackFrames: WriteBackFrame[] = [];
 // Declared types of in-scope variables and narrowing binders (for optional-field wrap checks).
 let _varTypes: Map<string, Ty> = new Map();
 
-/** Look up the declared field type reached by walking `fields` from `rootTy`. */
-function lookupFieldTy(rootTy: Ty | undefined, fields: string[], typeDecls: TypeDeclInfo[], ofVariant?: string): Ty | null {
+/** Look up the declared field type and union-owner tags reached by walking
+ *  `fields` from `rootTy`. */
+function lookupFieldPathInfo(
+  rootTy: Ty | undefined,
+  fields: string[],
+  typeDecls: TypeDeclInfo[],
+  ownerVariants?: (string | undefined)[],
+): { fieldTy: Ty | null; unionsByDepth: ({ ctor?: string; ctorOf: string } | undefined)[] } {
   let cur: Ty | undefined = rootTy;
+  const unionsByDepth: ({ ctor?: string; ctorOf: string } | undefined)[] = [];
   for (let i = 0; i < fields.length; i++) {
     const field = fields[i]!;
-    if (!cur) return null;
+    if (!cur) return { fieldTy: null, unionsByDepth };
     if (cur.kind === "optional" || cur.kind === "nullish") cur = cur.inner;
-    if (cur.kind !== "user") return null;
+    if (cur.kind !== "user") return { fieldTy: null, unionsByDepth };
     const decl = declOfTy(typeDecls, cur);
-    if (!decl) return null;
+    if (!decl) return { fieldTy: null, unionsByDepth };
     if (decl.kind === "record" && decl.fields) {
+      unionsByDepth.push(undefined);
       const f = decl.fields.find(fi => fi.name === field);
-      if (!f?.type) return null;
+      if (!f?.type) return { fieldTy: null, unionsByDepth };
       cur = f.type;
     } else if (decl.kind === "discriminated-union" && decl.variants) {
-      const variant = (i === 0 && ofVariant ? decl.variants.find(v => v.name === ofVariant) : undefined)
+      const ov = ownerVariants?.[i];
+      unionsByDepth.push({ ctor: ov, ctorOf: decl.name });
+      const variant = (ov ? decl.variants.find(v => v.name === ov) : undefined)
         ?? decl.variants.find(v => v.fields.some(fi => fi.name === field));
       const f = variant?.fields.find(fi => fi.name === field);
-      if (!f?.type) return null;
+      if (!f?.type) return { fieldTy: null, unionsByDepth };
       cur = f.type;
     } else {
-      return null;
+      return { fieldTy: null, unionsByDepth };
     }
   }
-  return cur ?? null;
+  return { fieldTy: cur ?? null, unionsByDepth };
 }
 
 /** True if `e` contains any subexpression that can carry a backend precondition
@@ -2497,41 +2599,15 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       if (s.init.kind === "havoc") {
         return [{ kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: { kind: "havoc", type: s.init.ty } }];
       }
-      // arr.shift()! → let x = arr[0]; arr = arr[1..] (handles narrowed Option/Nullish via checkedUnwrap)
+      // let x = recv.shift() / recv.pop(): bind removed element from original receiver,
+      // then write shortened array back through the receiver Place.
       const init = s.init.kind === "call" ? s.init : undefined;
-      if (init && init.fn.kind === "field" && init.fn.field === "shift" && init.fn.obj.ty.kind === "array") {
-        const obj = init.fn.obj;
-        const arrName = obj.kind === "var" ? obj.name
-          : obj.kind === "checkedUnwrap" && obj.expr.kind === "var" ? obj.expr.name : undefined;
-        if (arrName) {
-          const arrExpr: Expr = obj.kind === "checkedUnwrap"
-            ? { kind: "checkedUnwrap", expr: { kind: "var", name: arrName } }
-            : { kind: "var", name: arrName };
-          const letHead: Stmt = { kind: "let", name: s.name, type: s.ty, mutable: s.mutable,
-            value: { kind: "index", arr: arrExpr, idx: { kind: "num", value: 0 } } };
-          const sliced: Expr = { kind: "methodCall", obj: arrExpr, objTy: init.fn.obj.ty, method: "slice", args: [{ kind: "num", value: 1 }], monadic: false };
-          const tailVal: Expr = obj.kind === "checkedUnwrap" ? wrapCheckedUnwrapValue(sliced, obj.expr.ty) : sliced;
-          const sliceTail: Stmt = { kind: "assign", target: arrName, value: tailVal };
-          return [letHead, sliceTail, ...emitWriteBacksForTarget(arrName, _writeBackFrames)];
-        }
-      }
-      // let x = arr.pop() → let x: T? = (Option-expr); arr := (truncated-or-self)
-      if (init && init.fn.kind === "field" && init.fn.field === "pop" && init.fn.obj.ty.kind === "array") {
-        const obj = init.fn.obj;
-        const arrName = obj.kind === "var" ? obj.name
-          : obj.kind === "checkedUnwrap" && obj.expr.kind === "var" ? obj.expr.name : undefined;
-        if (arrName) {
-          const arrExpr: Expr = obj.kind === "checkedUnwrap"
-            ? { kind: "checkedUnwrap", expr: { kind: "var", name: arrName } }
-            : { kind: "var", name: arrName };
-          const { optValue, guardedTrunc } = buildPopLoweringExpr(arrExpr, init.fn.obj.ty);
-          const truncVal: Expr = obj.kind === "checkedUnwrap" ? wrapCheckedUnwrapValue(guardedTrunc, obj.expr.ty) : guardedTrunc;
-          return [
-            { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: optValue },
-            { kind: "assign", target: arrName, value: truncVal },
-            ...emitWriteBacksForTarget(arrName, _writeBackFrames),
-          ];
-        }
+      const popOrShiftLet = lowerArrayPopOrShift(s.init, "value");
+      if (popOrShiftLet) {
+        return [
+          { kind: "let", name: s.name, type: s.ty, mutable: s.mutable, value: popOrShiftLet.result },
+          ...popOrShiftLet.writeStmts,
+        ];
       }
       // new Map(arr.map(n => [n.field, n])) → let m = map[]; for (n of arr) m[n.field] := n
       if (init && init.fn.kind === "var" && init.fn.name === "__mapFromArray" &&
@@ -2585,24 +2661,19 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
     }
 
     case "assign": {
-      // x = arr.pop() → x := (Option-expr); arr := (truncated-or-self) + Place write-back
-      if (s.value.kind === "call" && s.value.fn.kind === "field" &&
-          s.value.fn.field === "pop" && s.value.fn.obj.ty.kind === "array") {
-        const obj = s.value.fn.obj;
-        const arrName = obj.kind === "var" ? obj.name
-          : obj.kind === "checkedUnwrap" && obj.expr.kind === "var" ? obj.expr.name : undefined;
-        if (arrName) {
-          const arrExpr: Expr = obj.kind === "checkedUnwrap"
-            ? { kind: "checkedUnwrap", expr: { kind: "var", name: arrName } }
-            : { kind: "var", name: arrName };
-          const { optValue, guardedTrunc } = buildPopLoweringExpr(arrExpr, s.value.fn.obj.ty);
-          const truncVal: Expr = obj.kind === "checkedUnwrap" ? wrapCheckedUnwrapValue(guardedTrunc, obj.expr.ty) : guardedTrunc;
-          return [
-            { kind: "assign", target: s.target, value: optValue },
-            { kind: "assign", target: arrName, value: truncVal },
-            ...emitWriteBacksForTarget(arrName, _writeBackFrames),
-          ];
-        }
+      // target = recv.shift() / recv.pop(): save the removed element first,
+      // write the shortened array back through the original receiver, and only
+      // then assign the saved result to `s.target` (so `t = t.children.shift()!`
+      // mutates the original `t`, not the shifted child).
+      const popOrShiftAssign = lowerArrayPopOrShift(s.value, "value");
+      if (popOrShiftAssign) {
+        const tmp = freshName(`_${popOrShiftAssign.method}${_liftCounter++}`);
+        const assignTmp: TStmt = { ...s, value: { kind: "var", name: tmp, ty: s.value.ty } };
+        return [
+          { kind: "let", name: tmp, type: s.value.ty, mutable: false, value: popOrShiftAssign.result },
+          ...popOrShiftAssign.writeStmts,
+          ...transformStmt(assignTmp, typeDecls),
+        ];
       }
       // Non-`this.` dotted field assignment on a record, union variant, or narrowed
       // optional/nullish record (e.g. `b.count = 5`, `u.v = 99`, `u.items[0] = 10`, `u.box.count = 42`):
@@ -2632,7 +2703,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
           if (frame.fields.length > 0) {
             return [
               ...binds,
-              { kind: "assign", target: frame.rootVar, value: buildNestedFieldExpr(frame.rootVar, frame.fields, optExpr) },
+              { kind: "assign", target: frame.rootVar, value: buildNestedFieldExpr({ kind: "var", name: frame.rootVar }, frame.fields, optExpr) },
               ...emitWriteBacksForTarget(frame.rootVar, _writeBackFrames),
             ];
           }
@@ -2644,40 +2715,22 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
         }
         if (resolved.remainingFields.length > 0) {
           const rootTy = _varTypes.get(resolved.currentRoot);
-          const fieldTy = lookupFieldTy(rootTy, resolved.remainingFields, typeDecls, s.ofVariant);
+          const skippedDepth = fields.length - resolved.remainingFields.length;
+          const remOwnerVariants = s.ownerVariants?.slice(skippedDepth);
+          const { fieldTy, unionsByDepth } = lookupFieldPathInfo(rootTy, resolved.remainingFields, typeDecls, remOwnerVariants);
           const rhsExpr = fieldTy?.kind === "nullish"
             ? wrapNullishBranch(expr, s.value)
             : fieldTy?.kind === "optional"
               ? wrapOptionalBranch(expr, s.value)
               : expr;
-          // If the root variable itself has Nullish<Record> or Option<Record> storage
-          // (narrowed without a someMatch frame), update `root.value` and re-wrap.
-          if (rootTy?.kind === "nullish" || rootTy?.kind === "optional") {
-            const unwrappedRoot: Expr = { kind: "checkedUnwrap", expr: { kind: "var", name: resolved.currentRoot } };
-            const innerTy = rootTy.inner;
-            const unionBase = innerTy.kind === "user" && declOfKind(typeDecls, tyBaseName(innerTy.name), "discriminated-union")
-              ? tyBaseName(innerTy.name)
-              : undefined;
-            const buildNestedFromExpr = (base: Expr, fs: string[], val: Expr, isOuter: boolean): Expr => {
-              const unionTag = isOuter && unionBase ? { ctor: s.ofVariant, ctorOf: unionBase } : {};
-              if (fs.length === 1) return { kind: "record", spread: base, fields: [{ name: fs[0]!, value: val }], ...unionTag };
-              const nextBase: Expr = { kind: "field", obj: base, field: fs[0]!, ...(isOuter && unionBase ? { fromUnion: unionBase, ctor: s.ofVariant } : {}), datatypeField: true };
-              return { kind: "record", spread: base, fields: [{ name: fs[0]!, value: buildNestedFromExpr(nextBase, fs.slice(1), val, false) }], ...unionTag };
-            };
-            const updatedRecord = buildNestedFromExpr(unwrappedRoot, resolved.remainingFields, rhsExpr, true);
-            const wrappedRoot = wrapCheckedUnwrapValue(updatedRecord, rootTy);
-            return [
-              ...binds,
-              { kind: "assign", target: resolved.currentRoot, value: wrappedRoot },
-              ...emitWriteBacksForTarget(resolved.currentRoot, _writeBackFrames),
-            ];
-          }
-          const outerUnion = rootTy?.kind === "user" && declOfKind(typeDecls, tyBaseName(rootTy.name), "discriminated-union")
-            ? { ctor: s.ofVariant, ctorOf: tyBaseName(rootTy.name) }
-            : undefined;
+          const rootExpr: Expr = { kind: "var", name: resolved.currentRoot };
+          const isOptRoot = rootTy?.kind === "nullish" || rootTy?.kind === "optional";
+          const baseExpr: Expr = isOptRoot ? { kind: "checkedUnwrap", expr: rootExpr } : rootExpr;
+          const hasAnyUnion = unionsByDepth.some(u => u !== undefined);
+          const updated = buildNestedFieldExpr(baseExpr, resolved.remainingFields, rhsExpr, hasAnyUnion ? unionsByDepth : undefined);
           return [
             ...binds,
-            { kind: "assign", target: resolved.currentRoot, value: buildNestedFieldExpr(resolved.currentRoot, resolved.remainingFields, rhsExpr, outerUnion) },
+            { kind: "assign", target: resolved.currentRoot, value: isOptRoot ? wrapCheckedUnwrapValue(updated, rootTy) : updated },
             ...emitWriteBacksForTarget(resolved.currentRoot, _writeBackFrames),
           ];
         }
@@ -2729,6 +2782,8 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       // enclosing narrowing frames (`someMatch` unwrap or union variant arm).
       // Non-Place receivers (e.g. `getArr().push(1)`) fail closed instead of
       // silently discarding the updated collection.
+      const popOrShiftExpr = lowerArrayPopOrShift(s.expr, "discard");
+      if (popOrShiftExpr) return popOrShiftExpr.writeStmts;
       if (s.expr.kind === "call" && s.expr.fn.kind === "field") {
         const recv = s.expr.fn.obj;
         const f = s.expr.fn.field;
@@ -3250,20 +3305,34 @@ function transformTypeDecl(d: TypeDeclInfo): Decl {
 /** Find parameter names that are reassigned anywhere in the body. */
 function findReassignedNames(stmts: TStmt[], names: Set<string>): Set<string> {
   const found = new Set<string>();
+  const markRoot = (root: string | null) => {
+    if (root && names.has(root)) found.add(root);
+  };
   function scan(stmts: TStmt[]) {
     for (const s of stmts) {
-      if (s.kind === "assign" && names.has(s.target)) found.add(s.target);
+      if (s.kind === "assign") {
+        markRoot(s.target.split(".")[0]!);
+        if (s.value.kind === "call" && s.value.fn.kind === "field" &&
+            (s.value.fn.field === "pop" || s.value.fn.field === "shift") && s.value.fn.obj.ty.kind === "array") {
+          markRoot(placeRootVar(s.value.fn.obj));
+        }
+      }
       if (s.kind === "ghostAssign" && names.has(s.target)) found.add(s.target);
-      // Mutating collection calls: s.add(x), m.set(k,v), s.delete(x), arr.push(x)
+      if (s.kind === "let" && s.init.kind === "call" && s.init.fn.kind === "field" &&
+          (s.init.fn.field === "pop" || s.init.fn.field === "shift") && s.init.fn.obj.ty.kind === "array") {
+        markRoot(placeRootVar(s.init.fn.obj));
+      }
+      // Mutating collection calls: s.add(x), m.set(k,v), s.delete(x), arr.push(x), b.items.pop()
       if (s.kind === "expr" && s.expr.kind === "call" && s.expr.fn.kind === "field" &&
-          s.expr.fn.obj.kind === "var" && names.has(s.expr.fn.obj.name) &&
-          ["add", "set", "delete", "push", "unshift"].includes(s.expr.fn.field)) {
-        found.add(s.expr.fn.obj.name);
+          ["add", "set", "delete", "push", "unshift", "sort", "pop", "shift"].includes(s.expr.fn.field)) {
+        markRoot(placeRootVar(s.expr.fn.obj));
       }
       if (s.kind === "if") { scan(s.then); scan(s.else); }
       if (s.kind === "while") scan(s.body);
       if (s.kind === "forof") scan(s.body);
       if (s.kind === "switch") { for (const c of s.cases) scan(c.body); scan(s.defaultBody); }
+      if (s.kind === "someMatch") { scan(s.someBody); scan(s.noneBody); }
+      if (s.kind === "tagMatch") { for (const c of s.cases) scan(c.body); scan(s.fallthrough); }
     }
   }
   scan(stmts);
