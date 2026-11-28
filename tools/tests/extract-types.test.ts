@@ -674,3 +674,68 @@ test("uninitialized let declarations dispatch default initializers from structur
   assert.equal(lets[6].kind === "let" && lets[6].init.kind, "str");
 });
 
+test("unresolved imported types shadowed by declare-type preserve user names instead of collapsing to unknown", () => {
+  const code = `
+    import type { AgentMessage } from "@missing/agent-core";
+    import type { AssistantMessage } from "@missing/ai";
+    import type { DiscoverResult } from "@missing/core-internal";
+
+    //@ declare-type AgentMessage { role: string }
+    //@ declare-type AssistantMessage = AgentMessage
+    //@ declare-type DiscoverResult { supportedVersions: string[] }
+
+    export type Entry =
+      | { id: string; type: "message"; message: AgentMessage }
+      | { id: string; type: "compaction" };
+
+    export type Verdict =
+      | { kind: "modern"; version: string; discover: DiscoverResult }
+      | { kind: "legacy" };
+
+    //@ extern
+    export function isRetryable(message: AssistantMessage, extra: any, raw: unknown): boolean {
+      return Boolean(message && extra && raw);
+    }
+
+    //@ verify
+    //@ ensures \\result.kind === "modern" ==> \\result.discover.supportedVersions.includes(\\result.version)
+    export function classify(discover: DiscoverResult, version: string, msgs: AgentMessage[], entry: Entry): Verdict {
+      if (entry.type === "message" && discover.supportedVersions.includes(version) && msgs.length >= 0) {
+        return { kind: "modern", version, discover };
+      }
+      return { kind: "legacy" };
+    }
+  `;
+  const project = makeProject(true);
+  const sf = project.createSourceFile("unresolved-import.ts", code, { overwrite: true });
+  const raw = extractModule(sf);
+
+  const entry = raw.typeDecls.find(d => d.name === "Entry");
+  assert.ok(entry && entry.variants);
+  const msgField = entry.variants.find(v => v.name === "message")?.fields.find(f => f.name === "message");
+  assert.deepEqual(msgField?.type, { kind: "user", name: "AgentMessage" });
+
+  const verdict = raw.typeDecls.find(d => d.name === "Verdict");
+  assert.ok(verdict && verdict.variants);
+  const discoverField = verdict.variants.find(v => v.name === "modern")?.fields.find(f => f.name === "discover");
+  assert.deepEqual(discoverField?.type, { kind: "user", name: "DiscoverResult" });
+
+  const ext = raw.externs.find(e => e.flat === "isRetryable");
+  assert.ok(ext);
+  assert.deepEqual(ext.params[0].type, { kind: "user", name: "AssistantMessage" });
+  assert.deepEqual(ext.params[1].type, { kind: "unknown" });
+  assert.deepEqual(ext.params[2].type, { kind: "unknown" });
+
+  const classifyFn = raw.functions.find(f => f.name === "classify");
+  assert.ok(classifyFn);
+  assert.deepEqual(classifyFn.params[0].type, { kind: "user", name: "DiscoverResult" });
+  assert.deepEqual(classifyFn.params[2].type, { kind: "array", elem: { kind: "user", name: "AgentMessage" } });
+
+  // Verify resolveModule resolves `.discover.supportedVersions.includes(...)` cleanly
+  const typed = resolveModule(raw);
+  const tClassify = typed.functions.find(f => f.name === "classify");
+  assert.ok(tClassify);
+  assert.equal(tClassify.ensures.length, 1);
+});
+
+

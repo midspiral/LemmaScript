@@ -528,16 +528,16 @@ function lowerCheckerType(type: Type, ctx: ExtractTypeCtx, visited: Set<Type>): 
   if (ctx.isConstEnum?.(type)) return { kind: "int" };
   if (type.isUndefined()) return { kind: "void" };
   if (type.isNull()) return { kind: "null" };
-  if (type.isVoid()) return { kind: "void" };
-  if (type.isAny() || type.isUnknown()) return { kind: "unknown" };
   if (type.isNumber() || type.isNumberLiteral()) return { kind: "int" };
   if (type.isBigInt() || type.isBigIntLiteral()) return { kind: "int", big: true };
   if (type.isString() || type.isStringLiteral()) return { kind: "string" };
   if (type.isBoolean() || type.isBooleanLiteral()) return { kind: "bool" };
 
-  // Named type alias — MUST check built-in collection/wrapper aliases
-  // (especially `Record<K, V>` and `Readonly<T>`, which TS defines as type
-  // aliases in lib.es5.d.ts) BEFORE returning `{ kind: "user", name }`.
+  // Named type alias — MUST run before `isAny()`/`isUnknown()` because
+  // TypeScript represents unresolved imported types (e.g. `import type { Foo }`
+  // shadowed by `//@ declare-type Foo`) as `isAny() === true` with `aliasSym`
+  // carrying the imported name, and MUST check built-in collection/wrapper
+  // aliases (`Record<K, V>`, `Readonly<T>`) before returning `{ kind: "user" }`.
   const aliasSym = type.getAliasSymbol();
   if (aliasSym) {
     const name = aliasSym.getName();
@@ -678,6 +678,9 @@ function lowerCheckerType(type: Type, ctx: ExtractTypeCtx, visited: Set<Type>): 
     }
     return { kind: "user", name };
   }
+
+  if (type.isVoid()) return { kind: "void" };
+  if (type.isAny() || type.isUnknown()) return { kind: "unknown" };
 
   const text = type.getText();
   if (text === "void" || text === "undefined") return { kind: "void" };
