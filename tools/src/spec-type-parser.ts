@@ -270,8 +270,8 @@ export function isOptionalSpecTy(t: SpecTy): boolean {
 }
 
 export function wrapNullability(inner: SpecTy, hasNull: boolean, hasUndef: boolean): SpecTy {
-  //@ ensures \result.kind === "optionalUndef" ==> !isOptionalSpecTy(\result.inner)
-  //@ ensures \result.kind === "optionalNull" ==> !isOptionalSpecTy(\result.inner)
+  //@ ensures \result.kind === "optionalUndef" ==> !isOptionalSpecTy(\result.inner) && \result.inner.kind !== "null" && \result.inner.kind !== "void"
+  //@ ensures \result.kind === "optionalNull" ==> !isOptionalSpecTy(\result.inner) && \result.inner.kind !== "null" && \result.inner.kind !== "void"
   //@ ensures \result.kind === "nullish" ==> !isOptionalSpecTy(\result.inner)
   //@ ensures (!hasNull && !hasUndef && !isOptionalSpecTy(inner)) ==> \result === inner
   //@ ensures (hasNull && hasUndef) ==> \result.kind === "nullish"
@@ -294,6 +294,14 @@ export function wrapNullability(inner: SpecTy, hasNull: boolean, hasUndef: boole
       mergedUndef = true;
       payload = payload.inner;
     }
+  }
+  if (payload.kind === "null") {
+    if (mergedUndef) return { kind: "nullish", inner: { kind: "void" } };
+    return payload;
+  }
+  if (payload.kind === "void") {
+    if (mergedNull) return { kind: "nullish", inner: { kind: "void" } };
+    return payload;
   }
   if (mergedNull && mergedUndef) return { kind: "nullish", inner: payload };
   if (mergedNull) return { kind: "optionalNull", inner: payload };
@@ -387,9 +395,11 @@ function parseFnType(tokens: SpecTypeToken[], pos: number): SpecParseResult {
         cur = cur + 1;
         const tRes = parseType(tokens, cur);
         if (tRes.kind === "err") return tRes;
-        pTy = tRes.ty;
+        pTy = optMark === "?" ? wrapNullability(tRes.ty, false, true) : tRes.ty;
         pRaw = pName + optMark + ": " + tRes.raw;
         cur = tRes.nextPos;
+      } else if (optMark === "?") {
+        pTy = wrapNullability(pTy, false, true);
       }
       params.push(pTy);
       paramRaws.push(pRaw);
@@ -641,18 +651,31 @@ function parsePrimary(tokens: SpecTypeToken[], pos: number): SpecParseResult {
           return { kind: "err", error: "Unterminated tuple type" };
         }
         // Optional named tuple label: `label: T` or `label?: T`
+        let isOptionalElem = false;
         if (tokens[cur].kind === "ident" && cur + 1 < tokens.length) {
           if (tokens[cur + 1].kind === "colon") {
             cur = cur + 2;
           } else if (tokens[cur + 1].kind === "question" && cur + 2 < tokens.length && tokens[cur + 2].kind === "colon") {
+            isOptionalElem = true;
             cur = cur + 3;
           }
         }
         const elemRes = parseType(tokens, cur);
         if (elemRes.kind === "err") return elemRes;
-        elems.push(elemRes.ty);
-        elemRaws.push(elemRes.raw);
+        let elemTy = elemRes.ty;
+        let elemRaw = elemRes.raw;
         cur = elemRes.nextPos;
+        // Unnamed optional tuple element: `[number, string?]`
+        if (cur < tokens.length && tokens[cur].kind === "question") {
+          isOptionalElem = true;
+          elemRaw = elemRaw + "?";
+          cur = cur + 1;
+        }
+        if (isOptionalElem) {
+          elemTy = wrapNullability(elemTy, false, true);
+        }
+        elems.push(elemTy);
+        elemRaws.push(elemRaw);
         if (cur < tokens.length && tokens[cur].kind === "comma") {
           cur = cur + 1;
           if (cur < tokens.length && tokens[cur].kind === "rbracket") {
@@ -757,6 +780,10 @@ function parsePrimary(tokens: SpecTypeToken[], pos: number): SpecParseResult {
         if (name === "Map" || name === "ReadonlyMap" || name === "Record") {
           if (args.length !== 2) return { kind: "err", error: name + " expects exactly 2 type arguments" };
           return { kind: "ok", ty: { kind: "map", key: args[0], value: args[1] }, raw: fullRaw, nextPos: cur };
+        }
+        if (name === "Readonly") {
+          if (args.length !== 1) return { kind: "err", error: name + " expects exactly 1 type argument" };
+          return { kind: "ok", ty: args[0], raw: fullRaw, nextPos: cur };
         }
       }
       return { kind: "ok", ty: { kind: "user", name: fullRaw }, raw: fullRaw, nextPos: cur };

@@ -11,10 +11,12 @@ import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
 import type { Ty } from "./typedir.js";
 import { parseSpecType } from "./spec-type.js";
 import {
+  eraseTypeText,
   extractTy,
   extractTyFromNode,
   hasIndexedAccessType,
   registerSynthArrayUnion,
+  trySynthArrayUnionFromNodes,
   typeToTsString,
   wrapNullability,
   type ErasedTypeParam,
@@ -250,12 +252,6 @@ let _collapsedUnionMap: Map<string, string> = new Map();
  */
 let _synthArrayUnions: TypeDeclInfo[] | null = null;
 
-/** Sanitize an arbitrary type-string fragment for use inside a generated identifier. */
-function _synthName(elemName: string, otherName: string): string {
-  const sanitize = (s: string) => s.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-  return `ArrayOf_${sanitize(elemName)}_Or_${sanitize(otherName)}`;
-}
-
 /**
  * String-level fallback for synth detection on a `T[] | U` shape, used by
  * declare-type field parsing (where no ts-morph TypeNode is available). The
@@ -275,19 +271,13 @@ function _synthFromTsTypeString(ts: string): string | null {
   if (arms[otherIdx].endsWith("[]")) return null;
   const elem = arms[arrIdx].slice(0, -2);
   const other = arms[otherIdx];
-  const synthName = _synthName(elem, other);
-  if (!_synthArrayUnions.some(d => d.name === synthName)) {
-    _synthArrayUnions.push({
-      name: synthName,
-      kind: "discriminated-union",
-      discriminant: "__isArray__",
-      variants: [
-        { name: "ArrayBranch", fields: [{ name: "arr", tsType: `${elem}[]`, type: parseSpecType(`${elem}[]`) }] },
-        { name: "NonArrayBranch", fields: [{ name: "val", tsType: other, type: parseSpecType(other) }] },
-      ],
-    });
-  }
-  return synthName;
+  return registerSynthArrayUnion(
+    _synthArrayUnions,
+    elem,
+    parseSpecType(elem),
+    other,
+    parseSpecType(other),
+  );
 }
 
 /**
@@ -300,32 +290,12 @@ function _synthFromTsTypeString(ts: string): string | null {
 function _tsTypeFromUnionNode(tn: Node): string {
   if (!Node.isUnionTypeNode(tn)) return tn.getText();
   const members = tn.getTypeNodes();
-  if (_synthArrayUnions !== null && members.length === 2) {
-    const arrIdx = members.findIndex(m => m.getType().isArray());
-    if (arrIdx !== -1) {
-      const other = members[1 - arrIdx];
-      const ot = other.getType();
-      if (!ot.isArray() && !ot.isUndefined() && !ot.isNull()) {
-        const ctx = currentTypeCtx();
-        const arrNode = members[arrIdx];
-        const elemNode = Node.isArrayTypeNode(arrNode) ? arrNode.getElementTypeNode() : undefined;
-        const elemName = elemNode
-          ? elemNode.getText()
-          : typeToString(arrNode.getType().getArrayElementTypeOrThrow());
-        const elemTy = elemNode
-          ? extractTyFromNode(elemNode, undefined, ctx)
-          : extractTy(arrNode.getType().getArrayElementTypeOrThrow(), undefined, ctx);
-        const otherName = other.getText();
-        const otherTy = extractTyFromNode(other, undefined, ctx);
-        return registerSynthArrayUnion(_synthArrayUnions, elemName, elemTy, otherName, otherTy);
-      }
-    }
-  }
+  const synthName = trySynthArrayUnionFromNodes(members, currentTypeCtx({ eraseGenerics: true }));
+  if (synthName) return synthName;
   return members.map(m => m.getText()).join(" | ");
 }
 
-/** Generic bounds erasure maps — set during extractFunction, applied in extractStmts. */
-let _typeParamMap: Map<string, string> = new Map();
+/** Generic bounds erasure map — set during extractFunction, applied in extractStmts. */
 let _typeParamTyMap: Map<string, ErasedTypeParam> = new Map();
 
 function currentTypeCtx(opts?: { eraseGenerics?: boolean }): ExtractTypeCtx {
@@ -338,14 +308,7 @@ function currentTypeCtx(opts?: { eraseGenerics?: boolean }): ExtractTypeCtx {
 }
 
 function _eraseGenerics(tsType: string): string {
-  if (_typeParamMap.size === 0) return tsType;
-  if (tsType.includes(" | ")) {
-    const arms = [...new Set(tsType.split(" | ").map(a => _eraseGenerics(a.trim())))];
-    return arms.length === 1 ? arms[0] : arms.join(" | ");
-  }
-  if (tsType.endsWith("[]")) return _eraseGenerics(tsType.slice(0, -2)) + "[]";
-  if (_typeParamMap.has(tsType)) return _typeParamMap.get(tsType)!;
-  return tsType;
+  return eraseTypeText(tsType, _typeParamTyMap);
 }
 
 function unwrapParens(expr: Expression): Expression {
@@ -1611,11 +1574,12 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
         }
         const declType = d.getType();
         const stmtCtx = currentTypeCtx({ eraseGenerics: true });
+        const annotationNode = d.getTypeNode();
+        const parsedHavoc = havocType ? parseSpecType(havocType) : undefined;
         let init: RawExpr;
         if (isHavoc && !havocKey) {
           // Use explicit type from //@ havoc : Type, or initializer type (pre-cast), or declared type
           const initType = d.getInitializer()?.getType();
-          const parsedHavoc = havocType ? parseSpecType(havocType) : undefined;
           const havocTy = parsedHavoc ?? extractTy(initType ?? declType, undefined, stmtCtx);
           init = { kind: "havoc", tsType: havocType ?? typeToString(initType ?? declType), type: havocTy };
         } else {
@@ -1628,41 +1592,38 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
             // Dafny binding `var x: T := <default>;` typechecks. The empty-
             // collection cases are picked up by dafny-emit's let case, which
             // adds an explicit `: T` annotation for inference.
-            const typeNode = d.getTypeNode();
-            const tsType = _eraseGenerics((typeNode && annotationTypeText(typeNode, declType))
-              ?? typeNode?.getText() ?? typeToString(declType));
-            const varTy = extractTy(declType, typeNode, stmtCtx);
-            const isOptional = / \| (null|undefined)\b/.test(tsType)
-              || /^(null|undefined) \| /.test(tsType)
-              || tsType.endsWith(" | undefined") || tsType.endsWith(" | null");
-            const isArray = tsType.endsWith("[]") || /^Array</.test(tsType) || /^readonly /.test(tsType);
-            const isMap = /^Map</.test(tsType);
-            const isSet = /^Set</.test(tsType);
-            if (isOptional)      init = { kind: "var" as const, name: "undefined" };
-            else if (isArray)    init = { kind: "arrayLiteral" as const, elems: [] };
-            else if (isMap)      init = { kind: "emptyCollection" as const, collectionType: "Map", tsType, type: varTy };
-            else if (isSet)      init = { kind: "emptyCollection" as const, collectionType: "Set", tsType, type: varTy };
-            else if (tsType === "number") init = { kind: "num" as const, value: 0 };
-            else if (tsType === "boolean") init = { kind: "bool" as const, value: false };
-            else if (tsType === "string")  init = { kind: "str" as const, value: "" };
+            const tsType = _eraseGenerics((annotationNode && annotationTypeText(annotationNode, declType))
+              ?? annotationNode?.getText() ?? typeToString(declType));
+            const varTy = extractTy(declType, annotationNode, stmtCtx);
+            if (varTy.kind === "optional" || varTy.kind === "nullish") init = { kind: "var" as const, name: "undefined" };
+            else if (varTy.kind === "array") init = { kind: "arrayLiteral" as const, elems: [] };
+            else if (varTy.kind === "map" && /^Map</.test(tsType)) init = { kind: "emptyCollection" as const, collectionType: "Map", tsType, type: varTy };
+            else if (varTy.kind === "set") init = { kind: "emptyCollection" as const, collectionType: "Set", tsType, type: varTy };
+            else if (varTy.kind === "int" && !varTy.big) init = { kind: "num" as const, value: 0 };
+            else if (varTy.kind === "bool") init = { kind: "bool" as const, value: false };
+            else if (varTy.kind === "string") init = { kind: "str" as const, value: "" };
             else init = { kind: "var" as const, name: "default" };
           }
           _havocKey = null;
         }
         // Use the source-level type annotation if present — ts-morph's
         // `d.getType()` strips `| undefined` from optional annotations.
+        // Route syntactic UnionTypeNode through _tsTypeFromUnionNode so `T[] | U`
+        // synthesis fires and brownfield pruning preserves the synthesized type.
         // When no annotation, fall back to ts-morph's inferred type — except
         // when the inference collapses to `any` (e.g. brownfield imports
         // where the imported declaration's shape is opaque to LS): in that
         // case leave null so resolve infers from the initializer's IR type
         // (which sees the declare-type stubs).
-        const annotationNode = d.getTypeNode();
         const annotatedText = annotationNode
-          ? annotationTypeText(annotationNode, declType) ?? annotationNode.getText() : undefined;
+          ? annotationTypeText(annotationNode, declType)
+            ?? (Node.isUnionTypeNode(annotationNode)
+              ? _tsTypeFromUnionNode(annotationNode)
+              : annotationNode.getText())
+          : undefined;
         const inferred = annotatedText ? null : _eraseGenerics(typeToString(declType));
         const tsType: string | null = havocType
           ?? (annotatedText ? _eraseGenerics(annotatedText) : (inferred === "any" ? null : inferred));
-        const parsedHavoc = havocType ? parseSpecType(havocType) : undefined;
         const letType: Ty | undefined = parsedHavoc
           ?? (annotationNode
             ? extractTy(declType, annotationNode, stmtCtx)
@@ -2005,7 +1966,6 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
   // (e.g. `x.id`) then typechecks against B. When B is a union/intersection we
   // can't model as one Dafny type (e.g. `string & {}` tricks), keep T as a Dafny
   // type param instead; such a T must be phantom (any field read won't typecheck).
-  _typeParamMap = new Map();
   _typeParamTyMap = new Map();
   const typeParams: string[] = [];
   for (const tp of fn.getTypeParameters?.() ?? []) {
@@ -2013,7 +1973,6 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
     const ct = constraint?.getType();
     if (constraint && ct && !ct.isUnion() && !ct.isIntersection()) {
       const text = constraint.getText();
-      _typeParamMap.set(tp.getName(), text);
       _typeParamTyMap.set(tp.getName(), { text, ty: extractTy(ct, constraint, currentTypeCtx()) });
     } else {
       typeParams.push(tp.getName());
@@ -2185,7 +2144,6 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   _havocKey = null;
   _destrCounter = 0;
   _lexicalNames = null;
-  _typeParamMap = new Map();
   _typeParamTyMap = new Map();
   // Seed the fresh-name check (names.ts) before anything mints: every
   // Identifier token in the module, a deliberate over-approximation.
@@ -2681,7 +2639,11 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     }
     function collectNames(stmts: RawStmt[]) {
       for (const s of stmts) {
-        if (s.kind === "let") { if (s.tsType) referencedNames.add(s.tsType); collectNamesExpr(s.init); }
+        if (s.kind === "let") {
+          if (s.tsType) referencedNames.add(s.tsType);
+          if (s.type?.kind === "user") referencedNames.add(s.type.name);
+          collectNamesExpr(s.init);
+        }
         if (s.kind === "assign") { collectSpecNames(s.target); collectNamesExpr(s.value); }
         if (s.kind === "return") { collectNamesExpr(s.value); }
         if (s.kind === "if") { collectNamesExpr(s.cond); collectNames(s.then); collectNames(s.else); }

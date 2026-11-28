@@ -90,14 +90,12 @@ export function wrapNullability(inner: Ty, hasNull: boolean, hasUndef: boolean):
     }
   }
   if (payload.kind === "null") {
-    mergedNull = true;
     if (mergedUndef) return { kind: "nullish", inner: { kind: "void" } };
-    return { kind: "null" };
+    return payload;
   }
   if (payload.kind === "void") {
-    if (mergedNull && mergedUndef) return { kind: "nullish", inner: { kind: "void" } };
-    if (mergedNull) return { kind: "optional", inner: { kind: "void" }, absent: "null" };
-    return { kind: "void" };
+    if (mergedNull) return { kind: "nullish", inner: { kind: "void" } };
+    return payload;
   }
   if (mergedNull && mergedUndef) return { kind: "nullish", inner: payload };
   if (mergedNull) return { kind: "optional", inner: payload, absent: "null" };
@@ -157,9 +155,9 @@ function tupleTyFromElems(elems: Ty[]): Ty {
   return { kind: "tuple", elems };
 }
 
-/** Lower a builtin collection name (`Array`, `ReadonlyArray`, `Set`, `ReadonlySet`,
- *  `Map`, `ReadonlyMap`, `Record`) to a canonical `Ty`, or `null` when the name
- *  and arity do not match a known builtin collection. */
+/** Lower a builtin collection or wrapper name (`Array`, `ReadonlyArray`, `Set`,
+ *  `ReadonlySet`, `Map`, `ReadonlyMap`, `Record`, `Readonly`) to a canonical
+ *  `Ty`, or `null` when the name and arity do not match. */
 function lowerBuiltinCollection(name: string, args: Ty[]): Ty | null {
   if ((name === "Array" || name === "ReadonlyArray") && args.length === 1) {
     return { kind: "array", elem: args[0] };
@@ -170,7 +168,73 @@ function lowerBuiltinCollection(name: string, args: Ty[]): Ty | null {
   if ((name === "Map" || name === "ReadonlyMap" || name === "Record") && args.length === 2) {
     return { kind: "map", key: args[0], value: args[1] };
   }
+  if (name === "Readonly" && args.length === 1) {
+    return args[0];
+  }
   return null;
+}
+
+/** Synthesize `ArrayOf_<Elem>_Or_<Other>` for a 2-arm syntactic union `T[] | U`
+ *  (where U is not array/null/undefined). Applies `ctx.typeParamMap` erasure so
+ *  bounded generic type parameters never leak into synthesized datatype names
+ *  or branch fields. */
+export function trySynthArrayUnionFromNodes(arms: TypeNode[], ctx: ExtractTypeCtx): string | null {
+  if (!ctx.synthArrayUnions || arms.length !== 2) return null;
+  const arrIdx = arms.findIndex(m => m.getType().isArray());
+  if (arrIdx === -1) return null;
+  const other = arms[1 - arrIdx];
+  const ot = other.getType();
+  if (ot.isArray() || ot.isUndefined() || ot.isNull()) return null;
+  const arrNode = arms[arrIdx];
+  const elemNode = Node.isArrayTypeNode(arrNode) ? arrNode.getElementTypeNode() : undefined;
+  const rawElemName = elemNode
+    ? elemNode.getText()
+    : typeToTsString(arrNode.getType().getArrayElementTypeOrThrow(), ctx);
+  const rawElemTy = elemNode
+    ? lowerTypeNode(elemNode, ctx)
+    : lowerCheckerType(arrNode.getType().getArrayElementTypeOrThrow(), ctx, new Set());
+  const rawOtherName = other.getText();
+  const rawOtherTy = lowerTypeNode(other, ctx);
+  const elemName = eraseTypeText(rawElemName, ctx.typeParamMap);
+  const otherName = eraseTypeText(rawOtherName, ctx.typeParamMap);
+  const elemTy = ctx.typeParamMap && ctx.typeParamMap.size > 0
+    ? eraseGenericTy(rawElemTy, ctx.typeParamMap)
+    : rawElemTy;
+  const otherTy = ctx.typeParamMap && ctx.typeParamMap.size > 0
+    ? eraseGenericTy(rawOtherTy, ctx.typeParamMap)
+    : rawOtherTy;
+  return registerSynthArrayUnion(ctx.synthArrayUnions, elemName, elemTy, otherName, otherTy);
+}
+
+/** Synthesize `ArrayOf_<Elem>_Or_<Other>` for a 2-member checker union `T[] | U`
+ *  (where U is not array/null/undefined). */
+function trySynthArrayUnionFromTypes(
+  unionTypes: Type[],
+  ctx: ExtractTypeCtx,
+  visited: Set<Type>,
+): string | null {
+  if (!ctx.synthArrayUnions || unionTypes.length !== 2) return null;
+  const [m0, m1] = unionTypes;
+  const arrayMember = m0.isArray() ? m0 : (m1.isArray() ? m1 : null);
+  const otherMember = arrayMember === m0 ? m1 : m0;
+  if (!arrayMember || !otherMember || otherMember.isArray()
+      || otherMember.isUndefined() || otherMember.isNull()) {
+    return null;
+  }
+  const elemType = arrayMember.getArrayElementTypeOrThrow();
+  const rawElemName = typeToTsString(elemType, ctx);
+  const rawOtherName = typeToTsString(otherMember, ctx);
+  const rawElemTy = lowerCheckerType(elemType, ctx, visited);
+  const rawOtherTy = lowerCheckerType(otherMember, ctx, visited);
+  const elemName = eraseTypeText(rawElemName, ctx.typeParamMap);
+  const otherName = eraseTypeText(rawOtherName, ctx.typeParamMap);
+  const elemTy = ctx.typeParamMap && ctx.typeParamMap.size > 0
+    ? eraseGenericTy(rawElemTy, ctx.typeParamMap)
+    : rawElemTy;
+  const otherTy = ctx.typeParamMap && ctx.typeParamMap.size > 0
+    ? eraseGenericTy(rawOtherTy, ctx.typeParamMap)
+    : rawOtherTy;
+  return registerSynthArrayUnion(ctx.synthArrayUnions, elemName, elemTy, otherName, otherTy);
 }
 
 /** Format a checker `Type` as a TS type string (used for `RawIR` `tsType` metadata,
@@ -201,24 +265,8 @@ export function typeToTsString(type: Type, ctx: ExtractTypeCtx = EMPTY_CTX): str
         return [typeToTsString(inner, ctx), ...nullish.map(t => typeToTsString(t, ctx))].join(" | ");
       }
     }
-    if (ctx.synthArrayUnions && unionTypes.length === 2) {
-      const [m0, m1] = unionTypes;
-      const arrayMember = m0.isArray() ? m0 : (m1.isArray() ? m1 : null);
-      const otherMember = arrayMember === m0 ? m1 : m0;
-      if (arrayMember && otherMember && !otherMember.isArray()
-          && !otherMember.isUndefined() && !otherMember.isNull()) {
-        const elemType = arrayMember.getArrayElementTypeOrThrow();
-        const elemName = typeToTsString(elemType, ctx);
-        const otherName = typeToTsString(otherMember, ctx);
-        return registerSynthArrayUnion(
-          ctx.synthArrayUnions,
-          elemName,
-          extractTy(elemType, undefined, ctx),
-          otherName,
-          extractTy(otherMember, undefined, ctx),
-        );
-      }
-    }
+    const synth = trySynthArrayUnionFromTypes(unionTypes, ctx, new Set());
+    if (synth) return synth;
     const parts = [...new Set(unionTypes.map(t => typeToTsString(t, ctx)))];
     const real = parts.filter(p => p !== "undefined" && p !== "null");
     if (real.length <= 1) return parts.join(" | ");
@@ -278,7 +326,7 @@ export function extractTyFromNode(
     : ty;
 }
 
-function eraseTypeText(text: string, typeParamMap?: ReadonlyMap<string, ErasedTypeParam>): string {
+export function eraseTypeText(text: string, typeParamMap?: ReadonlyMap<string, ErasedTypeParam>): string {
   if (!typeParamMap || typeParamMap.size === 0) return text;
   if (text.includes(" | ")) {
     const arms = [...new Set(text.split(" | ").map(a => eraseTypeText(a.trim(), typeParamMap)))];
@@ -286,6 +334,12 @@ function eraseTypeText(text: string, typeParamMap?: ReadonlyMap<string, ErasedTy
   }
   if (text.endsWith("[]")) return eraseTypeText(text.slice(0, -2), typeParamMap) + "[]";
   return typeParamMap.get(text)?.text ?? text;
+}
+
+function unwrapParenTypeNode(tn: TypeNode): TypeNode {
+  let cur = tn;
+  while (Node.isParenthesizedTypeNode(cur)) cur = cur.getTypeNode();
+  return cur;
 }
 
 function lowerTypeNode(tn: TypeNode, ctx: ExtractTypeCtx): Ty {
@@ -299,35 +353,20 @@ function lowerTypeNode(tn: TypeNode, ctx: ExtractTypeCtx): Ty {
   if (Node.isUnionTypeNode(tn)) {
     const arms = tn.getTypeNodes();
     // `T[] | U` synthesis on syntactic unions (preserving alias spellings like `Part[] | string`).
-    if (ctx.synthArrayUnions && arms.length === 2) {
-      const arrIdx = arms.findIndex(m => m.getType().isArray());
-      if (arrIdx !== -1) {
-        const other = arms[1 - arrIdx];
-        const ot = other.getType();
-        if (!ot.isArray() && !ot.isUndefined() && !ot.isNull()) {
-          const arrNode = arms[arrIdx];
-          const elemNode = Node.isArrayTypeNode(arrNode) ? arrNode.getElementTypeNode() : undefined;
-          const elemName = elemNode
-            ? elemNode.getText()
-            : typeToTsString(arrNode.getType().getArrayElementTypeOrThrow(), ctx);
-          const elemTy = elemNode
-            ? lowerTypeNode(elemNode, ctx)
-            : extractTy(arrNode.getType().getArrayElementTypeOrThrow(), undefined, ctx);
-          const otherName = other.getText();
-          const otherTy = lowerTypeNode(other, ctx);
-          const synthName = registerSynthArrayUnion(ctx.synthArrayUnions, elemName, elemTy, otherName, otherTy);
-          return { kind: "user", name: synthName };
-        }
-      }
-    }
+    const synthName = trySynthArrayUnionFromNodes(arms, ctx);
+    if (synthName) return { kind: "user", name: synthName };
 
-    const isBoolLit = (a: TypeNode) =>
-      Node.isLiteralTypeNode(a)
-      && (a.getLiteral().getKind() === SyntaxKind.TrueKeyword || a.getLiteral().getKind() === SyntaxKind.FalseKeyword);
-    const isNullNode = (a: TypeNode) =>
-      a.getKind() === SyntaxKind.NullKeyword
-      || (Node.isLiteralTypeNode(a) && a.getLiteral().getKind() === SyntaxKind.NullKeyword);
-    const isUndefNode = (a: TypeNode) => a.getKind() === SyntaxKind.UndefinedKeyword;
+    const isBoolLit = (a: TypeNode) => {
+      const u = unwrapParenTypeNode(a);
+      return Node.isLiteralTypeNode(u)
+        && (u.getLiteral().getKind() === SyntaxKind.TrueKeyword || u.getLiteral().getKind() === SyntaxKind.FalseKeyword);
+    };
+    const isNullNode = (a: TypeNode) => {
+      const u = unwrapParenTypeNode(a);
+      return u.getKind() === SyntaxKind.NullKeyword
+        || (Node.isLiteralTypeNode(u) && u.getLiteral().getKind() === SyntaxKind.NullKeyword);
+    };
+    const isUndefNode = (a: TypeNode) => unwrapParenTypeNode(a).getKind() === SyntaxKind.UndefinedKeyword;
     const isNullish = (a: TypeNode) => isNullNode(a) || isUndefNode(a);
 
     const hasNull = arms.some(isNullNode);
@@ -404,15 +443,24 @@ function lowerTypeNode(tn: TypeNode, ctx: ExtractTypeCtx): Ty {
   }
   if (Node.isTupleTypeNode(tn)) {
     const elems = tn.getElements().map(e => {
-      const inner = Node.isNamedTupleMember(e) ? e.getTypeNode() : e;
-      return lowerTypeNode(inner, ctx);
+      if (Node.isNamedTupleMember(e)) {
+        const ty = lowerTypeNode(e.getTypeNode(), ctx);
+        return e.hasQuestionToken() ? wrapNullability(ty, false, true) : ty;
+      }
+      if (e.getKind() === SyntaxKind.OptionalType) {
+        const inner = e.getFirstChild();
+        const ty: Ty = inner ? lowerTypeNode(inner as TypeNode, ctx) : { kind: "unknown" };
+        return wrapNullability(ty, false, true);
+      }
+      return lowerTypeNode(e, ctx);
     });
     return tupleTyFromElems(elems);
   }
   if (Node.isFunctionTypeNode(tn)) {
     const params = tn.getParameters().map(p => {
       const ptn = p.getTypeNode();
-      return ptn ? lowerTypeNode(ptn, ctx) : ({ kind: "unknown" } as Ty);
+      const ty: Ty = ptn ? lowerTypeNode(ptn, ctx) : { kind: "unknown" };
+      return p.hasQuestionToken() ? wrapNullability(ty, false, true) : ty;
     });
     const rtn = tn.getReturnTypeNode();
     const result: Ty = rtn ? lowerTypeNode(rtn, ctx) : { kind: "void" };
@@ -470,13 +518,13 @@ export function extractTy(
   ctx: ExtractTypeCtx = EMPTY_CTX,
 ): Ty {
   if (typeNode) return extractTyFromNode(typeNode, type, ctx);
-  const ty = lowerCheckerType(type, ctx);
+  const ty = lowerCheckerType(type, ctx, new Set());
   return ctx.typeParamMap && ctx.typeParamMap.size > 0
     ? eraseGenericTy(ty, ctx.typeParamMap)
     : ty;
 }
 
-function lowerCheckerType(type: Type, ctx: ExtractTypeCtx): Ty {
+function lowerCheckerType(type: Type, ctx: ExtractTypeCtx, visited: Set<Type>): Ty {
   if (ctx.isConstEnum?.(type)) return { kind: "int" };
   if (type.isUndefined()) return { kind: "void" };
   if (type.isNull()) return { kind: "null" };
@@ -487,15 +535,18 @@ function lowerCheckerType(type: Type, ctx: ExtractTypeCtx): Ty {
   if (type.isString() || type.isStringLiteral()) return { kind: "string" };
   if (type.isBoolean() || type.isBooleanLiteral()) return { kind: "bool" };
 
-  // Named type alias — MUST check built-in collection aliases (especially
-  // `Record<K, V>`, which TS defines as a type alias in lib.es5.d.ts) BEFORE
-  // returning `{ kind: "user", name }`.
+  // Named type alias — MUST check built-in collection/wrapper aliases
+  // (especially `Record<K, V>` and `Readonly<T>`, which TS defines as type
+  // aliases in lib.es5.d.ts) BEFORE returning `{ kind: "user", name }`.
   const aliasSym = type.getAliasSymbol();
   if (aliasSym) {
     const name = aliasSym.getName();
     const args = type.getAliasTypeArguments();
     if (args.length > 0) {
-      const loweredArgs = args.map(t => lowerCheckerType(t, ctx));
+      if (visited.has(type)) return { kind: "user", name };
+      const nextVisited = new Set(visited);
+      nextVisited.add(type);
+      const loweredArgs = args.map(t => lowerCheckerType(t, ctx, nextVisited));
       const builtin = lowerBuiltinCollection(name, loweredArgs);
       if (builtin) return builtin;
       return { kind: "user", name: `${name}<${args.map(t => typeToTsString(t, ctx)).join(", ")}>` };
@@ -513,31 +564,14 @@ function lowerCheckerType(type: Type, ctx: ExtractTypeCtx): Ty {
     if (hasNull || hasUndef) {
       const inner = type.getNonNullableType();
       if (inner.isUnion() && inner.getAliasSymbol()) {
-        return wrapNullability(lowerCheckerType(inner, ctx), hasNull, hasUndef);
+        return wrapNullability(lowerCheckerType(inner, ctx, visited), hasNull, hasUndef);
       }
     }
 
     // `T[] | U` synthesis: exactly two members, one array, the other not
     // array/undefined/null.
-    if (ctx.synthArrayUnions && unionTypes.length === 2) {
-      const [m0, m1] = unionTypes;
-      const arrayMember = m0.isArray() ? m0 : (m1.isArray() ? m1 : null);
-      const otherMember = arrayMember === m0 ? m1 : m0;
-      if (arrayMember && otherMember && !otherMember.isArray()
-          && !otherMember.isUndefined() && !otherMember.isNull()) {
-        const elemType = arrayMember.getArrayElementTypeOrThrow();
-        const elemName = typeToTsString(elemType, ctx);
-        const otherName = typeToTsString(otherMember, ctx);
-        const synthName = registerSynthArrayUnion(
-          ctx.synthArrayUnions,
-          elemName,
-          lowerCheckerType(elemType, ctx),
-          otherName,
-          lowerCheckerType(otherMember, ctx),
-        );
-        return { kind: "user", name: synthName };
-      }
-    }
+    const synthName = trySynthArrayUnionFromTypes(unionTypes, ctx, visited);
+    if (synthName) return { kind: "user", name: synthName };
 
     const nonNullish = unionTypes.filter(t => !t.isNull() && !t.isUndefined());
     if (nonNullish.length === 0) {
@@ -551,9 +585,8 @@ function lowerCheckerType(type: Type, ctx: ExtractTypeCtx): Ty {
       return wrapNullability({ kind: "bool" }, hasNull, hasUndef);
     }
 
-    // Numeric literal union (e.g. `0 | 1 | 2`).
-    if (nonNullish.every(t => (t.isNumber() || t.isNumberLiteral()) && !ctx.isConstEnum?.(t))
-        || nonNullish.every(t => t.isNumber() || t.isNumberLiteral() || !!ctx.isConstEnum?.(t))) {
+    // Numeric literal / const-enum union (e.g. `0 | 1 | 2`).
+    if (nonNullish.every(t => t.isNumber() || t.isNumberLiteral() || !!ctx.isConstEnum?.(t))) {
       return wrapNullability({ kind: "int" }, hasNull, hasUndef);
     }
 
@@ -575,7 +608,7 @@ function lowerCheckerType(type: Type, ctx: ExtractTypeCtx): Ty {
     }
 
     // Single remaining real arm (or all arms lower to the same Ty).
-    const loweredArms = nonNullish.map(t => lowerCheckerType(t, ctx));
+    const loweredArms = nonNullish.map(t => lowerCheckerType(t, ctx, visited));
     if (loweredArms.every(t => tyEqual(t, loweredArms[0]))) {
       return wrapNullability(loweredArms[0], hasNull, hasUndef);
     }
@@ -589,29 +622,42 @@ function lowerCheckerType(type: Type, ctx: ExtractTypeCtx): Ty {
 
   // Tuples BEFORE arrays (tuples are assignable to Array in TS).
   if (type.isTuple()) {
-    const elems = type.getTupleElements().map(t => lowerCheckerType(t, ctx));
+    if (visited.has(type)) return { kind: "unknown" };
+    const nextVisited = new Set(visited);
+    nextVisited.add(type);
+    const elems = type.getTupleElements().map(t => lowerCheckerType(t, ctx, nextVisited));
     return tupleTyFromElems(elems);
   }
 
   if (type.isArray() || type.isReadonlyArray()) {
+    if (visited.has(type)) return { kind: "unknown" };
+    const nextVisited = new Set(visited);
+    nextVisited.add(type);
     const elem = type.getArrayElementTypeOrThrow();
-    return { kind: "array", elem: lowerCheckerType(elem, ctx) };
+    return { kind: "array", elem: lowerCheckerType(elem, ctx, nextVisited) };
   }
 
-  // Pure callable type `(a: T, b: U) => R` (no properties, no named alias).
+  // Anonymous pure callable type `(a: T, b: U) => R` (no properties, not a named
+  // interface). Named callable interfaces (`interface Fix { (x: Fix): void }`)
+  // fall through to the symbol branch so their identity is preserved and self-
+  // referential signatures cannot overflow the stack.
   const callSigs = type.getCallSignatures();
-  if (callSigs.length > 0 && type.getProperties().length === 0) {
+  if (!type.isInterface() && callSigs.length > 0 && type.getProperties().length === 0) {
+    if (visited.has(type)) return { kind: "unknown" };
+    const nextVisited = new Set(visited);
+    nextVisited.add(type);
     const sig = callSigs[0];
     const params = sig.getParameters().map(p => {
       const decl = p.getValueDeclaration();
       const pt = decl ? p.getTypeAtLocation(decl) : p.getDeclaredType();
-      return lowerCheckerType(pt, ctx);
+      return lowerCheckerType(pt, ctx, nextVisited);
     });
-    const result = lowerCheckerType(sig.getReturnType(), ctx);
+    const result = lowerCheckerType(sig.getReturnType(), ctx, nextVisited);
     return { kind: "fn", params, result };
   }
 
   const symbol = type.getSymbol();
+
   if (symbol) {
     const name = symbol.getName();
     // Recover collapsed single-variant union alias via property fingerprint.
@@ -622,7 +668,10 @@ function lowerCheckerType(type: Type, ctx: ExtractTypeCtx): Ty {
     }
     const typeArgs = type.getTypeArguments();
     if (typeArgs.length > 0) {
-      const loweredArgs = typeArgs.map(t => lowerCheckerType(t, ctx));
+      if (visited.has(type)) return { kind: "user", name };
+      const nextVisited = new Set(visited);
+      nextVisited.add(type);
+      const loweredArgs = typeArgs.map(t => lowerCheckerType(t, ctx, nextVisited));
       const builtin = lowerBuiltinCollection(name, loweredArgs);
       if (builtin) return builtin;
       return { kind: "user", name: `${name}<${typeArgs.map(t => typeToTsString(t, ctx)).join(", ")}>` };

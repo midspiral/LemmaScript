@@ -375,8 +375,8 @@ method specTyListEqual(a: seq<SpecTy>, b: seq<SpecTy>) returns (res: bool)
 }
 
 method wrapNullability(inner: SpecTy, hasNull: bool, hasUndef: bool) returns (res: SpecTy)
-  ensures (match res { case optionalUndef(i_result_inner) => !(isOptionalSpecTy(i_result_inner)) case _ => true })
-  ensures (match res { case optionalNull(i_result_inner) => !(isOptionalSpecTy(i_result_inner)) case _ => true })
+  ensures (match res { case optionalUndef(i_result_inner) => ((!(isOptionalSpecTy(i_result_inner)) && (!i_result_inner.null_?)) && (!i_result_inner.void?)) case _ => true })
+  ensures (match res { case optionalNull(i_result_inner) => ((!(isOptionalSpecTy(i_result_inner)) && (!i_result_inner.null_?)) && (!i_result_inner.void?)) case _ => true })
   ensures (match res { case nullish(i_result_inner) => !(isOptionalSpecTy(i_result_inner)) case _ => true })
   ensures (!(hasNull) ==> !(hasUndef) ==> !(isOptionalSpecTy(inner)) ==> (res == inner))
   ensures (hasNull ==> hasUndef ==> res.nullish?)
@@ -403,16 +403,29 @@ method wrapNullability(inner: SpecTy, hasNull: bool, hasUndef: bool) returns (re
         payload := payload.inner;
     }
   }
-  if (mergedNull && mergedUndef) {
-    return nullish(payload);
+  match payload {
+    case null_ =>
+      if mergedUndef {
+        return nullish(SpecTy.void);
+      }
+      return payload;
+    case void =>
+      if mergedNull {
+        return nullish(SpecTy.void);
+      }
+      return payload;
+    case _ =>
+      if (mergedNull && mergedUndef) {
+        return nullish(payload);
+      }
+      if mergedNull {
+        return optionalNull(payload);
+      }
+      if mergedUndef {
+        return optionalUndef(payload);
+      }
+      return payload;
   }
-  if mergedNull {
-    return optionalNull(payload);
-  }
-  if mergedUndef {
-    return optionalUndef(payload);
-  }
-  return payload;
 }
 
 method joinWith(parts: seq<string>, sep: string) returns (res: string)
@@ -520,10 +533,19 @@ method parseFnType(tokens: seq<SpecTypeToken>, pos: int) returns (res: SpecParse
           case err(_) =>
             return tRes;
           case ok(_, _, _) =>
-            pTy := tRes.ty;
+            var i_branch11: SpecTy := *;
+            if (optMark == "?") {
+              var i_t19 := wrapNullability(tRes.ty, false, true);
+              i_branch11 := i_t19;
+            } else {
+              i_branch11 := tRes.ty;
+            }
+            pTy := i_branch11;
             pRaw := (((pName + optMark) + ": ") + tRes.raw);
             cur := tRes.nextPos;
         }
+      } else if (optMark == "?") {
+        pTy := wrapNullability(pTy, false, true);
       }
       params := (params + [pTy]);
       paramRaws := (paramRaws + [pRaw]);
@@ -545,14 +567,14 @@ method parseFnType(tokens: seq<SpecTypeToken>, pos: int) returns (res: SpecParse
     return SpecParseResult.err("Expected '=>' in function type");
   }
   cur := (cur + 1);
-  var i_t19 := parseType(tokens, cur);
-  var retRes := i_t19;
+  var i_t20 := parseType(tokens, cur);
+  var retRes := i_t20;
   match retRes {
     case err(_) =>
       return retRes;
     case ok(_, _, _) =>
-      var i_t20 := joinWith(paramRaws, ", ");
-      var raw := ((("(" + i_t20) + ") => ") + retRes.raw);
+      var i_t21 := joinWith(paramRaws, ", ");
+      var raw := ((("(" + i_t21) + ") => ") + retRes.raw);
       return SpecParseResult.ok(fn(params, retRes.ty), raw, retRes.nextPos);
   }
 }
@@ -630,8 +652,8 @@ method resolveUnionArms(arms: seq<UnionArm>) returns (res: SpecTy)
     return SpecTy.void;
   }
   if (|nonNullish| == 1) {
-    var i_t21 := wrapNullability(nonNullish[0].ty, hasNull, hasUndef);
-    return i_t21;
+    var i_t22 := wrapNullability(nonNullish[0].ty, hasNull, hasUndef);
+    return i_t22;
   }
   var allStr := true;
   var strVals: seq<string> := [];
@@ -649,8 +671,8 @@ method resolveUnionArms(arms: seq<UnionArm>) returns (res: SpecTy)
     i := (i + 1);
   }
   if allStr {
-    var i_t22 := wrapNullability(stringUnion(strVals), hasNull, hasUndef);
-    return i_t22;
+    var i_t23 := wrapNullability(stringUnion(strVals), hasNull, hasUndef);
+    return i_t23;
   }
   var allInt := true;
   i := 0;
@@ -665,8 +687,8 @@ method resolveUnionArms(arms: seq<UnionArm>) returns (res: SpecTy)
     i := (i + 1);
   }
   if allInt {
-    var i_t23 := wrapNullability(SpecTy.int_, hasNull, hasUndef);
-    return i_t23;
+    var i_t24 := wrapNullability(SpecTy.int_, hasNull, hasUndef);
+    return i_t24;
   }
   if (hasNull || hasUndef) {
     var innerRaws: seq<string> := [];
@@ -679,9 +701,9 @@ method resolveUnionArms(arms: seq<UnionArm>) returns (res: SpecTy)
       innerRaws := (innerRaws + [nonNullish[i].raw]);
       i := (i + 1);
     }
-    var i_t25 := joinWith(innerRaws, " | ");
-    var i_t24 := wrapNullability(user(i_t25), hasNull, hasUndef);
-    return i_t24;
+    var i_t26 := joinWith(innerRaws, " | ");
+    var i_t25 := wrapNullability(user(i_t26), hasNull, hasUndef);
+    return i_t25;
   }
   var allRaws: seq<string> := [];
   i := 0;
@@ -693,8 +715,8 @@ method resolveUnionArms(arms: seq<UnionArm>) returns (res: SpecTy)
     allRaws := (allRaws + [arms[i].raw]);
     i := (i + 1);
   }
-  var i_t26 := joinWith(allRaws, " | ");
-  return user(i_t26);
+  var i_t27 := joinWith(allRaws, " | ");
+  return user(i_t27);
 }
 
 method parseUnion(tokens: seq<SpecTypeToken>, pos: int) returns (res: SpecParseResult)
@@ -711,14 +733,14 @@ method parseUnion(tokens: seq<SpecTypeToken>, pos: int) returns (res: SpecParseR
     }
   }
   var firstStart := cur;
-  var i_t27 := parsePostfix(tokens, cur);
-  var first := i_t27;
+  var i_t28 := parsePostfix(tokens, cur);
+  var first := i_t28;
   match first {
     case err(_) =>
       return first;
     case ok(_, _, _) =>
-      var i_t28 := makeUnionArm(tokens, firstStart, first.nextPos, first.ty, first.raw);
-      var arms := [i_t28];
+      var i_t29 := makeUnionArm(tokens, firstStart, first.nextPos, first.ty, first.raw);
+      var arms := [i_t29];
       var raws := [first.raw];
       cur := first.nextPos;
       while ((cur < |tokens|) && tokens[cur].kind.pipe?)
@@ -732,22 +754,22 @@ method parseUnion(tokens: seq<SpecTypeToken>, pos: int) returns (res: SpecParseR
           return SpecParseResult.err("Expected type after '|'");
         }
         var armStart := cur;
-        var i_t29 := parsePostfix(tokens, cur);
-        var arm := i_t29;
+        var i_t30 := parsePostfix(tokens, cur);
+        var arm := i_t30;
         match arm {
           case err(_) =>
             return arm;
           case ok(_, _, _) =>
-            var i_t30 := makeUnionArm(tokens, armStart, arm.nextPos, arm.ty, arm.raw);
-            arms := (arms + [i_t30]);
+            var i_t31 := makeUnionArm(tokens, armStart, arm.nextPos, arm.ty, arm.raw);
+            arms := (arms + [i_t31]);
             raws := (raws + [arm.raw]);
             cur := arm.nextPos;
         }
       }
-      var i_t31 := resolveUnionArms(arms);
-      var ty := i_t31;
-      var i_t32 := joinWith(raws, " | ");
-      return SpecParseResult.ok(ty, i_t32, cur);
+      var i_t32 := resolveUnionArms(arms);
+      var ty := i_t32;
+      var i_t33 := joinWith(raws, " | ");
+      return SpecParseResult.ok(ty, i_t33, cur);
   }
 }
 
@@ -761,8 +783,8 @@ method parsePostfix(tokens: seq<SpecTypeToken>, pos: int) returns (res: SpecPars
     if ((pos + 1) >= |tokens|) {
       return SpecParseResult.err("Expected type after 'readonly'");
     }
-    var i_t33 := parsePostfix(tokens, (pos + 1));
-    var inner := i_t33;
+    var i_t34 := parsePostfix(tokens, (pos + 1));
+    var inner := i_t34;
     match inner {
       case err(_) =>
         return inner;
@@ -770,8 +792,8 @@ method parsePostfix(tokens: seq<SpecTypeToken>, pos: int) returns (res: SpecPars
         return SpecParseResult.ok(inner.ty, ("readonly " + inner.raw), inner.nextPos);
     }
   }
-  var i_t34 := parsePrimary(tokens, pos);
-  var base := i_t34;
+  var i_t35 := parsePrimary(tokens, pos);
+  var base := i_t35;
   match base {
     case err(_) =>
       return base;
@@ -800,8 +822,8 @@ method parsePrimary(tokens: seq<SpecTypeToken>, pos: int) returns (res: SpecPars
 {
   var tok := tokens[pos];
   if tok.kind.lparen? {
-    var i_t35 := parseType(tokens, (pos + 1));
-    var inner := i_t35;
+    var i_t36 := parseType(tokens, (pos + 1));
+    var inner := i_t36;
     match inner {
       case err(_) =>
         return inner;
@@ -825,22 +847,34 @@ method parsePrimary(tokens: seq<SpecTypeToken>, pos: int) returns (res: SpecPars
         if (cur >= |tokens|) {
           return SpecParseResult.err("Unterminated tuple type");
         }
+        var isOptionalElem := false;
         if (tokens[cur].kind.ident? && ((cur + 1) < |tokens|)) {
           if tokens[(cur + 1)].kind.colon? {
             cur := (cur + 2);
           } else if ((tokens[(cur + 1)].kind.question? && ((cur + 2) < |tokens|)) && tokens[(cur + 2)].kind.colon?) {
+            isOptionalElem := true;
             cur := (cur + 3);
           }
         }
-        var i_t36 := parseType(tokens, cur);
-        var elemRes := i_t36;
+        var i_t37 := parseType(tokens, cur);
+        var elemRes := i_t37;
         match elemRes {
           case err(_) =>
             return elemRes;
           case ok(_, _, _) =>
-            elems := (elems + [elemRes.ty]);
-            elemRaws := (elemRaws + [elemRes.raw]);
+            var elemTy := elemRes.ty;
+            var elemRaw := elemRes.raw;
             cur := elemRes.nextPos;
+            if ((cur < |tokens|) && tokens[cur].kind.question?) {
+              isOptionalElem := true;
+              elemRaw := (elemRaw + "?");
+              cur := (cur + 1);
+            }
+            if isOptionalElem {
+              elemTy := wrapNullability(elemTy, false, true);
+            }
+            elems := (elems + [elemTy]);
+            elemRaws := (elemRaws + [elemRaw]);
             if ((cur < |tokens|) && tokens[cur].kind.comma?) {
               cur := (cur + 1);
               if ((cur < |tokens|) && tokens[cur].kind.rbracket?) {
@@ -855,8 +889,8 @@ method parsePrimary(tokens: seq<SpecTypeToken>, pos: int) returns (res: SpecPars
     if ((cur >= |tokens|) || (!tokens[cur].kind.rbracket?)) {
       return SpecParseResult.err("Expected ']' in tuple type");
     }
-    var i_t37 := joinWith(elemRaws, ", ");
-    var raw := (("[" + i_t37) + "]");
+    var i_t38 := joinWith(elemRaws, ", ");
+    var raw := (("[" + i_t38) + "]");
     if (|elems| == 0) {
       return SpecParseResult.ok(array_(SpecTy.unknown), raw, (cur + 1));
     }
@@ -867,8 +901,8 @@ method parsePrimary(tokens: seq<SpecTypeToken>, pos: int) returns (res: SpecPars
       invariant (i <= |elems|)
       decreases (|elems| - i)
     {
-      var i_t38 := specTyEqual(elems[i], elems[0]);
-      if !(i_t38) {
+      var i_t39 := specTyEqual(elems[i], elems[0]);
+      if !(i_t39) {
         homogeneous := false;
       }
       i := (i + 1);
@@ -915,8 +949,8 @@ method parsePrimary(tokens: seq<SpecTypeToken>, pos: int) returns (res: SpecPars
         invariant (cur <= |tokens|)
         decreases (|tokens| - cur)
       {
-        var i_t39 := parseType(tokens, cur);
-        var argRes := i_t39;
+        var i_t40 := parseType(tokens, cur);
+        var argRes := i_t40;
         match argRes {
           case err(_) =>
             return argRes;
@@ -938,8 +972,8 @@ method parsePrimary(tokens: seq<SpecTypeToken>, pos: int) returns (res: SpecPars
         return SpecParseResult.err((("Expected '>' to close type arguments for '" + name_2) + "'"));
       }
       cur := (cur + 1);
-      var i_t40 := joinWith(argRaws, ", ");
-      var fullRaw := (((name_2 + "<") + i_t40) + ">");
+      var i_t41 := joinWith(argRaws, ", ");
+      var fullRaw := (((name_2 + "<") + i_t41) + ">");
       if !(hasDot) {
         if ((name_2 == "Array") || (name_2 == "ReadonlyArray")) {
           if (|args| != 1) {
@@ -958,6 +992,12 @@ method parsePrimary(tokens: seq<SpecTypeToken>, pos: int) returns (res: SpecPars
             return SpecParseResult.err((name_2 + " expects exactly 2 type arguments"));
           }
           return SpecParseResult.ok(map_(args[0], args[1]), fullRaw, cur);
+        }
+        if (name_2 == "Readonly") {
+          if (|args| != 1) {
+            return SpecParseResult.err((name_2 + " expects exactly 1 type argument"));
+          }
+          return SpecParseResult.ok(args[0], fullRaw, cur);
         }
       }
       return SpecParseResult.ok(user(fullRaw), fullRaw, cur);
@@ -1003,8 +1043,8 @@ method parseSpecTypeTokens(tokens: seq<SpecTypeToken>) returns (res': SpecParseR
   if (|tokens| == 0) {
     return SpecParseResult.err("Empty type annotation");
   }
-  var i_t41 := parseType(tokens, 0);
-  var res := i_t41;
+  var i_t42 := parseType(tokens, 0);
+  var res := i_t42;
   match res {
     case err(_) =>
       return res;
@@ -1018,13 +1058,13 @@ method parseSpecTypeTokens(tokens: seq<SpecTypeToken>) returns (res': SpecParseR
 
 method parseSpecTypeKernel(input: string) returns (res: SpecParseResult)
 {
-  var i_t42 := tokenizeSpecType(input);
-  var tokRes := i_t42;
+  var i_t43 := tokenizeSpecType(input);
+  var tokRes := i_t43;
   match tokRes {
     case err(_) =>
       return SpecParseResult.err(tokRes.error);
     case ok(_) =>
-      var i_t43 := parseSpecTypeTokens(tokRes.tokens);
-      return i_t43;
+      var i_t44 := parseSpecTypeTokens(tokRes.tokens);
+      return i_t44;
   }
 }
