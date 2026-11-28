@@ -13,7 +13,8 @@
 import { writeFileSync } from "fs";
 import type { RawFunction, RawModule } from "./rawir.js";
 import type { TFunction, TModule } from "./typedir.js";
-import { parseTsType, tyToCanonical } from "./types.js";
+import { tyToCanonical } from "./types.js";
+import { parseSpecType } from "./spec-type.js";
 import type { LscOptions } from "./config.js";
 
 interface FnInfo {
@@ -24,8 +25,10 @@ interface FnInfo {
 }
 
 function renderSig(fn: RawFunction): string {
-  const params = fn.params.map(p => `${p.name}: ${tyToCanonical(parseTsType(p.tsType))}`).join(", ");
-  return `(${params}): ${tyToCanonical(parseTsType(fn.returnType))}`;
+  const params = fn.params
+    .map(p => `${p.name}: ${tyToCanonical(p.type ?? parseSpecType(p.tsType))}`)
+    .join(", ");
+  return `(${params}): ${tyToCanonical(fn.returnTy ?? parseSpecType(fn.returnType))}`;
 }
 
 function fnToInfo(fn: RawFunction): FnInfo {

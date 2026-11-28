@@ -37,7 +37,7 @@ export function synthArrayUnionName(elemName: string, otherName: string): string
 }
 
 /** Register a synthesized `T[] | U` discriminated union if not already present. */
-function registerSynthArrayUnion(
+export function registerSynthArrayUnion(
   synthDecls: TypeDeclInfo[],
   elemName: string,
   elemTy: Ty,
@@ -290,8 +290,10 @@ function eraseTypeText(text: string, typeParamMap?: ReadonlyMap<string, ErasedTy
 
 function lowerTypeNode(tn: TypeNode, ctx: ExtractTypeCtx): Ty {
   if (Node.isParenthesizedTypeNode(tn)) return lowerTypeNode(tn.getTypeNode(), ctx);
-  // `readonly T[]`, `readonly [A, B]` — TypeOperator wrapping the inner type.
-  if (Node.isTypeOperatorTypeNode(tn)) return lowerTypeNode(tn.getTypeNode(), ctx);
+  // `readonly T[]`, `readonly [A, B]` — Readonly TypeOperator wrapping the inner type.
+  if (Node.isTypeOperatorTypeNode(tn) && tn.getOperator() === SyntaxKind.ReadonlyKeyword) {
+    return lowerTypeNode(tn.getTypeNode(), ctx);
+  }
   if (tn.getKind() === SyntaxKind.TypePredicate) return { kind: "bool" };
 
   if (Node.isUnionTypeNode(tn)) {

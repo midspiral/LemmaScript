@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Project, ScriptTarget, SyntaxKind, type Type, type TypeNode } from "ts-morph";
 import {
   extractTy,
@@ -9,6 +12,10 @@ import {
   wrapNullability,
   type ExtractTypeCtx,
 } from "../src/extract-types.ts";
+import { extractModule } from "../src/extract.ts";
+import { resolveModule } from "../src/resolve.ts";
+import { runInfo, runTypedInfo } from "../src/info-command.ts";
+import { DEFAULT_OPTIONS } from "../src/config.ts";
 import type { TypeDeclInfo } from "../src/types.ts";
 
 function makeProject(strictNullChecks = true) {
@@ -314,4 +321,68 @@ test("wrapNullability flattens nested optional/nullish without double wrapping",
     kind: "nullish",
     inner: intTy,
   });
+});
+
+test("TypeOperatorTypeNode only unwraps readonly, not keyof", () => {
+  const code = `
+    interface Config { host: string; port: number; }
+    declare const ro: readonly number[];
+    declare const key: keyof Config;
+  `;
+  assert.deepEqual(getVarType(code, "ro", { useTypeNode: true }).ty, {
+    kind: "array",
+    elem: { kind: "int" },
+  });
+  // keyof Config must NOT unwrap to { kind: "user", name: "Config" }
+  assert.deepEqual(getVarType(code, "key", { useTypeNode: true }).ty, {
+    kind: "user",
+    name: "keyof Config",
+  });
+});
+
+test("extractModule populates structured Ty while lsc info --typed preserves Map vs Record tsType", () => {
+  const code = `
+    export function lookup(m: Map<string, number>, r: Record<string, number>): number {
+      const a = m.get("k") ?? 0;
+      const b = r["k"] ?? 0;
+      return a + b;
+    }
+  `;
+  const project = makeProject(true);
+  const sf = project.createSourceFile("info-test.ts", code, { overwrite: true });
+  const raw = extractModule(sf);
+  const fn = raw.functions.find(f => f.name === "lookup");
+  assert.ok(fn);
+  assert.deepEqual(fn.params[0].type, { kind: "map", key: { kind: "string" }, value: { kind: "int" } });
+  assert.deepEqual(fn.params[1].type, { kind: "map", key: { kind: "string" }, value: { kind: "int" } });
+  assert.deepEqual(fn.returnTy, { kind: "int" });
+  assert.equal(fn.params[0].tsType, "Map<string, number>");
+  assert.equal(fn.params[1].tsType, "Record<string, number>");
+
+  // Verify runInfo renders canonical signature from structured Ty
+  const tmp = mkdtempSync(path.join(tmpdir(), "lsc-info-test-"));
+  try {
+    const outPath = path.join(tmp, "info-test.ts.json");
+    const origLog = console.log;
+    let typedOutput = "";
+    try {
+      console.log = () => {};
+      runInfo(raw, outPath);
+      const infoJson = JSON.parse(readFileSync(outPath, "utf-8"));
+      assert.equal(infoJson.lookup.sig, "(m: map<string, int>, r: map<string, int>): int");
+
+      const typed = resolveModule(raw);
+      console.log = (s: unknown) => { typedOutput += String(s); };
+      runTypedInfo(raw, typed, "0.0.0-test", null, DEFAULT_OPTIONS, {});
+    } finally {
+      console.log = origLog;
+    }
+    const typedJson = JSON.parse(typedOutput);
+    assert.equal(typedJson.functions[0].params[0].tsType, "Map<string, number>");
+    assert.equal(typedJson.functions[0].params[1].tsType, "Record<string, number>");
+    assert.deepEqual(typedJson.functions[0].params[0].ty, { kind: "map", key: { kind: "string" }, value: { kind: "int" } });
+    assert.deepEqual(typedJson.functions[0].params[1].ty, { kind: "map", key: { kind: "string" }, value: { kind: "int" } });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
