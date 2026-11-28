@@ -15,7 +15,7 @@ import { freshName, freshNameWhere, isUserName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
 import { lowerIndexedCallback } from "./callback-lowering.js";
 import { isFalsyCapableTy } from "./condition-facts.js";
-import { declOf, declOfKind, declOfTy, unionDeclOfTy, declWithVariant, tyBaseName, remainingVariant } from "./typedecls.js";
+import { declOf, declOfKind, declOfTy, unionDeclOfTy, tyBaseName, remainingVariant } from "./typedecls.js";
 import {
   buildNestedFieldExpr,
   collectAssignedIrTargets,
@@ -2295,11 +2295,11 @@ function matchToIfChains(stmts: Stmt[]): Stmt[] {
     // accidentally drop an earlier literal arm from a malformed mixed match.
     if (arms.some(a => a.pattern.kind === "literal")) return [{ ...s, arms }];
     const ctorArms = arms.filter(a => a.pattern.kind === "ctor");
-    const firstCtor = ctorArms[0] ? patternCtor(ctorArms[0].pattern) : undefined;
-    const decl = s.unionType
-      ? declOf(_typeDecls, tyBaseName(s.unionType))
-      : (firstCtor ? declWithVariant(_typeDecls, firstCtor) : undefined);
-    if (!decl) return [{ ...s, arms }]; // not a user union (e.g. Option) — leave as match
+    // Only user-union matches carry `unionType` (from `emitMatchStmt` / `emitSwitchStmt`);
+    // leave `Option` matches and other non-union matches alone even if a user union
+    // happens to define `"some"` / `"none"` variants.
+    const decl = s.unionType ? declOf(_typeDecls, tyBaseName(s.unionType)) : undefined;
+    if (!decl) return [{ ...s, arms }];
 
     const scrutExpr: Expr = s.scrutinee;
     const defaultArm = arms.find(a => a.pattern.kind === "wild");

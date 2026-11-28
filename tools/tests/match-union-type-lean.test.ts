@@ -104,3 +104,30 @@ export function switchOnUB(u: UB): number {
   assert.doesNotMatch(bodyUB, /UA\./, bodyUB);
   assert.match(bodyUB, /match u with \| \.ok/, bodyUB);
 });
+
+test("Option match is not hijacked by a user string union with 'some' / 'none' variants", () => {
+  const lean = compileLean(`
+type Mode = "some" | "none";
+
+export function useMode(m: Mode): number {
+  //@ verify
+  return m === "some" ? 1 : 0;
+}
+
+export function incOptional(x?: number): number {
+  //@ verify
+  let n = 0;
+  if (x !== undefined) {
+    n = x + 1;
+  }
+  return n;
+}
+`, "mode_option_collision.ts");
+
+  const startOpt = lean.indexOf("method incOptional ");
+  assert.notEqual(startOpt, -1, lean);
+  const bodyOpt = lean.slice(startOpt);
+  assert.match(bodyOpt, /\(x\)\.isSome = true/, bodyOpt);
+  assert.match(bodyOpt, /let _x_val := \(x\)\.get/, bodyOpt);
+  assert.doesNotMatch(bodyOpt, /Mode\.some/, bodyOpt);
+});
