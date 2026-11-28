@@ -1884,11 +1884,6 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
       //      must exit only the switch, never surviving into `match` where it
       //      would escape to an enclosing `while`/`for` loop. Nested loops and
       //      nested switches own their own `break`s and are not descended into.
-      //      When at most one branch of each breaking `if` can fall through
-      //      (e.g. `if (flag) break; rest`), rewrite directly to `if/else`.
-      //      When both branches of an `if` can reach a non-empty continuation
-      //      (e.g. `if (p) { if (q) break; } rest`), hoist a fresh switch-exit
-      //      flag so the continuation is emitted once rather than copied per path.
       const hasSwitchBreak = (stmts: RawStmt[]): boolean =>
         stmts.some(st =>
           st.kind === "break" ||
@@ -1904,96 +1899,70 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
         }
         return true;
       };
-      const needsBreakFlag = (stmts: RawStmt[], hasCont: boolean): boolean => {
-        for (let idx = 0; idx < stmts.length; idx++) {
-          const st = stmts[idx]!;
-          if (st.kind === "break" || st.kind === "return" || st.kind === "throw" || st.kind === "continue") {
-            return false;
-          }
-          if (st.kind === "if") {
-            const hasAfter = hasCont || stmts.slice(idx + 1).some(x => x.kind !== "break");
-            if (hasSwitchBreak(st.then) || hasSwitchBreak(st.else)) {
-              if (hasAfter && canFallThrough(st.then) && canFallThrough(st.else)) return true;
-              if (needsBreakFlag(st.then, hasAfter) || needsBreakFlag(st.else, hasAfter)) return true;
-            }
-            if (!canFallThrough(st.then) && !canFallThrough(st.else)) return false;
-          }
-        }
-        return false;
-      };
-      const eliminateSwitchBreaks = (stmts: RawStmt[], cont: RawStmt[]): { body: RawStmt[]; fallsThrough: boolean } => {
-        if (stmts.length === 0) return { body: cont, fallsThrough: true };
-        const [head, ...tail] = stmts;
-        if (head.kind === "break") return { body: [], fallsThrough: false };
-        if (head.kind === "return" || head.kind === "throw" || head.kind === "continue") {
-          return { body: [head], fallsThrough: false };
-        }
-        if (head.kind === "if") {
-          if (hasSwitchBreak(head.then) || hasSwitchBreak(head.else)) {
-            const after = eliminateSwitchBreaks(tail, cont);
-            const thenRes = eliminateSwitchBreaks(head.then, after.body);
-            const elseRes = eliminateSwitchBreaks(head.else, after.body);
-            return {
-              body: [{ ...head, then: thenRes.body, else: elseRes.body }],
-              fallsThrough: (thenRes.fallsThrough || elseRes.fallsThrough) && after.fallsThrough,
-            };
-          }
-          if (!canFallThrough(head.then) && !canFallThrough(head.else)) {
-            return { body: [head], fallsThrough: false };
-          }
-        }
-        const rest = eliminateSwitchBreaks(tail, cont);
-        return { body: [head, ...rest.body], fallsThrough: rest.fallsThrough };
-      };
-      const rewriteWithBreakFlag = (stmts: RawStmt[], cont: RawStmt[], flag: string, isTopLevel: boolean): RawStmt[] => {
+      // Single-pass switch-break lowering organized around which branches of each
+      // `if` can reach the following statements (`rest`):
+      //  - Neither branch reaches `rest`: omit `rest`.
+      //  - Neither branch contains a switch break: keep the ordinary `if` and continue.
+      //  - Exactly one branch reaches `rest`: place `rest` directly in that branch
+      //    (emitted once, preserving TypeScript narrowing from `head.cond`).
+      //  - Both branches can reach `rest` and an inner path can also break: guard
+      //    `rest` once after the `if` with a lazily allocated switch-exit flag.
+      const eliminateSwitchBreaks = (
+        stmts: RawStmt[],
+        cont: RawStmt[],
+        exitFlag: string | null,
+        ensureFlag: () => string,
+      ): RawStmt[] => {
         if (stmts.length === 0) return cont;
         const [head, ...tail] = stmts;
         if (head.kind === "break") {
-          return isTopLevel
+          return exitFlag === null
             ? []
-            : [{ kind: "assign", target: flag, value: { kind: "bool", value: true }, line: head.line }];
+            : [{ kind: "assign", target: exitFlag, value: { kind: "bool", value: true }, line: head.line }];
         }
         if (head.kind === "return" || head.kind === "throw" || head.kind === "continue") {
           return [head];
         }
         if (head.kind === "if") {
-          if (hasSwitchBreak(head.then) || hasSwitchBreak(head.else)) {
-            const thenFalls = canFallThrough(head.then);
-            const elseFalls = canFallThrough(head.else);
-            // When at most one branch can fall through (e.g. `if (v === undefined) break;`),
-            // push `rest` directly into that branch: no duplication, and TypeScript narrowing
-            // from `head.cond` stays in scope over `rest`.
-            if (!thenFalls || !elseFalls) {
-              const rest = thenFalls || elseFalls
-                ? rewriteWithBreakFlag(tail, cont, flag, isTopLevel)
-                : [];
-              const thenBody = rewriteWithBreakFlag(head.then, thenFalls ? rest : [], flag, isTopLevel);
-              const elseBody = rewriteWithBreakFlag(head.else, elseFalls ? rest : [], flag, isTopLevel);
-              return [{ ...head, then: thenBody, else: elseBody }];
-            }
-            const thenBody = rewriteWithBreakFlag(head.then, [], flag, false);
-            const elseBody = rewriteWithBreakFlag(head.else, [], flag, false);
-            const ifStmt: RawStmt = { ...head, then: thenBody, else: elseBody };
-            const rest = rewriteWithBreakFlag(tail, cont, flag, isTopLevel);
-            if (rest.length === 0) {
-              return [ifStmt];
-            }
-            return [
-              ifStmt,
-              {
-                kind: "if",
-                cond: { kind: "unop", op: "!", expr: { kind: "var", name: flag } },
-                then: rest,
-                else: [],
-                line: head.line,
-              },
-            ];
+          const thenFalls = canFallThrough(head.then);
+          const elseFalls = canFallThrough(head.else);
+          if (!thenFalls && !elseFalls) {
+            return [{
+              ...head,
+              then: eliminateSwitchBreaks(head.then, [], exitFlag, ensureFlag),
+              else: eliminateSwitchBreaks(head.else, [], exitFlag, ensureFlag),
+            }];
           }
-          if (!canFallThrough(head.then) && !canFallThrough(head.else)) {
-            return [head];
+          if (!hasSwitchBreak(head.then) && !hasSwitchBreak(head.else)) {
+            return [head, ...eliminateSwitchBreaks(tail, cont, exitFlag, ensureFlag)];
           }
+          const rest = eliminateSwitchBreaks(tail, cont, exitFlag, ensureFlag);
+          if (!thenFalls || !elseFalls) {
+            return [{
+              ...head,
+              then: eliminateSwitchBreaks(head.then, thenFalls ? rest : [], exitFlag, ensureFlag),
+              else: eliminateSwitchBreaks(head.else, elseFalls ? rest : [], exitFlag, ensureFlag),
+            }];
+          }
+          const flag = rest.length > 0 ? (exitFlag ?? ensureFlag()) : exitFlag;
+          const ifStmt: RawStmt = {
+            ...head,
+            then: eliminateSwitchBreaks(head.then, [], flag, ensureFlag),
+            else: eliminateSwitchBreaks(head.else, [], flag, ensureFlag),
+          };
+          if (rest.length === 0) return [ifStmt];
+          return [
+            ifStmt,
+            {
+              kind: "if",
+              cond: { kind: "unop", op: "!", expr: { kind: "var", name: flag! } },
+              then: rest,
+              else: [],
+              line: head.line,
+            },
+          ];
         }
-        return [head, ...rewriteWithBreakFlag(tail, cont, flag, isTopLevel)];
+        return [head, ...eliminateSwitchBreaks(tail, cont, exitFlag, ensureFlag)];
       };
       const clauseInfos = s.getClauses().map(clause => {
         const stmts = extractStmts(clause.getStatements());
@@ -2008,26 +1977,23 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
         return { label, stmts };
       });
       const fallThroughBody = (start: number): RawStmt[] => {
-        const chain: RawStmt[][] = [];
+        const stmts: RawStmt[] = [];
         for (let j = start; j < clauseInfos.length; j++) {
-          const stmts = clauseInfos[j]!.stmts;
-          chain.push(stmts);
-          if (!canFallThrough(stmts)) break;
+          const clauseStmts = clauseInfos[j]!.stmts;
+          stmts.push(...clauseStmts);
+          if (!canFallThrough(clauseStmts)) break;
         }
-        const useFlag = chain.some((stmts, idx) => {
-          const hasLater = chain.slice(idx + 1).some(later => later.some(x => x.kind !== "break"));
-          return needsBreakFlag(stmts, hasLater);
-        });
-        if (!useFlag) {
-          let cont: RawStmt[] = [];
-          for (let idx = chain.length - 1; idx >= 0; idx--) {
-            cont = eliminateSwitchBreaks(chain[idx]!, cont).body;
+        let flag: string | null = null;
+        const ensureFlag = (): string => {
+          if (flag === null) {
+            const suffix = _switchBreakCounter === 0 ? "" : String(_switchBreakCounter);
+            _switchBreakCounter += 1;
+            flag = freshName(`_switchBroken${suffix}`);
           }
-          return cont;
-        }
-        const suffix = _switchBreakCounter === 0 ? "" : String(_switchBreakCounter);
-        _switchBreakCounter += 1;
-        const flag = freshName(`_switchBroken${suffix}`);
+          return flag;
+        };
+        const body = eliminateSwitchBreaks(stmts, [], null, ensureFlag);
+        if (flag === null) return body;
         const decl: RawStmt = {
           kind: "let",
           name: flag,
@@ -2036,11 +2002,7 @@ function extractScopedStmts(stmts: Node[]): RawStmt[] {
           init: { kind: "bool", value: false },
           line,
         };
-        let cont: RawStmt[] = [];
-        for (let idx = chain.length - 1; idx >= 0; idx--) {
-          cont = rewriteWithBreakFlag(chain[idx]!, cont, flag, true);
-        }
-        return [decl, ...cont];
+        return [decl, ...body];
       };
       for (let i = 0; i < clauseInfos.length; i++) {
         const c = clauseInfos[i]!;
