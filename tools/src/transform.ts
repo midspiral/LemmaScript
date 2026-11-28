@@ -2156,12 +2156,14 @@ function lowerArrayPopOrShift(e: TExpr, usage: "value" | "discard"): { method: "
   };
 }
 /**
- * Velvet (Lean backend) rejects `return` inside a loop. For a function shaped as
- * `…; while (…) { … early returns … }; return fallthrough`, hoist a mutable
- * result variable: each in-loop `return e` becomes `_loopRet := e; break`, then
- * `return _loopRet` after the loop. The trailing fallthrough return seeds
- * `_loopRet`, so a normal loop exit returns it unchanged. Dafny is untouched —
- * it keeps the native early returns.
+ * Velvet (Lean backend) rejects `return` inside a loop. For a loop containing
+ * early `return`s, hoist a mutable `Option T` result variable `_loopRet := none`:
+ * each in-loop `return e` becomes `_loopRet := some e; break`. After the loop,
+ * match on `_loopRet` so an early return returns its saved value, while a normal
+ * exit (or regular `break`) runs the remaining statements with the post-loop
+ * state rather than a stale pre-loop snapshot. Using `Option T` avoids needing
+ * an `Inhabited T` default value whenever fallthrough statements follow the loop.
+ * Dafny is untouched — it keeps the native early returns.
  */
 function stmtsContainReturn(stmts: Stmt[]): boolean {
   for (const s of stmts) {
@@ -2175,17 +2177,26 @@ function stmtsContainReturn(stmts: Stmt[]): boolean {
 
 function replaceReturnsWithBreak(stmts: Stmt[], retVar: string): Stmt[] {
   return stmts.flatMap((s): Stmt[] => {
-    if (s.kind === "return") return [{ kind: "assign", target: retVar, value: s.value }, { kind: "break" }];
-    if (s.kind === "if") return [{ ...s, then: replaceReturnsWithBreak(s.then, retVar), else: replaceReturnsWithBreak(s.else, retVar) }];
-    if (s.kind === "match") return [{ ...s, arms: s.arms.map(a => ({ ...a, body: replaceReturnsWithBreak(a.body, retVar) })) }];
+    if (s.kind === "return") {
+      return [
+        { kind: "assign", target: retVar, value: { kind: "app", fn: "Some", args: [s.value] } },
+        { kind: "break" },
+      ];
+    }
+    if (s.kind === "if") {
+      return [{ ...s, then: replaceReturnsWithBreak(s.then, retVar), else: replaceReturnsWithBreak(s.else, retVar) }];
+    }
+    if (s.kind === "match") {
+      return [{ ...s, arms: s.arms.map(a => ({ ...a, body: replaceReturnsWithBreak(a.body, retVar) })) }];
+    }
     return [s];
   });
 }
 
-// Seed value for `_loopRet` when a return-in-loop function has no trailing
-// fallthrough return. Readable literals for the primitives; everything else
-// (user types, arrays, maps, optionals) gets a typed `default : T` rather than a
-// type-incorrect `0` — these types derive `Inhabited`, so the default exists.
+// Fallback value only when a non-void return-in-loop has no statements after
+// the loop (e.g. `while (true) { ... return e; }`) so the unreachable `none`
+// branch still type-checks. Readable literals for primitives; everything else
+// gets a typed `default : T`.
 function defaultExprForTy(ty: Ty): Expr {
   switch (ty.kind) {
     case "bool": return { kind: "bool", value: false };
@@ -2195,24 +2206,58 @@ function defaultExprForTy(ty: Ty): Expr {
   }
 }
 
-function eliminateReturnInLoops(stmts: Stmt[], retTy: Ty, resultInvariants: Expr[]): Stmt[] {
+function eliminateReturnInLoops(
+  stmts: Stmt[],
+  retTy: Ty,
+  ensuresExprs: Expr[],
+  counter = { n: 0 },
+): Stmt[] {
   const out: Stmt[] = [];
   for (let i = 0; i < stmts.length; i++) {
     const s = stmts[i];
     if (s.kind === "while" && stmtsContainReturn(s.body)) {
-      const retVar = "_loopRet";
-      const next = stmts[i + 1];
-      const init: Expr = next && next.kind === "return" ? next.value : defaultExprForTy(retTy);
-      out.push({ kind: "let", name: retVar, type: retTy, mutable: true, value: init });
-      // The result variable carries the postcondition (the function's `ensures`
-      // with `\result` → `_loopRet`) as a loop invariant: it holds initially (the
-      // fallthrough seed) and after each `_loopRet := e; break`, so the
-      // postcondition is re-established from the invariant when the loop exits.
-      // Where Dafny discharged the postcondition at each `return` site, the
-      // break-rewrite discharges it once, after the loop.
-      out.push({ ...s, invariants: [...s.invariants, ...resultInvariants], body: replaceReturnsWithBreak(s.body, retVar) });
-      out.push({ kind: "return", value: { kind: "var", name: retVar } });
-      if (next && next.kind === "return") i++; // consume the seeded fallthrough return
+      const suffix = counter.n === 0 ? "" : String(counter.n);
+      counter.n += 1;
+      const retVar = freshName(`_loopRet${suffix}`);
+      const retVal = freshName(`_loopRet${suffix}_val`);
+      const retRef: Expr = { kind: "var", name: retVar };
+      const retIsSome: Expr = { kind: "field", obj: retRef, field: "isSome" };
+      const retUnwrap: Expr = { kind: "checkedUnwrap", expr: retRef };
+      const resultInvariants: Expr[] = ensuresExprs.map(e => ({
+        kind: "implies",
+        premises: [retIsSome],
+        conclusion: replaceVar(e, "\\result", retUnwrap),
+      }));
+      out.push({
+        kind: "let",
+        name: retVar,
+        type: { kind: "optional", inner: retTy },
+        mutable: true,
+        value: { kind: "app", fn: "None", args: [] },
+      });
+      // Guard each postcondition invariant with `_loopRet.isSome → P[_loopRet.get / \result]`:
+      // it holds vacuously while `_loopRet = none`, and Velvet checks `P[e / \result]`
+      // at each `_loopRet := some e; break`.
+      out.push({
+        ...s,
+        invariants: [...s.invariants, ...resultInvariants],
+        body: replaceReturnsWithBreak(s.body, retVar),
+      });
+      const rest = stmts.slice(i + 1);
+      const noneBody: Stmt[] = rest.length > 0
+        ? eliminateReturnInLoops(rest, retTy, ensuresExprs, counter)
+        : retTy.kind === "void"
+          ? []
+          : [{ kind: "return", value: defaultExprForTy(retTy) }];
+      out.push({
+        kind: "match",
+        scrutinee: retRef,
+        arms: [
+          { pattern: pCtor("some", retVal), body: [{ kind: "return", value: { kind: "var", name: retVal } }] },
+          { pattern: pCtor("none"), body: noneBody },
+        ],
+      });
+      break;
     } else {
       out.push(s);
     }
@@ -3543,8 +3588,8 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
     // since loom's default loop-exit fact `¬guard` does not hold across a break.
     if (_opts.backend === "lean" && !pureDefNames.has(fn.name)) {
       body = matchToIfChains(body);
-      const resultInvariants = fn.ensures.map(e => replaceVar(transformSpecExpr(e), "\\result", { kind: "var", name: "_loopRet" }));
-      body = eliminateReturnInLoops(body, fn.returnTy, resultInvariants);
+      const ensuresExprs = fn.ensures.map(e => transformSpecExpr(e));
+      body = eliminateReturnInLoops(body, fn.returnTy, ensuresExprs);
       requireDoneWithForBreaks(body, fn.name);
     }
 

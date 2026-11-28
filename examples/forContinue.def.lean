@@ -107,14 +107,14 @@ method countKeep (items : Array Item) returns (res : Int)
   do
     let mut count : Int := 0
     let mut i : Nat := 0
-    let mut _loopRet : Int := count
+    let mut _loopRet : Option Int := none
     while i < items.size
       invariant invariant_1: (0 ≤ i : Prop)
       invariant invariant_2: (i ≤ items.size : Prop)
       invariant invariant_3: (0 ≤ count : Prop)
       invariant invariant_4: (count ≤ i : Prop)
-      invariant invariant_5: (0 ≤ _loopRet : Prop)
-      invariant invariant_6: (_loopRet ≤ items.size : Prop)
+      invariant invariant_5: (∀ (_h0 : (_loopRet.isSome) = true), 0 ≤ ((_loopRet).get (by grind)) : Prop)
+      invariant invariant_6: (∀ (_h1 : (_loopRet.isSome) = true), ((_loopRet).get (by grind)) ≤ items.size : Prop)
       decreasing items.size - i
       done_with (true : Prop)
     do
@@ -122,8 +122,12 @@ method countKeep (items : Array Item) returns (res : Int)
         i := i + 1
         continue
       else if (items[i]!).kind = Kind.stop then
-        _loopRet := count
+        _loopRet := some count
         break
       count := count + 1
       i := i + 1
-    return _loopRet
+    if h__loopRet : (_loopRet).isSome = true then
+      let _loopRet_val := (_loopRet).get h__loopRet
+      return _loopRet_val
+    else
+      return count
