@@ -1,5 +1,7 @@
 # LemmaScript (Tech Preview)
 
+[![CI](https://github.com/midspiral/LemmaScript/actions/workflows/ci.yml/badge.svg)](https://github.com/midspiral/LemmaScript/actions/workflows/ci.yml)
+
 A verification toolchain for TypeScript. Write ordinary TypeScript with `//@ ` specification annotations. The toolchain generates verifiable code from your TypeScript — either in Dafny or Lean 4 (with Velvet 2).
 
 See [SPEC.md](SPEC.md), [DESIGN.md](DESIGN.md), and [GETTING_STARTED.md](GETTING_STARTED.md).
